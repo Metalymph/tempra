@@ -1,5 +1,4 @@
-#[derive(Debug, Clone)]
-pub struct PackageManifest {
-    pub name: String,
-    pub entry: Option<String>,
-}
+//! `fero.toml` manifest parsing and validation.
+//!
+//! The manifest declares package metadata (name, version, dependencies) and
+//! build configuration (entry point, target, mode).

@@ -1,4 +1,24 @@
-#[derive(Debug, Clone, Default)]
-pub struct IrModule {
-    pub functions: Vec<String>,
+use crate::function::Function;
+
+/// A compiled Fero program ready for execution or code generation.
+///
+/// Contains all functions defined in (or imported by) the program.
+#[derive(Debug)]
+pub struct Module {
+    pub functions: Vec<Function>,
+}
+
+impl Module {
+    /// Create an empty module.
+    pub fn new() -> Self {
+        Self {
+            functions: Vec::new(),
+        }
+    }
+}
+
+impl Default for Module {
+    fn default() -> Self {
+        Self::new()
+    }
 }

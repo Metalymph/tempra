@@ -2,11 +2,9 @@
 name = "fero-parser"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
-authors.workspace = true
 
 [dependencies]
-fero-ast = { path = "../fero-ast" }
-fero-diagnostics = { path = "../fero-diagnostics" }
-fero-lexer = { path = "../fero-lexer" }
-fero-span = { path = "../fero-span" }
+fero-span.workspace = true
+fero-ast.workspace = true
+fero-lexer.workspace = true
+anyhow.workspace = true

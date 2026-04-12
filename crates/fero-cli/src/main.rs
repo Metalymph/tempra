@@ -1,12 +1,11 @@
 use anyhow::Result;
-use clap::{Parser, Subcommand, ValueEnum};
-use fero_driver::{BuildRequest, Driver, DriverCommand};
-use fero_package::{BuildMode, BuildTarget};
-use fero_repl::Repl;
-use std::path::PathBuf;
+use clap::{Parser, Subcommand};
 
+mod app;
+
+/// Fero — Write scripts, ship binaries.
 #[derive(Parser)]
-#[command(name = "fero", about = "Fero compiler and toolchain")]
+#[command(name = "fero", version, about)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -14,98 +13,51 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Run a Fero script via the interpreter.
     Run {
-        path: PathBuf,
+        /// Path to the `.fero` source file.
+        file: String,
     },
+    /// Type-check a source file without executing it.
     Check {
-        path: PathBuf,
+        /// Path to the `.fero` source file.
+        file: String,
     },
+    /// Compile a source file to a binary or Wasm module.
     Build {
-        path: PathBuf,
-        #[arg(long, value_enum, default_value = "native")]
-        target: TargetArg,
-        #[arg(long, value_enum, default_value = "fast")]
-        mode: ModeArg,
+        /// Path to the `.fero` source file.
+        file: String,
+        /// Output target: `native` or `wasm32-wasi`.
+        #[arg(long, default_value = "native")]
+        target: String,
+        /// Build mode: `fast` (performance) or `light` (size).
+        #[arg(long, default_value = "fast")]
+        mode: String,
     },
+    /// Build and install a Fero tool locally.
     Install {
-        path: PathBuf,
-        #[arg(long, value_enum, default_value = "native")]
-        target: TargetArg,
-        #[arg(long, value_enum, default_value = "fast")]
-        mode: ModeArg,
+        /// Path to the `.fero` source file.
+        file: String,
     },
-    Test {
-        path: Option<PathBuf>,
-    },
-    Fmt {
-        path: Option<PathBuf>,
-    },
+    /// Run tests.
+    Test,
+    /// Format Fero source code.
+    Fmt,
+    /// Start an interactive REPL session.
     Repl,
-}
-
-#[derive(Clone, Copy, ValueEnum)]
-enum TargetArg {
-    Native,
-    Wasm32Wasi,
-}
-
-#[derive(Clone, Copy, ValueEnum)]
-enum ModeArg {
-    Fast,
-    Light,
-}
-
-impl From<TargetArg> for BuildTarget {
-    fn from(value: TargetArg) -> Self {
-        match value {
-            TargetArg::Native => BuildTarget::Native,
-            TargetArg::Wasm32Wasi => BuildTarget::Wasm32Wasi,
-        }
-    }
-}
-
-impl From<ModeArg> for BuildMode {
-    fn from(value: ModeArg) -> Self {
-        match value {
-            ModeArg::Fast => BuildMode::Fast,
-            ModeArg::Light => BuildMode::Light,
-        }
-    }
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let driver = Driver;
-    match cli.command {
-        Command::Run { path } => print_outcome(driver.execute(DriverCommand::Run, &path)?),
-        Command::Check { path } => print_outcome(driver.execute(DriverCommand::Check, &path)?),
-        Command::Build { path, target, mode } => print_outcome(driver.execute(
-            DriverCommand::Build(BuildRequest {
-                target: target.into(),
-                mode: mode.into(),
-            }),
-            &path,
-        )?),
-        Command::Install { path, target, mode } => print_outcome(driver.execute(
-            DriverCommand::Install(BuildRequest {
-                target: target.into(),
-                mode: mode.into(),
-            }),
-            &path,
-        )?),
-        Command::Test { path } => {
-            let path = path.unwrap_or_else(|| PathBuf::from("tests"));
-            print_outcome(driver.execute(DriverCommand::Test, &path)?);
-        }
-        Command::Fmt { path } => {
-            let path = path.unwrap_or_else(|| PathBuf::from("."));
-            print_outcome(driver.execute(DriverCommand::Fmt, &path)?);
-        }
-        Command::Repl => println!("{}", Repl.banner()),
-    }
-    Ok(())
-}
+    let app = app::App::new();
 
-fn print_outcome(outcome: fero_driver::DriverOutcome) {
-    println!("{}", outcome.summary);
+    match cli.command {
+        Command::Run { file } => app.run(&file),
+        Command::Check { file } => app.check(&file),
+        Command::Build { file, target, mode } => app.build(&file, &target, &mode),
+        Command::Install { file } => app.install(&file),
+        Command::Test => app.test(),
+        Command::Fmt => app.fmt(),
+        Command::Repl => app.repl(),
+    }
 }

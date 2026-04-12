@@ -2,9 +2,7 @@
 name = "fero-testing"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
-authors.workspace = true
 
 [dependencies]
-fero-driver = { path = "../fero-driver" }
-fero-fs = { path = "../fero-fs" }
+fero-driver.workspace = true
+anyhow.workspace = true

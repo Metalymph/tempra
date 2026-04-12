@@ -1,12 +1,13 @@
-use crate::Expr;
+use fero_span::Span;
+use crate::expr::Expr;
 
-#[derive(Debug, Clone)]
-pub struct Function {
-    pub name: String,
-    pub body: Expr,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct Module {
-    pub functions: Vec<Function>,
+/// A top-level syntactic item.
+#[derive(Debug)]
+pub enum Item {
+    /// A function definition: `fn name() { body }`.
+    Function {
+        span: Span,
+        name: String,
+        body: Expr,
+    },
 }

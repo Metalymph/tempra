@@ -1,20 +1,25 @@
-use crate::grammar::fallback_module;
-use fero_ast::Module;
+use anyhow::Result;
+use fero_ast::item::Item;
 use fero_lexer::Lexer;
 
-pub fn parse_module(source: &str) -> Module {
-    let _tokens = Lexer::new(source).tokenize();
-    fallback_module()
+/// The main parser state machine.
+///
+/// Wraps a [`Lexer`] and uses recursive descent to build the AST.
+pub struct Parser {
+    /// The token source driving this parse.
+    lexer: Lexer,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::parse_module;
+impl Parser {
+    /// Construct a parser that will read tokens from `lexer`.
+    pub fn new(lexer: Lexer) -> Self {
+        Self { lexer }
+    }
 
-    #[test]
-    fn builds_a_fallback_module() {
-        let module = parse_module("io.println(\"hello\")");
-        assert_eq!(module.functions.len(), 1);
-        assert_eq!(module.functions[0].name, "main");
+    /// Parse an entire source file and return its top-level items.
+    pub fn parse(&mut self) -> Result<Vec<Item>> {
+        // TODO: implement top-level item parsing loop
+        let _ = self.lexer.next_token();
+        Ok(vec![])
     }
 }

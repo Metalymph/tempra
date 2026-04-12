@@ -1,22 +1,11 @@
+//! Build-mode dispatch logic.
+//!
+//! Selects the appropriate backend and optimisation pipeline based on the
+//! requested [`BuildTarget`] and [`BuildMode`].
+
 use fero_package::{BuildMode, BuildTarget};
 
-#[derive(Debug, Clone)]
-pub enum DriverCommand {
-    Run,
-    Check,
-    Build(BuildRequest),
-    Install(BuildRequest),
-    Test,
-    Fmt,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct BuildRequest {
-    pub target: BuildTarget,
-    pub mode: BuildMode,
-}
-
-#[derive(Debug, Clone)]
-pub struct DriverOutcome {
-    pub summary: String,
+/// Placeholder for future build dispatch.
+pub fn describe_build(target: BuildTarget, mode: BuildMode) -> String {
+    format!("target={target:?}, mode={mode:?}")
 }

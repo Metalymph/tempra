@@ -1,3 +1,9 @@
-pub mod engine;
+//! Stack-based interpreter for Fero IR.
+//!
+//! The interpreter is the default execution mode (`fero run`). It evaluates
+//! a [`Module`](fero_ir::module::Module) directly without any compilation
+//! step, offering instant cold-start at the cost of lower peak throughput
+//! compared to AOT backends.
 
-pub use engine::Interpreter;
+pub mod eval;
+pub mod frame;

@@ -115,16 +115,15 @@ dependencies = [
 name = "fero-backend-cranelift"
 version = "0.1.0"
 dependencies = [
- "fero-diagnostics",
+ "anyhow",
  "fero-ir",
- "fero-linker",
 ]
 
 [[package]]
 name = "fero-backend-wasm"
 version = "0.1.0"
 dependencies = [
- "fero-diagnostics",
+ "anyhow",
  "fero-ir",
 ]
 
@@ -135,8 +134,7 @@ dependencies = [
  "anyhow",
  "clap",
  "fero-driver",
- "fero-package",
- "fero-repl",
+ "fero-session",
 ]
 
 [[package]]
@@ -144,7 +142,6 @@ name = "fero-component-host"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "fero-runtime",
 ]
 
 [[package]]
@@ -160,17 +157,15 @@ name = "fero-driver"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "fero-ast",
  "fero-backend-cranelift",
  "fero-backend-wasm",
- "fero-diagnostics",
  "fero-fs",
  "fero-hir",
  "fero-interpreter",
  "fero-ir",
  "fero-lexer",
+ "fero-linker",
  "fero-mir",
- "fero-opt",
  "fero-package",
  "fero-parser",
  "fero-session",
@@ -189,6 +184,7 @@ dependencies = [
 name = "fero-hir"
 version = "0.1.0"
 dependencies = [
+ "fero-ast",
  "fero-span",
 ]
 
@@ -196,24 +192,22 @@ dependencies = [
 name = "fero-interpreter"
 version = "0.1.0"
 dependencies = [
- "fero-ast",
- "fero-diagnostics",
+ "anyhow",
+ "fero-ir",
  "fero-runtime",
- "fero-stdlib",
 ]
 
 [[package]]
 name = "fero-ir"
 version = "0.1.0"
 dependencies = [
- "fero-mir",
+ "fero-span",
 ]
 
 [[package]]
 name = "fero-lexer"
 version = "0.1.0"
 dependencies = [
- "fero-diagnostics",
  "fero-span",
 ]
 
@@ -228,6 +222,7 @@ dependencies = [
 name = "fero-lsp"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "fero-driver",
 ]
 
@@ -236,6 +231,7 @@ name = "fero-mir"
 version = "0.1.0"
 dependencies = [
  "fero-hir",
+ "fero-span",
 ]
 
 [[package]]
@@ -249,15 +245,15 @@ dependencies = [
 name = "fero-package"
 version = "0.1.0"
 dependencies = [
- "fero-fs",
+ "anyhow",
 ]
 
 [[package]]
 name = "fero-parser"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "fero-ast",
- "fero-diagnostics",
  "fero-lexer",
  "fero-span",
 ]
@@ -266,6 +262,7 @@ dependencies = [
 name = "fero-repl"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "fero-driver",
 ]
 
@@ -273,6 +270,7 @@ dependencies = [
 name = "fero-runtime"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "thiserror",
 ]
 
@@ -280,35 +278,40 @@ dependencies = [
 name = "fero-session"
 version = "0.1.0"
 dependencies = [
- "fero-diagnostics",
- "fero-package",
+ "anyhow",
+ "fero-span",
 ]
 
 [[package]]
 name = "fero-span"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+]
 
 [[package]]
 name = "fero-stdlib"
 version = "0.1.0"
 dependencies = [
- "fero-runtime",
+ "anyhow",
 ]
 
 [[package]]
 name = "fero-testing"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "fero-driver",
- "fero-fs",
 ]
 
 [[package]]
 name = "fero-typeck"
 version = "0.1.0"
 dependencies = [
- "fero-diagnostics",
+ "anyhow",
+ "fero-ast",
  "fero-hir",
+ "fero-span",
 ]
 
 [[package]]
@@ -316,7 +319,6 @@ name = "fero-wasm-host"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "fero-runtime",
 ]
 
 [[package]]

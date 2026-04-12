@@ -39,3 +39,28 @@ authors = ["Lorenzo Pirro"]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 thiserror = "1"
+fero-session = { path = "crates/fero-session" }
+fero-span = { path = "crates/fero-span" }
+fero-diagnostics = { path = "crates/fero-diagnostics" }
+fero-fs = { path = "crates/fero-fs" }
+fero-lexer = { path = "crates/fero-lexer" }
+fero-parser = { path = "crates/fero-parser" }
+fero-ast = { path = "crates/fero-ast" }
+fero-hir = { path = "crates/fero-hir" }
+fero-typeck = { path = "crates/fero-typeck" }
+fero-mir = { path = "crates/fero-mir" }
+fero-ir = { path = "crates/fero-ir" }
+fero-opt = { path = "crates/fero-opt" }
+fero-interpreter = { path = "crates/fero-interpreter" }
+fero-runtime = { path = "crates/fero-runtime" }
+fero-stdlib = { path = "crates/fero-stdlib" }
+fero-backend-wasm = { path = "crates/fero-backend-wasm" }
+fero-wasm-host = { path = "crates/fero-wasm-host" }
+fero-component-host = { path = "crates/fero-component-host" }
+fero-backend-cranelift = { path = "crates/fero-backend-cranelift" }
+fero-linker = { path = "crates/fero-linker" }
+fero-package = { path = "crates/fero-package" }
+fero-repl = { path = "crates/fero-repl" }
+fero-lsp = { path = "crates/fero-lsp" }
+fero-testing = { path = "crates/fero-testing" }
+fero-driver = { path = "crates/fero-driver" }

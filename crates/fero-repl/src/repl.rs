@@ -1,8 +1,1 @@
-#[derive(Debug, Default)]
-pub struct Repl;
-
-impl Repl {
-    pub fn banner(&self) -> &'static str {
-        "Fero REPL placeholder"
-    }
-}
+//! The REPL main loop: read input, compile, evaluate, print result.

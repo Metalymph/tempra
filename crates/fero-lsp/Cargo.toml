@@ -2,8 +2,7 @@
 name = "fero-lsp"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
-authors.workspace = true
 
 [dependencies]
-fero-driver = { path = "../fero-driver" }
+fero-driver.workspace = true
+anyhow.workspace = true

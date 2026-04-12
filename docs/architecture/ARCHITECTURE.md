@@ -231,6 +231,7 @@ Fero is a script-first programming language designed to transition seamlessly fr
 ## 5. Backend Separation & Build Modes
 
 ### Backend Rules
+
 - **Interpretation**: Focused on instant startup. Debug symbols should be preserved.
 - **Wasm**: Focused on isolation and interoperability. Should not assume a specific native host.
 - **Native AOT**: Focused on performance. Leverages Cranelift for backend machine optimizations.
@@ -258,4 +259,5 @@ Fero is a script-first programming language designed to transition seamlessly fr
 6. **Codegen (Priority 2)**: `fero-backend-cranelift`, `fero-backend-wasm`.
 
 ### Source of Truth
+
 The **Fero IR** remains the canonical representation of a program once semantic checks pass. No backend is permitted to perform proprietary semantic changes to the program logic. Any logic optimization that affects program semantics must occur in `fero-opt` before reaching the backend emitters.

@@ -1,3 +1,7 @@
-pub mod host;
+//! Wasm module host (future Wasmtime integration).
+//!
+//! Responsible for *executing* third-party `.wasm` modules from within a
+//! Fero program. This is the consumer side of WebAssembly — the producer
+//! side lives in `fero-backend-wasm`.
 
-pub use host::WasmHostPlan;
+pub mod runtime;

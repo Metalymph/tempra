@@ -1,0 +1,13 @@
+[package]
+name = "fero-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+fero-driver = { path = "../fero-driver" }
+fero-package = { path = "../fero-package" }
+fero-repl = { path = "../fero-repl" }

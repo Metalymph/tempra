@@ -1,0 +1,10 @@
+[package]
+name = "fero-typeck"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+fero-diagnostics = { path = "../fero-diagnostics" }
+fero-hir = { path = "../fero-hir" }

@@ -1,0 +1,24 @@
+[package]
+name = "fero-driver"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+fero-ast = { path = "../fero-ast" }
+fero-backend-cranelift = { path = "../fero-backend-cranelift" }
+fero-backend-wasm = { path = "../fero-backend-wasm" }
+fero-diagnostics = { path = "../fero-diagnostics" }
+fero-fs = { path = "../fero-fs" }
+fero-hir = { path = "../fero-hir" }
+fero-interpreter = { path = "../fero-interpreter" }
+fero-ir = { path = "../fero-ir" }
+fero-lexer = { path = "../fero-lexer" }
+fero-mir = { path = "../fero-mir" }
+fero-opt = { path = "../fero-opt" }
+fero-package = { path = "../fero-package" }
+fero-parser = { path = "../fero-parser" }
+fero-session = { path = "../fero-session" }
+fero-typeck = { path = "../fero-typeck" }

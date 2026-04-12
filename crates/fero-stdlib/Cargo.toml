@@ -1,0 +1,9 @@
+[package]
+name = "fero-stdlib"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+fero-runtime = { path = "../fero-runtime" }

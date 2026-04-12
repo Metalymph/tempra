@@ -1,0 +1,10 @@
+[package]
+name = "fero-component-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+fero-runtime = { path = "../fero-runtime" }

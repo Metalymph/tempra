@@ -1,0 +1,3 @@
+let values = [1, 2, 3]
+let sum = for value in values { value }
+io.println(sum)

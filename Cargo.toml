@@ -1,0 +1,41 @@
+[workspace]
+members = [
+  "crates/fero-cli",
+  "crates/fero-driver",
+  "crates/fero-session",
+  "crates/fero-span",
+  "crates/fero-diagnostics",
+  "crates/fero-fs",
+  "crates/fero-lexer",
+  "crates/fero-parser",
+  "crates/fero-ast",
+  "crates/fero-hir",
+  "crates/fero-typeck",
+  "crates/fero-mir",
+  "crates/fero-ir",
+  "crates/fero-opt",
+  "crates/fero-interpreter",
+  "crates/fero-runtime",
+  "crates/fero-stdlib",
+  "crates/fero-backend-wasm",
+  "crates/fero-wasm-host",
+  "crates/fero-component-host",
+  "crates/fero-backend-cranelift",
+  "crates/fero-linker",
+  "crates/fero-package",
+  "crates/fero-repl",
+  "crates/fero-lsp",
+  "crates/fero-testing",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+license = "MIT"
+authors = ["Lorenzo Pirro"]
+
+[workspace.dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+thiserror = "1"

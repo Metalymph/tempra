@@ -1,3 +1,5 @@
+//! Entry point for type-checking a Fero HIR file.
+
 use fero_hir::HirFile;
 use crate::error::TypeError;
 use crate::context::TypeContext;

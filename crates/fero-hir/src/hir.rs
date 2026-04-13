@@ -1,3 +1,9 @@
+//! High-level Intermediate Representation (HIR) for Fero.
+//!
+//! The HIR is a simplified and normalized version of the AST,
+//! stripped of syntax-only details and tokens, making it easier
+//! to perform type checking and lowering to MIR.
+
 use fero_span::Span;
 
 pub struct HirFile {

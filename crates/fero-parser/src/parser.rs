@@ -1,13 +1,19 @@
+//! Hand-written recursive-descent parser for Fero v0.1.
+//!
+//! Converts a stream of tokens into a structured Abstract Syntax Tree (AST).
+
 use fero_lexer::{Token, TokenKind, tokenize};
 use fero_span::Span;
 use fero_ast::*;
 
+/// An error encountered during parsing.
 #[derive(Debug)]
 pub struct ParseError {
     pub message: String,
     pub span: Span,
 }
 
+/// The state of the Fero parser.
 pub struct Parser<'src> {
     source: &'src str,
     tokens: Vec<Token>,
@@ -15,6 +21,7 @@ pub struct Parser<'src> {
 }
 
 impl<'src> Parser<'src> {
+    /// Creates a new parser for the given source and tokens.
     pub fn new(source: &'src str, tokens: Vec<Token>) -> Self {
         Self {
             source,

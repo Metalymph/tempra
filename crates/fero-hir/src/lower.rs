@@ -1,7 +1,10 @@
+//! Logic for lowering Fero AST into HIR.
+
 use fero_ast as ast;
 use fero_lexer::{Token, TokenKind};
 use crate::hir::*;
 
+/// State for the lowering pass.
 pub struct Lowerer<'src> {
     source: &'src str,
 }
@@ -270,6 +273,7 @@ impl<'src> Lowerer<'src> {
     }
 }
 
+/// Lowers an entire AST file into a HIR file.
 pub fn lower_file(source: &str, ast: &ast::File) -> HirFile {
     let lowerer = Lowerer::new(source);
     lowerer.lower_file(ast)

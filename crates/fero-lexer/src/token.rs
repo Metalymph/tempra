@@ -1,5 +1,6 @@
 use fero_span::Span;
 
+/// The broad category of a lexical token.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenKind {
     // Special
@@ -67,12 +68,14 @@ pub enum TokenKind {
     OrOr,           // ||
 }
 
+/// A single lexical token produced by the lexer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Token {
     pub kind: TokenKind,
     pub span: Span,
 }
 
+/// Returns the `TokenKind` for a given keyword string, or `None` if it's not a keyword.
 pub fn keyword_kind(text: &str) -> Option<TokenKind> {
     match text {
         "let" => Some(TokenKind::Let),

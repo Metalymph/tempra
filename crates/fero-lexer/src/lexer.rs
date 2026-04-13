@@ -1,6 +1,9 @@
+//! Single-pass scanner that transforms source bytes into a stream of tokens.
+
 use crate::token::{Token, TokenKind, keyword_kind};
 use fero_span::Span;
 
+/// State for the Fero lexer.
 pub struct Lexer<'src> {
     source: &'src str,
     bytes: &'src [u8],
@@ -16,6 +19,7 @@ impl<'src> Lexer<'src> {
         }
     }
 
+    /// Scans and returns the next token from the source.
     pub fn next_token(&mut self) -> Token {
         self.skip_whitespace();
         
@@ -251,6 +255,7 @@ impl<'src> Lexer<'src> {
     }
 }
 
+/// Tokenizes a string of Fero source code into a vector of tokens.
 pub fn tokenize(source: &str) -> Vec<Token> {
     let mut lexer = Lexer::new(source);
     let mut tokens = Vec::new();

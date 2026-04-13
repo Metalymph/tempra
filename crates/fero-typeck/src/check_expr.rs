@@ -1,3 +1,5 @@
+//! Expression-level type checking logic.
+
 use fero_span::Span;
 use fero_hir::*;
 use crate::types::Type;

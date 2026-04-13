@@ -5,3 +5,4 @@ edition.workspace = true
 
 [dependencies]
 fero-span.workspace = true
+fero-lexer.workspace = true

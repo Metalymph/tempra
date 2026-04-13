@@ -6,4 +6,4 @@
 pub mod grammar;
 pub mod parser;
 
-pub use parser::Parser;
+pub use parser::{Parser, parse_source};

@@ -8,3 +8,6 @@ fero-span.workspace = true
 fero-hir.workspace = true
 fero-ast.workspace = true
 anyhow.workspace = true
+
+[dev-dependencies]
+fero-parser.workspace = true

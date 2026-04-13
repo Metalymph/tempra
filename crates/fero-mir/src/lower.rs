@@ -1,4 +1,4 @@
-use fero_hir::item::Item as HirItem;
+use fero_hir::HirItem;
 use crate::block::BasicBlock;
 
 /// Lower a type-checked HIR program into MIR.

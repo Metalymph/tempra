@@ -108,6 +108,7 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 name = "fero-ast"
 version = "0.1.0"
 dependencies = [
+ "fero-lexer",
  "fero-span",
 ]
 
@@ -185,6 +186,8 @@ name = "fero-hir"
 version = "0.1.0"
 dependencies = [
  "fero-ast",
+ "fero-lexer",
+ "fero-parser",
  "fero-span",
 ]
 
@@ -311,6 +314,7 @@ dependencies = [
  "anyhow",
  "fero-ast",
  "fero-hir",
+ "fero-parser",
  "fero-span",
 ]
 

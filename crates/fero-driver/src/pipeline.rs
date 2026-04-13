@@ -7,11 +7,11 @@ use fero_lexer::Lexer;
 /// available:
 ///   lexer → parser → HIR lowering → type check → MIR → Fero IR
 pub fn compile(source: String) -> Result<()> {
-    let mut lexer = Lexer::new(source);
+    let mut lexer = Lexer::new(&source);
     // Drain all tokens (placeholder until the parser is wired in).
     loop {
         let tok = lexer.next_token();
-        if tok == fero_lexer::Token::Eof {
+        if tok.kind == fero_lexer::TokenKind::EndOfFile {
             break;
         }
     }

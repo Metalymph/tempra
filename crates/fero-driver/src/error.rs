@@ -6,6 +6,7 @@ pub enum DriverError {
     ParseError(String),
     TypeError(String),
     RuntimeError(String),
+    Exit(i32),
 }
 
 impl From<io::Error> for DriverError {

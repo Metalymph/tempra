@@ -304,3 +304,21 @@ fn test_append_wrong_type() {
         }
     "#);
 }
+
+#[test]
+fn test_exit_success() {
+    expect_ok(r#"
+        fn main() {
+            exit(1);
+        }
+    "#);
+}
+
+#[test]
+fn test_exit_wrong_type() {
+    expect_err(r#"
+        fn main() {
+            exit("1");
+        }
+    "#);
+}

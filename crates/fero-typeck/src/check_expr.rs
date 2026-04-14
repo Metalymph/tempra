@@ -140,6 +140,17 @@ fn check_builtin(ctx: &mut TypeContext, name: &str, args: &[HirExpression], span
             }
             Some(Type::Unit)
         }
+        "exit" => {
+            if args.len() != 1 {
+                ctx.error(format!("Function 'exit' expects 1 argument(s), found {}", args.len()), span);
+            } else {
+                let p = check_expression(ctx, &args[0]);
+                if p != Type::Int64 && p != Type::Error {
+                    ctx.error(format!("Argument 1 of 'exit': expected Int64, found {}", p), args[0].span());
+                }
+            }
+            Some(Type::Unit)
+        }
         "read_line" => {
             if args.len() != 0 {
                 ctx.error(format!("Function 'read_line' expects 0 argument(s), found {}", args.len()), span);

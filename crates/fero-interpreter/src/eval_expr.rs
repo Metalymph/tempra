@@ -242,6 +242,16 @@ impl Interpreter {
                 }
 
                 if let HirExpression::Name(_, name) = &*call.callee {
+                    if name == "exit" {
+                        if args.len() != 1 {
+                            return Err(format!("Builtin 'exit' expects 1 argument"));
+                        }
+                        if let Value::Int64(code) = args[0] {
+                            return Err(format!("@@FERO_EXIT@@{}", code));
+                        } else {
+                            return Err("exit requires an Int64 argument".into());
+                        }
+                    }
                     if name == "print" {
                         if args.len() != 1 {
                             return Err(format!("Builtin 'print' expects 1 argument"));
@@ -335,7 +345,13 @@ impl Interpreter {
                         .get(name)
                         .cloned()
                         .ok_or_else(|| format!("Function {} not found", name))?;
-                    self.call_function(&func, args)
+                    
+                    let flow = self.call_function(&func, args)?;
+                    match flow {
+                        ControlFlow::Value(v) | ControlFlow::Return(v) => Ok(v),
+                        ControlFlow::Exit(code) => Err(format!("@@FERO_EXIT@@{}", code)),
+                        ControlFlow::Break | ControlFlow::Continue => Err("Break/Continue not allowed here".into()),
+                    }
                 } else {
                     Err("Only named functions are supported".into())
                 }
@@ -460,16 +476,11 @@ impl Interpreter {
                 ControlFlow::Value(v) => last_val = v,
                 ControlFlow::Return(_v) => {
                     env.pop_scope();
-                    // In a block, a return should bubble up to the function call.
-                    // But our signature here returns Result<Value>.
-                    // Wait, eval_block is called from eval_expression! So if it hits a Return statement,
-                    // we actually have a slight problem. Expression evaluation doesn't bubble ControlFlow.
-                    // Technically, Return inside an expression block should return from the function.
-                    // To do this right, eval_expression would need to return ControlFlow.
-                    // Let's just return to keep it simple, though properly it bubbles up.
-                    // If we just return Ok(v), the return is local to the block, which is somewhat incorrect.
-                    // For the scope of 'minimal interpreter', assuming statements inside blocks might need to break early.
                     return Err("Return inside expression block bubbling is unsupported".into());
+                }
+                ControlFlow::Exit(code) => {
+                    env.pop_scope();
+                    return Err(format!("@@FERO_EXIT@@{}", code));
                 }
                 ControlFlow::Break | ControlFlow::Continue => {
                     return Err(

@@ -238,3 +238,21 @@ fn test_append_file() {
     let content = std::fs::read_to_string(&path).unwrap();
     assert_eq!(content, "hello world");
 }
+
+#[test]
+fn test_exit_propagates() {
+    let source = r#"
+    fn main() {
+        exit(5)
+    }
+    "#;
+    
+    let mut ast = fero_parser::parse_source(source).unwrap();
+    let hir = fero_hir::lower_file(source, &ast);
+    let result = fero_interpreter::run(&hir);
+    
+    match result {
+        Err(e) if e == "@@FERO_EXIT@@5" => {}
+        other => panic!("Expected Exit(5) string, got {:?}", other),
+    }
+}

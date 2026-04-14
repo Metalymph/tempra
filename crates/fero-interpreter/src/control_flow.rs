@@ -6,4 +6,5 @@ pub enum ControlFlow {
     Return(Value),
     Break,
     Continue,
+    Exit(i32),
 }

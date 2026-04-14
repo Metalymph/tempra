@@ -12,18 +12,41 @@ impl Interpreter {
     ) -> Result<ControlFlow, String> {
         match stmt {
             HirStatement::Let(let_stmt) => {
-                let val = self.eval_expression(&let_stmt.value, env)?;
-                env.insert(let_stmt.name.clone(), val);
-                Ok(ControlFlow::Value(Value::Unit))
+                match self.eval_expression(&let_stmt.value, env) {
+                    Ok(val) => {
+                        env.insert(let_stmt.name.clone(), val);
+                        Ok(ControlFlow::Value(Value::Unit))
+                    }
+                    Err(e) if e.starts_with("@@FERO_EXIT@@") => {
+                        let code: i32 = e["@@FERO_EXIT@@".len()..].parse().unwrap_or(1);
+                        Ok(ControlFlow::Exit(code))
+                    }
+                    Err(e) => Err(e),
+                }
             }
             HirStatement::Var(var_stmt) => {
-                let val = self.eval_expression(&var_stmt.value, env)?;
-                env.insert(var_stmt.name.clone(), val);
-                Ok(ControlFlow::Value(Value::Unit))
+                match self.eval_expression(&var_stmt.value, env) {
+                    Ok(val) => {
+                        env.insert(var_stmt.name.clone(), val);
+                        Ok(ControlFlow::Value(Value::Unit))
+                    }
+                    Err(e) if e.starts_with("@@FERO_EXIT@@") => {
+                        let code: i32 = e["@@FERO_EXIT@@".len()..].parse().unwrap_or(1);
+                        Ok(ControlFlow::Exit(code))
+                    }
+                    Err(e) => Err(e),
+                }
             }
             HirStatement::Return(ret) => {
                 let val = if let Some(expr) = ret {
-                    self.eval_expression(expr, env)?
+                    match self.eval_expression(expr, env) {
+                        Ok(val) => val,
+                        Err(e) if e.starts_with("@@FERO_EXIT@@") => {
+                            let code: i32 = e["@@FERO_EXIT@@".len()..].parse().unwrap_or(1);
+                            return Ok(ControlFlow::Exit(code));
+                        }
+                        Err(e) => return Err(e),
+                    }
                 } else {
                     Value::Unit
                 };
@@ -32,8 +55,14 @@ impl Interpreter {
             HirStatement::Break(_) => Ok(ControlFlow::Break),
             HirStatement::Continue(_) => Ok(ControlFlow::Continue),
             HirStatement::Expr(expr) => {
-                let val = self.eval_expression(expr, env)?;
-                Ok(ControlFlow::Value(val))
+                match self.eval_expression(expr, env) {
+                    Ok(val) => Ok(ControlFlow::Value(val)),
+                    Err(e) if e.starts_with("@@FERO_EXIT@@") => {
+                        let code: i32 = e["@@FERO_EXIT@@".len()..].parse().unwrap_or(1);
+                        Ok(ControlFlow::Exit(code))
+                    }
+                    Err(e) => Err(e),
+                }
             }
             HirStatement::For(for_stmt) => {
                 let iterable = self.eval_expression(&for_stmt.iterable, env)?;
@@ -70,6 +99,10 @@ impl Interpreter {
                                 env.pop_scope();
                                 return Ok(ControlFlow::Return(v));
                             }
+                            ControlFlow::Exit(code) => {
+                                env.pop_scope();
+                                return Ok(ControlFlow::Exit(code));
+                            }
                             ControlFlow::Break => {
                                 loop_flow = ControlFlow::Break;
                                 break;
@@ -84,6 +117,9 @@ impl Interpreter {
 
                     if let ControlFlow::Break = loop_flow {
                         break;
+                    }
+                    if let ControlFlow::Exit(code) = loop_flow {
+                        return Ok(ControlFlow::Exit(code));
                     }
                     if let ControlFlow::Value(v) = loop_flow {
                         last_val = v;

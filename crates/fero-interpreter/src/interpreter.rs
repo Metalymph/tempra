@@ -23,10 +23,15 @@ impl Interpreter {
             .get("main")
             .cloned()
             .ok_or_else(|| "Could not find main function".to_string())?;
-        self.call_function(&main_func, vec![])
+        let flow = self.call_function(&main_func, vec![])?;
+        match flow {
+            ControlFlow::Value(v) | ControlFlow::Return(v) => Ok(v),
+            ControlFlow::Exit(code) => Err(format!("@@FERO_EXIT@@{}", code)),
+            ControlFlow::Break | ControlFlow::Continue => Err("Break/Continue outside of loop".into()),
+        }
     }
 
-    pub fn call_function(&mut self, func: &HirFunction, args: Vec<Value>) -> Result<Value, String> {
+    pub fn call_function(&mut self, func: &HirFunction, args: Vec<Value>) -> Result<ControlFlow, String> {
         let mut env = RuntimeEnv::new();
 
         // Bind parameters
@@ -42,12 +47,13 @@ impl Interpreter {
             let flow = self.eval_statement(stmt, &mut env)?;
             match flow {
                 ControlFlow::Value(v) => result_val = v,
-                ControlFlow::Return(v) => return Ok(v),
+                ControlFlow::Return(v) => return Ok(ControlFlow::Return(v)),
+                ControlFlow::Exit(code) => return Ok(ControlFlow::Exit(code)),
                 ControlFlow::Break | ControlFlow::Continue => {
                     return Err("Break/Continue outside of loop".into());
                 }
             }
         }
-        Ok(result_val)
+        Ok(ControlFlow::Value(result_val))
     }
 }

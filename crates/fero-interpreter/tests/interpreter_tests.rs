@@ -178,3 +178,63 @@ fn test_command_or() {
         panic!("Expected Bool(true), found {:?}", val);
     }
 }
+
+#[test]
+fn test_read_file() {
+    let dir = std::env::temp_dir();
+    let path = dir.join("test_read.txt");
+    std::fs::write(&path, "test_hello_world").unwrap();
+    let path_str = path.to_str().unwrap().replace("\\", "\\\\");
+
+    let source = format!(r#"
+    fn main() {{
+        read("{}")
+    }}
+    "#, path_str);
+    
+    let val = assert_runs(&source);
+    if let Value::String(s) = val {
+        assert_eq!(s, "test_hello_world");
+    } else {
+        panic!("Expected String(\"test_hello_world\"), found {:?}", val);
+    }
+}
+
+#[test]
+fn test_write_file() {
+    let dir = std::env::temp_dir();
+    let path = dir.join("test_write.txt");
+    let path_str = path.to_str().unwrap().replace("\\", "\\\\");
+
+    let source = format!(r#"
+    fn main() {{
+        write("{}", "hello_fero")
+    }}
+    "#, path_str);
+    
+    let val = assert_runs(&source);
+    assert!(matches!(val, Value::Unit));
+    
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(content, "hello_fero");
+}
+
+#[test]
+fn test_append_file() {
+    let dir = std::env::temp_dir();
+    let path = dir.join("test_append.txt");
+    std::fs::write(&path, "hello").unwrap();
+    let path_str = path.to_str().unwrap().replace("\\", "\\\\");
+
+    let source = format!(r#"
+    fn main() {{
+        append("{}", " world")
+    }}
+    "#, path_str);
+    
+    let val = assert_runs(&source);
+    assert!(matches!(val, Value::Unit));
+    
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(content, "hello world");
+}

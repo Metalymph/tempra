@@ -287,6 +287,48 @@ impl Interpreter {
                         };
                         return Ok(Value::Command(crate::value::CommandValue { program, args: cmd_args }));
                     }
+                    if name == "read" {
+                        if args.len() != 1 {
+                            return Err(format!("Builtin 'read' expects 1 argument"));
+                        }
+                        if let Value::String(path) = &args[0] {
+                            let text = std::fs::read_to_string(path)
+                                .map_err(|e| format!("Failed to read '{}': {}", path, e))?;
+                            return Ok(Value::String(text));
+                        } else {
+                            return Err("read requires a String as first argument".into());
+                        }
+                    }
+                    if name == "write" {
+                        if args.len() != 2 {
+                            return Err(format!("Builtin 'write' expects 2 arguments"));
+                        }
+                        if let (Value::String(path), Value::String(text)) = (&args[0], &args[1]) {
+                            std::fs::write(path, text)
+                                .map_err(|e| format!("Failed to write to '{}': {}", path, e))?;
+                            return Ok(Value::Unit);
+                        } else {
+                            return Err("write requires two String arguments".into());
+                        }
+                    }
+                    if name == "append" {
+                        if args.len() != 2 {
+                            return Err(format!("Builtin 'append' expects 2 arguments"));
+                        }
+                        if let (Value::String(path), Value::String(text)) = (&args[0], &args[1]) {
+                            use std::io::Write;
+                            let mut file = std::fs::OpenOptions::new()
+                                .create(true)
+                                .append(true)
+                                .open(path)
+                                .map_err(|e| format!("Failed to open '{}' for appending: {}", path, e))?;
+                            file.write_all(text.as_bytes())
+                                .map_err(|e| format!("Failed to append to '{}': {}", path, e))?;
+                            return Ok(Value::Unit);
+                        } else {
+                            return Err("append requires two String arguments".into());
+                        }
+                    }
 
                     let func = self
                         .functions

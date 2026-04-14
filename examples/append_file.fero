@@ -1,0 +1,3 @@
+fn main() {
+    append("examples/out.txt", "\nappended line")
+}

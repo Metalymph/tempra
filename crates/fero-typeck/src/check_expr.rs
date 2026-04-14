@@ -164,6 +164,32 @@ fn check_builtin(ctx: &mut TypeContext, name: &str, args: &[HirExpression], span
             }
             Some(Type::Command)
         }
+        "read" => {
+            if args.len() != 1 {
+                ctx.error(format!("Function 'read' expects 1 argument(s), found {}", args.len()), span);
+            } else {
+                let p = check_expression(ctx, &args[0]);
+                if p != Type::String && p != Type::Error {
+                    ctx.error(format!("Argument 1 of 'read': expected String, found {}", p), args[0].span());
+                }
+            }
+            Some(Type::String)
+        }
+        "write" | "append" => {
+            if args.len() != 2 {
+                ctx.error(format!("Function '{}' expects 2 argument(s), found {}", name, args.len()), span);
+            } else {
+                let p = check_expression(ctx, &args[0]);
+                if p != Type::String && p != Type::Error {
+                    ctx.error(format!("Argument 1 of '{}': expected String, found {}", name, p), args[0].span());
+                }
+                let t = check_expression(ctx, &args[1]);
+                if t != Type::String && t != Type::Error {
+                    ctx.error(format!("Argument 2 of '{}': expected String, found {}", name, t), args[1].span());
+                }
+            }
+            Some(Type::Unit)
+        }
         _ => None,
     }
 }

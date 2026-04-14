@@ -249,3 +249,58 @@ fn test_command_pipe_success() {
         }
     "#);
 }
+
+#[test]
+fn test_read_success() {
+    expect_ok(r#"
+        fn main() {
+            let text = read("notes.txt");
+            print(text);
+        }
+    "#);
+}
+
+#[test]
+fn test_read_wrong_type() {
+    expect_err(r#"
+        fn main() {
+            let text = read(123);
+        }
+    "#);
+}
+
+#[test]
+fn test_write_success() {
+    expect_ok(r#"
+        fn main() {
+            write("out.txt", "hello");
+        }
+    "#);
+}
+
+#[test]
+fn test_write_wrong_type() {
+    expect_err(r#"
+        fn main() {
+            write("out.txt", 123);
+        }
+    "#);
+}
+
+#[test]
+fn test_append_success() {
+    expect_ok(r#"
+        fn main() {
+            append("log.txt", "done");
+        }
+    "#);
+}
+
+#[test]
+fn test_append_wrong_type() {
+    expect_err(r#"
+        fn main() {
+            append("log.txt", 123);
+        }
+    "#);
+}

@@ -1,1 +1,4 @@
-io.println("hello, fero")
+fn main() {
+    let x = 1
+    x
+}

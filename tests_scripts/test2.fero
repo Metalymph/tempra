@@ -1,0 +1,11 @@
+fn main() {
+    let content = read("examples/sample.txt")
+
+    if content == "" {
+        print("empty file")
+        exit(1)
+    }
+
+    write("examples/out.txt", content)
+    print("written")
+}

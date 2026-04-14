@@ -1,0 +1,10 @@
+fn main() {
+    let result = cmd("ls", []).run()
+
+    if !result.success {
+        print("ls failed")
+        exit(result.exit_code)
+    }
+
+    print(result.stdout)
+}

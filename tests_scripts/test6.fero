@@ -1,0 +1,11 @@
+fn main() {
+    let result = cmd("echo", ["hello from fero"]).run()
+
+    if !result.success {
+        append("log.txt", "command failed\n")
+        exit(result.exit_code)
+    }
+
+    append("log.txt", result.stdout)
+    print("logged")
+}

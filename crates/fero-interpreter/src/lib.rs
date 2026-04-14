@@ -8,9 +8,16 @@ pub mod value;
 
 use crate::interpreter::Interpreter;
 use crate::value::Value;
+pub use crate::interpreter::RuntimeSignal;
 use fero_hir::HirFile;
 
-pub fn run(file: &HirFile) -> Result<Value, String> {
+#[derive(Debug)]
+pub enum RuntimeError {
+    Message(String),
+    Exit(i32),
+}
+
+pub fn run(file: &HirFile) -> Result<Value, RuntimeError> {
     let mut interpreter = Interpreter::new(file);
     interpreter.run_main()
 }

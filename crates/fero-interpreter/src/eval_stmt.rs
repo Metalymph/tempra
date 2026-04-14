@@ -12,40 +12,28 @@ impl Interpreter {
     ) -> Result<ControlFlow, String> {
         match stmt {
             HirStatement::Let(let_stmt) => {
-                match self.eval_expression(&let_stmt.value, env) {
-                    Ok(val) => {
+                match self.eval_expression(&let_stmt.value, env)? {
+                    ControlFlow::Value(val) => {
                         env.insert(let_stmt.name.clone(), val);
                         Ok(ControlFlow::Value(Value::Unit))
                     }
-                    Err(e) if e.starts_with("@@FERO_EXIT@@") => {
-                        let code: i32 = e["@@FERO_EXIT@@".len()..].parse().unwrap_or(1);
-                        Ok(ControlFlow::Exit(code))
-                    }
-                    Err(e) => Err(e),
+                    cf => Ok(cf),
                 }
             }
             HirStatement::Var(var_stmt) => {
-                match self.eval_expression(&var_stmt.value, env) {
-                    Ok(val) => {
+                match self.eval_expression(&var_stmt.value, env)? {
+                    ControlFlow::Value(val) => {
                         env.insert(var_stmt.name.clone(), val);
                         Ok(ControlFlow::Value(Value::Unit))
                     }
-                    Err(e) if e.starts_with("@@FERO_EXIT@@") => {
-                        let code: i32 = e["@@FERO_EXIT@@".len()..].parse().unwrap_or(1);
-                        Ok(ControlFlow::Exit(code))
-                    }
-                    Err(e) => Err(e),
+                    cf => Ok(cf),
                 }
             }
             HirStatement::Return(ret) => {
                 let val = if let Some(expr) = ret {
-                    match self.eval_expression(expr, env) {
-                        Ok(val) => val,
-                        Err(e) if e.starts_with("@@FERO_EXIT@@") => {
-                            let code: i32 = e["@@FERO_EXIT@@".len()..].parse().unwrap_or(1);
-                            return Ok(ControlFlow::Exit(code));
-                        }
-                        Err(e) => return Err(e),
+                    match self.eval_expression(expr, env)? {
+                        ControlFlow::Value(val) => val,
+                        cf => return Ok(cf),
                     }
                 } else {
                     Value::Unit
@@ -55,17 +43,13 @@ impl Interpreter {
             HirStatement::Break(_) => Ok(ControlFlow::Break),
             HirStatement::Continue(_) => Ok(ControlFlow::Continue),
             HirStatement::Expr(expr) => {
-                match self.eval_expression(expr, env) {
-                    Ok(val) => Ok(ControlFlow::Value(val)),
-                    Err(e) if e.starts_with("@@FERO_EXIT@@") => {
-                        let code: i32 = e["@@FERO_EXIT@@".len()..].parse().unwrap_or(1);
-                        Ok(ControlFlow::Exit(code))
-                    }
-                    Err(e) => Err(e),
-                }
+                self.eval_expression(expr, env)
             }
             HirStatement::For(for_stmt) => {
-                let iterable = self.eval_expression(&for_stmt.iterable, env)?;
+                let iterable = match self.eval_expression(&for_stmt.iterable, env)? {
+                    ControlFlow::Value(v) => v,
+                    cf => return Ok(cf),
+                };
                 let iter_values = match iterable {
                     Value::Array(arr) => arr,
                     _ => return Err("For loop iterable must be an Array".into()),
@@ -76,9 +60,14 @@ impl Interpreter {
                     env.push_scope();
                     env.insert(for_stmt.binding.clone(), item);
 
-                    // Note: If filters exist, we'd eval them here and skip if false. Not strictly required by prompt but good to have if HirFor has it.
                     if let Some(filter_expr) = &for_stmt.filter {
-                        let filter_res = self.eval_expression(filter_expr, env)?;
+                        let filter_res = match self.eval_expression(filter_expr, env)? {
+                            ControlFlow::Value(v) => v,
+                            cf => {
+                                env.pop_scope();
+                                return Ok(cf);
+                            }
+                        };
                         if let Value::Bool(b) = filter_res {
                             if !b {
                                 env.pop_scope();

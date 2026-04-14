@@ -1,0 +1,17 @@
+fn main() {
+    let pattern = read_line()
+
+    if pattern == "" {
+        print("missing pattern")
+        exit(1)
+    }
+
+    let result = cmd("grep", [pattern, "examples/sample.txt"]).run()
+
+    if !result.success {
+        print("grep failed")
+        exit(result.exit_code)
+    }
+
+    print(result.stdout)
+}

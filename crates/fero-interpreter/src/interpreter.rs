@@ -4,6 +4,11 @@ use crate::value::Value;
 use fero_hir::*;
 use std::collections::HashMap;
 
+#[derive(Debug)]
+pub enum RuntimeSignal {
+    Exit(i32),
+}
+
 pub struct Interpreter {
     pub functions: HashMap<String, HirFunction>,
 }
@@ -17,17 +22,18 @@ impl Interpreter {
         Self { functions }
     }
 
-    pub fn run_main(&mut self) -> Result<Value, String> {
+    pub fn run_main(&mut self) -> Result<Value, crate::RuntimeError> {
         let main_func = self
             .functions
             .get("main")
             .cloned()
-            .ok_or_else(|| "Could not find main function".to_string())?;
-        let flow = self.call_function(&main_func, vec![])?;
+            .ok_or_else(|| crate::RuntimeError::Message("Could not find main function".to_string()))?;
+        let flow = self.call_function(&main_func, vec![])
+            .map_err(crate::RuntimeError::Message)?;
         match flow {
             ControlFlow::Value(v) | ControlFlow::Return(v) => Ok(v),
-            ControlFlow::Exit(code) => Err(format!("@@FERO_EXIT@@{}", code)),
-            ControlFlow::Break | ControlFlow::Continue => Err("Break/Continue outside of loop".into()),
+            ControlFlow::Exit(code) => Err(crate::RuntimeError::Exit(code)),
+            ControlFlow::Break | ControlFlow::Continue => Err(crate::RuntimeError::Message("Break/Continue outside of loop".into())),
         }
     }
 

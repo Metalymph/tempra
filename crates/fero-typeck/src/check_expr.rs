@@ -70,6 +70,9 @@ fn check_binary(ctx: &mut TypeContext, b: &HirBinary) -> Type {
 
     match b.op {
         HirBinaryOp::Add | HirBinaryOp::Sub | HirBinaryOp::Mul | HirBinaryOp::Div => {
+            if b.op == HirBinaryOp::Add && left == Type::String && right == Type::String {
+                return Type::String;
+            }
             if !left.is_numeric() {
                 ctx.error(format!("Arithmetic operator expects numeric type, found {}", left), b.span);
                 return Type::Error;

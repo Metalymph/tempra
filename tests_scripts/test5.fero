@@ -1,0 +1,12 @@
+fn main() {
+    let path = read_line()
+
+    if path == "" {
+        print("missing path")
+        exit(1)
+    }
+
+    let content = read(path)
+    write("copy.txt", content)
+    print("copied")
+}

@@ -1,0 +1,5 @@
+fn main() {
+    let result = cmd("cat", ["missing.txt"]) || cmd("echo", ["fallback"])
+
+    print(result.stdout)
+}

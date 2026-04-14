@@ -16,13 +16,9 @@ pub fn run_source(source: &str) -> Result<(), DriverError> {
         .map_err(|errs| DriverError::TypeError(format!("{:?}", errs)))?;
     
     let _value = run(&hir)
-        .map_err(|e| {
-            if e.starts_with("@@FERO_EXIT@@") {
-                let code: i32 = e["@@FERO_EXIT@@".len()..].parse().unwrap_or(1);
-                DriverError::Exit(code)
-            } else {
-                DriverError::RuntimeError(e)
-            }
+        .map_err(|e| match e {
+            fero_interpreter::RuntimeError::Exit(code) => DriverError::Exit(code),
+            fero_interpreter::RuntimeError::Message(s) => DriverError::RuntimeError(s),
         })?;
     
     Ok(())

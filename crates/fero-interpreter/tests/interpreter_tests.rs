@@ -252,7 +252,7 @@ fn test_exit_propagates() {
     let result = fero_interpreter::run(&hir);
     
     match result {
-        Err(e) if e == "@@FERO_EXIT@@5" => {}
-        other => panic!("Expected Exit(5) string, got {:?}", other),
+        Err(fero_interpreter::RuntimeError::Exit(5)) => {}
+        other => panic!("Expected Exit(5) signal, got {:?}", other),
     }
 }

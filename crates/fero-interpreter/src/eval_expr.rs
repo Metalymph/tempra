@@ -50,17 +50,17 @@ impl Interpreter {
         &mut self,
         expr: &HirExpression,
         env: &mut RuntimeEnv,
-    ) -> Result<Value, String> {
+    ) -> Result<ControlFlow, String> {
         match expr {
             HirExpression::Integer(_, s) => {
                 let v = s.parse::<i64>().map_err(|_| "Invalid Int64".to_string())?;
-                Ok(Value::Int64(v))
+                Ok(ControlFlow::Value(Value::Int64(v)))
             }
             HirExpression::Float(_, s) => {
                 let v = s
                     .parse::<f64>()
                     .map_err(|_| "Invalid Float64".to_string())?;
-                Ok(Value::Float64(v))
+                Ok(ControlFlow::Value(Value::Float64(v)))
             }
             HirExpression::String(_, s) => {
                 let unquoted = if s.starts_with('"') && s.ends_with('"') && s.len() >= 2 {
@@ -68,25 +68,29 @@ impl Interpreter {
                 } else {
                     s.clone()
                 };
-                Ok(Value::String(unquoted))
+                Ok(ControlFlow::Value(Value::String(unquoted)))
             }
-            HirExpression::Bool(_, b) => Ok(Value::Bool(*b)),
+            HirExpression::Bool(_, b) => Ok(ControlFlow::Value(Value::Bool(*b))),
             HirExpression::Name(_, name) => env
                 .get(name)
+                .map(ControlFlow::Value)
                 .ok_or_else(|| format!("Variable {} not found", name)),
             HirExpression::Unary(unary) => {
-                let val = self.eval_expression(&unary.expr, env)?;
+                let val = match self.eval_expression(&unary.expr, env)? {
+                    ControlFlow::Value(v) => v,
+                    cf => return Ok(cf),
+                };
                 match unary.op {
                     HirUnaryOp::Not => {
                         if let Value::Bool(b) = val {
-                            Ok(Value::Bool(!b))
+                            Ok(ControlFlow::Value(Value::Bool(!b)))
                         } else {
                             Err("! requires a Bool".into())
                         }
                     }
                     HirUnaryOp::Negate => match val {
-                        Value::Int64(i) => Ok(Value::Int64(-i)),
-                        Value::Float64(f) => Ok(Value::Float64(-f)),
+                        Value::Int64(i) => Ok(ControlFlow::Value(Value::Int64(-i))),
+                        Value::Float64(f) => Ok(ControlFlow::Value(Value::Float64(-f))),
                         _ => Err("- requires a numeric type".into()),
                     },
                 }
@@ -96,48 +100,66 @@ impl Interpreter {
 
                 // Special handling for short-circuiting logical operators and pipe
                 if binary.op == HirBinaryOp::And {
-                    let left = self.eval_expression(&binary.left, env)?;
+                    let left = match self.eval_expression(&binary.left, env)? {
+                        ControlFlow::Value(v) => v,
+                        cf => return Ok(cf),
+                    };
                     if let Value::Bool(false) = left {
-                        return Ok(Value::Bool(false));
+                        return Ok(ControlFlow::Value(Value::Bool(false)));
                     } else if let Value::Command(ref cmd_left) = left {
                         let res_left = run_command(cmd_left)?;
                         if let Value::CommandResult(r) = &res_left {
                             if !r.success {
-                                return Ok(res_left);
+                                return Ok(ControlFlow::Value(res_left));
                             }
                         }
-                        let right = self.eval_expression(&binary.right, env)?;
+                        let right = match self.eval_expression(&binary.right, env)? {
+                            ControlFlow::Value(v) => v,
+                            cf => return Ok(cf),
+                        };
                         if let Value::Command(cmd_right) = right {
-                            return run_command(&cmd_right);
+                            return run_command(&cmd_right).map(ControlFlow::Value);
                         } else {
                             return Err("&& right operand must be Command if left is Command".into());
                         }
                     }
                     v_left = Some(left);
                 } else if binary.op == HirBinaryOp::Or {
-                    let left = self.eval_expression(&binary.left, env)?;
+                    let left = match self.eval_expression(&binary.left, env)? {
+                        ControlFlow::Value(v) => v,
+                        cf => return Ok(cf),
+                    };
                     if let Value::Bool(true) = left {
-                        return Ok(Value::Bool(true));
+                        return Ok(ControlFlow::Value(Value::Bool(true)));
                     } else if let Value::Command(ref cmd_left) = left {
                         let res_left = run_command(cmd_left)?;
                         if let Value::CommandResult(r) = &res_left {
                             if r.success {
-                                return Ok(res_left);
+                                return Ok(ControlFlow::Value(res_left));
                             }
                         }
-                        let right = self.eval_expression(&binary.right, env)?;
+                        let right = match self.eval_expression(&binary.right, env)? {
+                            ControlFlow::Value(v) => v,
+                            cf => return Ok(cf),
+                        };
                         if let Value::Command(cmd_right) = right {
-                            return run_command(&cmd_right);
+                            return run_command(&cmd_right).map(ControlFlow::Value);
                         } else {
                             return Err("|| right operand must be Command if left is Command".into());
                         }
                     }
                     v_left = Some(left);
                 } else if binary.op == HirBinaryOp::Pipe {
-                    let left = self.eval_expression(&binary.left, env)?;
-                    let right = self.eval_expression(&binary.right, env)?;
+                    let left = match self.eval_expression(&binary.left, env)? {
+                        ControlFlow::Value(v) => v,
+                        cf => return Ok(cf),
+                    };
+                    let right = match self.eval_expression(&binary.right, env)? {
+                        ControlFlow::Value(v) => v,
+                        cf => return Ok(cf),
+                    };
                     if let (Value::Command(cmd_left), Value::Command(cmd_right)) = (left, right) {
-                        return pipe_commands(&cmd_left, &cmd_right);
+                        return pipe_commands(&cmd_left, &cmd_right).map(ControlFlow::Value);
                     } else {
                         return Err("| operator expects Commands".into());
                     }
@@ -146,76 +168,129 @@ impl Interpreter {
                 let left = if let Some(v) = v_left {
                     v
                 } else {
-                    self.eval_expression(&binary.left, env)?
+                    match self.eval_expression(&binary.left, env)? {
+                        ControlFlow::Value(v) => v,
+                        cf => return Ok(cf),
+                    }
                 };
 
                 // Assignment
                 if binary.op == HirBinaryOp::Assign {
-                    let right = self.eval_expression(&binary.right, env)?;
+                    let right = match self.eval_expression(&binary.right, env)? {
+                        ControlFlow::Value(v) => v,
+                        cf => return Ok(cf),
+                    };
                     if let HirExpression::Name(_, name) = &*binary.left {
                         env.insert(name.clone(), right.clone());
-                        return Ok(right);
+                        return Ok(ControlFlow::Value(right));
                     } else {
-                        // Advanced assignment like obj.field = x is not strictly required by the basic spec,
-                        // but normally handled. We'll return an error for now to keep it minimal as requested.
                         return Err("Invalid assignment target".into());
                     }
                 }
 
-                let right = self.eval_expression(&binary.right, env)?;
+                let right = match self.eval_expression(&binary.right, env)? {
+                    ControlFlow::Value(v) => v,
+                    cf => return Ok(cf),
+                };
 
                 match binary.op {
                     HirBinaryOp::Add => match (left, right) {
-                        (Value::Int64(a), Value::Int64(b)) => Ok(Value::Int64(a + b)),
-                        (Value::Float64(a), Value::Float64(b)) => Ok(Value::Float64(a + b)),
-                        (Value::String(a), Value::String(b)) => Ok(Value::String(a + &b)),
+                        (Value::Int64(a), Value::Int64(b)) => {
+                            Ok(ControlFlow::Value(Value::Int64(a + b)))
+                        }
+                        (Value::Float64(a), Value::Float64(b)) => {
+                            Ok(ControlFlow::Value(Value::Float64(a + b)))
+                        }
+                        (Value::String(a), Value::String(b)) => {
+                            Ok(ControlFlow::Value(Value::String(a + &b)))
+                        }
                         _ => Err("+ operator mismatch".into()),
                     },
                     HirBinaryOp::Sub => match (left, right) {
-                        (Value::Int64(a), Value::Int64(b)) => Ok(Value::Int64(a - b)),
-                        (Value::Float64(a), Value::Float64(b)) => Ok(Value::Float64(a - b)),
+                        (Value::Int64(a), Value::Int64(b)) => {
+                            Ok(ControlFlow::Value(Value::Int64(a - b)))
+                        }
+                        (Value::Float64(a), Value::Float64(b)) => {
+                            Ok(ControlFlow::Value(Value::Float64(a - b)))
+                        }
                         _ => Err("- operator mismatch".into()),
                     },
                     HirBinaryOp::Mul => match (left, right) {
-                        (Value::Int64(a), Value::Int64(b)) => Ok(Value::Int64(a * b)),
-                        (Value::Float64(a), Value::Float64(b)) => Ok(Value::Float64(a * b)),
+                        (Value::Int64(a), Value::Int64(b)) => {
+                            Ok(ControlFlow::Value(Value::Int64(a * b)))
+                        }
+                        (Value::Float64(a), Value::Float64(b)) => {
+                            Ok(ControlFlow::Value(Value::Float64(a * b)))
+                        }
                         _ => Err("* operator mismatch".into()),
                     },
                     HirBinaryOp::Div => match (left, right) {
-                        (Value::Int64(a), Value::Int64(b)) => Ok(Value::Int64(a / b)),
-                        (Value::Float64(a), Value::Float64(b)) => Ok(Value::Float64(a / b)),
+                        (Value::Int64(a), Value::Int64(b)) => {
+                            Ok(ControlFlow::Value(Value::Int64(a / b)))
+                        }
+                        (Value::Float64(a), Value::Float64(b)) => {
+                            Ok(ControlFlow::Value(Value::Float64(a / b)))
+                        }
                         _ => Err("/ operator mismatch".into()),
                     },
                     HirBinaryOp::Eq => match (left, right) {
-                        (Value::Int64(a), Value::Int64(b)) => Ok(Value::Bool(a == b)),
-                        (Value::Float64(a), Value::Float64(b)) => Ok(Value::Bool(a == b)),
-                        (Value::Bool(a), Value::Bool(b)) => Ok(Value::Bool(a == b)),
-                        (Value::String(a), Value::String(b)) => Ok(Value::Bool(a == b)),
-                        _ => Ok(Value::Bool(false)), // Or error
+                        (Value::Int64(a), Value::Int64(b)) => {
+                            Ok(ControlFlow::Value(Value::Bool(a == b)))
+                        }
+                        (Value::Float64(a), Value::Float64(b)) => {
+                            Ok(ControlFlow::Value(Value::Bool(a == b)))
+                        }
+                        (Value::Bool(a), Value::Bool(b)) => {
+                            Ok(ControlFlow::Value(Value::Bool(a == b)))
+                        }
+                        (Value::String(a), Value::String(b)) => {
+                            Ok(ControlFlow::Value(Value::Bool(a == b)))
+                        }
+                        _ => Ok(ControlFlow::Value(Value::Bool(false))),
                     },
                     HirBinaryOp::NotEq => match (left, right) {
-                        (Value::Int64(a), Value::Int64(b)) => Ok(Value::Bool(a != b)),
-                        (Value::Float64(a), Value::Float64(b)) => Ok(Value::Bool(a != b)),
-                        (Value::Bool(a), Value::Bool(b)) => Ok(Value::Bool(a != b)),
-                        (Value::String(a), Value::String(b)) => Ok(Value::Bool(a != b)),
-                        _ => Ok(Value::Bool(true)), // Or error
+                        (Value::Int64(a), Value::Int64(b)) => {
+                            Ok(ControlFlow::Value(Value::Bool(a != b)))
+                        }
+                        (Value::Float64(a), Value::Float64(b)) => {
+                            Ok(ControlFlow::Value(Value::Bool(a != b)))
+                        }
+                        (Value::Bool(a), Value::Bool(b)) => {
+                            Ok(ControlFlow::Value(Value::Bool(a != b)))
+                        }
+                        (Value::String(a), Value::String(b)) => {
+                            Ok(ControlFlow::Value(Value::Bool(a != b)))
+                        }
+                        _ => Ok(ControlFlow::Value(Value::Bool(true))),
                     },
                     HirBinaryOp::Less => match (left, right) {
-                        (Value::Int64(a), Value::Int64(b)) => Ok(Value::Bool(a < b)),
-                        (Value::Float64(a), Value::Float64(b)) => Ok(Value::Bool(a < b)),
+                        (Value::Int64(a), Value::Int64(b)) => {
+                            Ok(ControlFlow::Value(Value::Bool(a < b)))
+                        }
+                        (Value::Float64(a), Value::Float64(b)) => {
+                            Ok(ControlFlow::Value(Value::Bool(a < b)))
+                        }
                         _ => Err("< operator mismatch".into()),
                     },
                     HirBinaryOp::Greater => match (left, right) {
-                        (Value::Int64(a), Value::Int64(b)) => Ok(Value::Bool(a > b)),
-                        (Value::Float64(a), Value::Float64(b)) => Ok(Value::Bool(a > b)),
+                        (Value::Int64(a), Value::Int64(b)) => {
+                            Ok(ControlFlow::Value(Value::Bool(a > b)))
+                        }
+                        (Value::Float64(a), Value::Float64(b)) => {
+                            Ok(ControlFlow::Value(Value::Bool(a > b)))
+                        }
                         _ => Err("> operator mismatch".into()),
                     },
                     HirBinaryOp::And => match (left, right) {
-                        (Value::Bool(a), Value::Bool(b)) => Ok(Value::Bool(a && b)),
+                        (Value::Bool(a), Value::Bool(b)) => {
+                            Ok(ControlFlow::Value(Value::Bool(a && b)))
+                        }
                         _ => Err("&& requires Bool".into()),
                     },
                     HirBinaryOp::Or => match (left, right) {
-                        (Value::Bool(a), Value::Bool(b)) => Ok(Value::Bool(a || b)),
+                        (Value::Bool(a), Value::Bool(b)) => {
+                            Ok(ControlFlow::Value(Value::Bool(a || b)))
+                        }
                         _ => Err("|| requires Bool".into()),
                     },
                     _ => Err("Unsupported binary operator".into()),
@@ -224,12 +299,15 @@ impl Interpreter {
             HirExpression::Call(call) => {
                 if let HirExpression::Member(member) = &*call.callee {
                     if member.field == "run" {
-                        let obj = self.eval_expression(&member.object, env)?;
+                        let obj = match self.eval_expression(&member.object, env)? {
+                            ControlFlow::Value(v) => v,
+                            cf => return Ok(cf),
+                        };
                         if let Value::Command(cmd) = obj {
                             if !call.args.is_empty() {
                                 return Err("Method 'run' expects 0 arguments".into());
                             }
-                            return run_command(&cmd);
+                            return run_command(&cmd).map(ControlFlow::Value);
                         } else {
                             return Err("Method 'run' requires a Command".into());
                         }
@@ -238,7 +316,10 @@ impl Interpreter {
 
                 let mut args = Vec::new();
                 for arg_expr in &call.args {
-                    args.push(self.eval_expression(arg_expr, env)?);
+                    match self.eval_expression(arg_expr, env)? {
+                        ControlFlow::Value(v) => args.push(v),
+                        cf => return Ok(cf),
+                    }
                 }
 
                 if let HirExpression::Name(_, name) = &*call.callee {
@@ -247,7 +328,7 @@ impl Interpreter {
                             return Err(format!("Builtin 'exit' expects 1 argument"));
                         }
                         if let Value::Int64(code) = args[0] {
-                            return Err(format!("@@FERO_EXIT@@{}", code));
+                            return Ok(ControlFlow::Exit(code as i32));
                         } else {
                             return Err("exit requires an Int64 argument".into());
                         }
@@ -257,7 +338,7 @@ impl Interpreter {
                             return Err(format!("Builtin 'print' expects 1 argument"));
                         }
                         println!("{}", args[0]);
-                        return Ok(Value::Unit);
+                        return Ok(ControlFlow::Value(Value::Unit));
                     }
                     if name == "read_line" {
                         if args.len() != 0 {
@@ -271,7 +352,7 @@ impl Interpreter {
                                 input.pop();
                             }
                         }
-                        return Ok(Value::String(input));
+                        return Ok(ControlFlow::Value(Value::String(input)));
                     }
                     if name == "cmd" {
                         if args.len() != 2 {
@@ -295,7 +376,7 @@ impl Interpreter {
                             }
                             _ => return Err("cmd requires an array of Strings as second argument".into()),
                         };
-                        return Ok(Value::Command(crate::value::CommandValue { program, args: cmd_args }));
+                        return Ok(ControlFlow::Value(Value::Command(crate::value::CommandValue { program, args: cmd_args })));
                     }
                     if name == "read" {
                         if args.len() != 1 {
@@ -304,7 +385,7 @@ impl Interpreter {
                         if let Value::String(path) = &args[0] {
                             let text = std::fs::read_to_string(path)
                                 .map_err(|e| format!("Failed to read '{}': {}", path, e))?;
-                            return Ok(Value::String(text));
+                            return Ok(ControlFlow::Value(Value::String(text)));
                         } else {
                             return Err("read requires a String as first argument".into());
                         }
@@ -316,7 +397,7 @@ impl Interpreter {
                         if let (Value::String(path), Value::String(text)) = (&args[0], &args[1]) {
                             std::fs::write(path, text)
                                 .map_err(|e| format!("Failed to write to '{}': {}", path, e))?;
-                            return Ok(Value::Unit);
+                            return Ok(ControlFlow::Value(Value::Unit));
                         } else {
                             return Err("write requires two String arguments".into());
                         }
@@ -334,7 +415,7 @@ impl Interpreter {
                                 .map_err(|e| format!("Failed to open '{}' for appending: {}", path, e))?;
                             file.write_all(text.as_bytes())
                                 .map_err(|e| format!("Failed to append to '{}': {}", path, e))?;
-                            return Ok(Value::Unit);
+                            return Ok(ControlFlow::Value(Value::Unit));
                         } else {
                             return Err("append requires two String arguments".into());
                         }
@@ -346,41 +427,47 @@ impl Interpreter {
                         .cloned()
                         .ok_or_else(|| format!("Function {} not found", name))?;
                     
-                    let flow = self.call_function(&func, args)?;
-                    match flow {
-                        ControlFlow::Value(v) | ControlFlow::Return(v) => Ok(v),
-                        ControlFlow::Exit(code) => Err(format!("@@FERO_EXIT@@{}", code)),
-                        ControlFlow::Break | ControlFlow::Continue => Err("Break/Continue not allowed here".into()),
-                    }
+                    self.call_function(&func, args)
                 } else {
                     Err("Only named functions are supported".into())
                 }
             }
             HirExpression::Member(member) => {
-                let obj = self.eval_expression(&member.object, env)?;
+                let obj = match self.eval_expression(&member.object, env)? {
+                    ControlFlow::Value(v) => v,
+                    cf => return Ok(cf),
+                };
                 match obj {
                     Value::Struct(s) => s
                         .fields
                         .get(&member.field)
                         .cloned()
+                        .map(ControlFlow::Value)
                         .ok_or_else(|| format!("Field {} not found", member.field)),
                     Value::CommandResult(r) => match member.field.as_str() {
-                        "exit_code" => Ok(Value::Int64(r.exit_code as i64)),
-                        "stdout" => Ok(Value::String(r.stdout.clone())),
-                        "stderr" => Ok(Value::String(r.stderr.clone())),
-                        "success" => Ok(Value::Bool(r.success)),
+                        "exit_code" => Ok(ControlFlow::Value(Value::Int64(r.exit_code as i64))),
+                        "stdout" => Ok(ControlFlow::Value(Value::String(r.stdout.clone()))),
+                        "stderr" => Ok(ControlFlow::Value(Value::String(r.stderr.clone()))),
+                        "success" => Ok(ControlFlow::Value(Value::Bool(r.success))),
                         _ => Err(format!("Field {} not found on CommandResult", member.field)),
                     },
                     _ => Err("Member access requires a struct or CommandResult".into()),
                 }
             }
             HirExpression::Index(index) => {
-                let obj = self.eval_expression(&index.object, env)?;
-                let idx = self.eval_expression(&index.index, env)?;
+                let obj = match self.eval_expression(&index.object, env)? {
+                    ControlFlow::Value(v) => v,
+                    cf => return Ok(cf),
+                };
+                let idx = match self.eval_expression(&index.index, env)? {
+                    ControlFlow::Value(v) => v,
+                    cf => return Ok(cf),
+                };
                 if let Value::Array(arr) = obj {
                     if let Value::Int64(i) = idx {
                         arr.get(i as usize)
                             .cloned()
+                            .map(ControlFlow::Value)
                             .ok_or_else(|| "Index out of bounds".into())
                     } else {
                         Err("Index must be Int64".into())
@@ -390,7 +477,10 @@ impl Interpreter {
                 }
             }
             HirExpression::If(if_expr) => {
-                let cond = self.eval_expression(&if_expr.condition, env)?;
+                let cond = match self.eval_expression(&if_expr.condition, env)? {
+                    ControlFlow::Value(v) => v,
+                    cf => return Ok(cf),
+                };
                 let is_true = match cond {
                     Value::Bool(b) => b,
                     _ => return Err("If condition must be a Bool".into()),
@@ -401,38 +491,48 @@ impl Interpreter {
                 } else if let Some(else_branch) = &if_expr.else_branch {
                     self.eval_expression(else_branch, env)
                 } else {
-                    Ok(Value::Unit)
+                    Ok(ControlFlow::Value(Value::Unit))
                 }
             }
             HirExpression::Block(block) => self.eval_block(block, env),
             HirExpression::Tuple(_, exprs) => {
                 let mut vals = Vec::new();
                 for e in exprs {
-                    vals.push(self.eval_expression(e, env)?);
+                    match self.eval_expression(e, env)? {
+                        ControlFlow::Value(v) => vals.push(v),
+                        cf => return Ok(cf),
+                    }
                 }
-                Ok(Value::Tuple(vals))
+                Ok(ControlFlow::Value(Value::Tuple(vals)))
             }
             HirExpression::Array(_, exprs) => {
                 let mut vals = Vec::new();
                 for e in exprs {
-                    vals.push(self.eval_expression(e, env)?);
+                    match self.eval_expression(e, env)? {
+                        ControlFlow::Value(v) => vals.push(v),
+                        cf => return Ok(cf),
+                    }
                 }
-                Ok(Value::Array(vals))
+                Ok(ControlFlow::Value(Value::Array(vals)))
             }
             HirExpression::StructLiteral(s) => {
                 let mut fields = HashMap::new();
                 for (name, expr) in &s.fields {
-                    let val = self.eval_expression(expr, env)?;
-                    fields.insert(name.clone(), val);
+                    match self.eval_expression(expr, env)? {
+                        ControlFlow::Value(v) => { fields.insert(name.clone(), v); },
+                        cf => return Ok(cf),
+                    }
                 }
-                Ok(Value::Struct(StructInstance {
+                Ok(ControlFlow::Value(Value::Struct(StructInstance {
                     name: s.name.clone(),
                     fields,
-                }))
+                })))
             }
             HirExpression::For(for_expr) => {
-                // Return value from a for loop block is unit for now
-                let iterable = self.eval_expression(&for_expr.iterable, env)?;
+                let iterable = match self.eval_expression(&for_expr.iterable, env)? {
+                    ControlFlow::Value(v) => v,
+                    cf => return Ok(cf),
+                };
                 let iter_values = match iterable {
                     Value::Array(arr) => arr,
                     _ => return Err("ForExpr iterable must be an Array".into()),
@@ -444,7 +544,13 @@ impl Interpreter {
                     env.insert(for_expr.binding.clone(), item);
 
                     if let Some(filter_expr) = &for_expr.filter {
-                        let filter_res = self.eval_expression(filter_expr, env)?;
+                        let filter_res = match self.eval_expression(filter_expr, env)? {
+                            ControlFlow::Value(v) => v,
+                            cf => {
+                                env.pop_scope();
+                                return Ok(cf);
+                            }
+                        };
                         if let Value::Bool(b) = filter_res {
                             if !b {
                                 env.pop_scope();
@@ -456,40 +562,60 @@ impl Interpreter {
                         }
                     }
 
-                    let val = self.eval_block(&for_expr.body, env)?;
-                    last_val = val;
+                    match self.eval_block(&for_expr.body, env)? {
+                        ControlFlow::Value(v) => last_val = v,
+                        ControlFlow::Return(v) => {
+                            env.pop_scope();
+                            return Ok(ControlFlow::Return(v));
+                        }
+                        ControlFlow::Exit(code) => {
+                            env.pop_scope();
+                            return Ok(ControlFlow::Exit(code));
+                        }
+                        ControlFlow::Break => {
+                            env.pop_scope();
+                            break;
+                        }
+                        ControlFlow::Continue => {
+                            env.pop_scope();
+                            continue;
+                        }
+                    }
                     env.pop_scope();
                 }
-                Ok(last_val)
+                Ok(ControlFlow::Value(last_val))
             }
             // Minimal implementations for others to make it compile
             HirExpression::Match(_) => Err("Match expressions are not fully supported yet".into()),
         }
     }
 
-    fn eval_block(&mut self, block: &HirBlock, env: &mut RuntimeEnv) -> Result<Value, String> {
+    fn eval_block(&mut self, block: &HirBlock, env: &mut RuntimeEnv) -> Result<ControlFlow, String> {
         env.push_scope();
         let mut last_val = Value::Unit;
         for stmt in &block.statements {
             let flow = self.eval_statement(stmt, env)?;
             match flow {
                 ControlFlow::Value(v) => last_val = v,
-                ControlFlow::Return(_v) => {
+                ControlFlow::Return(v) => {
                     env.pop_scope();
-                    return Err("Return inside expression block bubbling is unsupported".into());
+                    return Ok(ControlFlow::Return(v));
                 }
                 ControlFlow::Exit(code) => {
                     env.pop_scope();
-                    return Err(format!("@@FERO_EXIT@@{}", code));
+                    return Ok(ControlFlow::Exit(code));
                 }
-                ControlFlow::Break | ControlFlow::Continue => {
-                    return Err(
-                        "Break/Continue inside expression block bubbling is unsupported".into(),
-                    );
+                ControlFlow::Break => {
+                    env.pop_scope();
+                    return Ok(ControlFlow::Break);
+                }
+                ControlFlow::Continue => {
+                    env.pop_scope();
+                    return Ok(ControlFlow::Continue);
                 }
             }
         }
         env.pop_scope();
-        Ok(last_val)
+        Ok(ControlFlow::Value(last_val))
     }
 }

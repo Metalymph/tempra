@@ -1,0 +1,10 @@
+fn main() {
+    let result = cmd("echo", ["abc"]) | cmd("grep", ["a"])
+
+    if !result.success {
+        print("pipeline failed")
+        exit(result.exit_code)
+    }
+
+    print(result.stdout)
+}

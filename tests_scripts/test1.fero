@@ -1,0 +1,10 @@
+fn main() {
+    let name = read_line()
+
+    if name == "" {
+        print("error: empty name")
+        exit(1)
+    }
+
+    print("Hello " + name)
+}

@@ -11,6 +11,9 @@ fn main() {
         Commands::Run(args) => {
             commands::run::run_command(args.path)
         }
+        Commands::Check(args) => {
+            commands::check::check_command(args.path)
+        }
     };
 
     if let Err(err) = result {

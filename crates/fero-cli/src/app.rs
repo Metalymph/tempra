@@ -12,9 +12,15 @@ pub struct Cli {
 #[derive(Subcommand)]
 pub enum Commands {
     Run(RunArgs),
+    Check(CheckArgs),
 }
 
 #[derive(Parser)]
 pub struct RunArgs {
+    pub path: PathBuf,
+}
+
+#[derive(Parser)]
+pub struct CheckArgs {
     pub path: PathBuf,
 }

@@ -3,7 +3,7 @@ use std::path::Path;
 use crate::error::DriverError;
 use fero_parser::parse_source;
 use fero_hir::lower_file;
-use fero_typeck::check_file;
+use fero_typeck::check_file as typeck_check_file;
 use fero_interpreter::run;
 
 pub fn run_source(source: &str) -> Result<(), DriverError> {
@@ -12,7 +12,7 @@ pub fn run_source(source: &str) -> Result<(), DriverError> {
     
     let hir = lower_file(source, &ast);
     
-    check_file(&hir)
+    typeck_check_file(&hir)
         .map_err(|errs| DriverError::TypeError(format!("{:?}", errs)))?;
     
     let _value = run(&hir)
@@ -24,6 +24,23 @@ pub fn run_source(source: &str) -> Result<(), DriverError> {
 pub fn run_file(path: &Path) -> Result<(), DriverError> {
     let source = fs::read_to_string(path)?;
     run_source(&source)
+}
+
+pub fn check_source(source: &str) -> Result<(), DriverError> {
+    let ast = parse_source(source)
+        .map_err(|e| DriverError::ParseError(format!("{:?}", e)))?;
+    
+    let hir = lower_file(source, &ast);
+    
+    typeck_check_file(&hir)
+        .map_err(|errs| DriverError::TypeError(format!("{:?}", errs)))?;
+    
+    Ok(())
+}
+
+pub fn check_file(path: &Path) -> Result<(), DriverError> {
+    let source = fs::read_to_string(path)?;
+    check_source(&source)
 }
 
 #[cfg(test)]
@@ -40,5 +57,39 @@ mod tests {
         ";
         let result = run_source(source);
         assert!(result.is_ok(), "Expected success, got {:?}", result.err().unwrap());
+    }
+
+    #[test]
+    fn test_check_source_success() {
+        let source = "
+        fn main() {
+            let x = 1;
+            x
+        }
+        ";
+        let result = check_source(source);
+        assert!(result.is_ok(), "Expected success, got {:?}", result.err().unwrap());
+    }
+
+    #[test]
+    fn test_check_source_type_error() {
+        let source = "
+        fn main() {
+            let x = read(123);
+        }
+        ";
+        let result = check_source(source);
+        assert!(matches!(result, Err(DriverError::TypeError(_))));
+    }
+
+    #[test]
+    fn test_check_source_parse_error() {
+        let source = "
+        fn main( {
+            let x = 1;
+        }
+        ";
+        let result = check_source(source);
+        assert!(matches!(result, Err(DriverError::ParseError(_))));
     }
 }

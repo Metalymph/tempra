@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-fero-ir.workspace = true
+fero-hir.workspace = true
 fero-runtime.workspace = true
 anyhow.workspace = true
+
+[dev-dependencies]
+fero-parser.workspace = true

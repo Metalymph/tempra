@@ -1,19 +1,44 @@
-use anyhow::Result;
-use fero_lexer::Lexer;
+use std::fs;
+use std::path::Path;
+use crate::error::DriverError;
+use fero_parser::parse_source;
+use fero_hir::lower_file;
+use fero_typeck::check_file;
+use fero_interpreter::run;
 
-/// Run the full compilation pipeline on raw source text.
-///
-/// Currently stops after lexing — each stage will be wired in as it becomes
-/// available:
-///   lexer → parser → HIR lowering → type check → MIR → Fero IR
-pub fn compile(source: String) -> Result<()> {
-    let mut lexer = Lexer::new(&source);
-    // Drain all tokens (placeholder until the parser is wired in).
-    loop {
-        let tok = lexer.next_token();
-        if tok.kind == fero_lexer::TokenKind::EndOfFile {
-            break;
-        }
-    }
+pub fn run_source(source: &str) -> Result<(), DriverError> {
+    let ast = parse_source(source)
+        .map_err(|e| DriverError::ParseError(format!("{:?}", e)))?;
+    
+    let hir = lower_file(source, &ast);
+    
+    check_file(&hir)
+        .map_err(|errs| DriverError::TypeError(format!("{:?}", errs)))?;
+    
+    let _value = run(&hir)
+        .map_err(|e| DriverError::RuntimeError(e))?;
+    
     Ok(())
+}
+
+pub fn run_file(path: &Path) -> Result<(), DriverError> {
+    let source = fs::read_to_string(path)?;
+    run_source(&source)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_run_source_basic() {
+        let source = "
+        fn main() {
+            let x = 1;
+            x
+        }
+        ";
+        let result = run_source(source);
+        assert!(result.is_ok(), "Expected success, got {:?}", result.err().unwrap());
+    }
 }

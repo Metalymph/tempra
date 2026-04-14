@@ -196,7 +196,8 @@ name = "fero-interpreter"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "fero-ir",
+ "fero-hir",
+ "fero-parser",
  "fero-runtime",
 ]
 

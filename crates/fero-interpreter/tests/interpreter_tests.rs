@@ -91,3 +91,22 @@ fn test_5() {
         panic!("Expected String(\"a\"), found {:?}", val);
     }
 }
+
+#[test]
+fn test_print() {
+    let source = r#"
+    fn main() {
+        print("hello")
+    }
+    "#;
+    let val = assert_runs(source);
+    assert!(matches!(val, Value::Unit));
+}
+
+// Limitations: `read_line` is not directly tested here automatically since
+// it blocks waiting for stdin in the default environment. Option B was chosen
+// to test it manually via CLI (smoke test).
+// #[test]
+// fn test_read_line() {
+//      // test logic
+// }

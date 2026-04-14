@@ -120,6 +120,26 @@ fn check_binary(ctx: &mut TypeContext, b: &HirBinary) -> Type {
     }
 }
 
+fn check_builtin(ctx: &mut TypeContext, name: &str, args: &[HirExpression], span: Span) -> Option<Type> {
+    match name {
+        "print" => {
+            if args.len() != 1 {
+                ctx.error(format!("Function 'print' expects 1 argument(s), found {}", args.len()), span);
+            } else {
+                let _ = check_expression(ctx, &args[0]);
+            }
+            Some(Type::Unit)
+        }
+        "read_line" => {
+            if args.len() != 0 {
+                ctx.error(format!("Function 'read_line' expects 0 argument(s), found {}", args.len()), span);
+            }
+            Some(Type::String)
+        }
+        _ => None,
+    }
+}
+
 fn check_call(ctx: &mut TypeContext, c: &HirCall) -> Type {
     // For now we only support direct name calls
     let func_name = match &*c.callee {
@@ -130,6 +150,10 @@ fn check_call(ctx: &mut TypeContext, c: &HirCall) -> Type {
             return Type::Unknown;
         }
     };
+
+    if let Some(builtin_ty) = check_builtin(ctx, &func_name, &c.args, c.span) {
+        return builtin_ty;
+    }
 
     let sig = match ctx.functions.get(&func_name) {
         Some(sig) => sig.clone(),

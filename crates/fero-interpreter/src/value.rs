@@ -19,3 +19,41 @@ pub struct StructInstance {
     pub name: String,
     pub fields: HashMap<String, Value>,
 }
+
+impl std::fmt::Display for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Value::Unit => write!(f, "()"),
+            Value::Bool(b) => write!(f, "{}", b),
+            Value::Int64(i) => write!(f, "{}", i),
+            Value::Float64(fl) => write!(f, "{}", fl),
+            Value::String(s) => write!(f, "{}", s),
+            Value::Array(arr) => {
+                write!(f, "[")?;
+                for (i, val) in arr.iter().enumerate() {
+                    if i > 0 { write!(f, ", ")?; }
+                    write!(f, "{}", val)?;
+                }
+                write!(f, "]")
+            }
+            Value::Tuple(tup) => {
+                write!(f, "(")?;
+                for (i, val) in tup.iter().enumerate() {
+                    if i > 0 { write!(f, ", ")?; }
+                    write!(f, "{}", val)?;
+                }
+                write!(f, ")")
+            }
+            Value::Struct(s) => {
+                write!(f, "{} {{ ", s.name)?;
+                let mut first = true;
+                for (k, v) in &s.fields {
+                    if !first { write!(f, ", ")?; }
+                    write!(f, "{}: {}", k, v)?;
+                    first = false;
+                }
+                write!(f, " }}")
+            }
+        }
+    }
+}

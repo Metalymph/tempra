@@ -158,6 +158,28 @@ impl Interpreter {
                 }
 
                 if let HirExpression::Name(_, name) = &*call.callee {
+                    if name == "print" {
+                        if args.len() != 1 {
+                            return Err(format!("Builtin 'print' expects 1 argument"));
+                        }
+                        println!("{}", args[0]);
+                        return Ok(Value::Unit);
+                    }
+                    if name == "read_line" {
+                        if args.len() != 0 {
+                            return Err(format!("Builtin 'read_line' expects 0 arguments"));
+                        }
+                        let mut input = String::new();
+                        std::io::stdin().read_line(&mut input).map_err(|e| format!("Failed to read stdin: {}", e))?;
+                        if input.ends_with('\n') {
+                            input.pop();
+                            if input.ends_with('\r') {
+                                input.pop();
+                            }
+                        }
+                        return Ok(Value::String(input));
+                    }
+
                     let func = self
                         .functions
                         .get(name)

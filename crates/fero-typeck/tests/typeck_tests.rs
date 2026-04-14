@@ -167,3 +167,40 @@ fn test_for_expression_success() {
         }
     "#);
 }
+
+#[test]
+fn test_print_success() {
+    expect_ok(r#"
+        fn main() {
+            print("hello")
+        }
+    "#);
+}
+
+#[test]
+fn test_read_line_success() {
+    expect_ok(r#"
+        fn main() {
+            let name = read_line()
+            print(name)
+        }
+    "#);
+}
+
+#[test]
+fn test_print_wrong_arity() {
+    expect_err(r#"
+        fn main() {
+            print()
+        }
+    "#);
+}
+
+#[test]
+fn test_read_line_wrong_arity() {
+    expect_err(r#"
+        fn main() {
+            read_line(1)
+        }
+    "#);
+}

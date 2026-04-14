@@ -30,6 +30,9 @@ pub enum Type {
     Struct(std::string::String),
     Enum(std::string::String),
 
+    Command,
+    CommandResult,
+
     /// Used during partial checking when a type is not yet known.
     Unknown,
     /// Sentinel for expressions that already failed type checking.
@@ -99,6 +102,8 @@ impl fmt::Display for Type {
             }
             Type::Struct(name) => write!(f, "{}", name),
             Type::Enum(name) => write!(f, "{}", name),
+            Type::Command => write!(f, "Command"),
+            Type::CommandResult => write!(f, "CommandResult"),
             Type::Unknown => write!(f, "?"),
             Type::Error => write!(f, "<error>"),
         }
@@ -120,6 +125,8 @@ pub fn resolve_named_type(name: &str) -> Type {
         "UInt64" => Type::UInt64,
         "Float32" => Type::Float32,
         "Float64" => Type::Float64,
+        "Command" => Type::Command,
+        "CommandResult" => Type::CommandResult,
         _ => Type::Unknown, // caller decides if this is struct/enum
     }
 }

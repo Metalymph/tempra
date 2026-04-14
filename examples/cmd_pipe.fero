@@ -1,0 +1,4 @@
+fn main() {
+    let result = cmd("echo", ["hello"]) | cmd("grep", ["h"])
+    print(result.stdout)
+}

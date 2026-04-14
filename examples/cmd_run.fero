@@ -1,0 +1,4 @@
+fn main() {
+    let result = cmd("echo", ["hello"]).run()
+    print(result.stdout)
+}

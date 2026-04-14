@@ -5,6 +5,46 @@ use crate::value::{StructInstance, Value};
 use fero_hir::*;
 use std::collections::HashMap;
 
+fn run_command(c: &crate::value::CommandValue) -> Result<Value, String> {
+    let mut cmd = std::process::Command::new(&c.program);
+    cmd.args(&c.args);
+    let output = cmd.output().map_err(|e| format!("Command error: {}", e))?;
+    Ok(Value::CommandResult(crate::value::CommandResultValue {
+        exit_code: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        success: output.status.success(),
+    }))
+}
+
+fn pipe_commands(left: &crate::value::CommandValue, right: &crate::value::CommandValue) -> Result<Value, String> {
+    let left_output = std::process::Command::new(&left.program)
+        .args(&left.args)
+        .output()
+        .map_err(|e| format!("Left command error: {}", e))?;
+    
+    use std::io::Write;
+    let mut right_child = std::process::Command::new(&right.program)
+        .args(&right.args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Right command error: {}", e))?;
+        
+    if let Some(mut stdin) = right_child.stdin.take() {
+        let _ = stdin.write_all(&left_output.stdout);
+    }
+    
+    let output = right_child.wait_with_output().map_err(|e| format!("Right wait error: {}", e))?;
+    Ok(Value::CommandResult(crate::value::CommandResultValue {
+        exit_code: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        success: output.status.success(),
+    }))
+}
+
 impl Interpreter {
     pub fn eval_expression(
         &mut self,
@@ -52,29 +92,59 @@ impl Interpreter {
                 }
             }
             HirExpression::Binary(binary) => {
-                let mut v_left = Some(Value::Unit);
+                let mut v_left = None;
 
-                // Short-circuiting for && and ||
+                // Special handling for short-circuiting logical operators and pipe
                 if binary.op == HirBinaryOp::And {
                     let left = self.eval_expression(&binary.left, env)?;
                     if let Value::Bool(false) = left {
                         return Ok(Value::Bool(false));
+                    } else if let Value::Command(ref cmd_left) = left {
+                        let res_left = run_command(cmd_left)?;
+                        if let Value::CommandResult(r) = &res_left {
+                            if !r.success {
+                                return Ok(res_left);
+                            }
+                        }
+                        let right = self.eval_expression(&binary.right, env)?;
+                        if let Value::Command(cmd_right) = right {
+                            return run_command(&cmd_right);
+                        } else {
+                            return Err("&& right operand must be Command if left is Command".into());
+                        }
                     }
                     v_left = Some(left);
                 } else if binary.op == HirBinaryOp::Or {
                     let left = self.eval_expression(&binary.left, env)?;
                     if let Value::Bool(true) = left {
                         return Ok(Value::Bool(true));
+                    } else if let Value::Command(ref cmd_left) = left {
+                        let res_left = run_command(cmd_left)?;
+                        if let Value::CommandResult(r) = &res_left {
+                            if r.success {
+                                return Ok(res_left);
+                            }
+                        }
+                        let right = self.eval_expression(&binary.right, env)?;
+                        if let Value::Command(cmd_right) = right {
+                            return run_command(&cmd_right);
+                        } else {
+                            return Err("|| right operand must be Command if left is Command".into());
+                        }
                     }
                     v_left = Some(left);
+                } else if binary.op == HirBinaryOp::Pipe {
+                    let left = self.eval_expression(&binary.left, env)?;
+                    let right = self.eval_expression(&binary.right, env)?;
+                    if let (Value::Command(cmd_left), Value::Command(cmd_right)) = (left, right) {
+                        return pipe_commands(&cmd_left, &cmd_right);
+                    } else {
+                        return Err("| operator expects Commands".into());
+                    }
                 }
 
-                let left = if let Some(v) = v_left.take() {
-                    if binary.op == HirBinaryOp::And || binary.op == HirBinaryOp::Or {
-                        v
-                    } else {
-                        self.eval_expression(&binary.left, env)?
-                    }
+                let left = if let Some(v) = v_left {
+                    v
                 } else {
                     self.eval_expression(&binary.left, env)?
                 };
@@ -152,6 +222,20 @@ impl Interpreter {
                 }
             }
             HirExpression::Call(call) => {
+                if let HirExpression::Member(member) = &*call.callee {
+                    if member.field == "run" {
+                        let obj = self.eval_expression(&member.object, env)?;
+                        if let Value::Command(cmd) = obj {
+                            if !call.args.is_empty() {
+                                return Err("Method 'run' expects 0 arguments".into());
+                            }
+                            return run_command(&cmd);
+                        } else {
+                            return Err("Method 'run' requires a Command".into());
+                        }
+                    }
+                }
+
                 let mut args = Vec::new();
                 for arg_expr in &call.args {
                     args.push(self.eval_expression(arg_expr, env)?);
@@ -179,6 +263,30 @@ impl Interpreter {
                         }
                         return Ok(Value::String(input));
                     }
+                    if name == "cmd" {
+                        if args.len() != 2 {
+                            return Err(format!("Builtin 'cmd' expects 2 arguments"));
+                        }
+                        let program = match &args[0] {
+                            Value::String(s) => s.clone(),
+                            _ => return Err("cmd requires a String as first argument".into()),
+                        };
+                        let cmd_args = match &args[1] {
+                            Value::Array(arr) => {
+                                let mut a = Vec::new();
+                                for el in arr {
+                                    if let Value::String(s) = el {
+                                        a.push(s.clone());
+                                    } else {
+                                        return Err("cmd requires an array of Strings".into());
+                                    }
+                                }
+                                a
+                            }
+                            _ => return Err("cmd requires an array of Strings as second argument".into()),
+                        };
+                        return Ok(Value::Command(crate::value::CommandValue { program, args: cmd_args }));
+                    }
 
                     let func = self
                         .functions
@@ -192,13 +300,20 @@ impl Interpreter {
             }
             HirExpression::Member(member) => {
                 let obj = self.eval_expression(&member.object, env)?;
-                if let Value::Struct(s) = obj {
-                    s.fields
+                match obj {
+                    Value::Struct(s) => s
+                        .fields
                         .get(&member.field)
                         .cloned()
-                        .ok_or_else(|| format!("Field {} not found", member.field))
-                } else {
-                    Err("Member access requires a struct".into())
+                        .ok_or_else(|| format!("Field {} not found", member.field)),
+                    Value::CommandResult(r) => match member.field.as_str() {
+                        "exit_code" => Ok(Value::Int64(r.exit_code as i64)),
+                        "stdout" => Ok(Value::String(r.stdout.clone())),
+                        "stderr" => Ok(Value::String(r.stderr.clone())),
+                        "success" => Ok(Value::Bool(r.success)),
+                        _ => Err(format!("Field {} not found on CommandResult", member.field)),
+                    },
+                    _ => Err("Member access requires a struct or CommandResult".into()),
                 }
             }
             HirExpression::Index(index) => {

@@ -12,6 +12,23 @@ pub enum Value {
     Tuple(Vec<Value>),
 
     Struct(StructInstance),
+
+    Command(CommandValue),
+    CommandResult(CommandResultValue),
+}
+
+#[derive(Debug, Clone)]
+pub struct CommandValue {
+    pub program: String,
+    pub args: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CommandResultValue {
+    pub exit_code: i32,
+    pub stdout: String,
+    pub stderr: String,
+    pub success: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -54,6 +71,8 @@ impl std::fmt::Display for Value {
                 }
                 write!(f, " }}")
             }
+            Value::Command(c) => write!(f, "Command(\"{}\", {:?})", c.program, c.args),
+            Value::CommandResult(r) => write!(f, "CommandResult(exit_code={}, success={})", r.exit_code, r.success),
         }
     }
 }

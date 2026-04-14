@@ -110,3 +110,71 @@ fn test_print() {
 // fn test_read_line() {
 //      // test logic
 // }
+
+#[test]
+fn test_cmd_run() {
+    let source = r#"
+    fn main() {
+        let r = cmd("echo", ["hello"]).run()
+        print(r.stdout)
+        r.stdout
+    }
+    "#;
+    let val = assert_runs(source);
+    if let Value::String(s) = val {
+        assert_eq!(s.trim(), "hello");
+    } else {
+        panic!("Expected String(\"hello\"), found {:?}", val);
+    }
+}
+
+#[test]
+fn test_command_pipe() {
+    let source = r#"
+    fn main() {
+        let r = cmd("echo", ["hello"]) | cmd("grep", ["h"])
+        print(r.stdout)
+        r.stdout
+    }
+    "#;
+    let val = assert_runs(source);
+    if let Value::String(s) = val {
+        assert_eq!(s.trim(), "hello");
+    } else {
+        panic!("Expected String(\"hello\"), found {:?}", val);
+    }
+}
+
+#[test]
+fn test_command_and() {
+    let source = r#"
+    fn main() {
+        let r = cmd("true", []) && cmd("echo", ["ok"])
+        print(r.success)
+        r.success
+    }
+    "#;
+    let val = assert_runs(source);
+    if let Value::Bool(b) = val {
+        assert!(b);
+    } else {
+        panic!("Expected Bool(true), found {:?}", val);
+    }
+}
+
+#[test]
+fn test_command_or() {
+    let source = r#"
+    fn main() {
+        let r = cmd("false", []) || cmd("echo", ["fallback"])
+        print(r.success)
+        r.success
+    }
+    "#;
+    let val = assert_runs(source);
+    if let Value::Bool(b) = val {
+        assert!(b);
+    } else {
+        panic!("Expected Bool(true), found {:?}", val);
+    }
+}

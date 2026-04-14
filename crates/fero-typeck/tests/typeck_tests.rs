@@ -204,3 +204,48 @@ fn test_read_line_wrong_arity() {
         }
     "#);
 }
+
+#[test]
+fn test_cmd_success() {
+    expect_ok(r#"
+        fn main() {
+            let c = cmd("echo", ["hello"]);
+        }
+    "#);
+}
+
+#[test]
+fn test_cmd_wrong_arity() {
+    expect_err(r#"
+        fn main() {
+            let c = cmd("echo");
+        }
+    "#);
+}
+
+#[test]
+fn test_cmd_wrong_arg_type() {
+    expect_err(r#"
+        fn main() {
+            let c = cmd("echo", "hello");
+        }
+    "#);
+}
+
+#[test]
+fn test_run_method_success() {
+    expect_ok(r#"
+        fn main() {
+            let r = cmd("echo", ["hello"]).run();
+        }
+    "#);
+}
+
+#[test]
+fn test_command_pipe_success() {
+    expect_ok(r#"
+        fn main() {
+            let r = cmd("echo", ["hello"]) | cmd("grep", ["h"]);
+        }
+    "#);
+}

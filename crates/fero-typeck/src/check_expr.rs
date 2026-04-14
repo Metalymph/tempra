@@ -99,10 +99,13 @@ fn check_binary(ctx: &mut TypeContext, b: &HirBinary) -> Type {
             Type::Bool
         }
         HirBinaryOp::And | HirBinaryOp::Or => {
-            if left != Type::Bool {
+            if left == Type::Command && right == Type::Command {
+                return Type::CommandResult;
+            }
+            if left != Type::Bool && left != Type::Error {
                 ctx.error(format!("Logical operator expects Bool, found {}", left), b.span);
             }
-            if right != Type::Bool {
+            if right != Type::Bool && right != Type::Error {
                 ctx.error(format!("Logical operator expects Bool, found {}", right), b.span);
             }
             Type::Bool
@@ -113,8 +116,15 @@ fn check_binary(ctx: &mut TypeContext, b: &HirBinary) -> Type {
             }
             Type::Unit
         }
-        HirBinaryOp::Pipe | HirBinaryOp::ShiftRight => {
-            ctx.error("Pipe and ShiftRight operators are not yet supported in type checking".to_string(), b.span);
+        HirBinaryOp::Pipe => {
+            if left == Type::Command && right == Type::Command {
+                return Type::CommandResult;
+            }
+            ctx.error("Pipe operator expects Command types".to_string(), b.span);
+            Type::Error
+        }
+        HirBinaryOp::ShiftRight => {
+            ctx.error("ShiftRight operator is not yet supported in type checking".to_string(), b.span);
             Type::Error
         }
     }
@@ -136,6 +146,24 @@ fn check_builtin(ctx: &mut TypeContext, name: &str, args: &[HirExpression], span
             }
             Some(Type::String)
         }
+        "cmd" => {
+            if args.len() != 2 {
+                ctx.error(format!("Function 'cmd' expects 2 argument(s), found {}", args.len()), span);
+            } else {
+                let p = check_expression(ctx, &args[0]);
+                if p != Type::String && p != Type::Error {
+                    ctx.error(format!("Argument 1 of 'cmd': expected String, found {}", p), args[0].span());
+                }
+                let a = check_expression(ctx, &args[1]);
+                if a != Type::Array(Box::new(Type::String)) && a != Type::Error { // For an empty array it might be Type::Array(Unknown), we should be careful.
+                    // Empty array literal gives Array(Unknown)
+                    if a != Type::Array(Box::new(Type::Unknown)) {
+                        ctx.error(format!("Argument 2 of 'cmd': expected [String], found {}", a), args[1].span());
+                    }
+                }
+            }
+            Some(Type::Command)
+        }
         _ => None,
     }
 }
@@ -144,6 +172,17 @@ fn check_call(ctx: &mut TypeContext, c: &HirCall) -> Type {
     // For now we only support direct name calls
     let func_name = match &*c.callee {
         HirExpression::Name(_, name) => name.clone(),
+        HirExpression::Member(m) => {
+            let object_ty = check_expression(ctx, &m.object);
+            if object_ty == Type::Command && m.field == "run" {
+                if !c.args.is_empty() {
+                    ctx.error(format!("Method 'run' on Command expects 0 argument(s), found {}", c.args.len()), c.span);
+                }
+                return Type::CommandResult;
+            }
+            ctx.error("Method calls only supported for Command.run()".to_string(), c.span);
+            return Type::Error;
+        }
         _ => {
             // Check the callee expression anyway
             let _ = check_expression(ctx, &c.callee);
@@ -205,6 +244,16 @@ fn check_member(ctx: &mut TypeContext, m: &HirMember) -> Type {
             }
             ctx.error(format!("Struct '{}' has no field '{}'", name, m.field), m.span);
             return Type::Error;
+        }
+    } else if object_ty == Type::CommandResult {
+        match m.field.as_str() {
+            "exit_code" => return Type::Int64,
+            "stdout" | "stderr" => return Type::String,
+            "success" => return Type::Bool,
+            _ => {
+                ctx.error(format!("CommandResult has no field '{}'", m.field), m.span);
+                return Type::Error;
+            }
         }
     }
     if object_ty != Type::Error {

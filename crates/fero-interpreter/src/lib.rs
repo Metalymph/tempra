@@ -15,7 +15,7 @@ use fero_hir::HirFile;
 pub enum RuntimeError {
     Message(String),
     Exit(i32),
-    Panic(String),
+    Crash(String),
 }
 
 pub fn run(file: &HirFile) -> Result<Value, RuntimeError> {

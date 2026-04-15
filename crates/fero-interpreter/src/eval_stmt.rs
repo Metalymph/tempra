@@ -92,9 +92,9 @@ impl Interpreter {
                                 env.pop_scope();
                                 return Ok(ControlFlow::Exit(code));
                             }
-                            ControlFlow::Panic(msg) => {
+                            ControlFlow::Crash(msg) => {
                                 env.pop_scope();
-                                return Ok(ControlFlow::Panic(msg));
+                                return Ok(ControlFlow::Crash(msg));
                             }
                             ControlFlow::Break => {
                                 loop_flow = ControlFlow::Break;
@@ -114,8 +114,8 @@ impl Interpreter {
                     if let ControlFlow::Exit(code) = loop_flow {
                         return Ok(ControlFlow::Exit(code));
                     }
-                    if let ControlFlow::Panic(msg) = loop_flow {
-                        return Ok(ControlFlow::Panic(msg));
+                    if let ControlFlow::Crash(msg) = loop_flow {
+                        return Ok(ControlFlow::Crash(msg));
                     }
                     if let ControlFlow::Value(v) = loop_flow {
                         last_val = v;

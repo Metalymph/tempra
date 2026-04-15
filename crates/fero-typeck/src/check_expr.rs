@@ -253,13 +253,13 @@ fn check_builtin(ctx: &mut TypeContext, name: &str, args: &[HirExpression], span
                 Some(Type::Result(Box::new(Type::Unknown), Box::new(Type::BuiltinError)))
             }
         }
-        "panic" => {
+        "crash" => {
             if args.len() != 1 {
-                ctx.error(format!("Function 'panic' expects 1 argument(s), found {}", args.len()), span);
+                ctx.error(format!("Function 'crash' expects 1 argument(s), found {}", args.len()), span);
             } else {
                 let p = check_expression(ctx, &args[0]);
                 if p != Type::String && p != Type::Error {
-                    ctx.error(format!("Argument 1 of 'panic': expected String, found {}", p), args[0].span());
+                    ctx.error(format!("Argument 1 of 'crash': expected String, found {}", p), args[0].span());
                 }
             }
             Some(Type::Unit)
@@ -322,8 +322,50 @@ fn check_fs_builtin(ctx: &mut TypeContext, name: &str, args: &[HirExpression], s
             }
             Type::Result(Box::new(Type::Unit), Box::new(Type::BuiltinError))
         }
+        "exists" => {
+            if args.len() != 1 {
+                ctx.error(format!("'fs.exists' expects 1 argument(s), found {}", args.len()), span);
+            } else {
+                let p = check_expression(ctx, &args[0]);
+                if p != Type::String && p != Type::Error {
+                    ctx.error(format!("'fs.exists' argument 1: expected String, found {}", p), args[0].span());
+                }
+            }
+            Type::Result(Box::new(Type::Bool), Box::new(Type::BuiltinError))
+        }
+        "remove" => {
+            if args.len() != 1 {
+                ctx.error(format!("'fs.remove' expects 1 argument(s), found {}", args.len()), span);
+            } else {
+                let p = check_expression(ctx, &args[0]);
+                if p != Type::String && p != Type::Error {
+                    ctx.error(format!("'fs.remove' argument 1: expected String, found {}", p), args[0].span());
+                }
+            }
+            Type::Result(Box::new(Type::Unit), Box::new(Type::BuiltinError))
+        }
         _ => {
             ctx.error(format!("Unknown filesystem operation 'fs.{}'", name), span);
+            Type::Error
+        }
+    }
+}
+
+fn check_env_builtin(ctx: &mut TypeContext, name: &str, args: &[HirExpression], span: Span) -> Type {
+    match name {
+        "get" => {
+            if args.len() != 1 {
+                ctx.error(format!("'env.get' expects 1 argument(s), found {}", args.len()), span);
+            } else {
+                let p = check_expression(ctx, &args[0]);
+                if p != Type::String && p != Type::Error {
+                    ctx.error(format!("'env.get' argument 1: expected String, found {}", p), args[0].span());
+                }
+            }
+            Type::Result(Box::new(Type::String), Box::new(Type::BuiltinError))
+        }
+        _ => {
+            ctx.error(format!("Unknown environment operation 'env.{}'", name), span);
             Type::Error
         }
     }
@@ -337,6 +379,9 @@ fn check_call(ctx: &mut TypeContext, c: &HirCall) -> Type {
             if let HirExpression::Name(_, ref obj_name) = *m.object {
                 if obj_name == "fs" {
                     return self::check_fs_builtin(ctx, &m.field, &c.args, c.span);
+                }
+                if obj_name == "env" {
+                    return self::check_env_builtin(ctx, &m.field, &c.args, c.span);
                 }
             }
             let object_ty = check_expression(ctx, &m.object);

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Unit,
     Bool(bool),
@@ -20,19 +20,19 @@ pub enum Value {
     Error(String),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ValueResult {
     Ok(Value),
     Err(Value),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CommandValue {
     pub program: String,
     pub args: Vec<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CommandResultValue {
     pub exit_code: i32,
     pub stdout: String,
@@ -40,7 +40,7 @@ pub struct CommandResultValue {
     pub success: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct StructInstance {
     pub name: String,
     pub fields: HashMap<String, Value>,

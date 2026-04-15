@@ -317,6 +317,16 @@ impl Interpreter {
                             }
                             return self.eval_fs_builtin(&member.field, &args);
                         }
+                        if obj_name == "env" {
+                            let mut args = Vec::new();
+                            for arg_expr in &call.args {
+                                match self.eval_expression(arg_expr, env)? {
+                                    ControlFlow::Value(v) => args.push(v),
+                                    cf => return Ok(cf),
+                                }
+                            }
+                            return self.eval_env_builtin(&member.field, &args);
+                        }
                     }
                     if member.field == "run" {
                         let obj = match self.eval_expression(&member.object, env)? {
@@ -361,11 +371,11 @@ impl Interpreter {
                         println!("{}", result);
                         return Ok(ControlFlow::Value(Value::Unit));
                     }
-                    if name == "panic" {
+                    if name == "crash" {
                         if args.len() != 1 {
-                            return Err(format!("Builtin 'panic' expects 1 argument"));
+                            return Err(format!("Builtin 'crash' expects 1 argument"));
                         }
-                        return Ok(ControlFlow::Panic(value_to_string(&args[0])));
+                        return Ok(ControlFlow::Crash(value_to_string(&args[0])));
                     }
                     if name == "fmt" {
                         let result = args.iter().map(value_to_string).collect::<String>();
@@ -447,7 +457,7 @@ impl Interpreter {
                                 } else {
                                     "expectation failed".to_string()
                                 };
-                                return Ok(ControlFlow::Panic(msg));
+                                return Ok(ControlFlow::Crash(msg));
                             }
                         } else {
                             return Err("expect requires a Bool as first argument".into());
@@ -616,9 +626,9 @@ impl Interpreter {
                             env.pop_scope();
                             return Ok(ControlFlow::Exit(code));
                         }
-                        ControlFlow::Panic(msg) => {
+                        ControlFlow::Crash(msg) => {
                             env.pop_scope();
-                            return Ok(ControlFlow::Panic(msg));
+                            return Ok(ControlFlow::Crash(msg));
                         }
                         ControlFlow::Break => {
                             env.pop_scope();
@@ -658,7 +668,7 @@ impl Interpreter {
                     Value::Result(res) => match res.as_ref() {
                         crate::value::ValueResult::Ok(v) => Ok(ControlFlow::Value(v.clone())),
                         crate::value::ValueResult::Err(v) => {
-                            Ok(ControlFlow::Panic(format!("Unwrap failed: {}", v)))
+                            Ok(ControlFlow::Crash(format!("Unwrap failed: {}", v)))
                         }
                     },
                     _ => Err("'!' expects a Result value".into()),
@@ -683,9 +693,9 @@ impl Interpreter {
                     env.pop_scope();
                     return Ok(ControlFlow::Exit(code));
                 }
-                ControlFlow::Panic(msg) => {
+                ControlFlow::Crash(msg) => {
                     env.pop_scope();
-                    return Ok(ControlFlow::Panic(msg));
+                    return Ok(ControlFlow::Crash(msg));
                 }
                 ControlFlow::Break => {
                     env.pop_scope();
@@ -753,7 +763,55 @@ impl Interpreter {
                     return Err("'fs.append' requires two String arguments".into());
                 }
             }
+            "exists" => {
+                if args.len() != 1 {
+                    return Err(format!("'fs.exists' expects 1 argument"));
+                }
+                if let Value::String(path) = &args[0] {
+                    let exists = std::path::Path::new(path).exists();
+                    Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::Bool(exists))))))
+                } else {
+                    return Err("'fs.exists' requires a String as first argument".into());
+                }
+            }
+            "remove" => {
+                if args.len() != 1 {
+                    return Err(format!("'fs.remove' expects 1 argument"));
+                }
+                if let Value::String(path) = &args[0] {
+                    match std::fs::remove_file(path) {
+                        Ok(_) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::Unit))))),
+                        Err(e) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Err(Value::Error(format!("Failed to remove '{}': {}", path, e))))))),
+                    }
+                } else {
+                    return Err("'fs.remove' requires a String as first argument".into());
+                }
+            }
             _ => Err(format!("Unknown filesystem operation 'fs.{}'", name)),
+        }
+    }
+
+    fn eval_env_builtin(&mut self, name: &str, args: &[Value]) -> Result<ControlFlow, String> {
+        match name {
+            "get" => {
+                if args.len() != 1 {
+                    return Err(format!("'env.get' expects 1 argument"));
+                }
+                if let Value::String(key) = &args[0] {
+                    match std::env::var(key) {
+                        Ok(val) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::String(val)))))),
+                        Err(std::env::VarError::NotPresent) => {
+                            Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Err(Value::Error(format!("Environment variable '{}' not found", key)))))))
+                        }
+                        Err(e) => {
+                            Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Err(Value::Error(format!("Failed to get environment variable '{}': {}", key, e)))))))
+                        }
+                    }
+                } else {
+                    return Err("'env.get' requires a String as first argument".into());
+                }
+            }
+            _ => Err(format!("Unknown environment operation 'env.{}'", name)),
         }
     }
 }

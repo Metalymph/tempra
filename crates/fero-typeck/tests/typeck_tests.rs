@@ -372,3 +372,58 @@ fn test_dbg_preserves_type() {
         }
     "#);
 }
+
+#[test]
+fn test_crash_success() {
+    expect_ok(r#"
+        fn main() {
+            crash("boom");
+        }
+    "#);
+}
+
+#[test]
+fn test_crash_failure() {
+    expect_err(r#"
+        fn main() {
+            crash(); // arity
+        }
+    "#);
+    expect_err(r#"
+        fn main() {
+            crash(123); // type
+        }
+    "#);
+}
+
+#[test]
+fn test_env_get_typeck() {
+    expect_ok(r#"
+        let home = env.get("HOME")?
+        print(home)
+    "#);
+    expect_err(r#"
+        let home = env.get(1)?
+    "#);
+}
+
+#[test]
+fn test_fs_exists_typeck() {
+    expect_ok(r#"
+        let ok = fs.exists("file.txt")?
+        expect(ok)
+    "#);
+    expect_err(r#"
+        let ok = fs.exists(1)?
+    "#);
+}
+
+#[test]
+fn test_fs_remove_typeck() {
+    expect_ok(r#"
+        fs.remove("file.txt")?
+    "#);
+    expect_err(r#"
+        fs.remove(1)?
+    "#);
+}

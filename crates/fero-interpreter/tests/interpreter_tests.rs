@@ -312,10 +312,10 @@ fn test_expect_fail() {
     let hir = fero_hir::lower_file(source, &ast);
     let result = fero_interpreter::run(&hir);
     match result {
-        Err(fero_interpreter::RuntimeError::Panic(msg)) => {
+        Err(fero_interpreter::RuntimeError::Crash(msg)) => {
             assert_eq!(msg, "expectation failed");
         }
-        other => panic!("Expected Panic signal, got {:?}", other),
+        other => panic!("Expected Crash signal, got {:?}", other),
     }
 }
 
@@ -330,10 +330,10 @@ fn test_expect_fail_message() {
     let hir = fero_hir::lower_file(source, &ast);
     let result = fero_interpreter::run(&hir);
     match result {
-        Err(fero_interpreter::RuntimeError::Panic(msg)) => {
+        Err(fero_interpreter::RuntimeError::Crash(msg)) => {
             assert_eq!(msg, "my custom message");
         }
-        other => panic!("Expected Panic signal, got {:?}", other),
+        other => panic!("Expected Crash signal, got {:?}", other),
     }
 }
 
@@ -351,4 +351,92 @@ fn test_dbg_eval() {
     } else {
         panic!("Expected Int64(123), got {:?}", val);
     }
+}
+
+#[test]
+fn test_crash() {
+    let source = r#"
+    fn main() {
+        crash("boom")
+    }
+    "#;
+    let ast = fero_parser::parse_source(source).unwrap();
+    let hir = fero_hir::lower_file(source, &ast);
+    let result = fero_interpreter::run(&hir);
+    match result {
+        Err(fero_interpreter::RuntimeError::Crash(msg)) => {
+            assert_eq!(msg, "boom");
+        }
+        other => panic!("Expected Crash signal, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_env_get_existing() {
+    std::env::set_var("FERO_TEST_VAR", "fero_is_cool");
+    let source = r#"
+    fn main() {
+        env.get("FERO_TEST_VAR")!
+    }
+    "#;
+    let val = assert_runs(source);
+    if let Value::String(s) = val {
+        assert_eq!(s, "fero_is_cool");
+    } else {
+        panic!("Expected String(fero_is_cool), got {:?}", val);
+    }
+}
+
+#[test]
+fn test_env_get_missing() {
+    let source = r#"
+    fn main() {
+        env.get("NON_EXISTENT_VAR_XYZ")!
+    }
+    "#;
+    let ast = parse_source(source).unwrap();
+    let hir = lower_file(source, &ast);
+    let res = run(&hir);
+    assert!(res.is_err(), "Expected error for missing env var");
+}
+
+#[test]
+fn test_fs_exists() {
+    let dir = std::env::temp_dir();
+    let path = dir.join("fero_exists.txt");
+    std::fs::write(&path, "exists").unwrap();
+    let path_str = path.to_str().unwrap().replace("\\", "\\\\");
+
+    let source = format!(r#"
+    fn main() {{
+        let e = fs.exists("{}")!
+        expect(e)
+        let non_existent = fs.exists("non_existent_file_123.txt")!
+        expect(!non_existent)
+        "ok"
+    }}
+    "#, path_str);
+    
+    let val = assert_runs(&source);
+    assert_eq!(val, Value::String("ok".to_string()));
+}
+
+#[test]
+fn test_fs_remove() {
+    let dir = std::env::temp_dir();
+    let path = dir.join("fero_remove.txt");
+    std::fs::write(&path, "remove me").unwrap();
+    let path_str = path.to_str().unwrap().replace("\\", "\\\\");
+
+    let source = format!(r#"
+    fn main() {{
+        expect(fs.exists("{}")!)
+        fs.remove("{}")!
+        expect(!fs.exists("{}")!)
+        "removed"
+    }}
+    "#, path_str, path_str, path_str);
+    
+    let val = assert_runs(&source);
+    assert_eq!(val, Value::String("removed".to_string()));
 }

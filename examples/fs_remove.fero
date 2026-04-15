@@ -1,0 +1,3 @@
+fs.write("examples/tmp.txt", "temporary")?
+fs.remove("examples/tmp.txt")?
+print("removed")

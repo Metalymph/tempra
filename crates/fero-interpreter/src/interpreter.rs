@@ -37,7 +37,7 @@ impl Interpreter {
         match flow {
             ControlFlow::Value(v) | ControlFlow::Return(v) => Ok(v),
             ControlFlow::Exit(code) => Err(crate::RuntimeError::Exit(code)),
-            ControlFlow::Panic(msg) => Err(crate::RuntimeError::Panic(msg)),
+            ControlFlow::Crash(msg) => Err(crate::RuntimeError::Crash(msg)),
             ControlFlow::Break | ControlFlow::Continue => Err(crate::RuntimeError::Message("Break/Continue outside of loop".into())),
         }
     }
@@ -54,7 +54,7 @@ impl Interpreter {
                 ControlFlow::Value(v) => _result_val = v,
                 ControlFlow::Return(_) => return Err(crate::RuntimeError::Message("Top-level return not allowed".into())),
                 ControlFlow::Exit(code) => return Err(crate::RuntimeError::Exit(code)),
-                ControlFlow::Panic(msg) => return Err(crate::RuntimeError::Panic(msg)),
+                ControlFlow::Crash(msg) => return Err(crate::RuntimeError::Crash(msg)),
                 ControlFlow::Break | ControlFlow::Continue => {
                     return Err(crate::RuntimeError::Message("Break/Continue outside of loop".into()));
                 }
@@ -83,7 +83,7 @@ impl Interpreter {
                 ControlFlow::Value(v) => result_val = v,
                 ControlFlow::Return(v) => return Ok(ControlFlow::Return(v)),
                 ControlFlow::Exit(code) => return Ok(ControlFlow::Exit(code)),
-                ControlFlow::Panic(msg) => return Ok(ControlFlow::Panic(msg)),
+                ControlFlow::Crash(msg) => return Ok(ControlFlow::Crash(msg)),
                 ControlFlow::Break | ControlFlow::Continue => {
                     return Err("Break/Continue outside of loop".into());
                 }

@@ -18,7 +18,7 @@ pub fn run_source(source: &str) -> Result<(), DriverError> {
     let value = run(&hir)
         .map_err(|e| match e {
             fero_interpreter::RuntimeError::Exit(code) => DriverError::Exit(code),
-            fero_interpreter::RuntimeError::Panic(msg) => DriverError::RuntimeError(format!("panic: {}", msg)),
+            fero_interpreter::RuntimeError::Crash(msg) => DriverError::RuntimeError(format!("crash: {}", msg)),
             fero_interpreter::RuntimeError::Message(s) => DriverError::RuntimeError(s),
         })?;
     
@@ -65,7 +65,7 @@ pub fn test_source(source: &str) -> Result<(), DriverError> {
     let value = run(&hir)
         .map_err(|e| match e {
             fero_interpreter::RuntimeError::Exit(code) => DriverError::Exit(code),
-            fero_interpreter::RuntimeError::Panic(msg) => DriverError::RuntimeError(format!("test failed: {}", msg)),
+            fero_interpreter::RuntimeError::Crash(msg) => DriverError::RuntimeError(format!("test failed: {}", msg)),
             fero_interpreter::RuntimeError::Message(s) => DriverError::RuntimeError(s),
         })?;
     

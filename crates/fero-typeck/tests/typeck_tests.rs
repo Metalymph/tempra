@@ -363,10 +363,12 @@ fn test_expect_wrong_type() {
 #[test]
 fn test_dbg_preserves_type() {
     expect_ok(r#"
+        fn take_int(x: Int) {}
+        fn take_string(s: String) {}
+        
         fn main() {
-            let x = dbg(1);
-            let y = dbg("hello");
-            let z = dbg(true);
+            take_int(dbg(1));
+            take_string(dbg("hello"));
         }
     "#);
 }

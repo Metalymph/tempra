@@ -457,7 +457,11 @@ impl Interpreter {
                         if args.len() != 1 {
                             return Err(format!("Builtin 'dbg' expects 1 argument"));
                         }
-                        println!("dbg: {:?}", args[0]);
+                        let repr = match &args[0] {
+                            Value::String(s) => format!("\"{}\"", s),
+                            v => v.to_string(),
+                        };
+                        println!("dbg: {}", repr);
                         return Ok(ControlFlow::Value(args[0].clone()));
                     }
 

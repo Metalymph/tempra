@@ -18,6 +18,18 @@ pub fn check_file(file: &HirFile) -> Result<(), Vec<TypeError>> {
     for item in &file.items {
         check_item(&mut ctx, item);
     }
+    
+    // Pass 3: check top-level statements (Script mode)
+    if !file.top_level_statements.is_empty() {
+        ctx.current_is_fallible = true;
+        ctx.current_return_type = None; // Returns unit, but let's just leave it None to prevent explicit return 
+        ctx.scopes.push_scope();
+        for stmt in &file.top_level_statements {
+            crate::check_stmt::check_statement(&mut ctx, stmt);
+        }
+        ctx.scopes.pop_scope();
+        ctx.current_is_fallible = false;
+    }
 
     if ctx.errors.is_empty() {
         Ok(())

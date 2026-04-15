@@ -66,6 +66,7 @@ pub enum TokenKind {
     Pipe,           // |
     AndAnd,         // &&
     OrOr,           // ||
+    QuestionMark,   // ?
 }
 
 /// A single lexical token produced by the lexer.

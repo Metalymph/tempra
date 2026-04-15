@@ -36,13 +36,19 @@ pub fn check_statement(ctx: &mut TypeContext, stmt: &HirStatement) -> Type {
                 if actual != Type::Error && actual != *expected {
                     let span = match value {
                         Some(expr) => expr.span(),
-                        None => fero_span::Span::new(0, 0),
+                        None => fero_span::Span::new(0, 0), // Use meaningful span if possible
                     };
                     ctx.error(
                         format!("Return type mismatch: expected {}, found {}", expected, actual),
                         span,
                     );
                 }
+            } else {
+                let span = match value {
+                    Some(expr) => expr.span(),
+                    None => fero_span::Span::new(0, 0),
+                };
+                ctx.error("Return statement outside of function", span);
             }
             Type::Unit
         }

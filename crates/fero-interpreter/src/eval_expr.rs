@@ -9,12 +9,12 @@ fn run_command(c: &crate::value::CommandValue) -> Result<Value, String> {
     let mut cmd = std::process::Command::new(&c.program);
     cmd.args(&c.args);
     let output = cmd.output().map_err(|e| format!("Command error: {}", e))?;
-    Ok(Value::CommandResult(crate::value::CommandResultValue {
+    Ok(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::CommandResult(crate::value::CommandResultValue {
         exit_code: output.status.code().unwrap_or(-1),
         stdout: String::from_utf8_lossy(&output.stdout).to_string(),
         stderr: String::from_utf8_lossy(&output.stderr).to_string(),
         success: output.status.success(),
-    }))
+    })))))
 }
 
 fn pipe_commands(left: &crate::value::CommandValue, right: &crate::value::CommandValue) -> Result<Value, String> {
@@ -43,6 +43,18 @@ fn pipe_commands(left: &crate::value::CommandValue, right: &crate::value::Comman
         stderr: String::from_utf8_lossy(&output.stderr).to_string(),
         success: output.status.success(),
     }))
+}
+
+fn value_to_string(value: &Value) -> String {
+    match value {
+        Value::String(s) => s.clone(),
+        Value::Bool(b) => b.to_string(),
+        Value::Int64(i) => i.to_string(),
+        Value::Float64(f) => f.to_string(),
+        // For other types, we use their Display implementation if they have one,
+        // but the prompt is specific about which types to support in the helper.
+        _ => value.to_string(),
+    }
 }
 
 impl Interpreter {
@@ -307,7 +319,10 @@ impl Interpreter {
                             if !call.args.is_empty() {
                                 return Err("Method 'run' expects 0 arguments".into());
                             }
-                            return run_command(&cmd).map(ControlFlow::Value);
+                            return match run_command(&cmd) {
+                                Ok(v) => Ok(ControlFlow::Value(v)),
+                                Err(msg) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Err(Value::Error(msg)))))),
+                            };
                         } else {
                             return Err("Method 'run' requires a Command".into());
                         }
@@ -334,25 +349,39 @@ impl Interpreter {
                         }
                     }
                     if name == "print" {
-                        if args.len() != 1 {
-                            return Err(format!("Builtin 'print' expects 1 argument"));
-                        }
-                        println!("{}", args[0]);
+                        let result = args.iter().map(value_to_string).collect::<String>();
+                        println!("{}", result);
                         return Ok(ControlFlow::Value(Value::Unit));
+                    }
+                    if name == "panic" {
+                        if args.len() != 1 {
+                            return Err(format!("Builtin 'panic' expects 1 argument"));
+                        }
+                        return Ok(ControlFlow::Panic(value_to_string(&args[0])));
+                    }
+                    if name == "fmt" {
+                        let result = args.iter().map(value_to_string).collect::<String>();
+                        return Ok(ControlFlow::Value(Value::String(result)));
                     }
                     if name == "read_line" {
                         if args.len() != 0 {
                             return Err(format!("Builtin 'read_line' expects 0 arguments"));
                         }
                         let mut input = String::new();
-                        std::io::stdin().read_line(&mut input).map_err(|e| format!("Failed to read stdin: {}", e))?;
-                        if input.ends_with('\n') {
-                            input.pop();
-                            if input.ends_with('\r') {
-                                input.pop();
+                        return match std::io::stdin().read_line(&mut input) {
+                            Ok(_) => {
+                                if input.ends_with('\n') {
+                                    input.pop();
+                                    if input.ends_with('\r') {
+                                        input.pop();
+                                    }
+                                }
+                                Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::String(input))))))
+                            }
+                            Err(e) => {
+                                Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Err(Value::Error(format!("Failed to read stdin: {}", e)))))))
                             }
                         }
-                        return Ok(ControlFlow::Value(Value::String(input)));
                     }
                     if name == "cmd" {
                         if args.len() != 2 {
@@ -383,9 +412,10 @@ impl Interpreter {
                             return Err(format!("Builtin 'read' expects 1 argument"));
                         }
                         if let Value::String(path) = &args[0] {
-                            let text = std::fs::read_to_string(path)
-                                .map_err(|e| format!("Failed to read '{}': {}", path, e))?;
-                            return Ok(ControlFlow::Value(Value::String(text)));
+                            return match std::fs::read_to_string(path) {
+                                Ok(text) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::String(text)))))),
+                                Err(e) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Err(Value::Error(format!("Failed to read '{}': {}", path, e))))))),
+                            }
                         } else {
                             return Err("read requires a String as first argument".into());
                         }
@@ -395,9 +425,10 @@ impl Interpreter {
                             return Err(format!("Builtin 'write' expects 2 arguments"));
                         }
                         if let (Value::String(path), Value::String(text)) = (&args[0], &args[1]) {
-                            std::fs::write(path, text)
-                                .map_err(|e| format!("Failed to write to '{}': {}", path, e))?;
-                            return Ok(ControlFlow::Value(Value::Unit));
+                            return match std::fs::write(path, text) {
+                                Ok(_) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::Unit))))),
+                                Err(e) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Err(Value::Error(format!("Failed to write to '{}': {}", path, e))))))),
+                            }
                         } else {
                             return Err("write requires two String arguments".into());
                         }
@@ -408,17 +439,42 @@ impl Interpreter {
                         }
                         if let (Value::String(path), Value::String(text)) = (&args[0], &args[1]) {
                             use std::io::Write;
-                            let mut file = std::fs::OpenOptions::new()
-                                .create(true)
-                                .append(true)
-                                .open(path)
-                                .map_err(|e| format!("Failed to open '{}' for appending: {}", path, e))?;
-                            file.write_all(text.as_bytes())
-                                .map_err(|e| format!("Failed to append to '{}': {}", path, e))?;
-                            return Ok(ControlFlow::Value(Value::Unit));
+                            let res = (|| -> Result<(), String> {
+                                let mut file = std::fs::OpenOptions::new()
+                                    .create(true)
+                                    .append(true)
+                                    .open(path)
+                                    .map_err(|e| format!("Failed to open '{}' for appending: {}", path, e))?;
+                                file.write_all(text.as_bytes())
+                                    .map_err(|e| format!("Failed to append to '{}': {}", path, e))?;
+                                Ok(())
+                            })();
+                            return match res {
+                                Ok(_) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::Unit))))),
+                                Err(msg) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Err(Value::Error(msg)))))),
+                            }
                         } else {
                             return Err("append requires two String arguments".into());
                         }
+                    }
+
+                    if name == "Ok" {
+                        if args.len() != 1 {
+                            return Err(format!("Builtin 'Ok' expects 1 argument"));
+                        }
+                        return Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(args[0].clone())))));
+                    }
+                    if name == "Err" {
+                        if args.len() != 1 {
+                            return Err(format!("Builtin 'Err' expects 1 argument"));
+                        }
+                        return Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Err(args[0].clone())))));
+                    }
+                    if name == "Error" {
+                         if args.len() != 1 {
+                            return Err(format!("Builtin 'Error' expects 1 argument"));
+                        }
+                        return Ok(ControlFlow::Value(Value::Error(value_to_string(&args[0]))));
                     }
 
                     let func = self
@@ -572,6 +628,10 @@ impl Interpreter {
                             env.pop_scope();
                             return Ok(ControlFlow::Exit(code));
                         }
+                        ControlFlow::Panic(msg) => {
+                            env.pop_scope();
+                            return Ok(ControlFlow::Panic(msg));
+                        }
                         ControlFlow::Break => {
                             env.pop_scope();
                             break;
@@ -586,6 +646,36 @@ impl Interpreter {
                 Ok(ControlFlow::Value(last_val))
             }
             // Minimal implementations for others to make it compile
+            HirExpression::Try(e) => {
+                let val = match self.eval_expression(&e.expr, env)? {
+                    ControlFlow::Value(v) => v,
+                    cf => return Ok(cf),
+                };
+                match val {
+                    Value::Result(res) => match res.as_ref() {
+                        crate::value::ValueResult::Ok(v) => Ok(ControlFlow::Value(v.clone())),
+                        crate::value::ValueResult::Err(v) => {
+                            Ok(ControlFlow::Return(Value::Result(Box::new(crate::value::ValueResult::Err(v.clone())))))
+                        }
+                    },
+                    _ => Err("'?' expects a Result value".into()),
+                }
+            }
+            HirExpression::Unwrap(e) => {
+                let val = match self.eval_expression(&e.expr, env)? {
+                    ControlFlow::Value(v) => v,
+                    cf => return Ok(cf),
+                };
+                match val {
+                    Value::Result(res) => match res.as_ref() {
+                        crate::value::ValueResult::Ok(v) => Ok(ControlFlow::Value(v.clone())),
+                        crate::value::ValueResult::Err(v) => {
+                            Ok(ControlFlow::Panic(format!("Unwrap failed: {}", v)))
+                        }
+                    },
+                    _ => Err("'!' expects a Result value".into()),
+                }
+            }
             HirExpression::Match(_) => Err("Match expressions are not fully supported yet".into()),
         }
     }
@@ -604,6 +694,10 @@ impl Interpreter {
                 ControlFlow::Exit(code) => {
                     env.pop_scope();
                     return Ok(ControlFlow::Exit(code));
+                }
+                ControlFlow::Panic(msg) => {
+                    env.pop_scope();
+                    return Ok(ControlFlow::Panic(msg));
                 }
                 ControlFlow::Break => {
                     env.pop_scope();

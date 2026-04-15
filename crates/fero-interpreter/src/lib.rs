@@ -15,9 +15,14 @@ use fero_hir::HirFile;
 pub enum RuntimeError {
     Message(String),
     Exit(i32),
+    Panic(String),
 }
 
 pub fn run(file: &HirFile) -> Result<Value, RuntimeError> {
     let mut interpreter = Interpreter::new(file);
-    interpreter.run_main()
+    if !file.top_level_statements.is_empty() {
+        interpreter.run_script()
+    } else {
+        interpreter.run_main()
+    }
 }

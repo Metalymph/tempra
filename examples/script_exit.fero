@@ -1,0 +1,2 @@
+print("before exit")
+exit(3)

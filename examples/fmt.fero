@@ -1,0 +1,5 @@
+fn main() {
+    let name = read_line()
+    let msg = fmt("hello ", name)
+    print(msg)
+}

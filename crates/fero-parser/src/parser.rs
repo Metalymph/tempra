@@ -37,11 +37,17 @@ impl<'src> Parser<'src> {
     pub fn parse_file(&mut self) -> Result<File, ParseError> {
         let span_start = self.current().span.start;
         let mut items = Vec::new();
+        let mut top_level_statements = Vec::new();
+        
         while !self.at(TokenKind::EndOfFile) {
-            items.push(self.parse_item()?);
+            if self.at(TokenKind::Import) || self.at(TokenKind::Fn) || self.at(TokenKind::Struct) || self.at(TokenKind::Enum) || self.at(TokenKind::Extend) {
+                items.push(self.parse_item()?);
+            } else {
+                top_level_statements.push(self.parse_statement()?);
+            }
         }
         let span_end = self.current().span.end;
-        Ok(File { span: Span::new(span_start, span_end), items })
+        Ok(File { span: Span::new(span_start, span_end), items, top_level_statements })
     }
 
     fn parse_item(&mut self) -> Result<Item, ParseError> {
@@ -140,15 +146,32 @@ impl<'src> Parser<'src> {
         }
         self.expect(TokenKind::RightParen)?;
 
+        let mut is_fallible = false;
+        if self.at(TokenKind::Bang) {
+            self.advance();
+            is_fallible = true;
+        }
+
         let mut return_type = None;
         if self.eat(TokenKind::Arrow) {
             return_type = Some(self.parse_type()?);
+            if self.at(TokenKind::Bang) {
+                self.advance();
+                is_fallible = true;
+            }
         }
 
         let body = self.parse_block()?;
         let span = Span::new(start_token.span.start, body.span.end);
         
-        Ok(FunctionItem { span, name, parameters, return_type, body })
+        Ok(FunctionItem {
+            span,
+            name,
+            parameters,
+            return_type,
+            is_fallible,
+            body,
+        })
     }
 
     fn parse_struct(&mut self) -> Result<StructItem, ParseError> {
@@ -262,7 +285,24 @@ impl<'src> Parser<'src> {
             }))
         } else {
             let name = self.expect_identifier()?;
-            Ok(TypeExpr::Named(NamedTypeExpr { span: name.span, name }))
+            let mut ty = TypeExpr::Named(NamedTypeExpr { span: name.span, name: name.clone() });
+            if self.at(TokenKind::LeftBracket) {
+                let _start = self.advance();
+                let mut arguments = Vec::new();
+                while !self.at(TokenKind::RightBracket) && !self.at(TokenKind::EndOfFile) {
+                    arguments.push(self.parse_type()?);
+                    if !self.eat(TokenKind::Comma) { break; }
+                }
+                let end = self.expect(TokenKind::RightBracket)?;
+                if let TypeExpr::Named(base) = ty {
+                    ty = TypeExpr::Generic(GenericTypeExpr {
+                        span: Span::new(base.span.start, end.span.end),
+                        base,
+                        arguments,
+                    });
+                }
+            }
+            Ok(ty)
         }
     }
 
@@ -438,6 +478,18 @@ impl<'src> Parser<'src> {
                         index: Box::new(index_or_start),
                     });
                 }
+            } else if self.at(TokenKind::QuestionMark) {
+                let token = self.advance();
+                expr = Expression::Try(TryExpr {
+                    span: Span::new(expr.span().start, token.span.end),
+                    expression: Box::new(expr),
+                });
+            } else if self.at(TokenKind::Bang) {
+                let token = self.advance();
+                expr = Expression::Unwrap(UnwrapExpr {
+                    span: Span::new(expr.span().start, token.span.end),
+                    expression: Box::new(expr),
+                });
             } else {
                 break;
             }

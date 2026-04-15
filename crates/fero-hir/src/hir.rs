@@ -8,6 +8,7 @@ use fero_span::Span;
 
 pub struct HirFile {
     pub items: Vec<HirItem>,
+    pub top_level_statements: Vec<HirStatement>,
 }
 
 #[derive(Debug, Clone)]
@@ -31,6 +32,7 @@ pub struct HirFunction {
     pub name: String,
     pub parameters: Vec<HirParameter>,
     pub return_type: Option<HirType>,
+    pub is_fallible: bool,
     pub body: HirBlock,
 }
 
@@ -122,6 +124,8 @@ pub enum HirExpression {
 
     Unary(HirUnary),
     Binary(HirBinary),
+    Try(HirTryExpr),
+    Unwrap(HirUnwrapExpr),
 
     Call(HirCall),
     Member(HirMember),
@@ -147,6 +151,7 @@ impl HirExpression {
             HirExpression::Bool(span, _) => *span,
             HirExpression::Unary(e) => e.span,
             HirExpression::Binary(e) => e.span,
+            HirExpression::Try(e) => e.span,
             HirExpression::Call(e) => e.span,
             HirExpression::Member(e) => e.span,
             HirExpression::Index(e) => e.span,
@@ -157,6 +162,7 @@ impl HirExpression {
             HirExpression::Tuple(span, _) => *span,
             HirExpression::Array(span, _) => *span,
             HirExpression::StructLiteral(e) => e.span,
+            HirExpression::Unwrap(e) => e.span,
         }
     }
 }
@@ -180,6 +186,18 @@ pub struct HirBinary {
     pub left: Box<HirExpression>,
     pub op: HirBinaryOp,
     pub right: Box<HirExpression>,
+}
+
+#[derive(Debug, Clone)]
+pub struct HirTryExpr {
+    pub span: Span,
+    pub expr: Box<HirExpression>,
+}
+
+#[derive(Debug, Clone)]
+pub struct HirUnwrapExpr {
+    pub span: Span,
+    pub expr: Box<HirExpression>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -254,6 +272,7 @@ pub enum HirType {
     Named(Span, String),
     Array(Span, Box<HirType>),
     Tuple(Span, Vec<HirType>),
+    Generic(Span, String, Vec<HirType>),
 }
 
 impl HirType {
@@ -262,6 +281,7 @@ impl HirType {
             HirType::Named(span, _) => *span,
             HirType::Array(span, _) => *span,
             HirType::Tuple(span, _) => *span,
+            HirType::Generic(span, _, _) => *span,
         }
     }
 }

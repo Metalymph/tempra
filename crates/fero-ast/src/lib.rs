@@ -25,6 +25,7 @@ use fero_lexer::Token;
 pub struct File {
     pub span: Span,
     pub items: Vec<Item>,
+    pub top_level_statements: Vec<Statement>,
 }
 
 #[derive(Debug, Clone)]
@@ -82,6 +83,7 @@ pub struct FunctionItem {
     pub name: Token,
     pub parameters: Vec<Parameter>,
     pub return_type: Option<TypeExpr>,
+    pub is_fallible: bool,
     pub body: Block,
 }
 
@@ -151,6 +153,7 @@ pub enum TypeExpr {
     Named(NamedTypeExpr),
     Array(ArrayTypeExpr),
     Tuple(TupleTypeExpr),
+    Generic(GenericTypeExpr),
 }
 
 impl TypeExpr {
@@ -159,6 +162,7 @@ impl TypeExpr {
             TypeExpr::Named(expr) => expr.span,
             TypeExpr::Array(expr) => expr.span,
             TypeExpr::Tuple(expr) => expr.span,
+            TypeExpr::Generic(expr) => expr.span,
         }
     }
 }
@@ -180,6 +184,13 @@ pub struct ArrayTypeExpr {
 pub struct TupleTypeExpr {
     pub span: Span,
     pub elements: Vec<TypeExpr>,
+}
+
+#[derive(Debug, Clone)]
+pub struct GenericTypeExpr {
+    pub span: Span,
+    pub base: NamedTypeExpr,
+    pub arguments: Vec<TypeExpr>,
 }
 
 // ----------------------------------------------------------------------------
@@ -282,6 +293,9 @@ pub enum Expression {
     Unary(UnaryExpr),
     Binary(BinaryExpr),
 
+    Try(TryExpr),
+    Unwrap(UnwrapExpr),
+
     Call(CallExpr),
     Member(MemberExpr),
     Index(IndexExpr),
@@ -309,6 +323,9 @@ impl Expression {
 
             Expression::Unary(expr) => expr.span,
             Expression::Binary(expr) => expr.span,
+
+            Expression::Try(expr) => expr.span,
+            Expression::Unwrap(expr) => expr.span,
 
             Expression::Call(expr) => expr.span,
             Expression::Member(expr) => expr.span,
@@ -415,6 +432,18 @@ pub struct BinaryExpr {
     pub left: Box<Expression>,
     pub operator: Token,
     pub right: Box<Expression>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TryExpr {
+    pub span: Span,
+    pub expression: Box<Expression>,
+}
+
+#[derive(Debug, Clone)]
+pub struct UnwrapExpr {
+    pub span: Span,
+    pub expression: Box<Expression>,
 }
 
 // ----------------------------------------------------------------------------

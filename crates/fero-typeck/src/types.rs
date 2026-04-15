@@ -11,6 +11,7 @@ pub enum Type {
     Bool,
     String,
 
+    Int,
     Int8,
     Int16,
     Int32,
@@ -37,13 +38,17 @@ pub enum Type {
     Unknown,
     /// Sentinel for expressions that already failed type checking.
     Error,
+
+    BuiltinError,
+    Result(Box<Type>, Box<Type>),
 }
 
 impl Type {
     pub fn is_numeric(&self) -> bool {
         matches!(
             self,
-            Type::Int8
+            Type::Int
+                | Type::Int8
                 | Type::Int16
                 | Type::Int32
                 | Type::Int64
@@ -59,7 +64,8 @@ impl Type {
     pub fn is_integer(&self) -> bool {
         matches!(
             self,
-            Type::Int8
+            Type::Int
+                | Type::Int8
                 | Type::Int16
                 | Type::Int32
                 | Type::Int64
@@ -73,6 +79,25 @@ impl Type {
     pub fn is_float(&self) -> bool {
         matches!(self, Type::Float32 | Type::Float64)
     }
+
+    pub fn is_printable(&self) -> bool {
+        matches!(
+            self,
+            Type::Unit
+                | Type::String
+                | Type::Bool
+                | Type::Int
+                | Type::Int8
+                | Type::Int16
+                | Type::Int32
+                | Type::Int64
+                | Type::Float32
+                | Type::Float64
+                | Type::CommandResult
+                | Type::BuiltinError
+                | Type::Result(_, _)
+        )
+    }
 }
 
 impl fmt::Display for Type {
@@ -81,6 +106,7 @@ impl fmt::Display for Type {
             Type::Unit => write!(f, "Unit"),
             Type::Bool => write!(f, "Bool"),
             Type::String => write!(f, "String"),
+            Type::Int => write!(f, "Int"),
             Type::Int8 => write!(f, "Int8"),
             Type::Int16 => write!(f, "Int16"),
             Type::Int32 => write!(f, "Int32"),
@@ -106,6 +132,8 @@ impl fmt::Display for Type {
             Type::CommandResult => write!(f, "CommandResult"),
             Type::Unknown => write!(f, "?"),
             Type::Error => write!(f, "<error>"),
+            Type::BuiltinError => write!(f, "Error"),
+            Type::Result(t, e) => write!(f, "Result[{}, {}]", t, e),
         }
     }
 }
@@ -115,6 +143,7 @@ pub fn resolve_named_type(name: &str) -> Type {
     match name {
         "Bool" => Type::Bool,
         "String" => Type::String,
+        "Int" => Type::Int,
         "Int8" => Type::Int8,
         "Int16" => Type::Int16,
         "Int32" => Type::Int32,
@@ -127,6 +156,7 @@ pub fn resolve_named_type(name: &str) -> Type {
         "Float64" => Type::Float64,
         "Command" => Type::Command,
         "CommandResult" => Type::CommandResult,
+        "Error" => Type::BuiltinError,
         _ => Type::Unknown, // caller decides if this is struct/enum
     }
 }

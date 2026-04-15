@@ -15,11 +15,18 @@ pub fn run_source(source: &str) -> Result<(), DriverError> {
     typeck_check_file(&hir)
         .map_err(|errs| DriverError::TypeError(format!("{:?}", errs)))?;
     
-    let _value = run(&hir)
+    let value = run(&hir)
         .map_err(|e| match e {
             fero_interpreter::RuntimeError::Exit(code) => DriverError::Exit(code),
+            fero_interpreter::RuntimeError::Panic(msg) => DriverError::RuntimeError(format!("panic: {}", msg)),
             fero_interpreter::RuntimeError::Message(s) => DriverError::RuntimeError(s),
         })?;
+    
+    if let fero_interpreter::value::Value::Result(res) = value {
+        if let fero_interpreter::value::ValueResult::Err(err_val) = *res {
+            return Err(DriverError::RuntimeError(format!("Uncaught error: {}", err_val)));
+        }
+    }
     
     Ok(())
 }

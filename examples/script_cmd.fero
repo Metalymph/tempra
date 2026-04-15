@@ -1,0 +1,7 @@
+let result = cmd("grep", ["hello", "examples/sample.txt"]).run()?
+
+if !result.success {
+    exit(result.exit_code)
+}
+
+print(result.stdout)

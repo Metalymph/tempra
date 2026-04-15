@@ -56,7 +56,7 @@ fn test_3() {
 #[test]
 fn test_4() {
     let source = "
-    fn add(a: Int64, b: Int64) -> Int64 {
+    fn add(a: Int, b: Int) -> Int {
         a + b
     }
 
@@ -93,10 +93,38 @@ fn test_5() {
 }
 
 #[test]
-fn test_print() {
+fn test_print_variadic() {
     let source = r#"
     fn main() {
-        print("hello")
+        print("hello ", "world")
+    }
+    "#;
+    let val = assert_runs(source);
+    assert!(matches!(val, Value::Unit));
+}
+
+#[test]
+fn test_fmt_variadic() {
+    let source = r#"
+    fn main() {
+        let s = fmt("hello ", "world")
+        print(s)
+        s
+    }
+    "#;
+    let val = assert_runs(source);
+    if let Value::String(s) = val {
+        assert_eq!(s, "hello world");
+    } else {
+        panic!("Expected String(\"hello world\"), found {:?}", val);
+    }
+}
+
+#[test]
+fn test_mixed_types() {
+    let source = r#"
+    fn main() {
+        print("val=", 5, " ok=", true)
     }
     "#;
     let val = assert_runs(source);
@@ -247,7 +275,7 @@ fn test_exit_propagates() {
     }
     "#;
     
-    let mut ast = fero_parser::parse_source(source).unwrap();
+    let ast = fero_parser::parse_source(source).unwrap();
     let hir = fero_hir::lower_file(source, &ast);
     let result = fero_interpreter::run(&hir);
     

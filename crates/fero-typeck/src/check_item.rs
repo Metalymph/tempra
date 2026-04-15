@@ -15,13 +15,18 @@ pub fn check_item(ctx: &mut TypeContext, item: &HirItem) {
 
 /// Check a function body against its declared signature.
 fn check_function(ctx: &mut TypeContext, f: &HirFunction) {
-    let return_type = f
+    let mut return_type = f
         .return_type
         .as_ref()
         .map(|t| ctx.resolve_hir_type(t))
         .unwrap_or(Type::Unit);
 
+    if f.is_fallible {
+        return_type = Type::Result(Box::new(return_type), Box::new(Type::BuiltinError));
+    }
+
     ctx.current_return_type = Some(return_type);
+    ctx.current_is_fallible = f.is_fallible;
     ctx.scopes.push_scope();
 
     // Bind parameters
@@ -30,9 +35,29 @@ fn check_function(ctx: &mut TypeContext, f: &HirFunction) {
         ctx.scopes.insert(p.name.clone(), ty);
     }
 
-    let _body_ty = check_block(ctx, &f.body);
+    let body_ty = check_block(ctx, &f.body);
+    
+    // Check final expression return type
+    if let Some(expected) = &ctx.current_return_type {
+        if body_ty != Type::Error && body_ty != *expected {
+            // Special case: implicit Ok(()) for fallible Unit functions
+            let is_implicit_ok_unit = f.is_fallible 
+                && matches!(f.return_type, None | Some(HirType::Named(_, _))) // Simplified check for Unit success
+                && body_ty == Type::Unit
+                && *expected == Type::Result(Box::new(Type::Unit), Box::new(Type::BuiltinError));
+
+            if !is_implicit_ok_unit {
+                ctx.error(
+                    format!("Function body return type mismatch: expected {}, found {}", expected, body_ty),
+                    f.body.span,
+                );
+            }
+        }
+    }
+
     ctx.scopes.pop_scope();
     ctx.current_return_type = None;
+    ctx.current_is_fallible = false;
 }
 
 /// Register all top-level items so that forward references work.
@@ -45,14 +70,17 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
                     .iter()
                     .map(|p| (p.name.clone(), ctx.resolve_hir_type(&p.ty)))
                     .collect();
-                let return_type = f
+                let mut return_type = f
                     .return_type
                     .as_ref()
                     .map(|t| ctx.resolve_hir_type(t))
                     .unwrap_or(Type::Unit);
+                if f.is_fallible {
+                    return_type = Type::Result(Box::new(return_type), Box::new(Type::BuiltinError));
+                }
                 ctx.functions.insert(
                     f.name.clone(),
-                    FunctionSignature { params, return_type },
+                    FunctionSignature { params, return_type, is_fallible: f.is_fallible },
                 );
             }
             HirItem::Struct(s) => {

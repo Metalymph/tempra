@@ -15,6 +15,15 @@ pub enum Value {
 
     Command(CommandValue),
     CommandResult(CommandResultValue),
+
+    Result(Box<ValueResult>),
+    Error(String),
+}
+
+#[derive(Debug, Clone)]
+pub enum ValueResult {
+    Ok(Value),
+    Err(Value),
 }
 
 #[derive(Debug, Clone)]
@@ -73,6 +82,11 @@ impl std::fmt::Display for Value {
             }
             Value::Command(c) => write!(f, "Command(\"{}\", {:?})", c.program, c.args),
             Value::CommandResult(r) => write!(f, "CommandResult(exit_code={}, success={})", r.exit_code, r.success),
+            Value::Result(res) => match res.as_ref() {
+                ValueResult::Ok(v) => write!(f, "Ok({})", v),
+                ValueResult::Err(v) => write!(f, "Err({})", v),
+            },
+            Value::Error(msg) => write!(f, "Error(\"{}\")", msg),
         }
     }
 }

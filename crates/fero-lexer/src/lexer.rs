@@ -125,6 +125,7 @@ impl<'src> Lexer<'src> {
                 }
             }
             b'<' => { self.advance(); self.make_token(TokenKind::Less, start, self.position) }
+            b'?' => { self.advance(); self.make_token(TokenKind::QuestionMark, start, self.position) }
             
             _ => {
                 self.advance();

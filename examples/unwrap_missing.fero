@@ -1,0 +1,4 @@
+fn main() {
+    let text = read("missing.txt")!
+    print(text)
+}

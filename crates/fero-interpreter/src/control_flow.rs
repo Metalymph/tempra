@@ -7,4 +7,5 @@ pub enum ControlFlow {
     Break,
     Continue,
     Exit(i32),
+    Panic(String),
 }

@@ -10,6 +10,7 @@ use crate::env::ScopeStack;
 pub struct FunctionSignature {
     pub params: Vec<(String, Type)>,
     pub return_type: Type,
+    pub is_fallible: bool,
 }
 
 /// Metadata about a struct definition.
@@ -33,6 +34,7 @@ pub struct TypeContext {
     pub scopes: ScopeStack,
     pub errors: Vec<TypeError>,
     pub current_return_type: Option<Type>,
+    pub current_is_fallible: bool,
 }
 
 impl TypeContext {
@@ -44,6 +46,7 @@ impl TypeContext {
             scopes: ScopeStack::new(),
             errors: Vec::new(),
             current_return_type: None,
+            current_is_fallible: false,
         }
     }
 
@@ -70,6 +73,18 @@ impl TypeContext {
             HirType::Array(_, inner) => Type::Array(Box::new(self.resolve_hir_type(inner))),
             HirType::Tuple(_, elems) => {
                 Type::Tuple(elems.iter().map(|e| self.resolve_hir_type(e)).collect())
+            }
+            HirType::Generic(_, name, args) => {
+                if name == "Result" {
+                    if args.len() != 2 {
+                         // Should ideally be an error, but let's stick to Type::Error for now
+                         return Type::Error;
+                    }
+                    let ok = self.resolve_hir_type(&args[0]);
+                    let err = self.resolve_hir_type(&args[1]);
+                    return Type::Result(Box::new(ok), Box::new(err));
+                }
+                Type::Unknown
             }
         }
     }

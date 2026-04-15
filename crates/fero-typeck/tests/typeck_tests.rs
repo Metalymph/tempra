@@ -69,7 +69,7 @@ fn test_if_failure() {
 #[test]
 fn test_function_call_success() {
     expect_ok(r#"
-        fn add(a: Int64, b: Int64) -> Int64 {
+        fn add(a: Int, b: Int) -> Int {
             a + b
         }
 
@@ -82,7 +82,7 @@ fn test_function_call_success() {
 #[test]
 fn test_function_call_arity_failure() {
     expect_err(r#"
-        fn add(a: Int64, b: Int64) -> Int64 {
+        fn add(a: Int, b: Int) -> Int {
             a + b
         }
 
@@ -97,7 +97,7 @@ fn test_struct_literal_success() {
     expect_ok(r#"
         struct User {
             name: String,
-            bank_value: Int64
+            bank_value: Int
         }
 
         fn main() {
@@ -114,7 +114,7 @@ fn test_struct_literal_failure() {
     expect_err(r#"
         struct User {
             name: String,
-            bank_value: Int64
+            bank_value: Int
         }
 
         fn main() {
@@ -173,6 +173,18 @@ fn test_print_success() {
     expect_ok(r#"
         fn main() {
             print("hello")
+            print("a", 1, true)
+            print()
+        }
+    "#);
+}
+
+#[test]
+fn test_fmt_success() {
+    expect_ok(r#"
+        fn main() {
+            let s = fmt("a", 1, true)
+            let s2 = fmt()
         }
     "#);
 }
@@ -188,10 +200,11 @@ fn test_read_line_success() {
 }
 
 #[test]
-fn test_print_wrong_arity() {
-    expect_err(r#"
+fn test_format_return_type() {
+    expect_ok(r#"
         fn main() {
-            print()
+            let s = fmt("value=", 5)
+            print(s)
         }
     "#);
 }

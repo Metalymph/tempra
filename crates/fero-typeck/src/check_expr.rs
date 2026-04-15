@@ -9,7 +9,7 @@ use crate::context::TypeContext;
 pub fn check_expression(ctx: &mut TypeContext, expr: &HirExpression) -> Type {
     match expr {
         HirExpression::Name(span, name) => check_name(ctx, name, *span),
-        HirExpression::Integer(_, _) => Type::Int64,
+        HirExpression::Integer(_, _) => Type::Int,
         HirExpression::Float(_, _) => Type::Float64,
         HirExpression::String(_, _) => Type::String,
         HirExpression::Bool(_, _) => Type::Bool,
@@ -25,7 +25,42 @@ pub fn check_expression(ctx: &mut TypeContext, expr: &HirExpression) -> Type {
         HirExpression::Tuple(span, elems) => check_tuple(ctx, elems, *span),
         HirExpression::Array(span, elems) => check_array(ctx, elems, *span),
         HirExpression::StructLiteral(s) => check_struct_literal(ctx, s),
+        HirExpression::Try(e) => check_try(ctx, e),
+        HirExpression::Unwrap(e) => check_unwrap(ctx, e),
     }
+}
+
+fn check_unwrap(ctx: &mut TypeContext, e: &HirUnwrapExpr) -> Type {
+    let ty = check_expression(ctx, &e.expr);
+    match ty {
+        Type::Result(ok, _) => *ok,
+        Type::Error => Type::Error,
+        _ => {
+            ctx.error(format!("'!' operator expects a Result type, found {}", ty), e.expr.span());
+            Type::Error
+        }
+    }
+}
+
+fn check_try(ctx: &mut TypeContext, e: &HirTryExpr) -> Type {
+    let ty = check_expression(ctx, &e.expr);
+    
+    // 1. Must be a Result type
+    let (ok_ty, _err_ty) = match ty {
+        Type::Result(ok, err) => (*ok, *err),
+        Type::Error => return Type::Error,
+        _ => {
+            ctx.error(format!("'?' operator expects a Result type, found {}", ty), e.span);
+            return Type::Error;
+        }
+    };
+
+    // 2. Surrounding function must return Result
+    if !ctx.current_is_fallible {
+        ctx.error("'?' operator can only be used in a fallible function".to_string(), e.span);
+    }
+
+    ok_ty
 }
 
 fn check_name(ctx: &mut TypeContext, name: &str, span: Span) -> Type {
@@ -78,17 +113,24 @@ fn check_binary(ctx: &mut TypeContext, b: &HirBinary) -> Type {
                 return Type::Error;
             }
             if left != right {
-                ctx.error(
-                    format!("Arithmetic operands must have the same type: {} vs {}", left, right),
-                    b.span,
-                );
-                return Type::Error;
+                // Allow Int and Int64 to be mixed
+                let both_int = (left == Type::Int || left == Type::Int64) && (right == Type::Int || right == Type::Int64);
+                if !both_int {
+                    ctx.error(
+                        format!("Arithmetic operands must have the same type: {} vs {}", left, right),
+                        b.span,
+                    );
+                    return Type::Error;
+                }
             }
             left
         }
         HirBinaryOp::Eq | HirBinaryOp::NotEq => {
             if left != right {
-                ctx.error(format!("Equality operands must have the same type: {} vs {}", left, right), b.span);
+                let both_int = (left == Type::Int || left == Type::Int64) && (right == Type::Int || right == Type::Int64);
+                if !both_int {
+                    ctx.error(format!("Equality operands must have the same type: {} vs {}", left, right), b.span);
+                }
             }
             Type::Bool
         }
@@ -97,7 +139,10 @@ fn check_binary(ctx: &mut TypeContext, b: &HirBinary) -> Type {
                 ctx.error(format!("Comparison operator expects numeric type, found {}", left), b.span);
             }
             if left != right {
-                ctx.error(format!("Comparison operands must have the same type: {} vs {}", left, right), b.span);
+                let both_int = (left == Type::Int || left == Type::Int64) && (right == Type::Int || right == Type::Int64);
+                if !both_int {
+                     ctx.error(format!("Comparison operands must have the same type: {} vs {}", left, right), b.span);
+                }
             }
             Type::Bool
         }
@@ -115,7 +160,10 @@ fn check_binary(ctx: &mut TypeContext, b: &HirBinary) -> Type {
         }
         HirBinaryOp::Assign => {
             if left != right {
-                ctx.error(format!("Cannot assign {} to {}", right, left), b.span);
+                let both_int = (left == Type::Int || left == Type::Int64) && (right == Type::Int || right == Type::Int64);
+                if !both_int {
+                    ctx.error(format!("Cannot assign {} to {}", right, left), b.span);
+                }
             }
             Type::Unit
         }
@@ -136,20 +184,30 @@ fn check_binary(ctx: &mut TypeContext, b: &HirBinary) -> Type {
 fn check_builtin(ctx: &mut TypeContext, name: &str, args: &[HirExpression], span: Span) -> Option<Type> {
     match name {
         "print" => {
-            if args.len() != 1 {
-                ctx.error(format!("Function 'print' expects 1 argument(s), found {}", args.len()), span);
-            } else {
-                let _ = check_expression(ctx, &args[0]);
+            for arg in args {
+                let ty = check_expression(ctx, arg);
+                if !ty.is_printable() && ty != Type::Error {
+                    ctx.error(format!("'print' argument must be a printable type, found {}", ty), arg.span());
+                }
             }
             Some(Type::Unit)
+        }
+        "fmt" => {
+            for arg in args {
+                let ty = check_expression(ctx, arg);
+                if !ty.is_printable() && ty != Type::Error {
+                    ctx.error(format!("'fmt' argument must be a printable type, found {}", ty), arg.span());
+                }
+            }
+            Some(Type::String)
         }
         "exit" => {
             if args.len() != 1 {
                 ctx.error(format!("Function 'exit' expects 1 argument(s), found {}", args.len()), span);
             } else {
                 let p = check_expression(ctx, &args[0]);
-                if p != Type::Int64 && p != Type::Error {
-                    ctx.error(format!("Argument 1 of 'exit': expected Int64, found {}", p), args[0].span());
+                if p != Type::Int && p != Type::Int64 && p != Type::Error {
+                    ctx.error(format!("Argument 1 of 'exit': expected Int or Int64, found {}", p), args[0].span());
                 }
             }
             Some(Type::Unit)
@@ -158,7 +216,7 @@ fn check_builtin(ctx: &mut TypeContext, name: &str, args: &[HirExpression], span
             if args.len() != 0 {
                 ctx.error(format!("Function 'read_line' expects 0 argument(s), found {}", args.len()), span);
             }
-            Some(Type::String)
+            Some(Type::Result(Box::new(Type::String), Box::new(Type::BuiltinError)))
         }
         "cmd" => {
             if args.len() != 2 {
@@ -187,7 +245,7 @@ fn check_builtin(ctx: &mut TypeContext, name: &str, args: &[HirExpression], span
                     ctx.error(format!("Argument 1 of 'read': expected String, found {}", p), args[0].span());
                 }
             }
-            Some(Type::String)
+            Some(Type::Result(Box::new(Type::String), Box::new(Type::BuiltinError)))
         }
         "write" | "append" => {
             if args.len() != 2 {
@@ -200,6 +258,34 @@ fn check_builtin(ctx: &mut TypeContext, name: &str, args: &[HirExpression], span
                 let t = check_expression(ctx, &args[1]);
                 if t != Type::String && t != Type::Error {
                     ctx.error(format!("Argument 2 of '{}': expected String, found {}", name, t), args[1].span());
+                }
+            }
+            Some(Type::Result(Box::new(Type::Unit), Box::new(Type::BuiltinError)))
+        }
+        "Ok" => {
+            if args.len() != 1 {
+                ctx.error(format!("Function 'Ok' expects 1 argument(s), found {}", args.len()), span);
+                Some(Type::Error)
+            } else {
+                let ty = check_expression(ctx, &args[0]);
+                Some(Type::Result(Box::new(ty), Box::new(Type::BuiltinError)))
+            }
+        }
+        "Err" => {
+            if args.len() != 1 {
+                ctx.error(format!("Function 'Err' expects 1 argument(s), found {}", args.len()), span);
+                Some(Type::Error)
+            } else {
+                Some(Type::Result(Box::new(Type::Unknown), Box::new(Type::BuiltinError)))
+            }
+        }
+        "panic" => {
+            if args.len() != 1 {
+                ctx.error(format!("Function 'panic' expects 1 argument(s), found {}", args.len()), span);
+            } else {
+                let p = check_expression(ctx, &args[0]);
+                if p != Type::String && p != Type::Error {
+                    ctx.error(format!("Argument 1 of 'panic': expected String, found {}", p), args[0].span());
                 }
             }
             Some(Type::Unit)
@@ -218,7 +304,7 @@ fn check_call(ctx: &mut TypeContext, c: &HirCall) -> Type {
                 if !c.args.is_empty() {
                     ctx.error(format!("Method 'run' on Command expects 0 argument(s), found {}", c.args.len()), c.span);
                 }
-                return Type::CommandResult;
+                return Type::Result(Box::new(Type::CommandResult), Box::new(Type::BuiltinError));
             }
             ctx.error("Method calls only supported for Command.run()".to_string(), c.span);
             return Type::Error;

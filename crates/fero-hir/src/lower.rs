@@ -17,6 +17,7 @@ impl<'src> Lowerer<'src> {
     pub fn lower_file(&self, file: &ast::File) -> HirFile {
         HirFile {
             items: file.items.iter().map(|item| self.lower_item(item)).collect(),
+            top_level_statements: file.top_level_statements.iter().map(|stmt| self.lower_statement(stmt)).collect(),
         }
     }
 
@@ -47,6 +48,7 @@ impl<'src> Lowerer<'src> {
             name: self.text(item.name.span),
             parameters: item.parameters.iter().map(|p| self.lower_parameter(p)).collect(),
             return_type: item.return_type.as_ref().map(|t| self.lower_type(t)),
+            is_fallible: item.is_fallible,
             body: self.lower_block(&item.body),
         }
     }
@@ -106,6 +108,11 @@ impl<'src> Lowerer<'src> {
             ast::TypeExpr::Named(t) => HirType::Named(t.span, self.text(t.name.span)),
             ast::TypeExpr::Array(t) => HirType::Array(t.span, Box::new(self.lower_type(&t.element_type))),
             ast::TypeExpr::Tuple(t) => HirType::Tuple(t.span, t.elements.iter().map(|e| self.lower_type(e)).collect()),
+            ast::TypeExpr::Generic(t) => HirType::Generic(
+                t.span,
+                self.text(t.base.name.span),
+                t.arguments.iter().map(|a| self.lower_type(a)).collect(),
+            ),
         }
     }
 
@@ -163,6 +170,14 @@ impl<'src> Lowerer<'src> {
                 left: Box::new(self.lower_expression(&e.left)),
                 op: self.lower_binary_op(e.operator),
                 right: Box::new(self.lower_expression(&e.right)),
+            }),
+            ast::Expression::Try(e) => HirExpression::Try(HirTryExpr {
+                span: e.span,
+                expr: Box::new(self.lower_expression(&e.expression)),
+            }),
+            ast::Expression::Unwrap(e) => HirExpression::Unwrap(HirUnwrapExpr {
+                span: e.span,
+                expr: Box::new(self.lower_expression(&e.expression)),
             }),
             ast::Expression::Call(e) => HirExpression::Call(HirCall {
                 span: e.span,

@@ -1,4 +1,4 @@
 fn main() {
-    let text = read("missing.txt")!
+    let text = fs.read("missing.txt")!
     print(text)
 }

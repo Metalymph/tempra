@@ -14,6 +14,9 @@ fn main() {
         Commands::Check(args) => {
             commands::check::check_command(args.path)
         }
+        Commands::Test(args) => {
+            commands::test::test_command(args.path)
+        }
     };
 
     if let Err(err) = result {

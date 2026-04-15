@@ -1,0 +1,2 @@
+fs.append("examples/out.txt", "\nappended line")?
+print("appended")

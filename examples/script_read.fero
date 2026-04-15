@@ -1,2 +1,2 @@
-let text = read("examples/sample.txt")?
+let text = fs.read("examples/sample.txt")?
 print(text)

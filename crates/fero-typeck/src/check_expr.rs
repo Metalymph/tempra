@@ -236,32 +236,6 @@ fn check_builtin(ctx: &mut TypeContext, name: &str, args: &[HirExpression], span
             }
             Some(Type::Command)
         }
-        "read" => {
-            if args.len() != 1 {
-                ctx.error(format!("Function 'read' expects 1 argument(s), found {}", args.len()), span);
-            } else {
-                let p = check_expression(ctx, &args[0]);
-                if p != Type::String && p != Type::Error {
-                    ctx.error(format!("Argument 1 of 'read': expected String, found {}", p), args[0].span());
-                }
-            }
-            Some(Type::Result(Box::new(Type::String), Box::new(Type::BuiltinError)))
-        }
-        "write" | "append" => {
-            if args.len() != 2 {
-                ctx.error(format!("Function '{}' expects 2 argument(s), found {}", name, args.len()), span);
-            } else {
-                let p = check_expression(ctx, &args[0]);
-                if p != Type::String && p != Type::Error {
-                    ctx.error(format!("Argument 1 of '{}': expected String, found {}", name, p), args[0].span());
-                }
-                let t = check_expression(ctx, &args[1]);
-                if t != Type::String && t != Type::Error {
-                    ctx.error(format!("Argument 2 of '{}': expected String, found {}", name, t), args[1].span());
-                }
-            }
-            Some(Type::Result(Box::new(Type::Unit), Box::new(Type::BuiltinError)))
-        }
         "Ok" => {
             if args.len() != 1 {
                 ctx.error(format!("Function 'Ok' expects 1 argument(s), found {}", args.len()), span);
@@ -290,7 +264,68 @@ fn check_builtin(ctx: &mut TypeContext, name: &str, args: &[HirExpression], span
             }
             Some(Type::Unit)
         }
+        "expect" => {
+            if args.len() < 1 || args.len() > 2 {
+                ctx.error(format!("Function 'expect' expects 1 or 2 argument(s), found {}", args.len()), span);
+            } else {
+                let p = check_expression(ctx, &args[0]);
+                if p != Type::Bool && p != Type::Error {
+                    ctx.error(format!("Argument 1 of 'expect': expected Bool, found {}", p), args[0].span());
+                }
+                if args.len() == 2 {
+                    let m = check_expression(ctx, &args[1]);
+                    if m != Type::String && m != Type::Error {
+                        ctx.error(format!("Argument 2 of 'expect': expected String, found {}", m), args[1].span());
+                    }
+                }
+            }
+            Some(Type::Unit)
+        }
+        "dbg" => {
+            if args.len() != 1 {
+                ctx.error(format!("Function 'dbg' expects 1 argument(s), found {}", args.len()), span);
+                Some(Type::Error)
+            } else {
+                let ty = check_expression(ctx, &args[0]);
+                Some(ty)
+            }
+        }
         _ => None,
+    }
+}
+
+fn check_fs_builtin(ctx: &mut TypeContext, name: &str, args: &[HirExpression], span: Span) -> Type {
+    match name {
+        "read" => {
+            if args.len() != 1 {
+                ctx.error(format!("'fs.read' expects 1 argument(s), found {}", args.len()), span);
+            } else {
+                let p = check_expression(ctx, &args[0]);
+                if p != Type::String && p != Type::Error {
+                    ctx.error(format!("'fs.read' argument 1: expected String, found {}", p), args[0].span());
+                }
+            }
+            Type::Result(Box::new(Type::String), Box::new(Type::BuiltinError))
+        }
+        "write" | "append" => {
+            if args.len() != 2 {
+                ctx.error(format!("'fs.{}' expects 2 argument(s), found {}", name, args.len()), span);
+            } else {
+                let p = check_expression(ctx, &args[0]);
+                if p != Type::String && p != Type::Error {
+                    ctx.error(format!("'fs.{}' argument 1: expected String, found {}", name, p), args[0].span());
+                }
+                let t = check_expression(ctx, &args[1]);
+                if t != Type::String && t != Type::Error {
+                    ctx.error(format!("'fs.{}' argument 2: expected String, found {}", name, t), args[1].span());
+                }
+            }
+            Type::Result(Box::new(Type::Unit), Box::new(Type::BuiltinError))
+        }
+        _ => {
+            ctx.error(format!("Unknown filesystem operation 'fs.{}'", name), span);
+            Type::Error
+        }
     }
 }
 
@@ -299,6 +334,11 @@ fn check_call(ctx: &mut TypeContext, c: &HirCall) -> Type {
     let func_name = match &*c.callee {
         HirExpression::Name(_, name) => name.clone(),
         HirExpression::Member(m) => {
+            if let HirExpression::Name(_, ref obj_name) = *m.object {
+                if obj_name == "fs" {
+                    return self::check_fs_builtin(ctx, &m.field, &c.args, c.span);
+                }
+            }
             let object_ty = check_expression(ctx, &m.object);
             if object_ty == Type::Command && m.field == "run" {
                 if !c.args.is_empty() {
@@ -306,7 +346,7 @@ fn check_call(ctx: &mut TypeContext, c: &HirCall) -> Type {
                 }
                 return Type::Result(Box::new(Type::CommandResult), Box::new(Type::BuiltinError));
             }
-            ctx.error("Method calls only supported for Command.run()".to_string(), c.span);
+            ctx.error("Method calls only supported for Command.run() or fs.*".to_string(), c.span);
             return Type::Error;
         }
         _ => {

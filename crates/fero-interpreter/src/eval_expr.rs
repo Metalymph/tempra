@@ -5,16 +5,16 @@ use crate::value::{StructInstance, Value};
 use fero_hir::*;
 use std::collections::HashMap;
 
-fn run_command(c: &crate::value::CommandValue) -> Result<Value, String> {
+fn run_command(c: &crate::value::CommandValue) -> Result<crate::value::CommandResultValue, String> {
     let mut cmd = std::process::Command::new(&c.program);
     cmd.args(&c.args);
     let output = cmd.output().map_err(|e| format!("Command error: {}", e))?;
-    Ok(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::CommandResult(crate::value::CommandResultValue {
+    Ok(crate::value::CommandResultValue {
         exit_code: output.status.code().unwrap_or(-1),
         stdout: String::from_utf8_lossy(&output.stdout).to_string(),
         stderr: String::from_utf8_lossy(&output.stderr).to_string(),
         success: output.status.success(),
-    })))))
+    })
 }
 
 fn pipe_commands(left: &crate::value::CommandValue, right: &crate::value::CommandValue) -> Result<Value, String> {
@@ -120,17 +120,15 @@ impl Interpreter {
                         return Ok(ControlFlow::Value(Value::Bool(false)));
                     } else if let Value::Command(ref cmd_left) = left {
                         let res_left = run_command(cmd_left)?;
-                        if let Value::CommandResult(r) = &res_left {
-                            if !r.success {
-                                return Ok(ControlFlow::Value(res_left));
-                            }
+                        if !res_left.success {
+                            return Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::CommandResult(res_left))))));
                         }
                         let right = match self.eval_expression(&binary.right, env)? {
                             ControlFlow::Value(v) => v,
                             cf => return Ok(cf),
                         };
                         if let Value::Command(cmd_right) = right {
-                            return run_command(&cmd_right).map(ControlFlow::Value);
+                            return run_command(&cmd_right).map(|v| ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::CommandResult(v))))));
                         } else {
                             return Err("&& right operand must be Command if left is Command".into());
                         }
@@ -145,17 +143,15 @@ impl Interpreter {
                         return Ok(ControlFlow::Value(Value::Bool(true)));
                     } else if let Value::Command(ref cmd_left) = left {
                         let res_left = run_command(cmd_left)?;
-                        if let Value::CommandResult(r) = &res_left {
-                            if r.success {
-                                return Ok(ControlFlow::Value(res_left));
-                            }
+                        if res_left.success {
+                            return Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::CommandResult(res_left))))));
                         }
                         let right = match self.eval_expression(&binary.right, env)? {
                             ControlFlow::Value(v) => v,
                             cf => return Ok(cf),
                         };
                         if let Value::Command(cmd_right) = right {
-                            return run_command(&cmd_right).map(ControlFlow::Value);
+                            return run_command(&cmd_right).map(|v| ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::CommandResult(v))))));
                         } else {
                             return Err("|| right operand must be Command if left is Command".into());
                         }
@@ -310,6 +306,18 @@ impl Interpreter {
             }
             HirExpression::Call(call) => {
                 if let HirExpression::Member(member) = &*call.callee {
+                    if let HirExpression::Name(_, ref obj_name) = *member.object {
+                        if obj_name == "fs" {
+                            let mut args = Vec::new();
+                            for arg_expr in &call.args {
+                                match self.eval_expression(arg_expr, env)? {
+                                    ControlFlow::Value(v) => args.push(v),
+                                    cf => return Ok(cf),
+                                }
+                            }
+                            return self.eval_fs_builtin(&member.field, &args);
+                        }
+                    }
                     if member.field == "run" {
                         let obj = match self.eval_expression(&member.object, env)? {
                             ControlFlow::Value(v) => v,
@@ -320,7 +328,7 @@ impl Interpreter {
                                 return Err("Method 'run' expects 0 arguments".into());
                             }
                             return match run_command(&cmd) {
-                                Ok(v) => Ok(ControlFlow::Value(v)),
+                                Ok(v) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::CommandResult(v)))))),
                                 Err(msg) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Err(Value::Error(msg)))))),
                             };
                         } else {
@@ -407,56 +415,6 @@ impl Interpreter {
                         };
                         return Ok(ControlFlow::Value(Value::Command(crate::value::CommandValue { program, args: cmd_args })));
                     }
-                    if name == "read" {
-                        if args.len() != 1 {
-                            return Err(format!("Builtin 'read' expects 1 argument"));
-                        }
-                        if let Value::String(path) = &args[0] {
-                            return match std::fs::read_to_string(path) {
-                                Ok(text) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::String(text)))))),
-                                Err(e) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Err(Value::Error(format!("Failed to read '{}': {}", path, e))))))),
-                            }
-                        } else {
-                            return Err("read requires a String as first argument".into());
-                        }
-                    }
-                    if name == "write" {
-                        if args.len() != 2 {
-                            return Err(format!("Builtin 'write' expects 2 arguments"));
-                        }
-                        if let (Value::String(path), Value::String(text)) = (&args[0], &args[1]) {
-                            return match std::fs::write(path, text) {
-                                Ok(_) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::Unit))))),
-                                Err(e) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Err(Value::Error(format!("Failed to write to '{}': {}", path, e))))))),
-                            }
-                        } else {
-                            return Err("write requires two String arguments".into());
-                        }
-                    }
-                    if name == "append" {
-                        if args.len() != 2 {
-                            return Err(format!("Builtin 'append' expects 2 arguments"));
-                        }
-                        if let (Value::String(path), Value::String(text)) = (&args[0], &args[1]) {
-                            use std::io::Write;
-                            let res = (|| -> Result<(), String> {
-                                let mut file = std::fs::OpenOptions::new()
-                                    .create(true)
-                                    .append(true)
-                                    .open(path)
-                                    .map_err(|e| format!("Failed to open '{}' for appending: {}", path, e))?;
-                                file.write_all(text.as_bytes())
-                                    .map_err(|e| format!("Failed to append to '{}': {}", path, e))?;
-                                Ok(())
-                            })();
-                            return match res {
-                                Ok(_) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::Unit))))),
-                                Err(msg) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Err(Value::Error(msg)))))),
-                            }
-                        } else {
-                            return Err("append requires two String arguments".into());
-                        }
-                    }
 
                     if name == "Ok" {
                         if args.len() != 1 {
@@ -475,6 +433,32 @@ impl Interpreter {
                             return Err(format!("Builtin 'Error' expects 1 argument"));
                         }
                         return Ok(ControlFlow::Value(Value::Error(value_to_string(&args[0]))));
+                    }
+                    if name == "expect" {
+                        if args.is_empty() || args.len() > 2 {
+                            return Err(format!("Builtin 'expect' expects 1 or 2 arguments"));
+                        }
+                        if let Value::Bool(b) = args[0] {
+                            if b {
+                                return Ok(ControlFlow::Value(Value::Unit));
+                            } else {
+                                let msg = if args.len() == 2 {
+                                    value_to_string(&args[1])
+                                } else {
+                                    "expectation failed".to_string()
+                                };
+                                return Ok(ControlFlow::Panic(msg));
+                            }
+                        } else {
+                            return Err("expect requires a Bool as first argument".into());
+                        }
+                    }
+                    if name == "dbg" {
+                        if args.len() != 1 {
+                            return Err(format!("Builtin 'dbg' expects 1 argument"));
+                        }
+                        println!("dbg: {:?}", args[0]);
+                        return Ok(ControlFlow::Value(args[0].clone()));
                     }
 
                     let func = self
@@ -711,5 +695,61 @@ impl Interpreter {
         }
         env.pop_scope();
         Ok(ControlFlow::Value(last_val))
+    }
+
+    fn eval_fs_builtin(&mut self, name: &str, args: &[Value]) -> Result<ControlFlow, String> {
+        match name {
+            "read" => {
+                if args.len() != 1 {
+                    return Err(format!("'fs.read' expects 1 argument"));
+                }
+                if let Value::String(path) = &args[0] {
+                    return match std::fs::read_to_string(path) {
+                        Ok(text) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::String(text)))))),
+                        Err(e) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Err(Value::Error(format!("Failed to read '{}': {}", path, e))))))),
+                    }
+                } else {
+                    return Err("'fs.read' requires a String as first argument".into());
+                }
+            }
+            "write" => {
+                if args.len() != 2 {
+                    return Err(format!("'fs.write' expects 2 arguments"));
+                }
+                if let (Value::String(path), Value::String(text)) = (&args[0], &args[1]) {
+                    return match std::fs::write(path, text) {
+                        Ok(_) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::Unit))))),
+                        Err(e) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Err(Value::Error(format!("Failed to write to '{}': {}", path, e))))))),
+                    }
+                } else {
+                    return Err("'fs.write' requires two String arguments".into());
+                }
+            }
+            "append" => {
+                if args.len() != 2 {
+                    return Err(format!("'fs.append' expects 2 arguments"));
+                }
+                if let (Value::String(path), Value::String(text)) = (&args[0], &args[1]) {
+                    use std::io::Write;
+                    let res = (|| -> Result<(), String> {
+                        let mut file = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(path)
+                            .map_err(|e| format!("Failed to open '{}' for appending: {}", path, e))?;
+                        file.write_all(text.as_bytes())
+                            .map_err(|e| format!("Failed to append to '{}': {}", path, e))?;
+                        Ok(())
+                    })();
+                    return match res {
+                        Ok(_) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::Unit))))),
+                        Err(msg) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Err(Value::Error(msg)))))),
+                    }
+                } else {
+                    return Err("'fs.append' requires two String arguments".into());
+                }
+            }
+            _ => Err(format!("Unknown filesystem operation 'fs.{}'", name)),
+        }
     }
 }

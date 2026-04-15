@@ -143,7 +143,7 @@ fn test_mixed_types() {
 fn test_cmd_run() {
     let source = r#"
     fn main() {
-        let r = cmd("echo", ["hello"]).run()
+        let r = cmd("echo", ["hello"]).run()!
         print(r.stdout)
         r.stdout
     }
@@ -160,7 +160,7 @@ fn test_cmd_run() {
 fn test_command_pipe() {
     let source = r#"
     fn main() {
-        let r = cmd("echo", ["hello"]) | cmd("grep", ["h"])
+        let r = (cmd("echo", ["hello"]) | cmd("grep", ["h"])) // pipe returns CommandResult directly currently
         print(r.stdout)
         r.stdout
     }
@@ -177,7 +177,7 @@ fn test_command_pipe() {
 fn test_command_and() {
     let source = r#"
     fn main() {
-        let r = cmd("true", []) && cmd("echo", ["ok"])
+        let r = (cmd("true", []) && cmd("echo", ["ok"]))!
         print(r.success)
         r.success
     }
@@ -194,7 +194,7 @@ fn test_command_and() {
 fn test_command_or() {
     let source = r#"
     fn main() {
-        let r = cmd("false", []) || cmd("echo", ["fallback"])
+        let r = (cmd("false", []) || cmd("echo", ["fallback"]))!
         print(r.success)
         r.success
     }
@@ -216,7 +216,7 @@ fn test_read_file() {
 
     let source = format!(r#"
     fn main() {{
-        read("{}")
+        fs.read("{}")!
     }}
     "#, path_str);
     
@@ -236,7 +236,7 @@ fn test_write_file() {
 
     let source = format!(r#"
     fn main() {{
-        write("{}", "hello_fero")
+        fs.write("{}", "hello_fero")!
     }}
     "#, path_str);
     
@@ -256,7 +256,7 @@ fn test_append_file() {
 
     let source = format!(r#"
     fn main() {{
-        append("{}", " world")
+        fs.append("{}", " world")!
     }}
     "#, path_str);
     
@@ -282,5 +282,73 @@ fn test_exit_propagates() {
     match result {
         Err(fero_interpreter::RuntimeError::Exit(5)) => {}
         other => panic!("Expected Exit(5) signal, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_expect_pass() {
+    let source = r#"
+    fn main() {
+        expect(true)
+        "ok"
+    }
+    "#;
+    let val = assert_runs(source);
+    if let Value::String(s) = val {
+        assert_eq!(s, "ok");
+    } else {
+        panic!("Expected String(\"ok\"), got {:?}", val);
+    }
+}
+
+#[test]
+fn test_expect_fail() {
+    let source = r#"
+    fn main() {
+        expect(false)
+    }
+    "#;
+    let ast = fero_parser::parse_source(source).unwrap();
+    let hir = fero_hir::lower_file(source, &ast);
+    let result = fero_interpreter::run(&hir);
+    match result {
+        Err(fero_interpreter::RuntimeError::Panic(msg)) => {
+            assert_eq!(msg, "expectation failed");
+        }
+        other => panic!("Expected Panic signal, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_expect_fail_message() {
+    let source = r#"
+    fn main() {
+        expect(false, "my custom message")
+    }
+    "#;
+    let ast = fero_parser::parse_source(source).unwrap();
+    let hir = fero_hir::lower_file(source, &ast);
+    let result = fero_interpreter::run(&hir);
+    match result {
+        Err(fero_interpreter::RuntimeError::Panic(msg)) => {
+            assert_eq!(msg, "my custom message");
+        }
+        other => panic!("Expected Panic signal, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_dbg_eval() {
+    let source = r#"
+    fn main() {
+        let x = dbg(123)
+        x
+    }
+    "#;
+    let val = assert_runs(source);
+    if let Value::Int64(i) = val {
+        assert_eq!(i, 123);
+    } else {
+        panic!("Expected Int64(123), got {:?}", val);
     }
 }

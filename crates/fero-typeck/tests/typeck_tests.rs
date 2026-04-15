@@ -267,7 +267,7 @@ fn test_command_pipe_success() {
 fn test_read_success() {
     expect_ok(r#"
         fn main() {
-            let text = read("notes.txt");
+            let text = fs.read("notes.txt")!;
             print(text);
         }
     "#);
@@ -277,7 +277,7 @@ fn test_read_success() {
 fn test_read_wrong_type() {
     expect_err(r#"
         fn main() {
-            let text = read(123);
+            let text = fs.read(123);
         }
     "#);
 }
@@ -286,7 +286,7 @@ fn test_read_wrong_type() {
 fn test_write_success() {
     expect_ok(r#"
         fn main() {
-            write("out.txt", "hello");
+            fs.write("out.txt", "hello")!;
         }
     "#);
 }
@@ -295,7 +295,7 @@ fn test_write_success() {
 fn test_write_wrong_type() {
     expect_err(r#"
         fn main() {
-            write("out.txt", 123);
+            fs.write("out.txt", 123)!;
         }
     "#);
 }
@@ -304,7 +304,7 @@ fn test_write_wrong_type() {
 fn test_append_success() {
     expect_ok(r#"
         fn main() {
-            append("log.txt", "done");
+            fs.append("log.txt", "done")!;
         }
     "#);
 }
@@ -313,7 +313,7 @@ fn test_append_success() {
 fn test_append_wrong_type() {
     expect_err(r#"
         fn main() {
-            append("log.txt", 123);
+            fs.append("log.txt", 123);
         }
     "#);
 }
@@ -332,6 +332,41 @@ fn test_exit_wrong_type() {
     expect_err(r#"
         fn main() {
             exit("1");
+        }
+    "#);
+}
+
+#[test]
+fn test_expect_success() {
+    expect_ok(r#"
+        fn main() {
+            expect(true);
+            expect(false, "message");
+        }
+    "#);
+}
+
+#[test]
+fn test_expect_wrong_type() {
+    expect_err(r#"
+        fn main() {
+            expect(1);
+        }
+    "#);
+    expect_err(r#"
+        fn main() {
+            expect(false, 1);
+        }
+    "#);
+}
+
+#[test]
+fn test_dbg_preserves_type() {
+    expect_ok(r#"
+        fn main() {
+            let x = dbg(1);
+            let y = dbg("hello");
+            let z = dbg(true);
         }
     "#);
 }

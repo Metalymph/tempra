@@ -1,0 +1,4 @@
+let x = dbg(123)
+let y = dbg(fmt("hello ", "world"))
+print(x)
+print(y)

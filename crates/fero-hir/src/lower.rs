@@ -200,15 +200,12 @@ impl<'src> Lowerer<'src> {
                 object: Box::new(self.lower_expression(&e.object)),
                 index: Box::new(self.lower_expression(&e.index)),
             }),
-            ast::Expression::Slice(e) => {
-                // Slicing might need its own HIR node if we want to be explicit,
-                // but for now let's keep it simple or map to a range-like index if needed.
-                // The plan didn't explicitly mention HirSlice yet, so I'll add a placeholder or map it.
-                // Actually, let's keep it as is or add it to HirExpression.
-                // I'll add Slice to HirExpression for completeness as it was in AST.
-                // Wait, I missed it in my hir.rs. I'll stick to what I have in hir.rs or update it.
-                HirExpression::Name(e.span, "SLICING_NOT_IMPLEMENTED".to_string())
-            }
+            ast::Expression::Slice(e) => HirExpression::Slice(HirSlice {
+                span: e.span,
+                object: Box::new(self.lower_expression(&e.object)),
+                start: Box::new(self.lower_expression(&e.start)),
+                end: Box::new(self.lower_expression(&e.end)),
+            }),
             ast::Expression::Block(e) => HirExpression::Block(self.lower_block(&e.block)),
             ast::Expression::If(e) => HirExpression::If(HirIf {
                 span: e.span,

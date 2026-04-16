@@ -21,10 +21,10 @@ No runtime bloat. No complex setup. Just a direct path from script to tool.
 ## Example
 
 ```fero
-let files = fs.read_dir(".")
+let files = fs.list_dir(".")?
 
 for f in files {
-    io.println(f)
+    print(f)
 }
 ```
 
@@ -123,15 +123,28 @@ Fero treats WebAssembly as a first-class target.
 
 ---
 
+### Status: Milestone 0.2
+Fero is rapidly evolving. We currently have a functional core with:
+- **Rich Syntax**: Arrays, Slices, Structs, Enums, Expressions-as-statements.
+- **Strong Type System**: Static type validation for variables, functions, and standard methods.
+- **Standard Library**: Core `os`, `fs`, `env`, and `builtins` (print, fmt, dbg, cmd).
+- **Tooling**: A working CLI with `run` and `check` commands.
+
 ## Roadmap
 
-### Near-term
+### Current (Done)
+- [x] Lexer, Parser, AST, HIR, Type Checker.
+- [x] Fast, high-level Interpreter.
+- [x] Initial Stdlib: `os`, `fs`, `env`.
+- [x] Native Command Execution (`cmd`).
+- [x] Array Slicing `xs[start..end]`.
 
-1. Robust parser and diagnostics engine.
-2. Fully typed HIR.
-3. High-performance interpreter.
-4. Production-ready Cranelift AOT.
-5. Dedicated Wasm backend.
+### Next
+- [ ] Productions-ready Cranelift AOT.
+- [ ] Dedicated Wasm backend.
+- [ ] LSP support (completion, go-to-definition).
+- [ ] REPL enhancements.
+- [ ] Shared backing storage for array slices.
 
 ### Long-term
 
@@ -156,6 +169,7 @@ fero/
 ```
 
 See [docs/architecture](file:///Users/lorenzopirro/coding/rust/fero/docs/architecture/ARCHITECTURE.md) for full technical details.
+Take a look at [STDLIB_TUTORIAL.md](file:///Users/lorenzopirro/coding/rust/fero/STDLIB_TUTORIAL.md) for a guide on how to add new stdlib features.
 
 ---
 

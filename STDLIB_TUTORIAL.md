@@ -5,6 +5,7 @@ This guide explains how to add a new builtin module and API to the Fero interpre
 ## Overview
 
 Adding a new stdlib API involves changes in four main areas:
+
 1. **HIR Representation**: (Optional) if adding new expression types.
 2. **Type Checker**: Define the type rules for the new API.
 3. **Interpreter**: Implement the runtime behavior.
@@ -17,6 +18,7 @@ Adding a new stdlib API involves changes in four main areas:
 Fero uses explicit dispatch for builtin namespaces like `fs.*`, `os.*`, and `env.*`.
 
 ### Step 1.1: Create a checking function
+
 Create a function to validate the arguments and return type of your module's operations.
 
 ```rust
@@ -48,6 +50,7 @@ fn check_my_module_builtin(ctx: &mut TypeContext, name: &str, args: &[HirCallArg
 ```
 
 ### Step 1.2: Register in `check_call`
+
 Add your namespace check to the `check_call` logic.
 
 ```rust
@@ -65,6 +68,7 @@ if let HirExpression::Member(m) = &*c.callee {
 ## 2. Interpreter (`crates/fero-interpreter/src/eval_expr.rs`)
 
 ### Step 2.1: Implement evaluation logic
+
 Create a function in the `Interpreter` struct to handle the runtime execution.
 
 ```rust
@@ -87,6 +91,7 @@ fn eval_my_module_builtin(&mut self, name: &str, positional_args: &[Value], name
 ```
 
 ### Step 2.2: Register in `eval_expression`
+
 Update the `HirExpression::Call` match arm to dispatch to your module.
 
 ```rust

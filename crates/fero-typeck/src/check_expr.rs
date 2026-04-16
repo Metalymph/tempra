@@ -18,6 +18,7 @@ pub fn check_expression(ctx: &mut TypeContext, expr: &HirExpression) -> Type {
         HirExpression::Call(c) => check_call(ctx, c),
         HirExpression::Member(m) => check_member(ctx, m),
         HirExpression::Index(i) => check_index(ctx, i),
+        HirExpression::Slice(s) => check_slice(ctx, s),
         HirExpression::Block(b) => check_block_expr(ctx, b),
         HirExpression::If(i) => check_if(ctx, i),
         HirExpression::Match(m) => check_match(ctx, m),
@@ -849,8 +850,28 @@ fn check_index(ctx: &mut TypeContext, i: &HirIndex) -> Type {
         }
         return *elem.clone();
     }
+    ctx.error(format!("Cannot index type {}", object_ty), i.span);
+    Type::Error
+}
+
+fn check_slice(ctx: &mut TypeContext, s: &HirSlice) -> Type {
+    let object_ty = check_expression(ctx, &s.object);
+    let start_ty = check_expression(ctx, &s.start);
+    let end_ty = check_expression(ctx, &s.end);
+
+    if !start_ty.is_integer() && start_ty != Type::Error {
+        ctx.error(format!("Slice start bound must be integer, found {}", start_ty), s.start.span());
+    }
+    if !end_ty.is_integer() && end_ty != Type::Error {
+        ctx.error(format!("Slice end bound must be integer, found {}", end_ty), s.end.span());
+    }
+
+    if let Type::Array(elem) = &object_ty {
+        return Type::Array(elem.clone());
+    }
+    
     if object_ty != Type::Error {
-        ctx.error(format!("Cannot index type {}", object_ty), i.span);
+        ctx.error(format!("Cannot slice type {}", object_ty), s.span);
     }
     Type::Error
 }

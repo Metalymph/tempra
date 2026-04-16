@@ -130,6 +130,8 @@ pub enum HirExpression {
     Call(HirCall),
     Member(HirMember),
     Index(HirIndex),
+    Slice(HirSlice),
+
 
     Block(HirBlock),
     If(HirIf),
@@ -155,6 +157,7 @@ impl HirExpression {
             HirExpression::Call(e) => e.span,
             HirExpression::Member(e) => e.span,
             HirExpression::Index(e) => e.span,
+            HirExpression::Slice(e) => e.span,
             HirExpression::Block(e) => e.span,
             HirExpression::If(e) => e.span,
             HirExpression::Match(e) => e.span,
@@ -239,6 +242,14 @@ pub struct HirIndex {
     pub span: Span,
     pub object: Box<HirExpression>,
     pub index: Box<HirExpression>,
+}
+
+#[derive(Debug, Clone)]
+pub struct HirSlice {
+    pub span: Span,
+    pub object: Box<HirExpression>,
+    pub start: Box<HirExpression>,
+    pub end: Box<HirExpression>,
 }
 
 #[derive(Debug, Clone)]

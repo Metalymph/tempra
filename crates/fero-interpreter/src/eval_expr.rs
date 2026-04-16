@@ -695,6 +695,31 @@ impl Interpreter {
                     Err("Index access requires an array".into())
                 }
             }
+            HirExpression::Slice(slice) => {
+                let obj = match self.eval_expression(&slice.object, env)? {
+                    ControlFlow::Value(v) => v,
+                    cf => return Ok(cf),
+                };
+                let start_val = match self.eval_expression(&slice.start, env)? {
+                    ControlFlow::Value(v) => v,
+                    cf => return Ok(cf),
+                };
+                let end_val = match self.eval_expression(&slice.end, env)? {
+                    ControlFlow::Value(v) => v,
+                    cf => return Ok(cf),
+                };
+
+                if let (Value::Array(arr), Value::Int64(start), Value::Int64(end)) = (obj, start_val, end_val) {
+                    let len = arr.len() as i64;
+                    if start < 0 || end < 0 || start > end || end > len {
+                        return Ok(ControlFlow::Crash(format!("Slice bounds out of range: [{}..{}] for length {}", start, end, len)));
+                    }
+                    let sub = arr[start as usize..end as usize].to_vec();
+                    Ok(ControlFlow::Value(Value::Array(sub)))
+                } else {
+                    Err("Slice requires an array and two integer bounds".into())
+                }
+            }
             HirExpression::If(if_expr) => {
                 let cond = match self.eval_expression(&if_expr.condition, env)? {
                     ControlFlow::Value(v) => v,

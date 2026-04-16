@@ -612,3 +612,42 @@ fn test_fs_v0_2() {
     let _ = std::fs::remove_dir("tmp_fs_test");
 }
 
+#[test]
+fn test_array_slices() {
+    let source = r#"
+    fn main() {
+        let xs = [1, 2, 3, 4]
+        let p1 = xs[1..3]
+        expect(p1.len() == 2)
+        expect(p1[0] == 2)
+        expect(p1[1] == 3)
+        
+        let p2 = xs[0..4]
+        expect(p2.len() == 4)
+        
+        let p3 = xs[2..2]
+        expect(p3.len() == 0)
+    }
+    "#;
+    assert_runs(source);
+}
+
+#[test]
+fn test_array_slices_oob() {
+    let source = r#"
+    fn main() {
+        let xs = [1, 2, 3]
+        let p = xs[1..5]
+    }
+    "#;
+    let ast = parse_source(source).unwrap();
+    let hir = lower_file(source, &ast);
+    let result = run(&hir);
+    match result {
+        Err(fero_interpreter::RuntimeError::Crash(msg)) => {
+            assert!(msg.contains("Slice bounds out of range"));
+        }
+        other => panic!("Expected Crash for OOB slice, got {:?}", other),
+    }
+}
+

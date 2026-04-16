@@ -52,7 +52,8 @@ impl Interpreter {
                 };
                 let iter_values = match iterable {
                     Value::Array(arr) => arr,
-                    _ => return Err("For loop iterable must be an Array".into()),
+                    Value::String(s) => s.chars().map(|c| Value::String(c.to_string())).collect(),
+                    _ => return Err("For loop iterable must be an Array or String".into()),
                 };
 
                 let mut last_val = Value::Unit;

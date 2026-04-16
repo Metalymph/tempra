@@ -216,7 +216,11 @@ impl Interpreter {
 
                     match &*binary.left {
                         HirExpression::Name(_, name) => {
-                            env.insert(name.clone(), right.clone());
+                            if !env.update(name, right.clone()) {
+                                // Fallback for top-level if not found? 
+                                // Actually, it should be there because of register_items or previous defs
+                                env.insert(name.clone(), right.clone());
+                            }
                             return Ok(ControlFlow::Value(right));
                         }
                         HirExpression::Member(m) => {
@@ -226,8 +230,10 @@ impl Interpreter {
                                 let mut obj_val = env.get(obj_name).ok_or_else(|| format!("Variable {} not found", obj_name))?;
                                 if let Value::Struct(ref mut s) = obj_val {
                                     s.fields.insert(m.field.clone(), right.clone());
-                                    // Re-insert since Value is not trivially mutable through the environment reference
-                                    env.insert(obj_name.clone(), obj_val);
+                                    // Re-insert using update to ensure it goes back to the correct scope
+                                    if !env.update(obj_name, obj_val.clone()) {
+                                         env.insert(obj_name.clone(), obj_val);
+                                    }
                                     return Ok(ControlFlow::Value(right));
                                 } else {
                                     return Err("Member assignment target is not a struct".into());
@@ -813,7 +819,8 @@ impl Interpreter {
                 };
                 let iter_values = match iterable {
                     Value::Array(arr) => arr,
-                    _ => return Err("ForExpr iterable must be an Array".into()),
+                    Value::String(s) => s.chars().map(|c| Value::String(c.to_string())).collect(),
+                    _ => return Err("ForExpr iterable must be an Array or String".into()),
                 };
 
                 let mut last_val = Value::Unit;
@@ -1122,7 +1129,8 @@ impl Interpreter {
         };
 
         match name {
-            "len" => Ok(Value::Int64(s.len() as i64)),
+            "len" => Ok(Value::Int64(s.chars().count() as i64)),
+            "size" => Ok(Value::Int64(s.len() as i64)),
             "trim" => Ok(Value::String(s.trim().to_string())),
             "trim_start" => Ok(Value::String(s.trim_start().to_string())),
             "trim_end" => Ok(Value::String(s.trim_end().to_string())),

@@ -698,3 +698,39 @@ fn test_struct_formatting() {
     // Fields should be sorted for consistency
     assert_eq!(val, Value::String("User { age: 29, name: \"Lorenzo\" }".to_string()));
 }
+
+#[test]
+fn test_string_unicode_interpreter() {
+    // ASCII
+    assert_eq!(assert_runs(r#"fn main() { "abc".len() }"#), Value::Int64(3));
+    assert_eq!(assert_runs(r#"fn main() { "abc".size() }"#), Value::Int64(3));
+
+    // Unicode (h + é)
+    // "é" is U+00E9, which is 2 bytes in UTF-8 (C3 A9)
+    assert_eq!(assert_runs(r#"fn main() { "hé".len() }"#), Value::Int64(2));
+    assert_eq!(assert_runs(r#"fn main() { "hé".size() }"#), Value::Int64(3));
+
+    // Iteration
+    let source = r#"
+    fn main() {
+        var count = 0
+        for ch in "hé" {
+            count = count + 1
+        }
+        count
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::Int64(2));
+    
+    // Values
+    let source = r#"
+    fn main() {
+        var last = ""
+        for ch in "hé" {
+            last = ch
+        }
+        last
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::String("é".to_string()));
+}

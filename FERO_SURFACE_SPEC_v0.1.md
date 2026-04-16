@@ -276,8 +276,12 @@ Rules:
 
 - a single public string type: `String`
 - UTF-8 internal representation
+- `s.len()` returns the number of **Unicode scalar values**
+- `s.size()` returns the number of **UTF-8 bytes**
+- `for ch in s` iterates over **Unicode scalar values** (binding `ch` as a single-scalar `String`)
 - no multiple public string types
 - string slices are part of the runtime model
+- string indexing and slicing via `s[i]` is not yet supported
 
 ---
 

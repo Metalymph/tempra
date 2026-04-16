@@ -25,6 +25,16 @@ impl RuntimeEnv {
         self.scopes.last_mut().unwrap().insert(name, value);
     }
 
+    pub fn update(&mut self, name: &str, value: Value) -> bool {
+        for scope in self.scopes.iter_mut().rev() {
+            if scope.contains_key(name) {
+                scope.insert(name.to_string(), value);
+                return true;
+            }
+        }
+        false
+    }
+
     pub fn get(&self, name: &str) -> Option<Value> {
         for scope in self.scopes.iter().rev() {
             if let Some(v) = scope.get(name) {

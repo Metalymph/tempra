@@ -57,10 +57,11 @@ pub fn check_statement(ctx: &mut TypeContext, stmt: &HirStatement) -> Type {
             let iter_ty = check_expression(ctx, &f.iterable);
             let elem_ty = match &iter_ty {
                 Type::Array(inner) => *inner.clone(),
+                Type::String => Type::String,
                 _ => {
                     if iter_ty != Type::Error {
                         ctx.error(
-                            format!("For iterable must be an array, found {}", iter_ty),
+                            format!("For iterable must be an array or string, found {}", iter_ty),
                             f.span,
                         );
                     }

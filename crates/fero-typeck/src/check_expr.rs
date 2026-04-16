@@ -637,9 +637,9 @@ fn check_string_method(ctx: &mut TypeContext, name: &str, args: &[HirCallArgumen
     };
 
     match name {
-        "len" => {
+        "len" | "size" => {
             if !args.is_empty() {
-                ctx.error("'len' method expects 0 arguments", span);
+                ctx.error(format!("'{}' method expects 0 arguments", name), span);
             }
             Type::Int
         }
@@ -945,9 +945,10 @@ fn check_for_expr(ctx: &mut TypeContext, f: &HirForExpr) -> Type {
     let iter_ty = check_expression(ctx, &f.iterable);
     let elem_ty = match &iter_ty {
         Type::Array(inner) => *inner.clone(),
+        Type::String => Type::String,
         _ => {
             if iter_ty != Type::Error {
-                ctx.error(format!("For iterable must be an array, found {}", iter_ty), f.span);
+                ctx.error(format!("For iterable must be an array or string, found {}", iter_ty), f.span);
             }
             Type::Error
         }

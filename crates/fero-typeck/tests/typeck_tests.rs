@@ -599,3 +599,17 @@ fn test_struct_visibility_syntax() {
         }
     "#);
 }
+
+#[test]
+fn test_string_unicode_typeck() {
+    expect_ok(r#"
+        fn main() {
+            let s = "hé";
+            let l = s.len();
+            let sz = s.size();
+            for ch in s {
+                print(ch);
+            }
+        }
+    "#);
+}

@@ -734,3 +734,68 @@ fn test_string_unicode_interpreter() {
     "#;
     assert_eq!(assert_runs(source), Value::String("é".to_string()));
 }
+
+#[test]
+fn test_slice_model_interpreter() {
+    // Array to Slice
+    let source = r#"
+    fn main() {
+        let xs = [10, 20, 30, 40]
+        let ys = xs[1..3]
+        ys[0]
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::Int64(20));
+
+    // Slice len
+    let source = r#"
+    fn main() {
+        let xs = [10, 20, 30, 40]
+        let ys = xs[1..3]
+        ys.len()
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::Int64(2));
+
+    // Nested Slice
+    let source = r#"
+    fn main() {
+        let xs = [1, 2, 3, 4, 5]
+        let ys = xs[1..5]
+        let zs = ys[1..3]
+        zs[0]
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::Int64(3));
+
+    // Nested Slice len
+    let source = r#"
+    fn main() {
+        let xs = [1, 2, 3, 4, 5]
+        let ys = xs[1..5]
+        let zs = ys[1..3]
+        zs.len()
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::Int64(2));
+
+    // Full range
+    let source = r#"
+    fn main() {
+        let xs = [1, 2]
+        let ys = xs[0..2]
+        ys.len()
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::Int64(2));
+
+    // Empty range
+    let source = r#"
+    fn main() {
+        let xs = [1, 2]
+        let ys = xs[1..1]
+        ys.len()
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::Int64(0));
+}

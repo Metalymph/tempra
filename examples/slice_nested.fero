@@ -1,0 +1,16 @@
+let xs = [1, 2, 3, 4, 5]
+let ys = xs[1..5]
+let zs = ys[1..3]
+
+print("xs = ", xs)
+print("ys = ", ys)
+print("zs = ", zs)
+print("zs len = ", zs.len())
+print("zs[0] = ", zs[0])
+print("zs[1] = ", zs[1])
+
+// Verify zero-copy behavior (logically, through nested slicing)
+let slice_of_slice = xs[0..5][1..4][1..2]
+print("slice_of_slice = ", slice_of_slice)
+print("slice_of_slice len = ", slice_of_slice.len())
+print("slice_of_slice[0] = ", slice_of_slice[0])

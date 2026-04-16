@@ -458,6 +458,16 @@ impl Interpreter {
                                 return Err(format!("Unknown method '{}' on Array", member.field));
                             }
                         }
+                        if let Value::Slice(slice) = obj {
+                            if member.field == "len" {
+                                if !call.args.is_empty() {
+                                    return Err("Method 'len' expects 0 arguments".into());
+                                }
+                                return Ok(ControlFlow::Value(Value::Int64(slice.len() as i64)));
+                            } else {
+                                return Err(format!("Unknown method '{}' on Slice", member.field));
+                            }
+                        }
                         if let Value::Command(cmd) = obj {
                             if member.field == "run" {
                                 if !call.args.is_empty() {
@@ -691,7 +701,7 @@ impl Interpreter {
                     },
                     Value::Command(c) => match member.field.as_str() {
                         "program" => Ok(ControlFlow::Value(Value::String(c.program.clone()))),
-                        "args" => Ok(ControlFlow::Value(Value::Array(c.args.iter().map(|s| Value::String(s.clone())).collect()))),
+                        "args" => Ok(ControlFlow::Value(Value::Array(std::rc::Rc::new(c.args.iter().map(|s| Value::String(s.clone())).collect())))),
                         _ => Err(format!("Field {} not found on Command", member.field)),
                     },
                     _ => Err("Member access requires a struct, Command, or CommandResult".into()),
@@ -706,17 +716,20 @@ impl Interpreter {
                     ControlFlow::Value(v) => v,
                     cf => return Ok(cf),
                 };
-                if let Value::Array(arr) = obj {
-                    if let Value::Int64(i) = idx {
+                match (obj, idx) {
+                    (Value::Array(arr), Value::Int64(i)) => {
                         arr.get(i as usize)
                             .cloned()
                             .map(ControlFlow::Value)
                             .ok_or_else(|| "Index out of bounds".into())
-                    } else {
-                        Err("Index must be Int64".into())
                     }
-                } else {
-                    Err("Index access requires an array".into())
+                    (Value::Slice(slice), Value::Int64(i)) => {
+                        slice.get(i as usize)
+                            .map(ControlFlow::Value)
+                            .ok_or_else(|| "Index out of bounds".into())
+                    }
+                    (Value::Array(_), _) | (Value::Slice(_), _) => Err("Index must be Int64".into()),
+                    _ => Err("Index access requires an array or slice".into())
                 }
             }
             HirExpression::Slice(slice) => {
@@ -733,15 +746,23 @@ impl Interpreter {
                     cf => return Ok(cf),
                 };
 
-                if let (Value::Array(arr), Value::Int64(start), Value::Int64(end)) = (obj, start_val, end_val) {
-                    let len = arr.len() as i64;
-                    if start < 0 || end < 0 || start > end || end > len {
-                        return Ok(ControlFlow::Crash(format!("Slice bounds out of range: [{}..{}] for length {}", start, end, len)));
+                let (parent, parent_len, start_offset) = match &obj {
+                    Value::Array(arr) => (arr.clone(), arr.len(), 0),
+                    Value::Slice(s) => (s.parent.clone(), s.len(), s.start),
+                    _ => return Err("Slice requires an array or slice".into()),
+                };
+
+                if let (Value::Int64(start), Value::Int64(end)) = (start_val, end_val) {
+                    if start < 0 || end < 0 || start > end || end > parent_len as i64 {
+                        return Ok(ControlFlow::Crash(format!("Slice bounds out of range: [{}..{}] for length {}", start, end, parent_len)));
                     }
-                    let sub = arr[start as usize..end as usize].to_vec();
-                    Ok(ControlFlow::Value(Value::Array(sub)))
+                    Ok(ControlFlow::Value(Value::Slice(crate::value::SliceValue {
+                        parent,
+                        start: start_offset + start as usize,
+                        end: start_offset + end as usize,
+                    })))
                 } else {
-                    Err("Slice requires an array and two integer bounds".into())
+                    Err("Slice bounds must be integers".into())
                 }
             }
             HirExpression::If(if_expr) => {
@@ -781,7 +802,7 @@ impl Interpreter {
                         cf => return Ok(cf),
                     }
                 }
-                Ok(ControlFlow::Value(Value::Array(vals)))
+                Ok(ControlFlow::Value(Value::Array(std::rc::Rc::new(vals))))
             }
             HirExpression::StructLiteral(s) => {
                 let mut fields = HashMap::new();
@@ -817,10 +838,17 @@ impl Interpreter {
                     ControlFlow::Value(v) => v,
                     cf => return Ok(cf),
                 };
-                let iter_values = match iterable {
-                    Value::Array(arr) => arr,
+                let iter_values: Vec<Value> = match iterable {
+                    Value::Array(arr) => arr.as_ref().clone(),
+                    Value::Slice(slice) => {
+                        let mut vals = Vec::new();
+                        for i in 0..slice.len() {
+                            vals.push(slice.get(i).unwrap());
+                        }
+                        vals
+                    }
                     Value::String(s) => s.chars().map(|c| Value::String(c.to_string())).collect(),
-                    _ => return Err("ForExpr iterable must be an Array or String".into()),
+                    _ => return Err("ForExpr iterable must be an Array, Slice, or String".into()),
                 };
 
                 let mut last_val = Value::Unit;
@@ -1024,7 +1052,7 @@ impl Interpreter {
                                             names.push(Value::String(entry.file_name().to_string_lossy().to_string()));
                                         }
                                     }
-                                    Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::Array(names))))))
+                    Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::Array(std::rc::Rc::new(names)))))))
                                 }
                                 Err(e) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Err(Value::Error(format!("Failed to read directory '{}': {}", path, e))))))),
                             }
@@ -1090,7 +1118,7 @@ impl Interpreter {
         match name {
             "args" => {
                 let val_args = self.args.iter().map(|s| Value::String(s.clone())).collect();
-                Ok(ControlFlow::Value(Value::Array(val_args)))
+                Ok(ControlFlow::Value(Value::Array(std::rc::Rc::new(val_args))))
             }
             "cwd" => {
                 match std::env::current_dir() {
@@ -1164,7 +1192,7 @@ impl Interpreter {
                 let sep = get_arg(0, "separator").ok_or("Missing argument 'separator' for split")?;
                 if let Value::String(p) = sep {
                     let parts = s.split(p).map(|part| Value::String(part.to_string())).collect();
-                    Ok(Value::Array(parts))
+                    Ok(Value::Array(std::rc::Rc::new(parts)))
                 } else {
                     Err("split expects String".into())
                 }

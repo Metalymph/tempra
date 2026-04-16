@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::rc::Rc;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -8,7 +9,8 @@ pub enum Value {
     Float64(f64),
     String(String),
 
-    Array(Vec<Value>),
+    Array(Rc<Vec<Value>>),
+    Slice(SliceValue),
     Tuple(Vec<Value>),
 
     Struct(StructInstance),
@@ -43,6 +45,27 @@ pub struct CommandResultValue {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct SliceValue {
+    pub parent: Rc<Vec<Value>>,
+    pub start: usize,
+    pub end: usize,
+}
+
+impl SliceValue {
+    pub fn len(&self) -> usize {
+        self.end - self.start
+    }
+
+    pub fn get(&self, index: usize) -> Option<Value> {
+        if index < self.len() {
+            Some(self.parent[self.start + index].clone())
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct StructInstance {
     pub name: String,
     pub fields: HashMap<String, Value>,
@@ -54,6 +77,13 @@ impl Value {
             Value::String(s) => format!("\"{}\"", s),
             Value::Array(arr) => {
                 let elems: Vec<String> = arr.iter().map(|v| v.to_repr()).collect();
+                format!("[{}]", elems.join(", "))
+            }
+            Value::Slice(slice) => {
+                let mut elems = Vec::new();
+                for i in 0..slice.len() {
+                    elems.push(slice.get(i).unwrap().to_repr());
+                }
                 format!("[{}]", elems.join(", "))
             }
             Value::Tuple(tup) => {
@@ -85,6 +115,14 @@ impl std::fmt::Display for Value {
                 for (i, val) in arr.iter().enumerate() {
                     if i > 0 { write!(f, ", ")?; }
                     write!(f, "{}", val.to_repr())?;
+                }
+                write!(f, "]")
+            }
+            Value::Slice(slice) => {
+                write!(f, "[")?;
+                for i in 0..slice.len() {
+                    if i > 0 { write!(f, ", ")?; }
+                    write!(f, "{}", slice.get(i).unwrap().to_repr())?;
                 }
                 write!(f, "]")
             }

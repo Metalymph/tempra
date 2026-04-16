@@ -262,6 +262,9 @@ Rules:
   - dynamic arrays
   - static arrays
   - slices
+- slices are zero-copy views over arrays or other slices
+- slices support `.len()`, indexing `s[i]`, and further slicing `s[a..b]`
+- slices are read-only views at the language level in v0.1
 - no large family of built-in container types in v0
 
 ---

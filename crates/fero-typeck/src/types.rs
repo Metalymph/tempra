@@ -26,6 +26,7 @@ pub enum Type {
     Float64,
 
     Array(Box<Type>),
+    Slice(Box<Type>),
     Tuple(Vec<Type>),
 
     Struct(std::string::String),
@@ -94,6 +95,7 @@ impl Type {
                 | Type::Float32
                 | Type::Float64
                 | Type::Array(_)
+                | Type::Slice(_)
                 | Type::Tuple(_)
                 | Type::CommandResult
                 | Type::BuiltinError
@@ -122,6 +124,7 @@ impl fmt::Display for Type {
             Type::Float32 => write!(f, "Float32"),
             Type::Float64 => write!(f, "Float64"),
             Type::Array(inner) => write!(f, "[{}]", inner),
+            Type::Slice(inner) => write!(f, "Slice[{}]", inner),
             Type::Tuple(elems) => {
                 write!(f, "(")?;
                 for (i, t) in elems.iter().enumerate() {

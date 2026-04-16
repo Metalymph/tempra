@@ -50,10 +50,17 @@ impl Interpreter {
                     ControlFlow::Value(v) => v,
                     cf => return Ok(cf),
                 };
-                let iter_values = match iterable {
-                    Value::Array(arr) => arr,
+                let iter_values: Vec<Value> = match iterable {
+                    Value::Array(arr) => arr.as_ref().clone(),
+                    Value::Slice(slice) => {
+                        let mut vals = Vec::new();
+                        for i in 0..slice.len() {
+                            vals.push(slice.get(i).unwrap());
+                        }
+                        vals
+                    }
                     Value::String(s) => s.chars().map(|c| Value::String(c.to_string())).collect(),
-                    _ => return Err("For loop iterable must be an Array or String".into()),
+                    _ => return Err("For loop iterable must be an Array, Slice, or String".into()),
                 };
 
                 let mut last_val = Value::Unit;

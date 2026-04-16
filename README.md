@@ -139,13 +139,13 @@ Fero is rapidly evolving. We currently have a functional core with:
 - [x] Initial Stdlib: `os`, `fs`, `env`.
 - [x] Native Command Execution (`cmd`).
 - [x] Array Slicing `xs[start..end]`.
+- [x] Shared backing storage for array slices.
 
 ### Next
 - [ ] Productions-ready Cranelift AOT.
 - [ ] Dedicated Wasm backend.
 - [ ] LSP support (completion, go-to-definition).
 - [ ] REPL enhancements.
-- [ ] Shared backing storage for array slices.
 
 ### Long-term
 
@@ -170,7 +170,11 @@ fero/
 ```
 
 See [docs/architecture](file:///Users/lorenzopirro/coding/rust/fero/docs/architecture/ARCHITECTURE.md) for full technical details.
-Take a look at [STDLIB_TUTORIAL.md](file:///Users/lorenzopirro/coding/rust/fero/STDLIB_TUTORIAL.md) for a guide on how to add new stdlib features.
+Take a look at [docs/STDLIB_TUTORIAL.md](file:///Users/lorenzopirro/coding/rust/fero/docs/STDLIB_TUTORIAL.md) for a guide on how to add new stdlib features.
+Detailed language documentation:
+- [Surface Syntax Spec](file:///Users/lorenzopirro/coding/rust/fero/docs/FERO_SURFACE_SPEC_v0.1.md)
+- [Grammar](file:///Users/lorenzopirro/coding/rust/fero/docs/GRAMMAR.md)
+- [Developer Guide](file:///Users/lorenzopirro/coding/rust/fero/docs/DEV_GUIDE.md)
 
 ---
 

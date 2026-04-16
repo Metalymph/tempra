@@ -613,3 +613,16 @@ fn test_string_unicode_typeck() {
         }
     "#);
 }
+
+#[test]
+fn test_slice_model_typeck() {
+    expect_ok(r#"
+        fn main() {
+            let xs = [1, 2, 3, 4]
+            let ys = xs[1..3]
+            let l = ys.len()
+            let z = ys[0]
+            let zs = ys[0..1]
+        }
+    "#);
+}

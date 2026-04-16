@@ -732,7 +732,7 @@ fn check_call(ctx: &mut TypeContext, c: &HirCall) -> Type {
             if object_ty == Type::String {
                 return self::check_string_method(ctx, &m.field, &c.args, c.span);
             }
-            if let Type::Array(_) = object_ty {
+            if let Type::Array(_) | Type::Slice(_) = object_ty {
                 return self::check_array_method(ctx, &m.field, &c.args, c.span);
             }
             if object_ty == Type::Command && m.field == "run" {
@@ -741,7 +741,7 @@ fn check_call(ctx: &mut TypeContext, c: &HirCall) -> Type {
                 }
                 return Type::Result(Box::new(Type::CommandResult), Box::new(Type::BuiltinError));
             }
-            ctx.error("Method calls only supported for Command.run() or fs.*".to_string(), c.span);
+            ctx.error(format!("Method '{}' is not supported for type {}", m.field, object_ty), c.span);
             return Type::Error;
         }
         _ => {
@@ -863,9 +863,9 @@ fn check_index(ctx: &mut TypeContext, i: &HirIndex) -> Type {
     let object_ty = check_expression(ctx, &i.object);
     let index_ty = check_expression(ctx, &i.index);
 
-    if let Type::Array(elem) = &object_ty {
+    if let Type::Array(elem) | Type::Slice(elem) = &object_ty {
         if !index_ty.is_integer() && index_ty != Type::Error {
-            ctx.error(format!("Array index must be integer, found {}", index_ty), i.span);
+            ctx.error(format!("Index must be integer, found {}", index_ty), i.span);
         }
         return *elem.clone();
     }
@@ -885,8 +885,8 @@ fn check_slice(ctx: &mut TypeContext, s: &HirSlice) -> Type {
         ctx.error(format!("Slice end bound must be integer, found {}", end_ty), s.end.span());
     }
 
-    if let Type::Array(elem) = &object_ty {
-        return Type::Array(elem.clone());
+    if let Type::Array(elem) | Type::Slice(elem) = &object_ty {
+        return Type::Slice(elem.clone());
     }
     
     if object_ty != Type::Error {

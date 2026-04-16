@@ -108,7 +108,10 @@ if obj_name == "my_module" {
 To add a method to a type (e.g., `String.trim()`), add logic to `check_call` and `eval_expression` that checks the type of the `object` in a member call.
 
 1. **Typeck**: `if object_ty == Type::String { return check_string_method(...); }`
+   - Use `Type::Array(_)` or `Type::Slice(_)` for collection methods.
 2. **Interpreter**: `if let Value::String(s) = obj { return eval_string_method(...); }`
+   - For strings, implement methods based on **Unicode scalar values** for `len()` or **UTF-8 bytes** for `size()`.
+   - Iteration over strings yields single-scalar `Value::String`.
 
 ---
 

@@ -1,0 +1,7 @@
+fn main() ! {
+    let src = "examples/a.txt"
+    let dst = "examples/b.txt"
+    fs.write(src, "hello")?
+    fs.rename(src, dst)?
+    print("Renamed", src, "to", dst)
+}

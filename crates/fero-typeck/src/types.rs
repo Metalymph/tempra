@@ -93,6 +93,8 @@ impl Type {
                 | Type::Int64
                 | Type::Float32
                 | Type::Float64
+                | Type::Array(_)
+                | Type::Tuple(_)
                 | Type::CommandResult
                 | Type::BuiltinError
                 | Type::Result(_, _)

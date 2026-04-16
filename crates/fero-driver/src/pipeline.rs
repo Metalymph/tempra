@@ -7,6 +7,10 @@ use fero_typeck::check_file as typeck_check_file;
 use fero_interpreter::run;
 
 pub fn run_source(source: &str) -> Result<(), DriverError> {
+    run_source_with_args(source, &[])
+}
+
+pub fn run_source_with_args(source: &str, args: &[String]) -> Result<(), DriverError> {
     let ast = parse_source(source)
         .map_err(|e| DriverError::ParseError(format!("{:?}", e)))?;
     
@@ -15,7 +19,7 @@ pub fn run_source(source: &str) -> Result<(), DriverError> {
     typeck_check_file(&hir)
         .map_err(|errs| DriverError::TypeError(format!("{:?}", errs)))?;
     
-    let value = run(&hir)
+    let value = fero_interpreter::run_with_args(&hir, args.to_vec())
         .map_err(|e| match e {
             fero_interpreter::RuntimeError::Exit(code) => DriverError::Exit(code),
             fero_interpreter::RuntimeError::Crash(msg) => DriverError::RuntimeError(format!("crash: {}", msg)),
@@ -32,8 +36,12 @@ pub fn run_source(source: &str) -> Result<(), DriverError> {
 }
 
 pub fn run_file(path: &Path) -> Result<(), DriverError> {
+    run_file_with_args(path, &[])
+}
+
+pub fn run_file_with_args(path: &Path, args: &[String]) -> Result<(), DriverError> {
     let source = fs::read_to_string(path)?;
-    run_source(&source)
+    run_source_with_args(&source, args)
 }
 
 pub fn check_source(source: &str) -> Result<(), DriverError> {

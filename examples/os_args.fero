@@ -1,0 +1,5 @@
+fn main() {
+    let args = os.args()
+    dbg(args, label="os_args")
+    print(args)
+}

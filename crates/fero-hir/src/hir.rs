@@ -209,10 +209,22 @@ pub enum HirBinaryOp {
 }
 
 #[derive(Debug, Clone)]
+pub enum HirCallArgument {
+    Positional(HirExpression),
+    Named(HirNamedArgument),
+}
+
+#[derive(Debug, Clone)]
+pub struct HirNamedArgument {
+    pub name: String,
+    pub value: HirExpression,
+}
+
+#[derive(Debug, Clone)]
 pub struct HirCall {
     pub span: Span,
     pub callee: Box<HirExpression>,
-    pub args: Vec<HirExpression>,
+    pub args: Vec<HirCallArgument>,
 }
 
 #[derive(Debug, Clone)]

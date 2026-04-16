@@ -182,7 +182,13 @@ impl<'src> Lowerer<'src> {
             ast::Expression::Call(e) => HirExpression::Call(HirCall {
                 span: e.span,
                 callee: Box::new(self.lower_expression(&e.callee)),
-                args: e.arguments.iter().map(|a| self.lower_expression(a)).collect(),
+                args: e.arguments.iter().map(|a| match a {
+                    ast::CallArgument::Positional(p) => HirCallArgument::Positional(self.lower_expression(&p.value)),
+                    ast::CallArgument::Named(n) => HirCallArgument::Named(HirNamedArgument {
+                        name: self.text(n.name.span),
+                        value: self.lower_expression(&n.value),
+                    }),
+                }).collect(),
             }),
             ast::Expression::Member(e) => HirExpression::Member(HirMember {
                 span: e.span,

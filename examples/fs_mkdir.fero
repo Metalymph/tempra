@@ -1,0 +1,5 @@
+fn main() ! {
+    let dir = "examples/tmp_dir"
+    fs.mkdir(dir)?
+    print("Created directory:", dir)
+}

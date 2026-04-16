@@ -1,0 +1,9 @@
+fn main() ! {
+    let before = os.cwd()?
+    print("before=", before)
+
+    os.chdir("examples")?
+
+    let after = os.cwd()?
+    print("after=", after)
+}

@@ -9,7 +9,7 @@ fn main() {
 
     let result = match cli.command {
         Commands::Run(args) => {
-            commands::run::run_command(args.path)
+            commands::run::run_command(args.path, args.args)
         }
         Commands::Check(args) => {
             commands::check::check_command(args.path)

@@ -19,7 +19,12 @@ pub enum RuntimeError {
 }
 
 pub fn run(file: &HirFile) -> Result<Value, RuntimeError> {
+    run_with_args(file, Vec::new())
+}
+
+pub fn run_with_args(file: &HirFile, args: Vec<String>) -> Result<Value, RuntimeError> {
     let mut interpreter = Interpreter::new(file);
+    interpreter.args = args;
     if !file.top_level_statements.is_empty() {
         interpreter.run_script()
     } else {

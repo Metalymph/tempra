@@ -1,0 +1,4 @@
+fn main() ! {
+    let entries = fs.list_dir("examples")?
+    print("Entries in 'examples':", entries)
+}

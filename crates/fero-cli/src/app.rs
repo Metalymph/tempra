@@ -19,6 +19,7 @@ pub enum Commands {
 #[derive(Parser)]
 pub struct RunArgs {
     pub path: PathBuf,
+    pub args: Vec<String>,
 }
 
 #[derive(Parser)]

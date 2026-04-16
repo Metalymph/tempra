@@ -12,6 +12,7 @@ pub enum RuntimeSignal {
 pub struct Interpreter {
     pub functions: HashMap<String, HirFunction>,
     pub top_level_statements: Vec<HirStatement>,
+    pub args: Vec<String>,
 }
 
 impl Interpreter {
@@ -23,6 +24,7 @@ impl Interpreter {
         Self { 
             functions,
             top_level_statements: file.top_level_statements.clone(),
+            args: Vec::new(),
         }
     }
 

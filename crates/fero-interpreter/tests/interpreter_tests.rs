@@ -1,12 +1,59 @@
 use fero_hir::lower_file;
-use fero_interpreter::{run, value::Value};
+use fero_interpreter::{run, run_with_args, value::Value, value::ValueResult};
+
 use fero_parser::parse_source;
 
 fn assert_runs(source: &str) -> Value {
+    assert_runs_with_args(source, vec![])
+}
+
+fn assert_runs_with_args(source: &str, args: Vec<String>) -> Value {
     let ast = parse_source(source).expect("Failed to parse source");
     let hir = lower_file(source, &ast);
-    run(&hir).expect("Failed to run interpreter")
+    run_with_args(&hir, args).expect("Failed to run interpreter")
 }
+
+#[test]
+fn test_os_args() {
+    let source = r#"
+    fn main() {
+        os.args()
+    }
+    "#;
+    let val = assert_runs_with_args(source, vec!["hello".to_string(), "world".to_string()]);
+    if let Value::Array(arr) = val {
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0].to_string(), "hello");
+        assert_eq!(arr[1].to_string(), "world");
+    } else {
+        panic!("Expected array, got {:?}", val);
+    }
+}
+
+#[test]
+fn test_os_cwd_chdir() {
+    let source = r#"
+    fn main() {
+        let initial = os.cwd()!
+        os.chdir("..")!
+        let second = os.cwd()!
+        // Try to go back
+        os.chdir(initial)!
+        second
+    }
+    "#;
+    let initial_cwd = std::env::current_dir().unwrap();
+    let val = assert_runs(source);
+    // Restoration is handled by the script itself above, but let's be double safe
+    std::env::set_current_dir(&initial_cwd).unwrap();
+    
+    if let Value::String(s) = val {
+        assert!(s.len() < initial_cwd.to_string_lossy().len());
+    } else {
+         panic!("Expected string, got {:?}", val);
+    }
+}
+
 
 #[test]
 fn test_1() {
@@ -143,7 +190,7 @@ fn test_mixed_types() {
 fn test_cmd_run() {
     let source = r#"
     fn main() {
-        let r = cmd("echo", ["hello"]).run()!
+        let r = cmd("echo", "hello").run()!
         print(r.stdout)
         r.stdout
     }
@@ -160,7 +207,7 @@ fn test_cmd_run() {
 fn test_command_pipe() {
     let source = r#"
     fn main() {
-        let r = (cmd("echo", ["hello"]) | cmd("grep", ["h"])) // pipe returns CommandResult directly currently
+        let r = (cmd("echo", "hello") | cmd("grep", "h")) // pipe returns CommandResult directly currently
         print(r.stdout)
         r.stdout
     }
@@ -177,7 +224,7 @@ fn test_command_pipe() {
 fn test_command_and() {
     let source = r#"
     fn main() {
-        let r = (cmd("true", []) && cmd("echo", ["ok"]))!
+        let r = (cmd("true") && cmd("echo", "ok"))!
         print(r.success)
         r.success
     }
@@ -194,7 +241,7 @@ fn test_command_and() {
 fn test_command_or() {
     let source = r#"
     fn main() {
-        let r = (cmd("false", []) || cmd("echo", ["fallback"]))!
+        let r = (cmd("false") || cmd("echo", "fallback"))!
         print(r.success)
         r.success
     }
@@ -440,3 +487,128 @@ fn test_fs_remove() {
     let val = assert_runs(&source);
     assert_eq!(val, Value::String("removed".to_string()));
 }
+#[test]
+fn test_named_arguments_execution() {
+    let source = r#"
+    fn greet(name: String, age: Int) -> String {
+        fmt("Hello ", name, ", you are ", age)
+    }
+
+    fn main() {
+        let s1 = greet(name="Lorenzo", age=25)
+        let s2 = greet(age=30, name="Antigravity")
+        let s3 = greet("Pair", age=100)
+        fmt(s1, " | ", s2, " | ", s3)
+    }
+    "#;
+    let val = assert_runs(source);
+    if let Value::String(s) = val {
+        assert_eq!(s, "Hello Lorenzo, you are 25 | Hello Antigravity, you are 30 | Hello Pair, you are 100");
+    } else {
+        panic!("Expected String, got {:?}", val);
+    }
+}
+
+#[test]
+fn test_ergonomic_builtins_execution() {
+    // fmt with separator
+    let source = r#"
+    fn main() {
+        fmt("a", "b", "c", separator=", ")
+    }
+    "#;
+    let val = assert_runs(source);
+    assert_eq!(val, Value::String("a, b, c".to_string()));
+
+    // cmd variadic
+    let source = r#"
+    fn main() {
+        let c = cmd("echo", "hello", "world")
+        c.args[0] + " " + c.args[1]
+    }
+    "#;
+    let val = assert_runs(source);
+    assert_eq!(val, Value::String("hello world".to_string()));
+
+    // cmd with check=true (success)
+    let source = r#"
+    fn main() {
+        cmd("true", check=true).run()!
+        "ok"
+    }
+    "#;
+    let val = assert_runs(source);
+    assert_eq!(val, Value::String("ok".to_string()));
+}
+
+#[test]
+fn test_cmd_check_failure() {
+    let source = r#"
+    fn main() {
+        cmd("false", check=true).run()
+    }
+    "#;
+    let val = assert_runs(source);
+    // Should return Err
+    if let Value::Result(res) = val {
+        assert!(matches!(res.as_ref(), ValueResult::Err(_)));
+    } else {
+        panic!("Expected Result::Err, got {:?}", val);
+    }
+}
+
+#[test]
+fn test_string_methods() {
+    let source = r#"
+    fn main() {
+        expect("abc".len() == 3)
+        expect("  hi  ".trim() == "hi")
+        expect("hello".contains("ell"))
+        expect(!"hello".contains("zzz"))
+        expect("hello".starts_with("he"))
+        expect("hello".ends_with("lo"))
+        expect("a,b,c".split(",").len() == 3)
+        expect("abc".replace("a", "z") == "zbc")
+        expect("AbC".to_lower() == "abc")
+        expect("AbC".to_upper() == "ABC")
+    }
+    "#;
+    assert_runs(source);
+}
+
+#[test]
+fn test_fs_v0_2() {
+    let _ = std::fs::remove_dir_all("tmp_fs_test");
+    let source = r#"
+    fn main() ! {
+        let dir = "tmp_fs_test"
+        fs.mkdir(dir)!
+        expect(fs.exists(dir)!)
+        
+        let f1 = "tmp_fs_test/a.txt"
+        fs.write(f1, "hello")!
+        
+        let entries = fs.list_dir(dir)!
+        expect(entries.len() == 1)
+        expect(entries[0] == "a.txt")
+        
+        let f2 = "tmp_fs_test/b.txt"
+        fs.rename(f1, f2)!
+        expect(!fs.exists(f1)!)
+        expect(fs.exists(f2)!)
+        
+        let f3 = "tmp_fs_test/c.txt"
+        fs.copy(f2, f3)!
+        expect(fs.exists(f2)!)
+        expect(fs.exists(f3)!)
+        expect(fs.read(f3)! == "hello")
+        
+        fs.remove(f3)!
+        fs.remove(f2)!
+        // std::fs::remove_dir is not in Fero yet
+    }
+    "#;
+    assert_runs(source);
+    let _ = std::fs::remove_dir("tmp_fs_test");
+}
+

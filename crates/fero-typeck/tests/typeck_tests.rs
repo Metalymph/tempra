@@ -222,7 +222,7 @@ fn test_read_line_wrong_arity() {
 fn test_cmd_success() {
     expect_ok(r#"
         fn main() {
-            let c = cmd("echo", ["hello"]);
+            let c = cmd("echo", "hello");
         }
     "#);
 }
@@ -231,25 +231,18 @@ fn test_cmd_success() {
 fn test_cmd_wrong_arity() {
     expect_err(r#"
         fn main() {
-            let c = cmd("echo");
+            let c = cmd();
         }
     "#);
 }
 
-#[test]
-fn test_cmd_wrong_arg_type() {
-    expect_err(r#"
-        fn main() {
-            let c = cmd("echo", "hello");
-        }
-    "#);
-}
+
 
 #[test]
 fn test_run_method_success() {
     expect_ok(r#"
         fn main() {
-            let r = cmd("echo", ["hello"]).run();
+            let r = cmd("echo", "hello").run();
         }
     "#);
 }
@@ -258,7 +251,7 @@ fn test_run_method_success() {
 fn test_command_pipe_success() {
     expect_ok(r#"
         fn main() {
-            let r = cmd("echo", ["hello"]) | cmd("grep", ["h"]);
+            let r = cmd("echo", "hello") | cmd("grep", "h");
         }
     "#);
 }
@@ -419,11 +412,121 @@ fn test_fs_exists_typeck() {
 }
 
 #[test]
-fn test_fs_remove_typeck() {
+fn test_named_arguments_builtins() {
     expect_ok(r#"
-        fs.remove("file.txt")?
+        fn main() {
+            exit(code=1);
+            crash(message="error");
+            expect(condition=true, message="ok");
+            expect(true, message="ok");
+            let _c1 = cmd("ls", "-l", cwd=".");
+            let _c2 = cmd("ls", check=true);
+            print("a", "b", newline=false);
+            let _s = fmt("1", "2", separator="-");
+            let _x = dbg(123, label="val");
+        }
+    "#);
+}
+
+#[test]
+fn test_named_arguments_user_functions() {
+    expect_ok(r#"
+        fn foo(x: Int, y: String) {}
+        fn main() {
+            foo(1, "a");
+            foo(x=1, y="a");
+            foo(1, y="a");
+            foo(y="a", x=1);
+        }
+    "#);
+}
+
+#[test]
+fn test_named_arguments_failures() {
+    expect_err(r#"
+        fn foo(x: Int) {}
+        fn main() {
+            foo(z=1); // Unknown named arg
+        }
     "#);
     expect_err(r#"
-        fs.remove(1)?
+        fn foo(x: Int) {}
+        fn main() {
+            foo(1, x=2); // Duplicate mapping
+        }
     "#);
+    expect_err(r#"
+        fn foo(x: Int, y: Int) {}
+        fn main() {
+            foo(y=1); // Missing x
+        }
+    "#);
+}
+
+#[test]
+fn test_namespaced_named_arguments() {
+    expect_ok(r#"
+        fn main() {
+            let r1 = fs.read(path="file.txt")!;
+            let r2 = fs.write(path="out.txt", text="hi")!;
+            let r3 = env.get(name="PATH")!;
+        }
+    "#);
+}
+#[test]
+fn test_os_stdlib_typeck() {
+    expect_ok(r#"
+        fn main() ! {
+            let args = os.args();
+            let cwd = os.cwd()?;
+            os.chdir("..")?;
+        }
+    "#);
+    
+    // Invalid arity
+    expect_err(r#"fn main() { os.args(1); }"#);
+    expect_err(r#"fn main() { os.cwd(1); }"#);
+    expect_err(r#"fn main() { os.chdir(); }"#);
+    
+    // Invalid type
+    expect_err(r#"fn main() { os.chdir(123); }"#);
+}
+#[test]
+fn test_string_methods_typeck() {
+    expect_ok(r#"
+        fn main() {
+            let n = "abc".len();
+            let s = "  hi  ".trim();
+            let s2 = "hi".trim_start();
+            let s3 = "hi".trim_end();
+            let ok = "hello".contains("ell");
+            let ok2 = "hello".starts_with("he");
+            let ok3 = "hello".ends_with("lo");
+            let xs = "a,b,c".split(",");
+            let s4 = "abc".replace("a", "z");
+            let s5 = "ABC".to_lower();
+            let s6 = "abc".to_upper();
+        }
+    "#);
+    
+    expect_err(r#"fn main() { 1.trim(); }"#);
+    expect_err(r#"fn main() { "abc".contains(1); }"#);
+    expect_err(r#"fn main() { "abc".replace("x"); }"#);
+}
+
+#[test]
+fn test_fs_v0_2_typeck() {
+    expect_ok(r#"
+        fn main() ! {
+            fs.mkdir("tmp")?;
+            let entries = fs.list_dir("examples")?;
+            fs.rename("a", "b")?;
+            fs.copy("a", "b")?;
+        }
+    "#);
+    
+    expect_err(r#"fn main() { fs.mkdir(); }"#);
+    expect_err(r#"fn main() { fs.list_dir(1); }"#);
+    expect_err(r#"fn main() { fs.rename("a"); }"#);
+    expect_err(r#"fn main() { fs.copy("a", 1); }"#);
 }

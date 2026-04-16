@@ -440,8 +440,44 @@ impl<'src> Parser<'src> {
             if self.at(TokenKind::LeftParen) {
                 let _paren = self.advance();
                 let mut arguments = Vec::new();
+                let mut seen_named = false;
+                let mut named_keys = std::collections::HashSet::new();
+
                 while !self.at(TokenKind::RightParen) && !self.at(TokenKind::EndOfFile) {
-                    arguments.push(self.parse_expression()?);
+                    if self.at(TokenKind::Identifier) && self.peek(1).kind == TokenKind::Equal {
+                        // Named argument
+                        seen_named = true;
+                        let name = self.expect_identifier()?;
+                        
+                        let name_str = self.text(name.span);
+                        if !named_keys.insert(name_str.to_string()) {
+                            return Err(ParseError {
+                                message: format!("Duplicate named argument '{}'", name_str),
+                                span: name.span,
+                            });
+                        }
+                        
+                        self.expect(TokenKind::Equal)?;
+                        let value = self.parse_expression()?;
+                        arguments.push(CallArgument::Named(NamedArgument {
+                            span: Span::new(name.span.start, value.span().end),
+                            name,
+                            value,
+                        }));
+                    } else {
+                        // Positional argument
+                        if seen_named {
+                            return Err(ParseError {
+                                message: "Positional argument cannot follow named arguments".to_string(),
+                                span: self.current().span,
+                            });
+                        }
+                        let value = self.parse_expression()?;
+                        arguments.push(CallArgument::Positional(PositionalArgument {
+                            span: value.span(),
+                            value,
+                        }));
+                    }
                     if !self.eat(TokenKind::Comma) { break; }
                 }
                 let end = self.expect(TokenKind::RightParen)?;
@@ -691,7 +727,11 @@ impl<'src> Parser<'src> {
 
     // Helpers
     fn current(&self) -> Token {
-        self.tokens.get(self.position).copied().unwrap_or_else(|| {
+        self.peek(0)
+    }
+
+    fn peek(&self, offset: usize) -> Token {
+        self.tokens.get(self.position + offset).copied().unwrap_or_else(|| {
             Token { kind: TokenKind::EndOfFile, span: Span { start: self.source.len() as u32, end: self.source.len() as u32 } }
         })
     }

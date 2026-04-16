@@ -61,6 +61,21 @@ fn test_binary_precedence() {
 #[test]
 fn test_calls() {
     assert_valid_parse("fn foo() { f(x); f(x, y); f()(x); }");
+    assert_valid_parse("fn foo() { f(path=\"file.txt\"); }");
+    assert_valid_parse("fn foo() { f(x, path=\"file.txt\"); }");
+}
+
+fn assert_invalid_parse(source: &str) {
+    match parse_source(source) {
+        Ok(_) => panic!("Expected parse failure: {}", source),
+        Err(_) => {},
+    }
+}
+
+#[test]
+fn test_invalid_calls() {
+    assert_invalid_parse("fn foo() { f(path=\"a\", \"b\"); }"); // Positional after named
+    assert_invalid_parse("fn foo() { f(path=\"a\", path=\"b\"); }"); // Duplicate named
 }
 
 #[test]

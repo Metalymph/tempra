@@ -1,0 +1,4 @@
+fn main() ! {
+    let cwd = os.cwd()?
+    print("cwd=", cwd)
+}

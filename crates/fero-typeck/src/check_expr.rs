@@ -181,57 +181,149 @@ fn check_binary(ctx: &mut TypeContext, b: &HirBinary) -> Type {
     }
 }
 
-fn check_builtin(ctx: &mut TypeContext, name: &str, args: &[HirExpression], span: Span) -> Option<Type> {
+fn check_builtin(ctx: &mut TypeContext, name: &str, args: &[HirCallArgument], span: Span) -> Option<Type> {
+    // Helper to get an argument by index (positional) or name
+    let get_arg = |idx: usize, arg_name: &str| -> Option<&HirExpression> {
+        if idx < args.len() {
+            match &args[idx] {
+                HirCallArgument::Positional(e) => return Some(e),
+                _ => {}
+            }
+        }
+        args.iter().find_map(|a| match a {
+            HirCallArgument::Named(n) if n.name == arg_name => Some(&n.value),
+            _ => None,
+        })
+    };
+
     match name {
         "print" => {
+            let mut newline_found = false;
             for arg in args {
-                let ty = check_expression(ctx, arg);
-                if !ty.is_printable() && ty != Type::Error {
-                    ctx.error(format!("'print' argument must be a printable type, found {}", ty), arg.span());
+                match arg {
+                    HirCallArgument::Positional(e) => {
+                        let ty = check_expression(ctx, e);
+                        if !ty.is_printable() && ty != Type::Error {
+                            ctx.error(format!("'print' argument must be a printable type, found {}", ty), e.span());
+                        }
+                    }
+                    HirCallArgument::Named(n) => {
+                        if n.name == "newline" {
+                            if newline_found {
+                                ctx.error("Duplicate named argument 'newline'", n.value.span());
+                            }
+                            newline_found = true;
+                            let ty = check_expression(ctx, &n.value);
+                            if ty != Type::Bool && ty != Type::Error {
+                                ctx.error(format!("'newline' must be Bool, found {}", ty), n.value.span());
+                            }
+                        } else {
+                            ctx.error(format!("Unknown named argument '{}' for 'print'", n.name), n.value.span());
+                        }
+                    }
                 }
             }
             Some(Type::Unit)
         }
         "fmt" => {
+            let mut separator_found = false;
             for arg in args {
-                let ty = check_expression(ctx, arg);
-                if !ty.is_printable() && ty != Type::Error {
-                    ctx.error(format!("'fmt' argument must be a printable type, found {}", ty), arg.span());
+                match arg {
+                    HirCallArgument::Positional(e) => {
+                        let ty = check_expression(ctx, e);
+                        if !ty.is_printable() && ty != Type::Error {
+                            ctx.error(format!("'fmt' argument must be a printable type, found {}", ty), e.span());
+                        }
+                    }
+                    HirCallArgument::Named(n) => {
+                        if n.name == "separator" {
+                            if separator_found {
+                                ctx.error("Duplicate named argument 'separator'", n.value.span());
+                            }
+                            separator_found = true;
+                            let ty = check_expression(ctx, &n.value);
+                            if ty != Type::String && ty != Type::Error {
+                                ctx.error(format!("'separator' must be String, found {}", ty), n.value.span());
+                            }
+                        } else {
+                            ctx.error(format!("Unknown named argument '{}' for 'fmt'", n.name), n.value.span());
+                        }
+                    }
                 }
             }
             Some(Type::String)
         }
         "exit" => {
-            if args.len() != 1 {
-                ctx.error(format!("Function 'exit' expects 1 argument(s), found {}", args.len()), span);
+            if args.is_empty() {
+                ctx.error(format!("Function 'exit' expects at least 1 argument(s), found {}", args.len()), span);
             } else {
-                let p = check_expression(ctx, &args[0]);
-                if p != Type::Int && p != Type::Int64 && p != Type::Error {
-                    ctx.error(format!("Argument 1 of 'exit': expected Int or Int64, found {}", p), args[0].span());
+                let arg_expr = get_arg(0, "code");
+                if let Some(e) = arg_expr {
+                    let p = check_expression(ctx, e);
+                    if p != Type::Int && p != Type::Int64 && p != Type::Error {
+                        ctx.error(format!("Argument 1 of 'exit': expected Int or Int64, found {}", p), e.span());
+                    }
+                } else {
+                    ctx.error("Missing argument 'code' for 'exit'", span);
                 }
             }
             Some(Type::Unit)
         }
         "read_line" => {
-            if args.len() != 0 {
-                ctx.error(format!("Function 'read_line' expects 0 argument(s), found {}", args.len()), span);
+            for arg in args {
+                match arg {
+                    HirCallArgument::Positional(_) => {
+                        ctx.error("'read_line' expects 0 positional arguments", span);
+                    }
+                    HirCallArgument::Named(n) if n.name == "trim_newline" => {
+                        let ty = check_expression(ctx, &n.value);
+                        if ty != Type::Bool && ty != Type::Error {
+                            ctx.error(format!("'trim_newline' must be Bool, found {}", ty), n.value.span());
+                        }
+                    }
+                    HirCallArgument::Named(n) => {
+                        ctx.error(format!("Unknown named argument '{}' for 'read_line'", n.name), n.value.span());
+                    }
+                }
             }
             Some(Type::Result(Box::new(Type::String), Box::new(Type::BuiltinError)))
         }
         "cmd" => {
-            if args.len() != 2 {
-                ctx.error(format!("Function 'cmd' expects 2 argument(s), found {}", args.len()), span);
+            if args.is_empty() {
+                ctx.error(format!("Function 'cmd' expects at least 1 positional argument (program), found {}", args.len()), span);
             } else {
-                let p = check_expression(ctx, &args[0]);
-                if p != Type::String && p != Type::Error {
-                    ctx.error(format!("Argument 1 of 'cmd': expected String, found {}", p), args[0].span());
-                }
-                let a = check_expression(ctx, &args[1]);
-                if a != Type::Array(Box::new(Type::String)) && a != Type::Error { // For an empty array it might be Type::Array(Unknown), we should be careful.
-                    // Empty array literal gives Array(Unknown)
-                    if a != Type::Array(Box::new(Type::Unknown)) {
-                        ctx.error(format!("Argument 2 of 'cmd': expected [String], found {}", a), args[1].span());
+                let mut positional_count = 0;
+                for arg in args {
+                    match arg {
+                        HirCallArgument::Positional(e) => {
+                            let p = check_expression(ctx, e);
+                            if p != Type::String && p != Type::Error {
+                                ctx.error(format!("'cmd' positional argument {}: expected String, found {}", positional_count + 1, p), e.span());
+                            }
+                            positional_count += 1;
+                        }
+                        HirCallArgument::Named(n) => {
+                            let ty = check_expression(ctx, &n.value);
+                            match n.name.as_str() {
+                                "cwd" => {
+                                    if ty != Type::String && ty != Type::Error {
+                                        ctx.error(format!("'cwd' must be String, found {}", ty), n.value.span());
+                                    }
+                                }
+                                "check" => {
+                                    if ty != Type::Bool && ty != Type::Error {
+                                        ctx.error(format!("'check' must be Bool, found {}", ty), n.value.span());
+                                    }
+                                }
+                                _ => {
+                                    ctx.error(format!("Unknown named argument '{}' for 'cmd'", n.name), n.value.span());
+                                }
+                            }
+                        }
                     }
+                }
+                if positional_count == 0 {
+                    ctx.error("Missing program name for 'cmd'", span);
                 }
             }
             Some(Type::Command)
@@ -241,7 +333,11 @@ fn check_builtin(ctx: &mut TypeContext, name: &str, args: &[HirExpression], span
                 ctx.error(format!("Function 'Ok' expects 1 argument(s), found {}", args.len()), span);
                 Some(Type::Error)
             } else {
-                let ty = check_expression(ctx, &args[0]);
+                let arg_expr = match &args[0] {
+                    HirCallArgument::Positional(e) => e,
+                    HirCallArgument::Named(n) => &n.value,
+                };
+                let ty = check_expression(ctx, arg_expr);
                 Some(Type::Result(Box::new(ty), Box::new(Type::BuiltinError)))
             }
         }
@@ -254,55 +350,100 @@ fn check_builtin(ctx: &mut TypeContext, name: &str, args: &[HirExpression], span
             }
         }
         "crash" => {
-            if args.len() != 1 {
-                ctx.error(format!("Function 'crash' expects 1 argument(s), found {}", args.len()), span);
+            if args.is_empty() {
+                 ctx.error(format!("Function 'crash' expects at least 1 argument(s), found {}", args.len()), span);
             } else {
-                let p = check_expression(ctx, &args[0]);
-                if p != Type::String && p != Type::Error {
-                    ctx.error(format!("Argument 1 of 'crash': expected String, found {}", p), args[0].span());
+                if let Some(e) = get_arg(0, "message") {
+                    let p = check_expression(ctx, e);
+                    if p != Type::String && p != Type::Error {
+                        ctx.error(format!("Argument 1 of 'crash': expected String, found {}", p), e.span());
+                    }
                 }
             }
             Some(Type::Unit)
         }
         "expect" => {
-            if args.len() < 1 || args.len() > 2 {
-                ctx.error(format!("Function 'expect' expects 1 or 2 argument(s), found {}", args.len()), span);
+            if args.len() < 1 {
+                ctx.error(format!("Function 'expect' expects at least 1 argument(s), found {}", args.len()), span);
             } else {
-                let p = check_expression(ctx, &args[0]);
-                if p != Type::Bool && p != Type::Error {
-                    ctx.error(format!("Argument 1 of 'expect': expected Bool, found {}", p), args[0].span());
+                if let Some(e) = get_arg(0, "condition") {
+                    let p = check_expression(ctx, e);
+                    if p != Type::Bool && p != Type::Error {
+                        ctx.error(format!("Argument 1 of 'expect': expected Bool, found {}", p), e.span());
+                    }
                 }
-                if args.len() == 2 {
-                    let m = check_expression(ctx, &args[1]);
+                if let Some(e) = get_arg(1, "message") {
+                    let m = check_expression(ctx, e);
                     if m != Type::String && m != Type::Error {
-                        ctx.error(format!("Argument 2 of 'expect': expected String, found {}", m), args[1].span());
+                        ctx.error(format!("Argument 2 of 'expect': expected String, found {}", m), e.span());
                     }
                 }
             }
             Some(Type::Unit)
         }
         "dbg" => {
-            if args.len() != 1 {
-                ctx.error(format!("Function 'dbg' expects 1 argument(s), found {}", args.len()), span);
+            if args.is_empty() {
+                ctx.error(format!("Function 'dbg' expects at least 1 argument(s), found {}", args.len()), span);
                 Some(Type::Error)
             } else {
-                let ty = check_expression(ctx, &args[0]);
-                Some(ty)
+                let mut label_found = false;
+                let mut first_val_ty = Type::Error;
+                for (i, arg) in args.iter().enumerate() {
+                    match arg {
+                        HirCallArgument::Positional(e) => {
+                            if i == 0 {
+                                first_val_ty = check_expression(ctx, e);
+                            } else {
+                                ctx.error("'dbg' expects only 1 positional argument", e.span());
+                            }
+                        }
+                        HirCallArgument::Named(n) => {
+                            if n.name == "label" {
+                                if label_found {
+                                    ctx.error("Duplicate named argument 'label'", n.value.span());
+                                }
+                                label_found = true;
+                                let ty = check_expression(ctx, &n.value);
+                                if ty != Type::String && ty != Type::Error {
+                                    ctx.error(format!("'label' must be String, found {}", ty), n.value.span());
+                                }
+                            } else {
+                                ctx.error(format!("Unknown named argument '{}' for 'dbg'", n.name), n.value.span());
+                            }
+                        }
+                    }
+                }
+                Some(first_val_ty)
             }
         }
         _ => None,
     }
 }
 
-fn check_fs_builtin(ctx: &mut TypeContext, name: &str, args: &[HirExpression], span: Span) -> Type {
+fn check_fs_builtin(ctx: &mut TypeContext, name: &str, args: &[HirCallArgument], span: Span) -> Type {
+    let get_arg = |idx: usize, arg_name: &str| -> Option<&HirExpression> {
+        if idx < args.len() {
+            match &args[idx] {
+                HirCallArgument::Positional(e) => return Some(e),
+                _ => {}
+            }
+        }
+        args.iter().find_map(|a| match a {
+            HirCallArgument::Named(n) if n.name == arg_name => Some(&n.value),
+            _ => None,
+        })
+    };
+
     match name {
         "read" => {
             if args.len() != 1 {
                 ctx.error(format!("'fs.read' expects 1 argument(s), found {}", args.len()), span);
             } else {
-                let p = check_expression(ctx, &args[0]);
-                if p != Type::String && p != Type::Error {
-                    ctx.error(format!("'fs.read' argument 1: expected String, found {}", p), args[0].span());
+                if let Some(e) = get_arg(0, "path") {
+                    let p = check_expression(ctx, e);
+                    if p != Type::String && p != Type::Error {
+                        ctx.error(format!("'fs.read' argument 1: expected String, found {}", p), e.span());
+                    }
                 }
             }
             Type::Result(Box::new(Type::String), Box::new(Type::BuiltinError))
@@ -311,13 +452,17 @@ fn check_fs_builtin(ctx: &mut TypeContext, name: &str, args: &[HirExpression], s
             if args.len() != 2 {
                 ctx.error(format!("'fs.{}' expects 2 argument(s), found {}", name, args.len()), span);
             } else {
-                let p = check_expression(ctx, &args[0]);
-                if p != Type::String && p != Type::Error {
-                    ctx.error(format!("'fs.{}' argument 1: expected String, found {}", name, p), args[0].span());
+                if let Some(e1) = get_arg(0, "path") {
+                    let p = check_expression(ctx, e1);
+                    if p != Type::String && p != Type::Error {
+                        ctx.error(format!("'fs.{}' argument 1: expected String, found {}", name, p), e1.span());
+                    }
                 }
-                let t = check_expression(ctx, &args[1]);
-                if t != Type::String && t != Type::Error {
-                    ctx.error(format!("'fs.{}' argument 2: expected String, found {}", name, t), args[1].span());
+                if let Some(e2) = get_arg(1, "text") {
+                    let t = check_expression(ctx, e2);
+                    if t != Type::String && t != Type::Error {
+                        ctx.error(format!("'fs.{}' argument 2: expected String, found {}", name, t), e2.span());
+                    }
                 }
             }
             Type::Result(Box::new(Type::Unit), Box::new(Type::BuiltinError))
@@ -326,20 +471,47 @@ fn check_fs_builtin(ctx: &mut TypeContext, name: &str, args: &[HirExpression], s
             if args.len() != 1 {
                 ctx.error(format!("'fs.exists' expects 1 argument(s), found {}", args.len()), span);
             } else {
-                let p = check_expression(ctx, &args[0]);
-                if p != Type::String && p != Type::Error {
-                    ctx.error(format!("'fs.exists' argument 1: expected String, found {}", p), args[0].span());
+                if let Some(e) = get_arg(0, "path") {
+                    let p = check_expression(ctx, e);
+                    if p != Type::String && p != Type::Error {
+                        ctx.error(format!("'fs.exists' argument 1: expected String, found {}", p), e.span());
+                    }
                 }
             }
             Type::Result(Box::new(Type::Bool), Box::new(Type::BuiltinError))
         }
-        "remove" => {
+        "remove" | "mkdir" | "list_dir" => {
             if args.len() != 1 {
-                ctx.error(format!("'fs.remove' expects 1 argument(s), found {}", args.len()), span);
+                ctx.error(format!("'fs.{}' expects 1 argument(s), found {}", name, args.len()), span);
             } else {
-                let p = check_expression(ctx, &args[0]);
-                if p != Type::String && p != Type::Error {
-                    ctx.error(format!("'fs.remove' argument 1: expected String, found {}", p), args[0].span());
+                if let Some(e) = get_arg(0, "path") {
+                    let p = check_expression(ctx, e);
+                    if p != Type::String && p != Type::Error {
+                        ctx.error(format!("'fs.{}' argument 1: expected String, found {}", name, p), e.span());
+                    }
+                }
+            }
+            if name == "list_dir" {
+                 Type::Result(Box::new(Type::Array(Box::new(Type::String))), Box::new(Type::BuiltinError))
+            } else {
+                 Type::Result(Box::new(Type::Unit), Box::new(Type::BuiltinError))
+            }
+        }
+        "rename" | "copy" => {
+            if args.len() != 2 {
+                ctx.error(format!("'fs.{}' expects 2 argument(s), found {}", name, args.len()), span);
+            } else {
+                if let Some(e1) = get_arg(0, "from") {
+                    let p = check_expression(ctx, e1);
+                    if p != Type::String && p != Type::Error {
+                        ctx.error(format!("'fs.{}' argument 1: expected String, found {}", name, p), e1.span());
+                    }
+                }
+                if let Some(e2) = get_arg(1, "to") {
+                    let t = check_expression(ctx, e2);
+                    if t != Type::String && t != Type::Error {
+                        ctx.error(format!("'fs.{}' argument 2: expected String, found {}", name, t), e2.span());
+                    }
                 }
             }
             Type::Result(Box::new(Type::Unit), Box::new(Type::BuiltinError))
@@ -351,21 +523,173 @@ fn check_fs_builtin(ctx: &mut TypeContext, name: &str, args: &[HirExpression], s
     }
 }
 
-fn check_env_builtin(ctx: &mut TypeContext, name: &str, args: &[HirExpression], span: Span) -> Type {
+fn check_env_builtin(ctx: &mut TypeContext, name: &str, args: &[HirCallArgument], span: Span) -> Type {
+    let get_arg = |idx: usize, arg_name: &str| -> Option<&HirExpression> {
+        if idx < args.len() {
+            match &args[idx] {
+                HirCallArgument::Positional(e) => return Some(e),
+                _ => {}
+            }
+        }
+        args.iter().find_map(|a| match a {
+            HirCallArgument::Named(n) if n.name == arg_name => Some(&n.value),
+            _ => None,
+        })
+    };
+
     match name {
         "get" => {
             if args.len() != 1 {
                 ctx.error(format!("'env.get' expects 1 argument(s), found {}", args.len()), span);
             } else {
-                let p = check_expression(ctx, &args[0]);
-                if p != Type::String && p != Type::Error {
-                    ctx.error(format!("'env.get' argument 1: expected String, found {}", p), args[0].span());
+                if let Some(e) = get_arg(0, "name") {
+                    let p = check_expression(ctx, e);
+                    if p != Type::String && p != Type::Error {
+                        ctx.error(format!("'env.get' argument 1: expected String, found {}", p), e.span());
+                    }
                 }
             }
             Type::Result(Box::new(Type::String), Box::new(Type::BuiltinError))
         }
         _ => {
             ctx.error(format!("Unknown environment operation 'env.{}'", name), span);
+            Type::Error
+        }
+    }
+}
+
+fn check_os_builtin(ctx: &mut TypeContext, name: &str, args: &[HirCallArgument], span: Span) -> Type {
+    let get_arg = |idx: usize, arg_name: &str| -> Option<&HirExpression> {
+        if idx < args.len() {
+            match &args[idx] {
+                HirCallArgument::Positional(e) => return Some(e),
+                _ => {}
+            }
+        }
+        args.iter().find_map(|a| match a {
+            HirCallArgument::Named(n) if n.name == arg_name => Some(&n.value),
+            _ => None,
+        })
+    };
+
+    match name {
+        "args" => {
+            if args.len() != 0 {
+                ctx.error(format!("'os.args' expects 0 argument(s), found {}", args.len()), span);
+            }
+            Type::Array(Box::new(Type::String))
+        }
+        "cwd" => {
+            if args.len() != 0 {
+                ctx.error(format!("'os.cwd' expects 0 argument(s), found {}", args.len()), span);
+            }
+            Type::Result(Box::new(Type::String), Box::new(Type::BuiltinError))
+        }
+        "chdir" => {
+            if args.len() != 1 {
+                ctx.error(format!("'os.chdir' expects 1 argument(s), found {}", args.len()), span);
+            } else {
+                if let Some(e) = get_arg(0, "path") {
+                    let p = check_expression(ctx, e);
+                    if p != Type::String && p != Type::Error {
+                        ctx.error(format!("'os.chdir' argument 1: expected String, found {}", p), e.span());
+                    }
+                }
+            }
+            Type::Result(Box::new(Type::Unit), Box::new(Type::BuiltinError))
+        }
+        _ => {
+            ctx.error(format!("Unknown OS operation 'os.{}'", name), span);
+            Type::Error
+        }
+    }
+}
+
+fn check_string_method(ctx: &mut TypeContext, name: &str, args: &[HirCallArgument], span: Span) -> Type {
+    let get_arg = |idx: usize, arg_name: &str| -> Option<&HirExpression> {
+        if idx < args.len() {
+            match &args[idx] {
+                HirCallArgument::Positional(e) => return Some(e),
+                _ => {}
+            }
+        }
+        args.iter().find_map(|a| match a {
+            HirCallArgument::Named(n) if n.name == arg_name => Some(&n.value),
+            _ => None,
+        })
+    };
+
+    match name {
+        "len" => {
+            if !args.is_empty() {
+                ctx.error("'len' method expects 0 arguments", span);
+            }
+            Type::Int
+        }
+        "trim" | "trim_start" | "trim_end" | "to_lower" | "to_upper" => {
+            if !args.is_empty() {
+                ctx.error(format!("'{}' method expects 0 arguments", name), span);
+            }
+            Type::String
+        }
+        "contains" | "starts_with" | "ends_with" => {
+            if args.len() != 1 {
+                ctx.error(format!("'{}' method expects 1 argument", name), span);
+            } else if let Some(arg) = get_arg(0, "pattern").or_else(|| get_arg(0, "substr")).or_else(|| get_arg(0, "prefix")).or_else(|| get_arg(0, "suffix")) {
+                let ty = check_expression(ctx, arg);
+                if ty != Type::String && ty != Type::Error {
+                    ctx.error(format!("'{}' expects String, found {}", name, ty), arg.span());
+                }
+            }
+            Type::Bool
+        }
+        "split" => {
+            if args.len() != 1 {
+                ctx.error("'split' method expects 1 argument", span);
+            } else if let Some(arg) = get_arg(0, "separator") {
+                let ty = check_expression(ctx, arg);
+                if ty != Type::String && ty != Type::Error {
+                    ctx.error(format!("'split' expects String, found {}", ty), arg.span());
+                }
+            }
+            Type::Array(Box::new(Type::String))
+        }
+        "replace" => {
+             if args.len() != 2 {
+                ctx.error("'replace' method expects 2 arguments", span);
+            } else {
+                if let Some(arg) = get_arg(0, "from") {
+                    let ty = check_expression(ctx, arg);
+                    if ty != Type::String && ty != Type::Error {
+                        ctx.error(format!("'replace' from expects String, found {}", ty), arg.span());
+                    }
+                }
+                if let Some(arg) = get_arg(1, "to") {
+                    let ty = check_expression(ctx, arg);
+                    if ty != Type::String && ty != Type::Error {
+                        ctx.error(format!("'replace' to expects String, found {}", ty), arg.span());
+                    }
+                }
+            }
+            Type::String
+        }
+        _ => {
+            ctx.error(format!("Unknown String method '{}'", name), span);
+            Type::Error
+        }
+    }
+}
+
+fn check_array_method(ctx: &mut TypeContext, name: &str, args: &[HirCallArgument], span: Span) -> Type {
+    match name {
+        "len" => {
+            if !args.is_empty() {
+                ctx.error("'len' method expects 0 arguments", span);
+            }
+            Type::Int
+        }
+        _ => {
+            ctx.error(format!("Unknown Array method '{}'", name), span);
             Type::Error
         }
     }
@@ -383,8 +707,17 @@ fn check_call(ctx: &mut TypeContext, c: &HirCall) -> Type {
                 if obj_name == "env" {
                     return self::check_env_builtin(ctx, &m.field, &c.args, c.span);
                 }
+                if obj_name == "os" {
+                    return self::check_os_builtin(ctx, &m.field, &c.args, c.span);
+                }
             }
             let object_ty = check_expression(ctx, &m.object);
+            if object_ty == Type::String {
+                return self::check_string_method(ctx, &m.field, &c.args, c.span);
+            }
+            if let Type::Array(_) = object_ty {
+                return self::check_array_method(ctx, &m.field, &c.args, c.span);
+            }
             if object_ty == Type::Command && m.field == "run" {
                 if !c.args.is_empty() {
                     ctx.error(format!("Method 'run' on Command expects 0 argument(s), found {}", c.args.len()), c.span);
@@ -413,33 +746,66 @@ fn check_call(ctx: &mut TypeContext, c: &HirCall) -> Type {
         }
     };
 
-    if c.args.len() != sig.params.len() {
-        ctx.error(
-            format!(
-                "Function '{}' expects {} argument(s), found {}",
-                func_name,
-                sig.params.len(),
-                c.args.len()
-            ),
-            c.span,
-        );
-        return Type::Error;
-    }
+    // Generic Named Argument Matching for user functions
+    let mut resolved_args = vec![None; sig.params.len()];
+    let mut named_keys = std::collections::HashSet::new();
 
     for (i, arg) in c.args.iter().enumerate() {
-        let arg_ty = check_expression(ctx, arg);
-        let param_ty = &sig.params[i].1;
-        if arg_ty != Type::Error && arg_ty != *param_ty {
-            ctx.error(
-                format!(
-                    "Argument {} of '{}': expected {}, found {}",
-                    i + 1,
-                    func_name,
-                    param_ty,
-                    arg_ty
-                ),
-                arg.span(),
-            );
+        match arg {
+            HirCallArgument::Positional(e) => {
+                if i >= sig.params.len() {
+                    ctx.error(format!("Too many positional arguments for '{}'", func_name), e.span());
+                    continue;
+                }
+                resolved_args[i] = Some(e);
+            }
+            HirCallArgument::Named(n) => {
+                if !named_keys.insert(n.name.clone()) {
+                    // Parser already rejects duplicate named args in CallExpr, 
+                    // but good to be safe if HIR somehow bypasses it in future.
+                    ctx.error(format!("Duplicate named argument '{}'", n.name), n.value.span());
+                    continue;
+                }
+                
+                let param_idx = sig.params.iter().position(|(name, _)| name == &n.name);
+                match param_idx {
+                    Some(idx) => {
+                        if resolved_args[idx].is_some() {
+                            ctx.error(format!("Argument for parameter '{}' already provided", n.name), n.value.span());
+                        } else {
+                            resolved_args[idx] = Some(&n.value);
+                        }
+                    }
+                    None => {
+                        ctx.error(format!("Unknown named argument '{}' for function '{}'", n.name, func_name), n.value.span());
+                    }
+                }
+            }
+        }
+    }
+
+    // Check types and missing arguments
+    for (i, resolved) in resolved_args.iter().enumerate() {
+        let (param_name, param_ty) = &sig.params[i];
+        match resolved {
+            Some(arg_expr) => {
+                let arg_ty = check_expression(ctx, arg_expr);
+                if arg_ty != Type::Error && arg_ty != *param_ty {
+                    ctx.error(
+                        format!(
+                            "Argument for '{}' in '{}': expected {}, found {}",
+                            param_name,
+                            func_name,
+                            param_ty,
+                            arg_ty
+                        ),
+                        arg_expr.span(),
+                    );
+                }
+            }
+            None => {
+                ctx.error(format!("Missing required argument '{}' for function '{}'", param_name, func_name), c.span);
+            }
         }
     }
 

@@ -1,0 +1,4 @@
+fn main() {
+    let result = cmd("grep", "hello", "examples/sample.txt", cwd=".", check=false).run()?
+    print(result.stdout)
+}

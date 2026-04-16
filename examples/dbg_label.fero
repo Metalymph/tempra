@@ -1,0 +1,4 @@
+fn main() {
+    let x = dbg(123, label="counter")
+    print("Value is: ", x)
+}

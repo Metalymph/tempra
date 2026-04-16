@@ -451,10 +451,29 @@ pub struct UnwrapExpr {
 // ----------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
+pub enum CallArgument {
+    Positional(PositionalArgument),
+    Named(NamedArgument),
+}
+
+#[derive(Debug, Clone)]
+pub struct PositionalArgument {
+    pub span: Span,
+    pub value: Expression,
+}
+
+#[derive(Debug, Clone)]
+pub struct NamedArgument {
+    pub span: Span,
+    pub name: Token,
+    pub value: Expression,
+}
+
+#[derive(Debug, Clone)]
 pub struct CallExpr {
     pub span: Span,
     pub callee: Box<Expression>,
-    pub arguments: Vec<Expression>,
+    pub arguments: Vec<CallArgument>,
 }
 
 #[derive(Debug, Clone)]

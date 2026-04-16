@@ -5,16 +5,25 @@ use crate::value::{StructInstance, Value};
 use fero_hir::*;
 use std::collections::HashMap;
 
-fn run_command(c: &crate::value::CommandValue) -> Result<crate::value::CommandResultValue, String> {
+fn run_command(c: &crate::value::CommandValue) -> Result<Value, String> {
     let mut cmd = std::process::Command::new(&c.program);
     cmd.args(&c.args);
+    if let Some(cwd) = &c.cwd {
+        cmd.current_dir(cwd);
+    }
     let output = cmd.output().map_err(|e| format!("Command error: {}", e))?;
-    Ok(crate::value::CommandResultValue {
+    let res = crate::value::CommandResultValue {
         exit_code: output.status.code().unwrap_or(-1),
         stdout: String::from_utf8_lossy(&output.stdout).to_string(),
         stderr: String::from_utf8_lossy(&output.stderr).to_string(),
         success: output.status.success(),
-    })
+    };
+
+    if c.check && !res.success {
+        Ok(Value::Result(Box::new(crate::value::ValueResult::Err(Value::Error(format!("Command '{}' failed with exit code {}", c.program, res.exit_code))))))
+    } else {
+        Ok(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::CommandResult(res)))))
+    }
 }
 
 fn pipe_commands(left: &crate::value::CommandValue, right: &crate::value::CommandValue) -> Result<Value, String> {
@@ -119,16 +128,24 @@ impl Interpreter {
                     if let Value::Bool(false) = left {
                         return Ok(ControlFlow::Value(Value::Bool(false)));
                     } else if let Value::Command(ref cmd_left) = left {
-                        let res_left = run_command(cmd_left)?;
-                        if !res_left.success {
-                            return Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::CommandResult(res_left))))));
+                        let res_v = run_command(cmd_left)?;
+                        let success = match res_v {
+                            Value::Result(ref r) => match r.as_ref() {
+                                crate::value::ValueResult::Ok(Value::CommandResult(cr)) => cr.success,
+                                crate::value::ValueResult::Err(_) => false,
+                                _ => unreachable!(),
+                            },
+                            _ => unreachable!(),
+                        };
+                        if !success {
+                            return Ok(ControlFlow::Value(res_v));
                         }
                         let right = match self.eval_expression(&binary.right, env)? {
                             ControlFlow::Value(v) => v,
                             cf => return Ok(cf),
                         };
                         if let Value::Command(cmd_right) = right {
-                            return run_command(&cmd_right).map(|v| ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::CommandResult(v))))));
+                            return run_command(&cmd_right).map(ControlFlow::Value);
                         } else {
                             return Err("&& right operand must be Command if left is Command".into());
                         }
@@ -142,16 +159,24 @@ impl Interpreter {
                     if let Value::Bool(true) = left {
                         return Ok(ControlFlow::Value(Value::Bool(true)));
                     } else if let Value::Command(ref cmd_left) = left {
-                        let res_left = run_command(cmd_left)?;
-                        if res_left.success {
-                            return Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::CommandResult(res_left))))));
+                        let res_v = run_command(cmd_left)?;
+                        let success = match res_v {
+                            Value::Result(ref r) => match r.as_ref() {
+                                crate::value::ValueResult::Ok(Value::CommandResult(cr)) => cr.success,
+                                crate::value::ValueResult::Err(_) => false,
+                                _ => unreachable!(),
+                            },
+                            _ => unreachable!(),
+                        };
+                        if success {
+                            return Ok(ControlFlow::Value(res_v));
                         }
                         let right = match self.eval_expression(&binary.right, env)? {
                             ControlFlow::Value(v) => v,
                             cf => return Ok(cf),
                         };
                         if let Value::Command(cmd_right) = right {
-                            return run_command(&cmd_right).map(|v| ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::CommandResult(v))))));
+                            return run_command(&cmd_right).map(ControlFlow::Value);
                         } else {
                             return Err("|| right operand must be Command if left is Command".into());
                         }
@@ -309,179 +334,314 @@ impl Interpreter {
                     if let HirExpression::Name(_, ref obj_name) = *member.object {
                         if obj_name == "fs" {
                             let mut args = Vec::new();
-                            for arg_expr in &call.args {
-                                match self.eval_expression(arg_expr, env)? {
-                                    ControlFlow::Value(v) => args.push(v),
-                                    cf => return Ok(cf),
+                            let mut named_args = HashMap::new();
+                            for arg in &call.args {
+                                match arg {
+                                    HirCallArgument::Positional(arg_expr) => {
+                                        match self.eval_expression(arg_expr, env)? {
+                                            ControlFlow::Value(v) => args.push(v),
+                                            cf => return Ok(cf),
+                                        }
+                                    }
+                                    HirCallArgument::Named(n) => {
+                                        match self.eval_expression(&n.value, env)? {
+                                            ControlFlow::Value(v) => { named_args.insert(n.name.clone(), v); }
+                                            cf => return Ok(cf),
+                                        }
+                                    }
                                 }
                             }
-                            return self.eval_fs_builtin(&member.field, &args);
+                            return self.eval_fs_builtin(&member.field, &args, &named_args);
                         }
                         if obj_name == "env" {
                             let mut args = Vec::new();
-                            for arg_expr in &call.args {
-                                match self.eval_expression(arg_expr, env)? {
-                                    ControlFlow::Value(v) => args.push(v),
-                                    cf => return Ok(cf),
+                            let mut named_args = HashMap::new();
+                            for arg in &call.args {
+                                match arg {
+                                    HirCallArgument::Positional(arg_expr) => {
+                                        match self.eval_expression(arg_expr, env)? {
+                                            ControlFlow::Value(v) => args.push(v),
+                                            cf => return Ok(cf),
+                                        }
+                                    }
+                                    HirCallArgument::Named(n) => {
+                                        match self.eval_expression(&n.value, env)? {
+                                            ControlFlow::Value(v) => { named_args.insert(n.name.clone(), v); }
+                                            cf => return Ok(cf),
+                                        }
+                                    }
                                 }
                             }
-                            return self.eval_env_builtin(&member.field, &args);
+                            return self.eval_env_builtin(&member.field, &args, &named_args);
+                        }
+                        if obj_name == "os" {
+                            let mut args = Vec::new();
+                            let mut named_args = HashMap::new();
+                            for arg in &call.args {
+                                match arg {
+                                    HirCallArgument::Positional(arg_expr) => {
+                                        match self.eval_expression(arg_expr, env)? {
+                                            ControlFlow::Value(v) => args.push(v),
+                                            cf => return Ok(cf),
+                                        }
+                                    }
+                                    HirCallArgument::Named(n) => {
+                                        match self.eval_expression(&n.value, env)? {
+                                            ControlFlow::Value(v) => { named_args.insert(n.name.clone(), v); }
+                                            cf => return Ok(cf),
+                                        }
+                                    }
+                                }
+                            }
+                            return self.eval_os_builtin(&member.field, &args, &named_args);
                         }
                     }
-                    if member.field == "run" {
                         let obj = match self.eval_expression(&member.object, env)? {
                             ControlFlow::Value(v) => v,
                             cf => return Ok(cf),
                         };
-                        if let Value::Command(cmd) = obj {
-                            if !call.args.is_empty() {
-                                return Err("Method 'run' expects 0 arguments".into());
+                        if let Value::String(s) = obj {
+                            let mut args = Vec::new();
+                            let mut named_args = HashMap::new();
+                            for arg in &call.args {
+                                match arg {
+                                    HirCallArgument::Positional(arg_expr) => {
+                                        match self.eval_expression(arg_expr, env)? {
+                                            ControlFlow::Value(v) => args.push(v),
+                                            cf => return Ok(cf),
+                                        }
+                                    }
+                                    HirCallArgument::Named(n) => {
+                                        match self.eval_expression(&n.value, env)? {
+                                            ControlFlow::Value(v) => { named_args.insert(n.name.clone(), v); }
+                                            cf => return Ok(cf),
+                                        }
+                                    }
+                                }
                             }
-                            return match run_command(&cmd) {
-                                Ok(v) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::CommandResult(v)))))),
-                                Err(msg) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Err(Value::Error(msg)))))),
-                            };
+                            return self.eval_string_method(&s, &member.field, &args, &named_args).map(ControlFlow::Value);
+                        }
+                        if let Value::Array(arr) = obj {
+                            if member.field == "len" {
+                                if !call.args.is_empty() {
+                                    return Err("Method 'len' expects 0 arguments".into());
+                                }
+                                return Ok(ControlFlow::Value(Value::Int64(arr.len() as i64)));
+                            } else {
+                                return Err(format!("Unknown method '{}' on Array", member.field));
+                            }
+                        }
+                        if let Value::Command(cmd) = obj {
+                            if member.field == "run" {
+                                if !call.args.is_empty() {
+                                    return Err("Method 'run' expects 0 arguments".into());
+                                }
+                                return run_command(&cmd).map(ControlFlow::Value);
+                            } else {
+                                return Err(format!("Unknown method '{}' on Command", member.field));
+                            }
                         } else {
-                            return Err("Method 'run' requires a Command".into());
+                            return Err(format!("Method call on unsupported type: {:?}", obj));
                         }
                     }
-                }
 
-                let mut args = Vec::new();
-                for arg_expr in &call.args {
-                    match self.eval_expression(arg_expr, env)? {
-                        ControlFlow::Value(v) => args.push(v),
-                        cf => return Ok(cf),
+                let mut positional_values = Vec::new();
+                let mut named_values = HashMap::new();
+                for arg in &call.args {
+                    match arg {
+                        HirCallArgument::Positional(e) => {
+                            match self.eval_expression(e, env)? {
+                                ControlFlow::Value(v) => positional_values.push(v),
+                                cf => return Ok(cf),
+                            }
+                        }
+                        HirCallArgument::Named(n) => {
+                            match self.eval_expression(&n.value, env)? {
+                                ControlFlow::Value(v) => { named_values.insert(n.name.clone(), v); }
+                                cf => return Ok(cf),
+                            }
+                        }
                     }
                 }
 
                 if let HirExpression::Name(_, name) = &*call.callee {
-                    if name == "exit" {
-                        if args.len() != 1 {
-                            return Err(format!("Builtin 'exit' expects 1 argument"));
-                        }
-                        if let Value::Int64(code) = args[0] {
-                            return Ok(ControlFlow::Exit(code as i32));
-                        } else {
-                            return Err("exit requires an Int64 argument".into());
-                        }
-                    }
-                    if name == "print" {
-                        let result = args.iter().map(value_to_string).collect::<String>();
-                        println!("{}", result);
-                        return Ok(ControlFlow::Value(Value::Unit));
-                    }
-                    if name == "crash" {
-                        if args.len() != 1 {
-                            return Err(format!("Builtin 'crash' expects 1 argument"));
-                        }
-                        return Ok(ControlFlow::Crash(value_to_string(&args[0])));
-                    }
-                    if name == "fmt" {
-                        let result = args.iter().map(value_to_string).collect::<String>();
-                        return Ok(ControlFlow::Value(Value::String(result)));
-                    }
-                    if name == "read_line" {
-                        if args.len() != 0 {
-                            return Err(format!("Builtin 'read_line' expects 0 arguments"));
-                        }
-                        let mut input = String::new();
-                        return match std::io::stdin().read_line(&mut input) {
-                            Ok(_) => {
-                                if input.ends_with('\n') {
-                                    input.pop();
-                                    if input.ends_with('\r') {
-                                        input.pop();
-                                    }
-                                }
-                                Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::String(input))))))
-                            }
-                            Err(e) => {
-                                Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Err(Value::Error(format!("Failed to read stdin: {}", e)))))))
-                            }
-                        }
-                    }
-                    if name == "cmd" {
-                        if args.len() != 2 {
-                            return Err(format!("Builtin 'cmd' expects 2 arguments"));
-                        }
-                        let program = match &args[0] {
-                            Value::String(s) => s.clone(),
-                            _ => return Err("cmd requires a String as first argument".into()),
-                        };
-                        let cmd_args = match &args[1] {
-                            Value::Array(arr) => {
-                                let mut a = Vec::new();
-                                for el in arr {
-                                    if let Value::String(s) = el {
-                                        a.push(s.clone());
-                                    } else {
-                                        return Err("cmd requires an array of Strings".into());
-                                    }
-                                }
-                                a
-                            }
-                            _ => return Err("cmd requires an array of Strings as second argument".into()),
-                        };
-                        return Ok(ControlFlow::Value(Value::Command(crate::value::CommandValue { program, args: cmd_args })));
-                    }
-
-                    if name == "Ok" {
-                        if args.len() != 1 {
-                            return Err(format!("Builtin 'Ok' expects 1 argument"));
-                        }
-                        return Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(args[0].clone())))));
-                    }
-                    if name == "Err" {
-                        if args.len() != 1 {
-                            return Err(format!("Builtin 'Err' expects 1 argument"));
-                        }
-                        return Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Err(args[0].clone())))));
-                    }
-                    if name == "Error" {
-                         if args.len() != 1 {
-                            return Err(format!("Builtin 'Error' expects 1 argument"));
-                        }
-                        return Ok(ControlFlow::Value(Value::Error(value_to_string(&args[0]))));
-                    }
-                    if name == "expect" {
-                        if args.is_empty() || args.len() > 2 {
-                            return Err(format!("Builtin 'expect' expects 1 or 2 arguments"));
-                        }
-                        if let Value::Bool(b) = args[0] {
-                            if b {
-                                return Ok(ControlFlow::Value(Value::Unit));
+                    // Builtins
+                    match name.as_str() {
+                        "exit" => {
+                            let val = positional_values.get(0).or_else(|| named_values.get("code")).ok_or("Missing argument 'code' for exit")?;
+                            if let Value::Int64(code) = val {
+                                return Ok(ControlFlow::Exit(*code as i32));
                             } else {
-                                let msg = if args.len() == 2 {
-                                    value_to_string(&args[1])
-                                } else {
-                                    "expectation failed".to_string()
-                                };
-                                return Ok(ControlFlow::Crash(msg));
+                                return Err("exit requires an Int64 argument".into());
                             }
-                        } else {
-                            return Err("expect requires a Bool as first argument".into());
                         }
-                    }
-                    if name == "dbg" {
-                        if args.len() != 1 {
-                            return Err(format!("Builtin 'dbg' expects 1 argument"));
+                        "print" => {
+                            let mut s = String::new();
+                            let mut newline = true;
+                            for val in positional_values.iter() {
+                                s.push_str(&value_to_string(val));
+                            }
+                            if let Some(v) = named_values.get("newline") {
+                                if let Value::Bool(b) = v {
+                                    newline = *b;
+                                }
+                            }
+                            if newline {
+                                println!("{}", s);
+                            } else {
+                                print!("{}", s);
+                                use std::io::Write;
+                                let _ = std::io::stdout().flush();
+                            }
+                            return Ok(ControlFlow::Value(Value::Unit));
                         }
-                        let repr = match &args[0] {
-                            Value::String(s) => format!("\"{}\"", s),
-                            v => v.to_string(),
-                        };
-                        println!("dbg: {}", repr);
-                        return Ok(ControlFlow::Value(args[0].clone()));
+                        "crash" => {
+                            let val = positional_values.get(0).or_else(|| named_values.get("message")).ok_or("Missing argument 'message' for crash")?;
+                            return Ok(ControlFlow::Crash(value_to_string(val)));
+                        }
+                        "fmt" => {
+                            let mut separator = "";
+                            if let Some(Value::String(sep)) = named_values.get("separator") {
+                                separator = sep;
+                            }
+                            let s = positional_values.iter()
+                                .map(|v| value_to_string(v))
+                                .collect::<Vec<_>>()
+                                .join(separator);
+                            return Ok(ControlFlow::Value(Value::String(s)));
+                        }
+                        "read_line" => {
+                            let mut trim_newline = true;
+                            if let Some(Value::Bool(b)) = named_values.get("trim_newline") {
+                                trim_newline = *b;
+                            }
+
+                            let mut input = String::new();
+                            return match std::io::stdin().read_line(&mut input) {
+                                Ok(_) => {
+                                    if trim_newline {
+                                        if input.ends_with('\n') {
+                                            input.pop();
+                                            if input.ends_with('\r') {
+                                                input.pop();
+                                            }
+                                        }
+                                    }
+                                    Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::String(input))))))
+                                }
+                                Err(e) => {
+                                    Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Err(Value::Error(format!("Failed to read stdin: {}", e)))))))
+                                }
+                            }
+                        }
+                        "cmd" => {
+                            let program = match positional_values.get(0).or_else(|| named_values.get("program")) {
+                                Some(Value::String(s)) => s.clone(),
+                                _ => return Err("cmd requires a String program name".into()),
+                            };
+                            
+                            let mut cmd_args = Vec::new();
+                            // If second arg is an array, use it as args? 
+                            // No, prompt says cmd("grep", "hello", "file.txt"). 
+                            // So positional args 1..N are command args.
+                            for v in positional_values.iter().skip(1) {
+                                cmd_args.push(value_to_string(v));
+                            }
+
+                            let mut cwd = None;
+                            if let Some(Value::String(s)) = named_values.get("cwd") {
+                                cwd = Some(s.clone());
+                            }
+                            let mut check = false;
+                            if let Some(Value::Bool(b)) = named_values.get("check") {
+                                check = *b;
+                            }
+                            
+                            return Ok(ControlFlow::Value(Value::Command(crate::value::CommandValue { 
+                                program, 
+                                args: cmd_args,
+                                cwd,
+                                check,
+                            })));
+                        }
+                        "Ok" => {
+                            let val = positional_values.get(0).or_else(|| named_values.get("value")).ok_or("Missing argument for Ok")?;
+                            return Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(val.clone())))));
+                        }
+                        "Err" => {
+                            let val = positional_values.get(0).or_else(|| named_values.get("error")).ok_or("Missing argument for Err")?;
+                            return Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Err(val.clone())))));
+                        }
+                        "expect" => {
+                            let cond_val = positional_values.get(0).or_else(|| named_values.get("condition")).ok_or("Missing argument 'condition' for expect")?;
+                            let msg_val = positional_values.get(1).or_else(|| named_values.get("message"));
+
+                            if let Value::Bool(b) = cond_val {
+                                if *b {
+                                    return Ok(ControlFlow::Value(Value::Unit));
+                                } else {
+                                    let msg = if let Some(m) = msg_val {
+                                        value_to_string(m)
+                                    } else {
+                                        "expectation failed".to_string()
+                                    };
+                                    return Ok(ControlFlow::Crash(msg));
+                                }
+                            } else {
+                                return Err("expect requires a Bool as first argument".into());
+                            }
+                        }
+                        "dbg" => {
+                            let val = positional_values.get(0).or_else(|| named_values.get("value")).ok_or("Missing argument for dbg")?;
+                            let mut label = "dbg";
+                            if let Some(Value::String(s)) = named_values.get("label") {
+                                label = s;
+                            }
+                            let repr = match val {
+                                Value::String(s) => format!("\"{}\"", s),
+                                v => v.to_string(),
+                            };
+                            println!("{}: {}", label, repr);
+                            return Ok(ControlFlow::Value(val.clone()));
+                        }
+                        _ => {}
                     }
 
+                    // User function
                     let func = self
                         .functions
                         .get(name)
                         .cloned()
                         .ok_or_else(|| format!("Function {} not found", name))?;
                     
-                    self.call_function(&func, args)
+                    let mut final_args = vec![None; func.parameters.len()];
+                    for (i, v) in positional_values.into_iter().enumerate() {
+                        if i < final_args.len() {
+                            final_args[i] = Some(v);
+                        } else {
+                            return Err(format!("Too many arguments for {}", name));
+                        }
+                    }
+                    for (n, v) in named_values {
+                        if let Some(idx) = func.parameters.iter().position(|p| p.name == n) {
+                            if final_args[idx].is_some() {
+                                return Err(format!("Duplicate argument for parameter {}", n));
+                            }
+                            final_args[idx] = Some(v);
+                        } else {
+                            return Err(format!("Unknown named argument {} for function {}", n, name));
+                        }
+                    }
+                    
+                    let mut args = Vec::new();
+                    for (i, opt_v) in final_args.into_iter().enumerate() {
+                        match opt_v {
+                            Some(v) => args.push(v),
+                            None => return Err(format!("Missing argument for parameter {}", func.parameters[i].name)),
+                        }
+                    }
+                    
+                    return self.call_function(&func, args);
                 } else {
                     Err("Only named functions are supported".into())
                 }
@@ -505,7 +665,12 @@ impl Interpreter {
                         "success" => Ok(ControlFlow::Value(Value::Bool(r.success))),
                         _ => Err(format!("Field {} not found on CommandResult", member.field)),
                     },
-                    _ => Err("Member access requires a struct or CommandResult".into()),
+                    Value::Command(c) => match member.field.as_str() {
+                        "program" => Ok(ControlFlow::Value(Value::String(c.program.clone()))),
+                        "args" => Ok(ControlFlow::Value(Value::Array(c.args.iter().map(|s| Value::String(s.clone())).collect()))),
+                        _ => Err(format!("Field {} not found on Command", member.field)),
+                    },
+                    _ => Err("Member access requires a struct, Command, or CommandResult".into()),
                 }
             }
             HirExpression::Index(index) => {
@@ -711,93 +876,129 @@ impl Interpreter {
         Ok(ControlFlow::Value(last_val))
     }
 
-    fn eval_fs_builtin(&mut self, name: &str, args: &[Value]) -> Result<ControlFlow, String> {
+    fn eval_fs_builtin(&mut self, name: &str, positional_args: &[Value], named_args: &HashMap<String, Value>) -> Result<ControlFlow, String> {
+        let get_arg = |idx: usize, arg_name: &str| -> Option<&Value> {
+            positional_args.get(idx).or_else(|| named_args.get(arg_name))
+        };
+
         match name {
             "read" => {
-                if args.len() != 1 {
-                    return Err(format!("'fs.read' expects 1 argument"));
-                }
-                if let Value::String(path) = &args[0] {
+                let path_val = get_arg(0, "path").ok_or_else(|| format!("'fs.read' missing argument 'path'"))?;
+                if let Value::String(path) = path_val {
                     return match std::fs::read_to_string(path) {
                         Ok(text) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::String(text)))))),
                         Err(e) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Err(Value::Error(format!("Failed to read '{}': {}", path, e))))))),
                     }
                 } else {
-                    return Err("'fs.read' requires a String as first argument".into());
+                    return Err("'fs.read' requires a String for 'path'".into());
                 }
             }
-            "write" => {
-                if args.len() != 2 {
-                    return Err(format!("'fs.write' expects 2 arguments"));
-                }
-                if let (Value::String(path), Value::String(text)) = (&args[0], &args[1]) {
-                    return match std::fs::write(path, text) {
-                        Ok(_) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::Unit))))),
-                        Err(e) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Err(Value::Error(format!("Failed to write to '{}': {}", path, e))))))),
+            "write" | "append" => {
+                let path_val = get_arg(0, "path").ok_or_else(|| format!("'fs.{}' missing argument 'path'", name))?;
+                let text_val = get_arg(1, "text").ok_or_else(|| format!("'fs.{}' missing argument 'text'", name))?;
+
+                if let (Value::String(path), Value::String(text)) = (path_val, text_val) {
+                    if name == "write" {
+                        return match std::fs::write(path, text) {
+                            Ok(_) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::Unit))))),
+                            Err(e) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Err(Value::Error(format!("Failed to write to '{}': {}", path, e))))))),
+                        }
+                    } else {
+                        use std::io::Write;
+                        let res = (|| -> Result<(), String> {
+                            let mut file = std::fs::OpenOptions::new()
+                                .create(true)
+                                .append(true)
+                                .open(path)
+                                .map_err(|e| format!("Failed to open '{}' for appending: {}", path, e))?;
+                            file.write_all(text.as_bytes())
+                                .map_err(|e| format!("Failed to append to '{}': {}", path, e))?;
+                            Ok(())
+                        })();
+                        return match res {
+                            Ok(_) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::Unit))))),
+                            Err(msg) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Err(Value::Error(msg)))))),
+                        }
                     }
                 } else {
-                    return Err("'fs.write' requires two String arguments".into());
-                }
-            }
-            "append" => {
-                if args.len() != 2 {
-                    return Err(format!("'fs.append' expects 2 arguments"));
-                }
-                if let (Value::String(path), Value::String(text)) = (&args[0], &args[1]) {
-                    use std::io::Write;
-                    let res = (|| -> Result<(), String> {
-                        let mut file = std::fs::OpenOptions::new()
-                            .create(true)
-                            .append(true)
-                            .open(path)
-                            .map_err(|e| format!("Failed to open '{}' for appending: {}", path, e))?;
-                        file.write_all(text.as_bytes())
-                            .map_err(|e| format!("Failed to append to '{}': {}", path, e))?;
-                        Ok(())
-                    })();
-                    return match res {
-                        Ok(_) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::Unit))))),
-                        Err(msg) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Err(Value::Error(msg)))))),
-                    }
-                } else {
-                    return Err("'fs.append' requires two String arguments".into());
+                    return Err(format!("'fs.{}' requires two String arguments", name));
                 }
             }
             "exists" => {
-                if args.len() != 1 {
-                    return Err(format!("'fs.exists' expects 1 argument"));
-                }
-                if let Value::String(path) = &args[0] {
+                let path_val = get_arg(0, "path").ok_or_else(|| format!("'fs.exists' missing argument 'path'"))?;
+                if let Value::String(path) = path_val {
                     let exists = std::path::Path::new(path).exists();
                     Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::Bool(exists))))))
                 } else {
-                    return Err("'fs.exists' requires a String as first argument".into());
+                    return Err("'fs.exists' requires a String for 'path'".into());
                 }
             }
-            "remove" => {
-                if args.len() != 1 {
-                    return Err(format!("'fs.remove' expects 1 argument"));
-                }
-                if let Value::String(path) = &args[0] {
-                    match std::fs::remove_file(path) {
-                        Ok(_) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::Unit))))),
-                        Err(e) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Err(Value::Error(format!("Failed to remove '{}': {}", path, e))))))),
+            "remove" | "mkdir" | "list_dir" => {
+                let path_val = get_arg(0, "path").ok_or_else(|| format!("'fs.{}' missing argument 'path'", name))?;
+                if let Value::String(path) = path_val {
+                    match name {
+                        "remove" => {
+                            match std::fs::remove_file(path) {
+                                Ok(_) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::Unit))))),
+                                Err(e) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Err(Value::Error(format!("Failed to remove '{}': {}", path, e))))))),
+                            }
+                        }
+                        "mkdir" => {
+                            match std::fs::create_dir(path) {
+                                Ok(_) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::Unit))))),
+                                Err(e) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Err(Value::Error(format!("Failed to create directory '{}': {}", path, e))))))),
+                            }
+                        }
+                        "list_dir" => {
+                            match std::fs::read_dir(path) {
+                                Ok(entries) => {
+                                    let mut names = Vec::new();
+                                    for entry in entries {
+                                        if let Ok(entry) = entry {
+                                            names.push(Value::String(entry.file_name().to_string_lossy().to_string()));
+                                        }
+                                    }
+                                    Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::Array(names))))))
+                                }
+                                Err(e) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Err(Value::Error(format!("Failed to read directory '{}': {}", path, e))))))),
+                            }
+                        }
+                        _ => unreachable!(),
                     }
                 } else {
-                    return Err("'fs.remove' requires a String as first argument".into());
+                    return Err(format!("'fs.{}' requires a String for 'path'", name));
+                }
+            }
+            "rename" | "copy" => {
+                let from_val = get_arg(0, "from").ok_or_else(|| format!("'fs.{}' missing argument 'from'", name))?;
+                let to_val = get_arg(1, "to").ok_or_else(|| format!("'fs.{}' missing argument 'to'", name))?;
+                if let (Value::String(from), Value::String(to)) = (from_val, to_val) {
+                    let res = if name == "rename" {
+                        std::fs::rename(from, to).map(|_| ())
+                    } else {
+                        std::fs::copy(from, to).map(|_| ())
+                    };
+                    match res {
+                        Ok(_) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::Unit))))),
+                        Err(e) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Err(Value::Error(format!("Failed to {} '{}' to '{}': {}", name, from, to, e))))))),
+                    }
+                } else {
+                    return Err(format!("'fs.{}' requires two String arguments", name));
                 }
             }
             _ => Err(format!("Unknown filesystem operation 'fs.{}'", name)),
         }
     }
 
-    fn eval_env_builtin(&mut self, name: &str, args: &[Value]) -> Result<ControlFlow, String> {
+    fn eval_env_builtin(&mut self, name: &str, positional_args: &[Value], named_args: &HashMap<String, Value>) -> Result<ControlFlow, String> {
+        let get_arg = |idx: usize, arg_name: &str| -> Option<&Value> {
+            positional_args.get(idx).or_else(|| named_args.get(arg_name))
+        };
+
         match name {
             "get" => {
-                if args.len() != 1 {
-                    return Err(format!("'env.get' expects 1 argument"));
-                }
-                if let Value::String(key) = &args[0] {
+                let name_val = get_arg(0, "name").ok_or_else(|| format!("'env.get' missing argument 'name'"))?;
+                if let Value::String(key) = name_val {
                     match std::env::var(key) {
                         Ok(val) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::String(val)))))),
                         Err(std::env::VarError::NotPresent) => {
@@ -808,10 +1009,109 @@ impl Interpreter {
                         }
                     }
                 } else {
-                    return Err("'env.get' requires a String as first argument".into());
+                    return Err("'env.get' requires a String for 'name'".into());
                 }
             }
             _ => Err(format!("Unknown environment operation 'env.{}'", name)),
+        }
+    }
+
+    fn eval_os_builtin(&self, name: &str, args: &[Value], named_args: &HashMap<String, Value>) -> Result<ControlFlow, String> {
+        let get_arg = |idx: usize, arg_name: &str| -> Option<&Value> {
+            args.get(idx).or_else(|| named_args.get(arg_name))
+        };
+
+        match name {
+            "args" => {
+                let val_args = self.args.iter().map(|s| Value::String(s.clone())).collect();
+                Ok(ControlFlow::Value(Value::Array(val_args)))
+            }
+            "cwd" => {
+                match std::env::current_dir() {
+                    Ok(path) => {
+                        let path_str = path.to_string_lossy().to_string();
+                        Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::String(path_str))))))
+                    }
+                    Err(e) => {
+                        Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Err(Value::Error(format!("Failed to get cwd: {}", e)))))))
+                    }
+                }
+            }
+            "chdir" => {
+                let path_val = get_arg(0, "path").ok_or("Missing argument 'path' for os.chdir")?;
+                if let Value::String(path_str) = path_val {
+                    match std::env::set_current_dir(path_str) {
+                        Ok(_) => {
+                            Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::Unit)))))
+                        }
+                        Err(e) => {
+                            Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Err(Value::Error(format!("Failed to chdir: {}", e)))))))
+                        }
+                    }
+                } else {
+                    Err("os.chdir requires a String argument".into())
+                }
+            }
+            _ => Err(format!("Unknown OS operation 'os.{}'", name)),
+        }
+    }
+
+
+    fn eval_string_method(&self, s: &str, name: &str, args: &[Value], named_args: &HashMap<String, Value>) -> Result<Value, String> {
+        let get_arg = |idx: usize, arg_name: &str| -> Option<&Value> {
+            args.get(idx).or_else(|| named_args.get(arg_name))
+        };
+
+        match name {
+            "len" => Ok(Value::Int64(s.len() as i64)),
+            "trim" => Ok(Value::String(s.trim().to_string())),
+            "trim_start" => Ok(Value::String(s.trim_start().to_string())),
+            "trim_end" => Ok(Value::String(s.trim_end().to_string())),
+            "to_lower" => Ok(Value::String(s.to_lowercase())),
+            "to_upper" => Ok(Value::String(s.to_uppercase())),
+            "contains" => {
+                let pattern = get_arg(0, "pattern").or_else(|| get_arg(0, "substr")).ok_or("Missing argument for contains")?;
+                if let Value::String(p) = pattern {
+                    Ok(Value::Bool(s.contains(p)))
+                } else {
+                    Err("contains expects String".into())
+                }
+            }
+            "starts_with" => {
+                let prefix = get_arg(0, "prefix").or_else(|| get_arg(0, "pattern")).ok_or("Missing argument for starts_with")?;
+                if let Value::String(p) = prefix {
+                    Ok(Value::Bool(s.starts_with(p)))
+                } else {
+                    Err("starts_with expects String".into())
+                }
+            }
+            "ends_with" => {
+                let suffix = get_arg(0, "suffix").or_else(|| get_arg(0, "pattern")).ok_or("Missing argument for ends_with")?;
+                if let Value::String(p) = suffix {
+                    Ok(Value::Bool(s.ends_with(p)))
+                } else {
+                    Err("ends_with expects String".into())
+                }
+            }
+            "split" => {
+                let sep = get_arg(0, "separator").ok_or("Missing argument 'separator' for split")?;
+                if let Value::String(p) = sep {
+                    let parts = s.split(p).map(|part| Value::String(part.to_string())).collect();
+                    Ok(Value::Array(parts))
+                } else {
+                    Err("split expects String".into())
+                }
+            }
+            "replace" => {
+                let from = get_arg(0, "from").ok_or("Missing argument 'from' for replace")?;
+                let to = get_arg(1, "to").ok_or("Missing argument 'to' for replace")?;
+                if let (Value::String(f), Value::String(t)) = (from, to) {
+                    Ok(Value::String(s.replace(f, t)))
+                } else {
+                    Err("replace expects Strings".into())
+                }
+            }
+            _ => Err(format!("Unknown String method '{}'", name)),
         }
     }
 }

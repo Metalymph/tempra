@@ -30,6 +30,8 @@ pub enum ValueResult {
 pub struct CommandValue {
     pub program: String,
     pub args: Vec<String>,
+    pub cwd: Option<String>,
+    pub check: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -80,7 +82,16 @@ impl std::fmt::Display for Value {
                 }
                 write!(f, " }}")
             }
-            Value::Command(c) => write!(f, "Command(\"{}\", {:?})", c.program, c.args),
+            Value::Command(c) => {
+                write!(f, "Command(\"{}\", args={:?}", c.program, c.args)?;
+                if let Some(cwd) = &c.cwd {
+                    write!(f, ", cwd=\"{}\"", cwd)?;
+                }
+                if c.check {
+                    write!(f, ", check=true")?;
+                }
+                write!(f, ")")
+            }
             Value::CommandResult(r) => write!(f, "CommandResult(exit_code={}, success={})", r.exit_code, r.success),
             Value::Result(res) => match res.as_ref() {
                 ValueResult::Ok(v) => write!(f, "Ok({})", v),

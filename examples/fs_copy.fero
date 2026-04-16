@@ -1,0 +1,7 @@
+fn main() ! {
+    let src = "examples/src.txt"
+    let dst = "examples/dst.txt"
+    fs.write(src, "hello")?
+    fs.copy(src, dst)?
+    print("Copied", src, "to", dst)
+}

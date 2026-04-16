@@ -1,0 +1,10 @@
+fn main() {
+    let line = "  hello,world  "
+    let trimmed = line.trim()
+    let parts = trimmed.split(",")
+    print("trimmed=", trimmed)
+    print("parts=", parts)
+    print("starts=", trimmed.starts_with("hello"))
+    print("ends=", trimmed.ends_with("world"))
+    print("replaced=", trimmed.replace("world", "fero"))
+}

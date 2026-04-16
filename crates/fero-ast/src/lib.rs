@@ -18,6 +18,16 @@ use fero_span::Span;
 use fero_lexer::Token;
 
 // ----------------------------------------------------------------------------
+// Visibility
+// ----------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Visibility {
+    Private,
+    Public,
+}
+
+// ----------------------------------------------------------------------------
 // Root
 // ----------------------------------------------------------------------------
 
@@ -80,6 +90,7 @@ pub enum ImportPathKind {
 #[derive(Debug, Clone)]
 pub struct FunctionItem {
     pub span: Span,
+    pub visibility: Visibility,
     pub name: Token,
     pub parameters: Vec<Parameter>,
     pub return_type: Option<TypeExpr>,
@@ -102,6 +113,7 @@ pub struct Parameter {
 #[derive(Debug, Clone)]
 pub struct StructItem {
     pub span: Span,
+    pub visibility: Visibility,
     pub name: Token,
     pub fields: Vec<StructField>,
 }
@@ -109,6 +121,7 @@ pub struct StructItem {
 #[derive(Debug, Clone)]
 pub struct StructField {
     pub span: Span,
+    pub visibility: Visibility,
     pub name: Token,
     pub ty: TypeExpr,
     pub is_mutable: bool,
@@ -122,6 +135,7 @@ pub struct StructField {
 #[derive(Debug, Clone)]
 pub struct EnumItem {
     pub span: Span,
+    pub visibility: Visibility,
     pub name: Token,
     pub variants: Vec<EnumVariant>,
 }

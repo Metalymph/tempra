@@ -48,6 +48,30 @@ pub struct StructInstance {
     pub fields: HashMap<String, Value>,
 }
 
+impl Value {
+    pub fn to_repr(&self) -> String {
+        match self {
+            Value::String(s) => format!("\"{}\"", s),
+            Value::Array(arr) => {
+                let elems: Vec<String> = arr.iter().map(|v| v.to_repr()).collect();
+                format!("[{}]", elems.join(", "))
+            }
+            Value::Tuple(tup) => {
+                let elems: Vec<String> = tup.iter().map(|v| v.to_repr()).collect();
+                format!("({})", elems.join(", "))
+            }
+            Value::Struct(s) => {
+                let mut fields: Vec<String> = s.fields.iter()
+                    .map(|(k, v)| format!("{}: {}", k, v.to_repr()))
+                    .collect();
+                fields.sort();
+                format!("{} {{ {} }}", s.name, fields.join(", "))
+            }
+            _ => self.to_string(),
+        }
+    }
+}
+
 impl std::fmt::Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -55,12 +79,12 @@ impl std::fmt::Display for Value {
             Value::Bool(b) => write!(f, "{}", b),
             Value::Int64(i) => write!(f, "{}", i),
             Value::Float64(fl) => write!(f, "{}", fl),
-            Value::String(s) => write!(f, "{}", s),
+            Value::String(s) => write!(f, "{}", s), // Direct string output for print
             Value::Array(arr) => {
                 write!(f, "[")?;
                 for (i, val) in arr.iter().enumerate() {
                     if i > 0 { write!(f, ", ")?; }
-                    write!(f, "{}", val)?;
+                    write!(f, "{}", val.to_repr())?;
                 }
                 write!(f, "]")
             }
@@ -68,17 +92,17 @@ impl std::fmt::Display for Value {
                 write!(f, "(")?;
                 for (i, val) in tup.iter().enumerate() {
                     if i > 0 { write!(f, ", ")?; }
-                    write!(f, "{}", val)?;
+                    write!(f, "{}", val.to_repr())?;
                 }
                 write!(f, ")")
             }
             Value::Struct(s) => {
                 write!(f, "{} {{ ", s.name)?;
-                let mut first = true;
-                for (k, v) in &s.fields {
-                    if !first { write!(f, ", ")?; }
-                    write!(f, "{}: {}", k, v)?;
-                    first = false;
+                let mut keys: Vec<&String> = s.fields.keys().collect();
+                keys.sort();
+                for (i, k) in keys.iter().enumerate() {
+                    if i > 0 { write!(f, ", ")?; }
+                    write!(f, "{}: {}", k, s.fields.get(*k).unwrap().to_repr())?;
                 }
                 write!(f, " }}")
             }
@@ -94,8 +118,8 @@ impl std::fmt::Display for Value {
             }
             Value::CommandResult(r) => write!(f, "CommandResult(exit_code={}, success={})", r.exit_code, r.success),
             Value::Result(res) => match res.as_ref() {
-                ValueResult::Ok(v) => write!(f, "Ok({})", v),
-                ValueResult::Err(v) => write!(f, "Err({})", v),
+                ValueResult::Ok(v) => write!(f, "Ok({})", v.to_repr()),
+                ValueResult::Err(v) => write!(f, "Err({})", v.to_repr()),
             },
             Value::Error(msg) => write!(f, "Error(\"{}\")", msg),
         }

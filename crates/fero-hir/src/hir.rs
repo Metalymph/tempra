@@ -5,6 +5,7 @@
 //! to perform type checking and lowering to MIR.
 
 use fero_span::Span;
+use fero_ast::Visibility;
 
 pub struct HirFile {
     pub items: Vec<HirItem>,
@@ -29,6 +30,7 @@ pub struct HirImport {
 #[derive(Debug, Clone)]
 pub struct HirFunction {
     pub span: Span,
+    pub visibility: Visibility,
     pub name: String,
     pub parameters: Vec<HirParameter>,
     pub return_type: Option<HirType>,
@@ -47,6 +49,7 @@ pub struct HirParameter {
 #[derive(Debug, Clone)]
 pub struct HirStruct {
     pub span: Span,
+    pub visibility: Visibility,
     pub name: String,
     pub fields: Vec<HirStructField>,
 }
@@ -54,14 +57,17 @@ pub struct HirStruct {
 #[derive(Debug, Clone)]
 pub struct HirStructField {
     pub span: Span,
+    pub visibility: Visibility,
     pub name: String,
     pub ty: HirType,
     pub is_mutable: bool,
+    pub default_value: Option<HirExpression>,
 }
 
 #[derive(Debug, Clone)]
 pub struct HirEnum {
     pub span: Span,
+    pub visibility: Visibility,
     pub name: String,
     pub variants: Vec<HirEnumVariant>,
 }

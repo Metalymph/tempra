@@ -4,10 +4,12 @@ use fero_hir::*;
 use crate::types::{Type, resolve_named_type};
 use crate::error::TypeError;
 use crate::env::ScopeStack;
+use fero_ast::Visibility;
 
 /// Metadata about a function signature used during type checking.
 #[derive(Debug, Clone)]
 pub struct FunctionSignature {
+    pub visibility: Visibility,
     pub params: Vec<(String, Type)>,
     pub return_type: Type,
     pub is_fallible: bool,
@@ -16,12 +18,23 @@ pub struct FunctionSignature {
 /// Metadata about a struct definition.
 #[derive(Debug, Clone)]
 pub struct StructInfo {
-    pub fields: HashMap<String, Type>,
+    pub visibility: Visibility,
+    pub fields: HashMap<String, StructFieldInfo>,
+    pub field_order: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct StructFieldInfo {
+    pub visibility: Visibility,
+    pub ty: Type,
+    pub is_mutable: bool,
+    pub has_default: bool,
 }
 
 /// Metadata about an enum definition.
 #[derive(Debug, Clone)]
 pub struct EnumInfo {
+    pub visibility: Visibility,
     pub variants: HashMap<String, Vec<Type>>,
 }
 

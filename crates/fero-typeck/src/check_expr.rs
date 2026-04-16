@@ -160,6 +160,22 @@ fn check_binary(ctx: &mut TypeContext, b: &HirBinary) -> Type {
             Type::Bool
         }
         HirBinaryOp::Assign => {
+            if let HirExpression::Member(m) = &*b.left {
+                let obj_ty = check_expression(ctx, &m.object);
+                if let Type::Struct(name) = &obj_ty {
+                    if let Some(info) = ctx.structs.get(name) {
+                        if let Some(field_info) = info.fields.get(&m.field) {
+                            if !field_info.is_mutable {
+                                ctx.error(format!("Cannot assign to immutable field '{}' in struct '{}'", m.field, name), b.span);
+                            }
+                        }
+                    }
+                }
+            } else if !matches!(&*b.left, HirExpression::Name(_, _)) {
+                 // For now only Name and Member are assignable
+                 ctx.error("Invalid assignment target".to_string(), b.span);
+            }
+
             if left != right {
                 let both_int = (left == Type::Int || left == Type::Int64) && (right == Type::Int || right == Type::Int64);
                 if !both_int {
@@ -747,6 +763,8 @@ fn check_call(ctx: &mut TypeContext, c: &HirCall) -> Type {
         }
     };
 
+    // (Future: visibility enforcement here for cross-module)
+
     // Generic Named Argument Matching for user functions
     let mut resolved_args = vec![None; sig.params.len()];
     let mut named_keys = std::collections::HashSet::new();
@@ -817,8 +835,9 @@ fn check_member(ctx: &mut TypeContext, m: &HirMember) -> Type {
     let object_ty = check_expression(ctx, &m.object);
     if let Type::Struct(name) = &object_ty {
         if let Some(info) = ctx.structs.get(name.as_str()) {
-            if let Some(field_ty) = info.fields.get(&m.field) {
-                return field_ty.clone();
+            if let Some(field_info) = info.fields.get(&m.field) {
+                // (Future: visibility enforcement here)
+                return field_info.ty.clone();
             }
             ctx.error(format!("Struct '{}' has no field '{}'", name, m.field), m.span);
             return Type::Error;
@@ -983,10 +1002,16 @@ fn check_struct_literal(ctx: &mut TypeContext, s: &HirStructLiteral) -> Type {
     };
 
     // Check each provided field
+    let mut provided = std::collections::HashSet::new();
     for (field_name, field_expr) in &s.fields {
+        if !provided.insert(field_name.as_str()) {
+            ctx.error(format!("Duplicate field '{}' in struct literal '{}'", field_name, s.name), field_expr.span());
+        }
+
         let actual_ty = check_expression(ctx, field_expr);
         match info.fields.get(field_name.as_str()) {
-            Some(expected_ty) => {
+            Some(field_info) => {
+                let expected_ty = &field_info.ty;
                 if actual_ty != Type::Error && actual_ty != *expected_ty {
                     ctx.error(
                         format!(
@@ -1006,13 +1031,11 @@ fn check_struct_literal(ctx: &mut TypeContext, s: &HirStructLiteral) -> Type {
         }
     }
 
-    // Check that all required fields are present
-    let provided: std::collections::HashSet<&str> =
-        s.fields.iter().map(|(n, _)| n.as_str()).collect();
-    for field_name in info.fields.keys() {
-        if !provided.contains(field_name.as_str()) {
+    // Check that all required fields are present (those without defaults)
+    for (field_name, field_info) in &info.fields {
+        if !field_info.has_default && !provided.contains(field_name.as_str()) {
             ctx.error(
-                format!("Missing field '{}' in struct literal '{}'", field_name, s.name),
+                format!("Missing required field '{}' in struct literal '{}'", field_name, s.name),
                 s.span,
             );
         }

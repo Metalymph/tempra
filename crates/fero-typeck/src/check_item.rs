@@ -1,6 +1,6 @@
 use fero_hir::*;
 use crate::types::Type;
-use crate::context::{TypeContext, FunctionSignature, StructInfo, EnumInfo};
+use crate::context::{TypeContext, FunctionSignature, StructInfo, EnumInfo, StructFieldInfo};
 use crate::check_stmt::check_block;
 use std::collections::HashMap;
 
@@ -80,15 +80,37 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
                 }
                 ctx.functions.insert(
                     f.name.clone(),
-                    FunctionSignature { params, return_type, is_fallible: f.is_fallible },
+                    FunctionSignature { 
+                        visibility: f.visibility,
+                        params, 
+                        return_type, 
+                        is_fallible: f.is_fallible 
+                    },
                 );
             }
             HirItem::Struct(s) => {
                 let mut fields = HashMap::new();
+                let mut field_order = Vec::new();
                 for field in &s.fields {
-                    fields.insert(field.name.clone(), ctx.resolve_hir_type(&field.ty));
+                    fields.insert(
+                        field.name.clone(),
+                        StructFieldInfo {
+                            visibility: field.visibility,
+                            ty: ctx.resolve_hir_type(&field.ty),
+                            is_mutable: field.is_mutable,
+                            has_default: field.default_value.is_some(),
+                        },
+                    );
+                    field_order.push(field.name.clone());
                 }
-                ctx.structs.insert(s.name.clone(), StructInfo { fields });
+                ctx.structs.insert(
+                    s.name.clone(),
+                    StructInfo {
+                        visibility: s.visibility,
+                        fields,
+                        field_order,
+                    },
+                );
             }
             HirItem::Enum(e) => {
                 let mut variants = HashMap::new();
@@ -97,7 +119,13 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
                         v.payload.iter().map(|t| ctx.resolve_hir_type(t)).collect();
                     variants.insert(v.name.clone(), payload);
                 }
-                ctx.enums.insert(e.name.clone(), EnumInfo { variants });
+                ctx.enums.insert(
+                    e.name.clone(),
+                    EnumInfo {
+                        visibility: e.visibility,
+                        variants,
+                    },
+                );
             }
             HirItem::Import(_) | HirItem::Extend(_) => {}
         }

@@ -213,11 +213,32 @@ impl Interpreter {
                         ControlFlow::Value(v) => v,
                         cf => return Ok(cf),
                     };
-                    if let HirExpression::Name(_, name) = &*binary.left {
-                        env.insert(name.clone(), right.clone());
-                        return Ok(ControlFlow::Value(right));
-                    } else {
-                        return Err("Invalid assignment target".into());
+
+                    match &*binary.left {
+                        HirExpression::Name(_, name) => {
+                            env.insert(name.clone(), right.clone());
+                            return Ok(ControlFlow::Value(right));
+                        }
+                        HirExpression::Member(m) => {
+                            // Target: m.object . m.field
+                            // We only support first-level struct member assignment for now
+                            if let HirExpression::Name(_, obj_name) = &*m.object {
+                                let mut obj_val = env.get(obj_name).ok_or_else(|| format!("Variable {} not found", obj_name))?;
+                                if let Value::Struct(ref mut s) = obj_val {
+                                    s.fields.insert(m.field.clone(), right.clone());
+                                    // Re-insert since Value is not trivially mutable through the environment reference
+                                    env.insert(obj_name.clone(), obj_val);
+                                    return Ok(ControlFlow::Value(right));
+                                } else {
+                                    return Err("Member assignment target is not a struct".into());
+                                }
+                            } else {
+                                return Err("Complex member assignment not yet supported".into());
+                            }
+                        }
+                        _ => {
+                            return Err("Invalid assignment target".into());
+                        }
                     }
                 }
 
@@ -597,11 +618,8 @@ impl Interpreter {
                             if let Some(Value::String(s)) = named_values.get("label") {
                                 label = s;
                             }
-                            let repr = match val {
-                                Value::String(s) => format!("\"{}\"", s),
-                                v => v.to_string(),
-                            };
-                            println!("{}: {}", label, repr);
+                            // dbg! style: show quotes for strings, readable structs
+                            println!("{}: {}", label, val.to_repr());
                             return Ok(ControlFlow::Value(val.clone()));
                         }
                         _ => {}
@@ -767,6 +785,22 @@ impl Interpreter {
                         cf => return Ok(cf),
                     }
                 }
+
+                // Fill defaults
+                if let Some(def) = self.structs.get(&s.name).cloned() {
+                    for field in &def.fields {
+                        if !fields.contains_key(&field.name) {
+                            if let Some(default_expr) = &field.default_value {
+                                // Evaluate default expression in the CURRENT environment
+                                match self.eval_expression(default_expr, env)? {
+                                    ControlFlow::Value(v) => { fields.insert(field.name.clone(), v); },
+                                    cf => return Ok(cf),
+                                }
+                            }
+                        }
+                    }
+                }
+
                 Ok(ControlFlow::Value(Value::Struct(StructInstance {
                     name: s.name.clone(),
                     fields,

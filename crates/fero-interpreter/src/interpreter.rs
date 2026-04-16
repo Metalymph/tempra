@@ -11,6 +11,7 @@ pub enum RuntimeSignal {
 
 pub struct Interpreter {
     pub functions: HashMap<String, HirFunction>,
+    pub structs: HashMap<String, HirStruct>,
     pub top_level_statements: Vec<HirStatement>,
     pub args: Vec<String>,
 }
@@ -18,11 +19,13 @@ pub struct Interpreter {
 impl Interpreter {
     pub fn new(file: &HirFile) -> Self {
         let mut functions = HashMap::new();
+        let mut structs = HashMap::new();
         for item in &file.items {
-            crate::eval_item::register_item(&mut functions, item);
+            crate::eval_item::register_item(&mut functions, &mut structs, item);
         }
         Self { 
             functions,
+            structs,
             top_level_statements: file.top_level_statements.clone(),
             args: Vec::new(),
         }

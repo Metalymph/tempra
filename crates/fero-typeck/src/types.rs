@@ -98,6 +98,8 @@ impl Type {
                 | Type::CommandResult
                 | Type::BuiltinError
                 | Type::Result(_, _)
+                | Type::Struct(_)
+                | Type::Enum(_)
         )
     }
 }

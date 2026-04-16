@@ -1,0 +1,9 @@
+struct User {
+    name: String
+    age: Int
+}
+
+let u = User { name: "Lorenzo", age: 29 }
+print(u)
+print(fmt("user=", u))
+dbg(u, label="user")

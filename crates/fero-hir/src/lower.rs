@@ -45,6 +45,7 @@ impl<'src> Lowerer<'src> {
     fn lower_function(&self, item: &ast::FunctionItem) -> HirFunction {
         HirFunction {
             span: item.span,
+            visibility: item.visibility,
             name: self.text(item.name.span),
             parameters: item.parameters.iter().map(|p| self.lower_parameter(p)).collect(),
             return_type: item.return_type.as_ref().map(|t| self.lower_type(t)),
@@ -65,6 +66,7 @@ impl<'src> Lowerer<'src> {
     fn lower_struct(&self, item: &ast::StructItem) -> HirStruct {
         HirStruct {
             span: item.span,
+            visibility: item.visibility,
             name: self.text(item.name.span),
             fields: item.fields.iter().map(|f| self.lower_struct_field(f)).collect(),
         }
@@ -73,15 +75,18 @@ impl<'src> Lowerer<'src> {
     fn lower_struct_field(&self, f: &ast::StructField) -> HirStructField {
         HirStructField {
             span: f.span,
+            visibility: f.visibility,
             name: self.text(f.name.span),
             ty: self.lower_type(&f.ty),
             is_mutable: f.is_mutable,
+            default_value: f.default_value.as_ref().map(|e| self.lower_expression(e)),
         }
     }
 
     fn lower_enum(&self, item: &ast::EnumItem) -> HirEnum {
         HirEnum {
             span: item.span,
+            visibility: item.visibility,
             name: self.text(item.name.span),
             variants: item.variants.iter().map(|v| self.lower_enum_variant(v)).collect(),
         }

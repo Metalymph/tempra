@@ -1,0 +1,10 @@
+struct User {
+    name: String = "anon"
+    age: Int = 0
+}
+
+let u = User {}
+let v = User { name: "Lorenzo" }
+
+print(u)
+print(v)

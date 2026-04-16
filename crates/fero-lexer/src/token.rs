@@ -32,6 +32,7 @@ pub enum TokenKind {
     Inout,
     True,
     False,
+    Pub,
 
     // Delimiters
     LeftParen,      // (
@@ -97,6 +98,7 @@ pub fn keyword_kind(text: &str) -> Option<TokenKind> {
         "inout" => Some(TokenKind::Inout),
         "true" => Some(TokenKind::True),
         "false" => Some(TokenKind::False),
+        "pub" => Some(TokenKind::Pub),
         _ => None,
     }
 }

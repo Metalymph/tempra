@@ -530,3 +530,72 @@ fn test_fs_v0_2_typeck() {
     expect_err(r#"fn main() { fs.rename("a"); }"#);
     expect_err(r#"fn main() { fs.copy("a", 1); }"#);
 }
+#[test]
+fn test_struct_defaults_success() {
+    expect_ok(r#"
+        struct User {
+            name: String = "anon"
+            age: Int = 0
+        }
+        fn main() {
+            let u1 = User {}
+            let u2 = User { name: "me" }
+            let u3 = User { age: 10 }
+            let u4 = User { name: "me", age: 10 }
+        }
+    "#);
+}
+
+#[test]
+fn test_struct_missing_required_field() {
+    expect_err(r#"
+        struct User {
+            name: String
+            age: Int = 0
+        }
+        fn main() {
+            let u = User { age: 10 }
+        }
+    "#);
+}
+
+#[test]
+fn test_struct_field_mutability() {
+    expect_ok(r#"
+        struct User {
+            name: String
+            var age: Int = 0
+        }
+        fn main() {
+            let u = User { name: "me" }
+            u.age = 21
+        }
+    "#);
+    
+    expect_err(r#"
+        struct User {
+            name: String
+            age: Int = 0
+        }
+        fn main() {
+            let u = User { name: "me" }
+            u.name = "you" // immutable
+        }
+    "#);
+}
+
+#[test]
+fn test_struct_visibility_syntax() {
+    // Visibility is mostly for cross-module, but we check syntax works in same module
+    expect_ok(r#"
+        pub struct User {
+            pub name: String
+            age: Int
+        }
+        fn main() {
+            let u = User { name: "me", age: 29 }
+            print(u.name)
+            print(u.age)
+        }
+    "#);
+}

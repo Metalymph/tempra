@@ -651,3 +651,50 @@ fn test_array_slices_oob() {
     }
 }
 
+#[test]
+fn test_struct_defaults_interpreter() {
+    let source = r#"
+    struct User {
+        name: String = "anon"
+        age: Int = 0
+    }
+    fn main() {
+        let u1 = User {}
+        let u2 = User { name: "me" }
+        fmt(u1.name, " ", u1.age, " | ", u2.name, " ", u2.age)
+    }
+    "#;
+    let val = assert_runs(source);
+    assert_eq!(val, Value::String("anon 0 | me 0".to_string()));
+}
+
+#[test]
+fn test_struct_field_mutation() {
+    let source = r#"
+    struct User {
+        name: String
+        var age: Int = 0
+    }
+    fn main() {
+        let u = User { name: "me" }
+        u.age = 29
+        u.age
+    }
+    "#;
+    let val = assert_runs(source);
+    assert_eq!(val, Value::Int64(29));
+}
+
+#[test]
+fn test_struct_formatting() {
+    let source = r#"
+    struct User { name: String, age: Int }
+    fn main() {
+        let u = User { name: "Lorenzo", age: 29 }
+        fmt(u)
+    }
+    "#;
+    let val = assert_runs(source);
+    // Fields should be sorted for consistency
+    assert_eq!(val, Value::String("User { age: 29, name: \"Lorenzo\" }".to_string()));
+}

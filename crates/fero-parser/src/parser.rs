@@ -40,7 +40,7 @@ impl<'src> Parser<'src> {
         let mut top_level_statements = Vec::new();
         
         while !self.at(TokenKind::EndOfFile) {
-            if self.at(TokenKind::Import) || self.at(TokenKind::Fn) || self.at(TokenKind::Struct) || self.at(TokenKind::Enum) || self.at(TokenKind::Extend) {
+            if self.at(TokenKind::Import) || self.at(TokenKind::Fn) || self.at(TokenKind::Struct) || self.at(TokenKind::Enum) || self.at(TokenKind::Extend) || self.at(TokenKind::Pub) {
                 items.push(self.parse_item()?);
             } else {
                 top_level_statements.push(self.parse_statement()?);
@@ -51,15 +51,33 @@ impl<'src> Parser<'src> {
     }
 
     fn parse_item(&mut self) -> Result<Item, ParseError> {
+        let visibility = if self.eat(TokenKind::Pub) {
+            Visibility::Public
+        } else {
+            Visibility::Private
+        };
+
         if self.at(TokenKind::Import) {
+            if visibility == Visibility::Public {
+                return Err(ParseError {
+                    message: "Imports cannot be public".to_string(),
+                    span: self.current().span,
+                });
+            }
             Ok(Item::Import(self.parse_import()?))
         } else if self.at(TokenKind::Fn) {
-            Ok(Item::Function(self.parse_function()?))
+            Ok(Item::Function(self.parse_function(visibility)?))
         } else if self.at(TokenKind::Struct) {
-            Ok(Item::Struct(self.parse_struct()?))
+            Ok(Item::Struct(self.parse_struct(visibility)?))
         } else if self.at(TokenKind::Enum) {
-            Ok(Item::Enum(self.parse_enum()?))
+            Ok(Item::Enum(self.parse_enum(visibility)?))
         } else if self.at(TokenKind::Extend) {
+            if visibility == Visibility::Public {
+                return Err(ParseError {
+                    message: "Extend blocks cannot be public".to_string(),
+                    span: self.current().span,
+                });
+            }
             Ok(Item::Extend(self.parse_extend()?))
         } else {
             let token = self.current();
@@ -117,7 +135,7 @@ impl<'src> Parser<'src> {
         Ok(ImportItem { span: Span::new(token.span.start, end_token.span.end), path })
     }
 
-    fn parse_function(&mut self) -> Result<FunctionItem, ParseError> {
+    fn parse_function(&mut self, visibility: Visibility) -> Result<FunctionItem, ParseError> {
         let start_token = self.expect(TokenKind::Fn)?;
         let name = self.expect_identifier()?;
         
@@ -166,6 +184,7 @@ impl<'src> Parser<'src> {
         
         Ok(FunctionItem {
             span,
+            visibility,
             name,
             parameters,
             return_type,
@@ -174,7 +193,7 @@ impl<'src> Parser<'src> {
         })
     }
 
-    fn parse_struct(&mut self) -> Result<StructItem, ParseError> {
+    fn parse_struct(&mut self, visibility: Visibility) -> Result<StructItem, ParseError> {
         let token = self.expect(TokenKind::Struct)?;
         let name = self.expect_identifier()?;
         self.expect(TokenKind::LeftBrace)?; 
@@ -182,6 +201,11 @@ impl<'src> Parser<'src> {
         let mut fields = Vec::new();
         while !self.at(TokenKind::RightBrace) && !self.at(TokenKind::EndOfFile) {
             let f_start = self.current().span.start;
+            let f_visibility = if self.eat(TokenKind::Pub) {
+                Visibility::Public
+            } else {
+                Visibility::Private
+            };
             let is_mutable = self.eat(TokenKind::Var);
             let f_name = self.expect_identifier()?;
             self.expect(TokenKind::Colon)?;
@@ -199,6 +223,7 @@ impl<'src> Parser<'src> {
 
             fields.push(StructField {
                 span: Span::new(f_start, end_span),
+                visibility: f_visibility,
                 name: f_name,
                 ty: f_ty,
                 is_mutable,
@@ -206,10 +231,10 @@ impl<'src> Parser<'src> {
             });
         }
         let end_token = self.expect(TokenKind::RightBrace)?;
-        Ok(StructItem { span: Span::new(token.span.start, end_token.span.end), name, fields })
+        Ok(StructItem { span: Span::new(token.span.start, end_token.span.end), visibility, name, fields })
     }
 
-    fn parse_enum(&mut self) -> Result<EnumItem, ParseError> {
+    fn parse_enum(&mut self, visibility: Visibility) -> Result<EnumItem, ParseError> {
         let token = self.expect(TokenKind::Enum)?;
         let name = self.expect_identifier()?;
         self.expect(TokenKind::LeftBrace)?;
@@ -238,7 +263,7 @@ impl<'src> Parser<'src> {
             });
         }
         let end_token = self.expect(TokenKind::RightBrace)?;
-        Ok(EnumItem { span: Span::new(token.span.start, end_token.span.end), name, variants })
+        Ok(EnumItem { span: Span::new(token.span.start, end_token.span.end), visibility, name, variants })
     }
 
     fn parse_extend(&mut self) -> Result<ExtendItem, ParseError> {
@@ -248,7 +273,8 @@ impl<'src> Parser<'src> {
         
         let mut methods = Vec::new();
         while !self.at(TokenKind::RightBrace) && !self.at(TokenKind::EndOfFile) {
-            methods.push(self.parse_function()?);
+            let v = if self.eat(TokenKind::Pub) { Visibility::Public } else { Visibility::Private };
+            methods.push(self.parse_function(v)?);
         }
         let end_token = self.expect(TokenKind::RightBrace)?;
         

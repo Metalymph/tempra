@@ -37,6 +37,14 @@ pub fn check_expression(ctx: &mut TypeContext, expr: &HirExpression) -> Type {
 
 fn check_is(ctx: &mut TypeContext, i: &HirIsExpr) -> Type {
     let _ = check_expression(ctx, &i.value);
+    
+    if let HirType::Named(span, name) = &i.ty {
+        if name.starts_with(|c: char| c.is_lowercase()) {
+            ctx.error("Naked binding patterns are not allowed after 'is'", *span);
+            return Type::Error;
+        }
+    }
+    
     let ty = ctx.resolve_hir_type(&i.ty);
     if ty == Type::Unknown {
         ctx.error("Unknown type in 'is' check".to_string(), i.ty.span());

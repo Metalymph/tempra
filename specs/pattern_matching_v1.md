@@ -21,6 +21,14 @@ if value is Some(x) {
 }
 ```
 
+### Forbidden Syntax in `if is`
+After `is`, Fero accepts only:
+- a **type** (`value is String`)
+- an **explicit constructor pattern** (`Some(x)`, `None`, `Ok(v)`, `Err(e)`)
+
+Naked binding patterns like `value is x` are intentionally forbidden to keep syntax clear and prevent confusing lower-cased type names with full wild bindings.
+
+
 ### Supported Patterns
 
 *   **Literals:** Exact value matches.

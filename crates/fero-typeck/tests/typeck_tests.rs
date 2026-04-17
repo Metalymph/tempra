@@ -144,6 +144,34 @@ fn test_is_pattern_isolation() {
 }
 
 #[test]
+fn test_is_pattern_naked_binding_rejected() {
+    expect_err(
+        r#"
+        fn main() {
+            let value = "hello";
+            if value is x {
+                print(x);
+            }
+        }
+    "#,
+    );
+}
+
+#[test]
+fn test_is_pattern_naked_foo_rejected() {
+    expect_err(
+        r#"
+        fn main() {
+            let value = "hello";
+            if value is foo {
+                print("foo");
+            }
+        }
+    "#,
+    );
+}
+
+#[test]
 fn test_is_pattern_negative_leak() {
     expect_err(
         r#"

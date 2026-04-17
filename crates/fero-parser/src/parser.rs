@@ -531,7 +531,7 @@ impl<'src> Parser<'src> {
                         true
                     } else if next.kind == TokenKind::Identifier {
                         let name = &self.source[next.span.start as usize..next.span.end as usize];
-                        name == "Some" || name == "None" || name == "Ok" || name == "Err" || name.starts_with(|c: char| c.is_lowercase())
+                        name == "Some" || name == "None" || name == "Ok" || name == "Err"
                     } else {
                         false
                     }

@@ -1,6 +1,6 @@
 use crate::check_stmt::check_block;
 use crate::context::{EnumInfo, FunctionSignature, StructFieldInfo, StructInfo, TypeContext};
-use crate::types::Type;
+use crate::types::{types_compatible, Type};
 use fero_hir::*;
 use std::collections::HashMap;
 
@@ -21,12 +21,13 @@ fn check_function(ctx: &mut TypeContext, f: &HirFunction) {
         .map(|t| ctx.resolve_hir_type(t))
         .unwrap_or(Type::Unit);
 
-    if f.is_fallible {
+    if f.is_fallible && !matches!(return_type, Type::Result(_, _)) {
         return_type = Type::Result(Box::new(return_type), Box::new(Type::BuiltinError));
     }
 
+    let is_result_return = matches!(return_type, Type::Result(_, _));
     ctx.current_return_type = Some(return_type);
-    ctx.current_is_fallible = f.is_fallible;
+    ctx.current_is_fallible = f.is_fallible || is_result_return;
     ctx.scopes.push_scope();
 
     // Bind parameters
@@ -39,7 +40,7 @@ fn check_function(ctx: &mut TypeContext, f: &HirFunction) {
 
     // Check final expression return type
     if let Some(expected) = &ctx.current_return_type {
-        if body_ty != Type::Error && body_ty != *expected {
+        if body_ty != Type::Error && !types_compatible(expected, &body_ty) {
             // Special case: implicit Ok(()) for fallible Unit functions
             let is_implicit_ok_unit = f.is_fallible
                 && matches!(f.return_type, None | Some(HirType::Named(_, _))) // Simplified check for Unit success
@@ -78,7 +79,7 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
                     .as_ref()
                     .map(|t| ctx.resolve_hir_type(t))
                     .unwrap_or(Type::Unit);
-                if f.is_fallible {
+                if f.is_fallible && !matches!(return_type, Type::Result(_, _)) {
                     return_type = Type::Result(Box::new(return_type), Box::new(Type::BuiltinError));
                 }
                 ctx.functions.insert(

@@ -871,3 +871,123 @@ fn test_regex_invalid_typeck() {
     "#,
     );
 }
+
+#[test]
+fn test_option_optional_return_syntax_typeck() {
+    expect_ok(
+        r#"
+        fn f() -> Int? {
+            Some(1)
+        }
+
+        fn main() {
+            print(f())
+        }
+    "#,
+    );
+}
+
+#[test]
+fn test_option_none_in_context_typeck() {
+    expect_ok(
+        r#"
+        fn f() -> Int? {
+            None
+        }
+
+        fn main() {
+            print(f())
+        }
+    "#,
+    );
+}
+
+#[test]
+fn test_option_some_string_typeck() {
+    expect_ok(
+        r#"
+        fn main() {
+            let x = Some("hello")
+            print(x)
+        }
+    "#,
+    );
+}
+
+#[test]
+fn test_option_invalid_some_return_mismatch_typeck() {
+    expect_err(
+        r#"
+        fn f() -> Int? {
+            Some("x")
+        }
+    "#,
+    );
+}
+
+#[test]
+fn test_option_ambiguous_none_typeck() {
+    expect_err(
+        r#"
+        fn main() {
+            let x = None
+            print(x)
+        }
+    "#,
+    );
+}
+
+#[test]
+fn test_result_default_error_sugar_typeck() {
+    expect_ok(
+        r#"
+        fn load() -> String! {
+            Ok("x")
+        }
+    "#,
+    );
+}
+
+#[test]
+fn test_result_explicit_error_sugar_typeck() {
+    expect_ok(
+        r#"
+        struct IoError {}
+
+        fn load() -> String!IoError {
+            Err(IoError {})
+        }
+    "#,
+    );
+}
+
+#[test]
+fn test_result_unit_fallible_sugar_typeck() {
+    expect_ok(
+        r#"
+        fn main()! {
+            print("ok")
+        }
+    "#,
+    );
+}
+
+#[test]
+fn test_option_result_distinction_typeck() {
+    expect_ok(
+        r#"
+        fn maybe() -> String? {
+            None
+        }
+
+        fn load() -> String! {
+            Ok("x")
+        }
+
+        fn main() {
+            print(maybe())
+            print(load())
+        }
+    "#,
+    );
+}

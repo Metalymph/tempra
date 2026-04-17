@@ -1,10 +1,10 @@
-use std::collections::HashMap;
-use fero_span::Span;
-use fero_hir::*;
-use crate::types::{Type, resolve_named_type};
-use crate::error::TypeError;
 use crate::env::ScopeStack;
+use crate::error::TypeError;
+use crate::types::{resolve_named_type, Type};
 use fero_ast::Visibility;
+use fero_hir::*;
+use fero_span::Span;
+use std::collections::HashMap;
 
 /// Metadata about a function signature used during type checking.
 #[derive(Debug, Clone)]
@@ -90,14 +90,30 @@ impl TypeContext {
             HirType::Generic(_, name, args) => {
                 if name == "Result" {
                     if args.len() != 2 {
-                         // Should ideally be an error, but let's stick to Type::Error for now
-                         return Type::Error;
+                        // Should ideally be an error, but let's stick to Type::Error for now
+                        return Type::Error;
                     }
                     let ok = self.resolve_hir_type(&args[0]);
                     let err = self.resolve_hir_type(&args[1]);
                     return Type::Result(Box::new(ok), Box::new(err));
                 }
+                if name == "Option" {
+                    if args.len() != 1 {
+                        return Type::Error;
+                    }
+                    let inner = self.resolve_hir_type(&args[0]);
+                    return Type::Option(Box::new(inner));
+                }
                 Type::Unknown
+            }
+            HirType::Option(_, inner) => Type::Option(Box::new(self.resolve_hir_type(inner))),
+            HirType::Result(_, ok, err) => {
+                let ok_ty = self.resolve_hir_type(ok);
+                let err_ty = err
+                    .as_ref()
+                    .map(|e| self.resolve_hir_type(e))
+                    .unwrap_or(Type::BuiltinError);
+                Type::Result(Box::new(ok_ty), Box::new(err_ty))
             }
         }
     }

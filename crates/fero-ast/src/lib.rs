@@ -14,8 +14,8 @@
 //! - expression nodes are explicit enough for precedence tests
 //! - future features are intentionally omitted
 
-use fero_span::Span;
 use fero_lexer::Token;
+use fero_span::Span;
 
 // ----------------------------------------------------------------------------
 // Visibility
@@ -168,6 +168,8 @@ pub enum TypeExpr {
     Array(ArrayTypeExpr),
     Tuple(TupleTypeExpr),
     Generic(GenericTypeExpr),
+    Optional(OptionalTypeExpr),
+    Result(ResultTypeExpr),
 }
 
 impl TypeExpr {
@@ -177,6 +179,8 @@ impl TypeExpr {
             TypeExpr::Array(expr) => expr.span,
             TypeExpr::Tuple(expr) => expr.span,
             TypeExpr::Generic(expr) => expr.span,
+            TypeExpr::Optional(expr) => expr.span,
+            TypeExpr::Result(expr) => expr.span,
         }
     }
 }
@@ -205,6 +209,19 @@ pub struct GenericTypeExpr {
     pub span: Span,
     pub base: NamedTypeExpr,
     pub arguments: Vec<TypeExpr>,
+}
+
+#[derive(Debug, Clone)]
+pub struct OptionalTypeExpr {
+    pub span: Span,
+    pub inner: Box<TypeExpr>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResultTypeExpr {
+    pub span: Span,
+    pub ok: Box<TypeExpr>,
+    pub err: Option<Box<TypeExpr>>,
 }
 
 // ----------------------------------------------------------------------------

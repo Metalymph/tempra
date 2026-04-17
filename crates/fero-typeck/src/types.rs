@@ -35,6 +35,7 @@ pub enum Type {
     Command,
     CommandResult,
     Regex,
+    Option(Box<Type>),
 
     /// Used during partial checking when a type is not yet known.
     Unknown,
@@ -108,6 +109,7 @@ impl Type {
                 | Type::Struct(_)
                 | Type::Enum(_)
                 | Type::Regex
+                | Type::Option(_)
         )
     }
 }
@@ -146,6 +148,7 @@ impl fmt::Display for Type {
             Type::Command => write!(f, "Command"),
             Type::CommandResult => write!(f, "CommandResult"),
             Type::Regex => write!(f, "Regex"),
+            Type::Option(inner) => write!(f, "Option[{}]", inner),
             Type::Unknown => write!(f, "?"),
             Type::Error => write!(f, "<error>"),
             Type::BuiltinError => write!(f, "Error"),
@@ -175,5 +178,45 @@ pub fn resolve_named_type(name: &str) -> Type {
         "Regex" => Type::Regex,
         "Error" => Type::BuiltinError,
         _ => Type::Unknown, // caller decides if this is struct/enum
+    }
+}
+
+pub fn types_compatible(expected: &Type, actual: &Type) -> bool {
+    if expected == actual {
+        return true;
+    }
+
+    if *expected == Type::Unknown || *actual == Type::Unknown {
+        return true;
+    }
+
+    let both_int = (*expected == Type::Int || *expected == Type::Int64)
+        && (*actual == Type::Int || *actual == Type::Int64);
+    if both_int {
+        return true;
+    }
+
+    match (expected, actual) {
+        (Type::Option(expected_inner), Type::Option(actual_inner)) => {
+            if **actual_inner == Type::Unknown {
+                true
+            } else {
+                types_compatible(expected_inner, actual_inner)
+            }
+        }
+        (Type::Result(expected_ok, expected_err), Type::Result(actual_ok, actual_err)) => {
+            let ok_ok = if **actual_ok == Type::Unknown {
+                true
+            } else {
+                types_compatible(expected_ok, actual_ok)
+            };
+            let err_ok = if **actual_err == Type::Unknown {
+                true
+            } else {
+                types_compatible(expected_err, actual_err)
+            };
+            ok_ok && err_ok
+        }
+        _ => false,
     }
 }

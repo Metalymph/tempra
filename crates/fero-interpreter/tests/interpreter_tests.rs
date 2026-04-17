@@ -1,5 +1,5 @@
 use fero_hir::lower_file;
-use fero_interpreter::{run, run_with_args, value::Value, value::ValueResult};
+use fero_interpreter::{run, run_with_args, value::OptionValue, value::Value, value::ValueResult};
 
 use fero_parser::parse_source;
 
@@ -970,6 +970,32 @@ fn test_regex_start_end() {
 }
 
 #[test]
+fn test_regex_start_anchor() {
+    let source = r#"
+    fn main() {
+        let re = Regex.seq(Regex.start(), Regex.text("abc"))
+        expect(re.is_match("abc"))
+        expect(!re.is_match("zabc"))
+        true
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::Bool(true));
+}
+
+#[test]
+fn test_regex_end_anchor() {
+    let source = r#"
+    fn main() {
+        let re = Regex.seq(Regex.text("abc"), Regex.end())
+        expect(re.is_match("abc"))
+        expect(!re.is_match("abcz"))
+        true
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::Bool(true));
+}
+
+#[test]
 fn test_regex_digit_word_space() {
     let source = r#"
     fn main() {
@@ -990,10 +1016,43 @@ fn test_regex_replace() {
     let source = r#"
     fn main() {
         let re = Regex.text("abc")
+        expect(re.replace("abc abc", "X") == "X X")
         re.replace("abc xyz abc", "X")
     }
     "#;
     assert_eq!(assert_runs(source), Value::String("X xyz X".to_string()));
+}
+
+#[test]
+fn test_regex_zero_width_optional_replace_terminates() {
+    let source = r#"
+    fn main() {
+        let re = Regex.optional(Regex.text("x"))
+        re.replace("abc", "_")
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::String("_a_b_c_".to_string()));
+}
+
+#[test]
+fn test_regex_zero_width_zero_or_more_replace_terminates() {
+    let source = r#"
+    fn main() {
+        let re = Regex.zero_or_more(Regex.text("a"))
+        re.replace("bbb", "_")
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::String("_b_b_b_".to_string()));
+}
+
+#[test]
+fn test_regex_zero_width_end_anchor_replace() {
+    let source = r#"
+    fn main() {
+        Regex.end().replace("abc", "_")
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::String("abc_".to_string()));
 }
 
 #[test]
@@ -1003,8 +1062,68 @@ fn test_regex_unicode_scalar_sanity() {
         let re = Regex.text("é")
         expect(re.is_match("héllo"))
         expect(!re.is_match("hello"))
+        expect(re.replace("héhé", "X") == "hXhX")
         true
     }
     "#;
     assert_eq!(assert_runs(source), Value::Bool(true));
+}
+
+#[test]
+fn test_option_some_formatting() {
+    let source = r#"
+    fn main() {
+        let x = Some(1)
+        print(x)
+        x
+    }
+    "#;
+    assert_eq!(
+        assert_runs(source),
+        Value::Option(OptionValue::Some(Box::new(Value::Int64(1))))
+    );
+}
+
+#[test]
+fn test_option_none_formatting() {
+    let source = r#"
+    fn main() {
+        print(None)
+        None
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::Option(OptionValue::None));
+}
+
+#[test]
+fn test_option_function_return_some() {
+    let source = r#"
+    fn f() -> Int? {
+        Some(1)
+    }
+
+    fn main() {
+        print(f())
+        f()
+    }
+    "#;
+    assert_eq!(
+        assert_runs(source),
+        Value::Option(OptionValue::Some(Box::new(Value::Int64(1))))
+    );
+}
+
+#[test]
+fn test_option_function_return_none() {
+    let source = r#"
+    fn f() -> Int? {
+        None
+    }
+
+    fn main() {
+        print(f())
+        f()
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::Option(OptionValue::None));
 }

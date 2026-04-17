@@ -1,6 +1,6 @@
 use crate::check_expr::check_expression;
 use crate::context::TypeContext;
-use crate::types::Type;
+use crate::types::{types_compatible, Type};
 use fero_hir::*;
 
 /// Check a block and return the type of its last expression (or Unit).
@@ -19,11 +19,25 @@ pub fn check_statement(ctx: &mut TypeContext, stmt: &HirStatement) -> Type {
     match stmt {
         HirStatement::Let(l) => {
             let value_ty = check_expression(ctx, &l.value);
+            if matches!(&l.value, HirExpression::Name(_, n) if n == "None") {
+                ctx.error(
+                    "Ambiguous 'None' without Option context; use it where an Option[T] is expected"
+                        .to_string(),
+                    l.value.span(),
+                );
+            }
             ctx.scopes.insert(l.name.clone(), value_ty);
             Type::Unit
         }
         HirStatement::Var(v) => {
             let value_ty = check_expression(ctx, &v.value);
+            if matches!(&v.value, HirExpression::Name(_, n) if n == "None") {
+                ctx.error(
+                    "Ambiguous 'None' without Option context; use it where an Option[T] is expected"
+                        .to_string(),
+                    v.value.span(),
+                );
+            }
             ctx.scopes.insert(v.name.clone(), value_ty);
             Type::Unit
         }
@@ -33,7 +47,7 @@ pub fn check_statement(ctx: &mut TypeContext, stmt: &HirStatement) -> Type {
                 None => Type::Unit,
             };
             if let Some(expected) = &ctx.current_return_type {
-                if actual != Type::Error && actual != *expected {
+                if actual != Type::Error && !types_compatible(expected, &actual) {
                     let span = match value {
                         Some(expr) => expr.span(),
                         None => fero_span::Span::new(0, 0), // Use meaningful span if possible

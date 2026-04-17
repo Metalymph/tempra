@@ -1,8 +1,8 @@
 //! Logic for lowering Fero AST into HIR.
 
+use crate::hir::*;
 use fero_ast as ast;
 use fero_lexer::{Token, TokenKind};
-use crate::hir::*;
 
 /// State for the lowering pass.
 pub struct Lowerer<'src> {
@@ -16,8 +16,16 @@ impl<'src> Lowerer<'src> {
 
     pub fn lower_file(&self, file: &ast::File) -> HirFile {
         HirFile {
-            items: file.items.iter().map(|item| self.lower_item(item)).collect(),
-            top_level_statements: file.top_level_statements.iter().map(|stmt| self.lower_statement(stmt)).collect(),
+            items: file
+                .items
+                .iter()
+                .map(|item| self.lower_item(item))
+                .collect(),
+            top_level_statements: file
+                .top_level_statements
+                .iter()
+                .map(|stmt| self.lower_statement(stmt))
+                .collect(),
         }
     }
 
@@ -38,7 +46,12 @@ impl<'src> Lowerer<'src> {
     fn lower_import(&self, item: &ast::ImportItem) -> HirImport {
         HirImport {
             span: item.span,
-            path: item.path.segments.iter().map(|t| self.text(t.span)).collect(),
+            path: item
+                .path
+                .segments
+                .iter()
+                .map(|t| self.text(t.span))
+                .collect(),
         }
     }
 
@@ -47,7 +60,11 @@ impl<'src> Lowerer<'src> {
             span: item.span,
             visibility: item.visibility,
             name: self.text(item.name.span),
-            parameters: item.parameters.iter().map(|p| self.lower_parameter(p)).collect(),
+            parameters: item
+                .parameters
+                .iter()
+                .map(|p| self.lower_parameter(p))
+                .collect(),
             return_type: item.return_type.as_ref().map(|t| self.lower_type(t)),
             is_fallible: item.is_fallible,
             body: self.lower_block(&item.body),
@@ -68,7 +85,11 @@ impl<'src> Lowerer<'src> {
             span: item.span,
             visibility: item.visibility,
             name: self.text(item.name.span),
-            fields: item.fields.iter().map(|f| self.lower_struct_field(f)).collect(),
+            fields: item
+                .fields
+                .iter()
+                .map(|f| self.lower_struct_field(f))
+                .collect(),
         }
     }
 
@@ -88,7 +109,11 @@ impl<'src> Lowerer<'src> {
             span: item.span,
             visibility: item.visibility,
             name: self.text(item.name.span),
-            variants: item.variants.iter().map(|v| self.lower_enum_variant(v)).collect(),
+            variants: item
+                .variants
+                .iter()
+                .map(|v| self.lower_enum_variant(v))
+                .collect(),
         }
     }
 
@@ -104,19 +129,36 @@ impl<'src> Lowerer<'src> {
         HirExtend {
             span: item.span,
             target: self.lower_type(&item.target),
-            methods: item.methods.iter().map(|m| self.lower_function(m)).collect(),
+            methods: item
+                .methods
+                .iter()
+                .map(|m| self.lower_function(m))
+                .collect(),
         }
     }
 
     fn lower_type(&self, ty: &ast::TypeExpr) -> HirType {
         match ty {
             ast::TypeExpr::Named(t) => HirType::Named(t.span, self.text(t.name.span)),
-            ast::TypeExpr::Array(t) => HirType::Array(t.span, Box::new(self.lower_type(&t.element_type))),
-            ast::TypeExpr::Tuple(t) => HirType::Tuple(t.span, t.elements.iter().map(|e| self.lower_type(e)).collect()),
+            ast::TypeExpr::Array(t) => {
+                HirType::Array(t.span, Box::new(self.lower_type(&t.element_type)))
+            }
+            ast::TypeExpr::Tuple(t) => HirType::Tuple(
+                t.span,
+                t.elements.iter().map(|e| self.lower_type(e)).collect(),
+            ),
             ast::TypeExpr::Generic(t) => HirType::Generic(
                 t.span,
                 self.text(t.base.name.span),
                 t.arguments.iter().map(|a| self.lower_type(a)).collect(),
+            ),
+            ast::TypeExpr::Optional(t) => {
+                HirType::Option(t.span, Box::new(self.lower_type(&t.inner)))
+            }
+            ast::TypeExpr::Result(t) => HirType::Result(
+                t.span,
+                Box::new(self.lower_type(&t.ok)),
+                t.err.as_ref().map(|e| Box::new(self.lower_type(e))),
             ),
         }
     }
@@ -124,7 +166,11 @@ impl<'src> Lowerer<'src> {
     fn lower_block(&self, block: &ast::Block) -> HirBlock {
         HirBlock {
             span: block.span,
-            statements: block.statements.iter().map(|s| self.lower_statement(s)).collect(),
+            statements: block
+                .statements
+                .iter()
+                .map(|s| self.lower_statement(s))
+                .collect(),
         }
     }
 
@@ -140,7 +186,9 @@ impl<'src> Lowerer<'src> {
                 name: self.text(s.name.span),
                 value: self.lower_expression(&s.initializer),
             }),
-            ast::Statement::Return(s) => HirStatement::Return(s.value.as_ref().map(|e| self.lower_expression(e))),
+            ast::Statement::Return(s) => {
+                HirStatement::Return(s.value.as_ref().map(|e| self.lower_expression(e)))
+            }
             ast::Statement::Break(s) => HirStatement::Break(s.span),
             ast::Statement::Continue(s) => HirStatement::Continue(s.span),
             ast::Statement::For(s) => HirStatement::For(HirFor {
@@ -150,7 +198,9 @@ impl<'src> Lowerer<'src> {
                 filter: s.filter.as_ref().map(|e| self.lower_expression(e)),
                 body: self.lower_block(&s.body),
             }),
-            ast::Statement::Expression(s) => HirStatement::Expr(self.lower_expression(&s.expression)),
+            ast::Statement::Expression(s) => {
+                HirStatement::Expr(self.lower_expression(&s.expression))
+            }
         }
     }
 
@@ -160,7 +210,9 @@ impl<'src> Lowerer<'src> {
             ast::Expression::Integer(e) => HirExpression::Integer(e.span, self.text(e.token.span)),
             ast::Expression::Float(e) => HirExpression::Float(e.span, self.text(e.token.span)),
             ast::Expression::String(e) => HirExpression::String(e.span, self.text(e.token.span)),
-            ast::Expression::Bool(e) => HirExpression::Bool(e.span, self.text(e.token.span) == "true"),
+            ast::Expression::Bool(e) => {
+                HirExpression::Bool(e.span, self.text(e.token.span) == "true")
+            }
             ast::Expression::Unary(e) => HirExpression::Unary(HirUnary {
                 span: e.span,
                 op: match e.operator.kind {
@@ -187,13 +239,19 @@ impl<'src> Lowerer<'src> {
             ast::Expression::Call(e) => HirExpression::Call(HirCall {
                 span: e.span,
                 callee: Box::new(self.lower_expression(&e.callee)),
-                args: e.arguments.iter().map(|a| match a {
-                    ast::CallArgument::Positional(p) => HirCallArgument::Positional(self.lower_expression(&p.value)),
-                    ast::CallArgument::Named(n) => HirCallArgument::Named(HirNamedArgument {
-                        name: self.text(n.name.span),
-                        value: self.lower_expression(&n.value),
-                    }),
-                }).collect(),
+                args: e
+                    .arguments
+                    .iter()
+                    .map(|a| match a {
+                        ast::CallArgument::Positional(p) => {
+                            HirCallArgument::Positional(self.lower_expression(&p.value))
+                        }
+                        ast::CallArgument::Named(n) => HirCallArgument::Named(HirNamedArgument {
+                            name: self.text(n.name.span),
+                            value: self.lower_expression(&n.value),
+                        }),
+                    })
+                    .collect(),
             }),
             ast::Expression::Member(e) => HirExpression::Member(HirMember {
                 span: e.span,
@@ -216,7 +274,10 @@ impl<'src> Lowerer<'src> {
                 span: e.span,
                 condition: Box::new(self.lower_expression(&e.condition)),
                 then_block: self.lower_block(&e.then_block),
-                else_branch: e.else_branch.as_ref().map(|e| Box::new(self.lower_expression(e))),
+                else_branch: e
+                    .else_branch
+                    .as_ref()
+                    .map(|e| Box::new(self.lower_expression(e))),
             }),
             ast::Expression::Match(e) => HirExpression::Match(HirMatch {
                 span: e.span,
@@ -227,19 +288,38 @@ impl<'src> Lowerer<'src> {
                 span: e.span,
                 binding: self.text(e.binding.span),
                 iterable: Box::new(self.lower_expression(&e.iterable)),
-                filter: e.filter.as_ref().map(|f| Box::new(self.lower_expression(f))),
+                filter: e
+                    .filter
+                    .as_ref()
+                    .map(|f| Box::new(self.lower_expression(f))),
                 body: self.lower_block(&e.body),
             }),
-            ast::Expression::Tuple(e) => HirExpression::Tuple(e.span, e.elements.iter().map(|el| self.lower_expression(el)).collect()),
-            ast::Expression::Array(e) => HirExpression::Array(e.span, e.elements.iter().map(|el| self.lower_expression(el)).collect()),
+            ast::Expression::Tuple(e) => HirExpression::Tuple(
+                e.span,
+                e.elements
+                    .iter()
+                    .map(|el| self.lower_expression(el))
+                    .collect(),
+            ),
+            ast::Expression::Array(e) => HirExpression::Array(
+                e.span,
+                e.elements
+                    .iter()
+                    .map(|el| self.lower_expression(el))
+                    .collect(),
+            ),
             ast::Expression::StructLiteral(e) => HirExpression::StructLiteral(HirStructLiteral {
                 span: e.span,
                 name: self.text(e.name.span),
-                fields: e.fields.iter().map(|f| (self.text(f.name.span), self.lower_expression(&f.value))).collect(),
+                fields: e
+                    .fields
+                    .iter()
+                    .map(|f| (self.text(f.name.span), self.lower_expression(&f.value)))
+                    .collect(),
             }),
             ast::Expression::Command(e) => {
-                 // Placeholder for command expressions
-                 HirExpression::Name(e.span, "COMMAND_NOT_IMPLEMENTED".to_string())
+                // Placeholder for command expressions
+                HirExpression::Name(e.span, "COMMAND_NOT_IMPLEMENTED".to_string())
             }
         }
     }
@@ -256,11 +336,13 @@ impl<'src> Lowerer<'src> {
         match pat {
             ast::Pattern::Wildcard(p) => HirPattern::Wildcard(p.span),
             ast::Pattern::Identifier(p) => HirPattern::Identifier(p.span, self.text(p.name.span)),
-            ast::Pattern::Literal(p) => HirPattern::Literal(p.span, self.lower_expression_from_token(p.token)),
+            ast::Pattern::Literal(p) => {
+                HirPattern::Literal(p.span, self.lower_expression_from_token(p.token))
+            }
             ast::Pattern::EnumCase(p) => HirPattern::EnumCase(
                 p.span,
                 self.text(p.name.span),
-                p.arguments.iter().map(|a| self.lower_pattern(a)).collect()
+                p.arguments.iter().map(|a| self.lower_pattern(a)).collect(),
             ),
         }
     }

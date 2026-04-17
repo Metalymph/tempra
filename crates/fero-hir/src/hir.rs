@@ -4,8 +4,8 @@
 //! stripped of syntax-only details and tokens, making it easier
 //! to perform type checking and lowering to MIR.
 
-use fero_span::Span;
 use fero_ast::Visibility;
+use fero_span::Span;
 
 pub struct HirFile {
     pub items: Vec<HirItem>,
@@ -138,7 +138,6 @@ pub enum HirExpression {
     Index(HirIndex),
     Slice(HirSlice),
 
-
     Block(HirBlock),
     If(HirIf),
     Match(HirMatch),
@@ -211,9 +210,18 @@ pub struct HirUnwrapExpr {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HirBinaryOp {
-    Add, Sub, Mul, Div,
-    Eq, NotEq, Less, Greater,
-    And, Or, Pipe, ShiftRight,
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Eq,
+    NotEq,
+    Less,
+    Greater,
+    And,
+    Or,
+    Pipe,
+    ShiftRight,
     Assign,
 }
 
@@ -302,6 +310,8 @@ pub enum HirType {
     Array(Span, Box<HirType>),
     Tuple(Span, Vec<HirType>),
     Generic(Span, String, Vec<HirType>),
+    Option(Span, Box<HirType>),
+    Result(Span, Box<HirType>, Option<Box<HirType>>),
 }
 
 impl HirType {
@@ -311,6 +321,8 @@ impl HirType {
             HirType::Array(span, _) => *span,
             HirType::Tuple(span, _) => *span,
             HirType::Generic(span, _, _) => *span,
+            HirType::Option(span, _) => *span,
+            HirType::Result(span, _, _) => *span,
         }
     }
 }

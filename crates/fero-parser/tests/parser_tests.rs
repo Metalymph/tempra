@@ -2,7 +2,7 @@ use fero_parser::parse_source;
 
 fn assert_valid_parse(source: &str) {
     match parse_source(source) {
-        Ok(_) => {},
+        Ok(_) => {}
         Err(e) => panic!("Failed to parse: {}\nError: {:?}", source, e),
     }
 }
@@ -16,16 +16,19 @@ fn test_basic_statements() {
 
 #[test]
 fn test_functions() {
-    assert_valid_parse(r#"
+    assert_valid_parse(
+        r#"
         fn add(a: UInt64, b: UInt64) -> UInt64 {
             a + b
         }
-    "#);
+    "#,
+    );
 }
 
 #[test]
 fn test_if_expressions() {
-    assert_valid_parse(r#"
+    assert_valid_parse(
+        r#"
         fn foo() {
             if ok {
                 a
@@ -33,12 +36,14 @@ fn test_if_expressions() {
                 b
             }
         }
-    "#);
+    "#,
+    );
 }
 
 #[test]
 fn test_for() {
-    assert_valid_parse(r#"
+    assert_valid_parse(
+        r#"
         fn foo() {
             for x in xs {
                 x
@@ -47,7 +52,8 @@ fn test_for() {
                 x
             }
         }
-    "#);
+    "#,
+    );
 }
 
 #[test]
@@ -68,7 +74,7 @@ fn test_calls() {
 fn assert_invalid_parse(source: &str) {
     match parse_source(source) {
         Ok(_) => panic!("Expected parse failure: {}", source),
-        Err(_) => {},
+        Err(_) => {}
     }
 }
 
@@ -90,26 +96,30 @@ fn test_arrays_tuples() {
 
 #[test]
 fn test_struct_literal() {
-    assert_valid_parse(r#"
+    assert_valid_parse(
+        r#"
         fn foo() {
             User {
                 name: "Lorenzo",
                 bank_value: 50000
             };
         }
-    "#);
+    "#,
+    );
 }
 
 #[test]
 fn test_match() {
-    assert_valid_parse(r#"
+    assert_valid_parse(
+        r#"
         fn foo() {
             match x {
                 Ok(v) => v,
                 Err(e) => e
             }
         }
-    "#);
+    "#,
+    );
 }
 
 #[test]
@@ -121,7 +131,8 @@ fn test_imports() {
 
 #[test]
 fn test_items() {
-    assert_valid_parse(r#"
+    assert_valid_parse(
+        r#"
         enum Result {
             Ok(String)
             Err(String)
@@ -137,5 +148,41 @@ fn test_items() {
                 self.bank_value > 100000
             }
         }
-    "#);
+    "#,
+    );
+}
+
+#[test]
+fn test_option_type_sugar_parse() {
+    assert_valid_parse(
+        r#"
+        fn f() -> Int? {
+            Some(1)
+        }
+    "#,
+    );
+
+    assert_valid_parse(
+        r#"
+        struct User {
+            nickname: String?
+        }
+    "#,
+    );
+
+    assert_valid_parse(
+        r#"
+        fn load() -> String! {
+            Ok("x")
+        }
+    "#,
+    );
+
+    assert_valid_parse(
+        r#"
+        fn load() -> String!IoError {
+            Err(IoError {})
+        }
+    "#,
+    );
 }

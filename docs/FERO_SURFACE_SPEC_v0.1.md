@@ -293,6 +293,64 @@ Rules:
 - **string slicing `s[a..b]` is intentionally unsupported**
 - no implicit byte-to-string conversions
 
+### Option (v0)
+
+Fero supports an explicit optional model:
+
+- semantic type: `Option[T]`
+- surface sugar in type position: `T?` (equivalent to `Option[T]`)
+- constructors in expression position:
+  - `Some(value)`
+  - `None`
+
+Examples:
+
+```fero
+fn first(xs: [Int]) -> Int? {
+    None
+}
+
+let x = Some(1)
+```
+
+Rules:
+
+- `T?` is type-position sugar only
+- `Some(value)` constructs `Option[T]` from `value: T`
+- `None` is the empty option value
+- this step does not add `if let`, `guard`, or Option helper methods
+- `expr?` propagation syntax is unchanged and is not extended to Option in v0
+
+### Result Sugar (v0)
+
+Fero supports concise type-position sugar for `Result`:
+
+- `T!E` is sugar for `Result[T, E]`
+- `T!` is sugar for `Result[T, Error]`
+
+Examples:
+
+```fero
+fn load() -> String! {
+    Ok("x")
+}
+
+fn load2() -> String!IoError {
+    Err(IoError {})
+}
+
+fn main()! {
+    print("ok")
+}
+```
+
+Meaning family (disambiguated by position):
+
+- `T?` in type position: `Option[T]`
+- `T!E` / `T!` in type position: `Result[...]`
+- `expr?` in expression position: Result propagation
+- `expr!` in expression position: unwrap/crash behavior
+
 ### Regex (v0)
 
 `Regex` is a first-class value type built using composable constructors, not a text mini-language as primary API.
@@ -316,6 +374,18 @@ Supported methods:
 
 - `re.is_match(text: String) -> Bool`
 - `re.replace(text: String, with: String) -> String` (global replacement, no captures)
+
+Runtime semantics (v0):
+
+- matching and scanning are over Unicode scalar values (not raw bytes)
+- `is_match` is true if any match exists somewhere in input, unless constrained by anchors
+- `replace` is global, literal replacement only, and scans left-to-right
+- after a non-empty match, scanning continues from match end
+- after a zero-width match during scanning/replacement, engine advances by at least 1 Unicode scalar value
+- zero-width at end-of-text is handled once and terminates (no infinite loops)
+- `Regex.start()` matches only at absolute start of full input
+- `Regex.end()` matches only at absolute end of full input
+- no multiline anchor semantics in v0
 
 Explicitly not part of v0:
 

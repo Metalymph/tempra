@@ -20,6 +20,7 @@ pub enum Value {
     CommandResult(CommandResultValue),
 
     Result(Box<ValueResult>),
+    Option(OptionValue),
     Error(String),
     Regex(RegexValue),
 }
@@ -28,6 +29,12 @@ pub enum Value {
 pub enum ValueResult {
     Ok(Value),
     Err(Value),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum OptionValue {
+    Some(Box<Value>),
+    None,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -97,7 +104,7 @@ impl RegexValue {
     pub fn is_match(&self, text: &str) -> bool {
         let chars: Vec<char> = text.chars().collect();
         for pos in 0..=chars.len() {
-            if Self::match_here(self, &chars, pos).is_some() {
+            if self.match_at(&chars, pos).is_some() {
                 return true;
             }
         }
@@ -107,20 +114,49 @@ impl RegexValue {
     pub fn replace_all(&self, text: &str, replacement: &str) -> String {
         let chars: Vec<char> = text.chars().collect();
         let mut result = String::new();
-        let mut pos = 0;
-        while pos < chars.len() {
-            match Self::match_here(self, &chars, pos) {
-                Some(end) if end > pos => {
+        let mut scan_pos = 0usize;
+        let mut emit_pos = 0usize;
+
+        while scan_pos <= chars.len() {
+            match self.match_at(&chars, scan_pos) {
+                Some(end) if end > scan_pos => {
+                    for ch in &chars[emit_pos..scan_pos] {
+                        result.push(*ch);
+                    }
                     result.push_str(replacement);
-                    pos = end;
+                    emit_pos = end;
+                    scan_pos = end;
                 }
-                _ => {
-                    result.push(chars[pos]);
-                    pos += 1;
+                Some(_end) => {
+                    // Zero-width match rule:
+                    // emit one replacement at this position, then advance by at least one scalar.
+                    for ch in &chars[emit_pos..scan_pos] {
+                        result.push(*ch);
+                    }
+                    result.push_str(replacement);
+                    if scan_pos < chars.len() {
+                        result.push(chars[scan_pos]);
+                        emit_pos = scan_pos + 1;
+                        scan_pos += 1;
+                    } else {
+                        emit_pos = scan_pos;
+                        scan_pos += 1;
+                    }
+                }
+                None => {
+                    scan_pos += 1;
                 }
             }
         }
+
+        for ch in &chars[emit_pos..] {
+            result.push(*ch);
+        }
         result
+    }
+
+    fn match_at(&self, chars: &[char], pos: usize) -> Option<usize> {
+        Self::match_here(self, chars, pos)
     }
 
     fn match_here(re: &RegexValue, chars: &[char], pos: usize) -> Option<usize> {
@@ -368,6 +404,10 @@ impl std::fmt::Display for Value {
             },
             Value::Error(msg) => write!(f, "Error(\"{}\")", msg),
             Value::Regex(re) => write!(f, "{}", re),
+            Value::Option(opt) => match opt {
+                OptionValue::Some(v) => write!(f, "Some({})", v.to_repr()),
+                OptionValue::None => write!(f, "None"),
+            },
         }
     }
 }

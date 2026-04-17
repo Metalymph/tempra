@@ -1,7 +1,7 @@
 use crate::control_flow::ControlFlow;
 use crate::env::RuntimeEnv;
 use crate::interpreter::Interpreter;
-use crate::value::{RegexValue, StructInstance, Value};
+use crate::value::{OptionValue, RegexValue, StructInstance, Value};
 use fero_hir::*;
 use std::collections::HashMap;
 
@@ -105,10 +105,15 @@ impl Interpreter {
                 Ok(ControlFlow::Value(Value::String(unquoted)))
             }
             HirExpression::Bool(_, b) => Ok(ControlFlow::Value(Value::Bool(*b))),
-            HirExpression::Name(_, name) => env
-                .get(name)
-                .map(ControlFlow::Value)
-                .ok_or_else(|| format!("Variable {} not found", name)),
+            HirExpression::Name(_, name) => {
+                if name == "None" {
+                    Ok(ControlFlow::Value(Value::Option(OptionValue::None)))
+                } else {
+                    env.get(name)
+                        .map(ControlFlow::Value)
+                        .ok_or_else(|| format!("Variable {} not found", name))
+                }
+            }
             HirExpression::Unary(unary) => {
                 let val = match self.eval_expression(&unary.expr, env)? {
                     ControlFlow::Value(v) => v,
@@ -344,6 +349,9 @@ impl Interpreter {
                         (Value::String(a), Value::String(b)) => {
                             Ok(ControlFlow::Value(Value::Bool(a == b)))
                         }
+                        (Value::Option(a), Value::Option(b)) => {
+                            Ok(ControlFlow::Value(Value::Bool(a == b)))
+                        }
                         _ => Ok(ControlFlow::Value(Value::Bool(false))),
                     },
                     HirBinaryOp::NotEq => match (left, right) {
@@ -360,6 +368,9 @@ impl Interpreter {
                             Ok(ControlFlow::Value(Value::Bool(a != b)))
                         }
                         (Value::String(a), Value::String(b)) => {
+                            Ok(ControlFlow::Value(Value::Bool(a != b)))
+                        }
+                        (Value::Option(a), Value::Option(b)) => {
                             Ok(ControlFlow::Value(Value::Bool(a != b)))
                         }
                         _ => Ok(ControlFlow::Value(Value::Bool(true))),
@@ -729,6 +740,15 @@ impl Interpreter {
                                 .ok_or("Missing argument for Err")?;
                             return Ok(ControlFlow::Value(Value::Result(Box::new(
                                 crate::value::ValueResult::Err(val.clone()),
+                            ))));
+                        }
+                        "Some" => {
+                            let val = positional_values
+                                .get(0)
+                                .or_else(|| named_values.get("value"))
+                                .ok_or("Missing argument for Some")?;
+                            return Ok(ControlFlow::Value(Value::Option(OptionValue::Some(
+                                Box::new(val.clone()),
                             ))));
                         }
                         "expect" => {

@@ -37,6 +37,19 @@ Pattern consigliato:
 Nota importante:
 - Se il tipo introduce collezioni/slice/iterazione, aggiorna anche `check_for_expr` e `check_stmt::For`.
 
+## 2.1 Type sugar nel parser
+
+Se il nuovo tipo ha sugar sintattico (es. `T?` per `Option[T]`):
+- implementa il parsing in `crates/fero-parser/src/parser.rs` nella parse dei tipi (`parse_type`)
+- conserva la distinzione tra type-position e expression-position
+- aggiorna AST/HIR (`crates/fero-ast`, `crates/fero-hir`) per rappresentare il sugar in modo esplicito
+
+Caso concreto:
+- `T?` in type position deve diventare semanticamente `Option[T]`
+- `expr?` resta una feature separata (propagation) e non va reinterpretata
+- `T!E` / `T!` in type position devono diventare semanticamente `Result[T, E]` / `Result[T, Error]`
+- `expr!` resta unwrap/crash in expression position (non type sugar)
+
 ## 3. Aggiungi il valore runtime
 
 File:
@@ -66,6 +79,11 @@ Checklist:
 Pattern utile:
 - helper `eval_<tipo>_constructor(...)`
 - helper `eval_<tipo>_method(...)`
+
+Per tipi con semantica di scansione (come `Regex`):
+- definisci una regola esplicita sui match zero-width
+- in operazioni globali (`replace`), dopo un match di lunghezza 0 avanza sempre di almeno 1 Unicode scalar
+- allinea tutte le entrypoint (`is_match`, `replace`, eventuali future API) alle stesse regole di avanzamento/anchor
 
 ## 5. Test obbligatori
 

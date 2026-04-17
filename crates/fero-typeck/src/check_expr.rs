@@ -1,7 +1,7 @@
 //! Expression-level type checking logic.
 
 use crate::context::TypeContext;
-use crate::types::Type;
+use crate::types::{types_compatible, Type};
 use fero_hir::*;
 use fero_span::Span;
 
@@ -74,6 +74,9 @@ fn check_try(ctx: &mut TypeContext, e: &HirTryExpr) -> Type {
 }
 
 fn check_name(ctx: &mut TypeContext, name: &str, span: Span) -> Type {
+    if name == "None" {
+        return Type::Option(Box::new(Type::Unknown));
+    }
     if let Some(ty) = ctx.scopes.lookup(name) {
         return ty.clone();
     }
@@ -224,12 +227,8 @@ fn check_binary(ctx: &mut TypeContext, b: &HirBinary) -> Type {
                 ctx.error("Invalid assignment target".to_string(), b.span);
             }
 
-            if left != right {
-                let both_int = (left == Type::Int || left == Type::Int64)
-                    && (right == Type::Int || right == Type::Int64);
-                if !both_int {
-                    ctx.error(format!("Cannot assign {} to {}", right, left), b.span);
-                }
+            if !types_compatible(&left, &right) {
+                ctx.error(format!("Cannot assign {} to {}", right, left), b.span);
             }
             Type::Unit
         }
@@ -473,7 +472,7 @@ fn check_builtin(
                     HirCallArgument::Named(n) => &n.value,
                 };
                 let ty = check_expression(ctx, arg_expr);
-                Some(Type::Result(Box::new(ty), Box::new(Type::BuiltinError)))
+                Some(Type::Result(Box::new(ty), Box::new(Type::Unknown)))
             }
         }
         "Err" => {
@@ -484,10 +483,31 @@ fn check_builtin(
                 );
                 Some(Type::Error)
             } else {
-                Some(Type::Result(
-                    Box::new(Type::Unknown),
-                    Box::new(Type::BuiltinError),
-                ))
+                let arg_expr = match &args[0] {
+                    HirCallArgument::Positional(e) => e,
+                    HirCallArgument::Named(n) => &n.value,
+                };
+                let err_ty = check_expression(ctx, arg_expr);
+                Some(Type::Result(Box::new(Type::Unknown), Box::new(err_ty)))
+            }
+        }
+        "Some" => {
+            if args.len() != 1 {
+                ctx.error(
+                    format!(
+                        "Function 'Some' expects 1 argument(s), found {}",
+                        args.len()
+                    ),
+                    span,
+                );
+                Some(Type::Error)
+            } else {
+                let arg_expr = match &args[0] {
+                    HirCallArgument::Positional(e) => e,
+                    HirCallArgument::Named(n) => &n.value,
+                };
+                let inner_ty = check_expression(ctx, arg_expr);
+                Some(Type::Option(Box::new(inner_ty)))
             }
         }
         "crash" => {
@@ -1103,7 +1123,7 @@ fn check_call(ctx: &mut TypeContext, c: &HirCall) -> Type {
         match resolved {
             Some(arg_expr) => {
                 let arg_ty = check_expression(ctx, arg_expr);
-                if arg_ty != Type::Error && arg_ty != *param_ty {
+                if arg_ty != Type::Error && !types_compatible(param_ty, &arg_ty) {
                     ctx.error(
                         format!(
                             "Argument for '{}' in '{}': expected {}, found {}",

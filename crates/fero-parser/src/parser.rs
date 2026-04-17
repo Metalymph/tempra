@@ -2,9 +2,9 @@
 //!
 //! Converts a stream of tokens into a structured Abstract Syntax Tree (AST).
 
-use fero_lexer::{Token, TokenKind, tokenize};
-use fero_span::Span;
 use fero_ast::*;
+use fero_lexer::{tokenize, Token, TokenKind};
+use fero_span::Span;
 
 /// An error encountered during parsing.
 #[derive(Debug)]
@@ -31,23 +31,33 @@ impl<'src> Parser<'src> {
     }
 
     pub fn text(&self, span: Span) -> &'src str {
-        &self.source[span.start as usize .. span.end as usize]
+        &self.source[span.start as usize..span.end as usize]
     }
 
     pub fn parse_file(&mut self) -> Result<File, ParseError> {
         let span_start = self.current().span.start;
         let mut items = Vec::new();
         let mut top_level_statements = Vec::new();
-        
+
         while !self.at(TokenKind::EndOfFile) {
-            if self.at(TokenKind::Import) || self.at(TokenKind::Fn) || self.at(TokenKind::Struct) || self.at(TokenKind::Enum) || self.at(TokenKind::Extend) || self.at(TokenKind::Pub) {
+            if self.at(TokenKind::Import)
+                || self.at(TokenKind::Fn)
+                || self.at(TokenKind::Struct)
+                || self.at(TokenKind::Enum)
+                || self.at(TokenKind::Extend)
+                || self.at(TokenKind::Pub)
+            {
                 items.push(self.parse_item()?);
             } else {
                 top_level_statements.push(self.parse_statement()?);
             }
         }
         let span_end = self.current().span.end;
-        Ok(File { span: Span::new(span_start, span_end), items, top_level_statements })
+        Ok(File {
+            span: Span::new(span_start, span_end),
+            items,
+            top_level_statements,
+        })
     }
 
     fn parse_item(&mut self) -> Result<Item, ParseError> {
@@ -82,7 +92,10 @@ impl<'src> Parser<'src> {
         } else {
             let token = self.current();
             Err(ParseError {
-                message: format!("Expected item (import, fn, struct, enum, extend), found {:?}", token.kind),
+                message: format!(
+                    "Expected item (import, fn, struct, enum, extend), found {:?}",
+                    token.kind
+                ),
                 span: token.span,
             })
         }
@@ -93,7 +106,7 @@ impl<'src> Parser<'src> {
         let mut segments = Vec::new();
         let mut kind = ImportPathKind::Package;
         let mut is_first = true;
-        
+
         while !self.at(TokenKind::Semicolon) && !self.at(TokenKind::EndOfFile) {
             if is_first && self.at(TokenKind::Dot) {
                 let _dot = self.advance();
@@ -102,43 +115,46 @@ impl<'src> Parser<'src> {
                 is_first = false;
                 continue;
             }
-            
+
             let seg = self.expect_identifier()?;
             if is_first && self.text(seg.span) == "std" {
                 kind = ImportPathKind::StandardLibrary;
             }
             segments.push(seg);
             is_first = false;
-            
+
             if self.eat(TokenKind::Slash) {
                 continue;
             } else {
                 break;
             }
         }
-        
+
         let path_span = if let Some(last) = segments.last() {
             Span::new(segments[0].span.start, last.span.end)
         } else {
             token.span
         };
-        
+
         let end_token = self.current();
         self.eat(TokenKind::Semicolon);
-        
+
         let path = ImportPath {
             span: path_span,
             segments,
             kind,
         };
-        
-        Ok(ImportItem { span: Span::new(token.span.start, end_token.span.end), path })
+
+        Ok(ImportItem {
+            span: Span::new(token.span.start, end_token.span.end),
+            path,
+        })
     }
 
     fn parse_function(&mut self, visibility: Visibility) -> Result<FunctionItem, ParseError> {
         let start_token = self.expect(TokenKind::Fn)?;
         let name = self.expect_identifier()?;
-        
+
         self.expect(TokenKind::LeftParen)?;
         let mut parameters = Vec::new();
         while !self.at(TokenKind::RightParen) && !self.at(TokenKind::EndOfFile) {
@@ -148,9 +164,12 @@ impl<'src> Parser<'src> {
             let p_ty = if self.eat(TokenKind::Colon) {
                 self.parse_type()?
             } else {
-                TypeExpr::Named(NamedTypeExpr { span: p_name.span, name: p_name })
+                TypeExpr::Named(NamedTypeExpr {
+                    span: p_name.span,
+                    name: p_name,
+                })
             };
-            
+
             let p_end = p_ty.span().end;
             parameters.push(Parameter {
                 span: Span::new(p_start, p_end),
@@ -173,15 +192,11 @@ impl<'src> Parser<'src> {
         let mut return_type = None;
         if self.eat(TokenKind::Arrow) {
             return_type = Some(self.parse_type()?);
-            if self.at(TokenKind::Bang) {
-                self.advance();
-                is_fallible = true;
-            }
         }
 
         let body = self.parse_block()?;
         let span = Span::new(start_token.span.start, body.span.end);
-        
+
         Ok(FunctionItem {
             span,
             visibility,
@@ -196,8 +211,8 @@ impl<'src> Parser<'src> {
     fn parse_struct(&mut self, visibility: Visibility) -> Result<StructItem, ParseError> {
         let token = self.expect(TokenKind::Struct)?;
         let name = self.expect_identifier()?;
-        self.expect(TokenKind::LeftBrace)?; 
-        
+        self.expect(TokenKind::LeftBrace)?;
+
         let mut fields = Vec::new();
         while !self.at(TokenKind::RightBrace) && !self.at(TokenKind::EndOfFile) {
             let f_start = self.current().span.start;
@@ -210,7 +225,7 @@ impl<'src> Parser<'src> {
             let f_name = self.expect_identifier()?;
             self.expect(TokenKind::Colon)?;
             let f_ty = self.parse_type()?;
-            
+
             let mut default_value = None;
             let mut end_span = f_ty.span().end;
             if self.eat(TokenKind::Equal) {
@@ -218,7 +233,7 @@ impl<'src> Parser<'src> {
                 end_span = default_expr.span().end;
                 default_value = Some(default_expr);
             }
-            
+
             self.eat(TokenKind::Comma);
 
             fields.push(StructField {
@@ -231,31 +246,38 @@ impl<'src> Parser<'src> {
             });
         }
         let end_token = self.expect(TokenKind::RightBrace)?;
-        Ok(StructItem { span: Span::new(token.span.start, end_token.span.end), visibility, name, fields })
+        Ok(StructItem {
+            span: Span::new(token.span.start, end_token.span.end),
+            visibility,
+            name,
+            fields,
+        })
     }
 
     fn parse_enum(&mut self, visibility: Visibility) -> Result<EnumItem, ParseError> {
         let token = self.expect(TokenKind::Enum)?;
         let name = self.expect_identifier()?;
         self.expect(TokenKind::LeftBrace)?;
-        
+
         let mut variants = Vec::new();
         while !self.at(TokenKind::RightBrace) && !self.at(TokenKind::EndOfFile) {
             let v_name = self.expect_identifier()?;
             let v_start = v_name.span.start;
             let mut v_end = v_name.span.end;
-            
+
             let mut payload_types = Vec::new();
             if self.eat(TokenKind::LeftParen) {
                 while !self.at(TokenKind::RightParen) && !self.at(TokenKind::EndOfFile) {
                     payload_types.push(self.parse_type()?);
-                    if !self.eat(TokenKind::Comma) { break; }
+                    if !self.eat(TokenKind::Comma) {
+                        break;
+                    }
                 }
                 let end_token = self.expect(TokenKind::RightParen)?;
                 v_end = end_token.span.end;
             }
             self.eat(TokenKind::Comma);
-            
+
             variants.push(EnumVariant {
                 span: Span::new(v_start, v_end),
                 name: v_name,
@@ -263,27 +285,86 @@ impl<'src> Parser<'src> {
             });
         }
         let end_token = self.expect(TokenKind::RightBrace)?;
-        Ok(EnumItem { span: Span::new(token.span.start, end_token.span.end), visibility, name, variants })
+        Ok(EnumItem {
+            span: Span::new(token.span.start, end_token.span.end),
+            visibility,
+            name,
+            variants,
+        })
     }
 
     fn parse_extend(&mut self) -> Result<ExtendItem, ParseError> {
         let token = self.expect(TokenKind::Extend)?;
         let target_name = self.expect_identifier()?;
         self.expect(TokenKind::LeftBrace)?;
-        
+
         let mut methods = Vec::new();
         while !self.at(TokenKind::RightBrace) && !self.at(TokenKind::EndOfFile) {
-            let v = if self.eat(TokenKind::Pub) { Visibility::Public } else { Visibility::Private };
+            let v = if self.eat(TokenKind::Pub) {
+                Visibility::Public
+            } else {
+                Visibility::Private
+            };
             methods.push(self.parse_function(v)?);
         }
         let end_token = self.expect(TokenKind::RightBrace)?;
-        
-        let target = TypeExpr::Named(NamedTypeExpr { span: target_name.span, name: target_name });
 
-        Ok(ExtendItem { span: Span::new(token.span.start, end_token.span.end), target, methods })
+        let target = TypeExpr::Named(NamedTypeExpr {
+            span: target_name.span,
+            name: target_name,
+        });
+
+        Ok(ExtendItem {
+            span: Span::new(token.span.start, end_token.span.end),
+            target,
+            methods,
+        })
     }
 
     fn parse_type(&mut self) -> Result<TypeExpr, ParseError> {
+        let mut ty = self.parse_type_atom()?;
+        let mut consumed_suffix = false;
+
+        if self.eat(TokenKind::QuestionMark) {
+            consumed_suffix = true;
+            let q = self.tokens[self.position - 1];
+            let span = Span::new(ty.span().start, q.span.end);
+            ty = TypeExpr::Optional(OptionalTypeExpr {
+                span,
+                inner: Box::new(ty),
+            });
+        } else if self.eat(TokenKind::Bang) {
+            consumed_suffix = true;
+            let bang = self.tokens[self.position - 1];
+            let err = if self.at(TokenKind::Identifier)
+                || self.at(TokenKind::LeftBracket)
+                || self.at(TokenKind::LeftParen)
+            {
+                Some(Box::new(self.parse_type_atom()?))
+            } else {
+                None
+            };
+            let end = err.as_ref().map(|e| e.span().end).unwrap_or(bang.span.end);
+            let span = Span::new(ty.span().start, end);
+            ty = TypeExpr::Result(ResultTypeExpr {
+                span,
+                ok: Box::new(ty),
+                err,
+            });
+        }
+
+        if consumed_suffix && (self.at(TokenKind::QuestionMark) || self.at(TokenKind::Bang)) {
+            return Err(ParseError {
+                message: "Chained type suffixes (? / !) are not supported in this position"
+                    .to_string(),
+                span: self.current().span,
+            });
+        }
+
+        Ok(ty)
+    }
+
+    fn parse_type_atom(&mut self) -> Result<TypeExpr, ParseError> {
         if self.at(TokenKind::LeftBracket) {
             let start = self.advance();
             let element_type = Box::new(self.parse_type()?);
@@ -302,7 +383,9 @@ impl<'src> Parser<'src> {
             let mut elements = Vec::new();
             while !self.at(TokenKind::RightParen) && !self.at(TokenKind::EndOfFile) {
                 elements.push(self.parse_type()?);
-                if !self.eat(TokenKind::Comma) { break; }
+                if !self.eat(TokenKind::Comma) {
+                    break;
+                }
             }
             let end = self.expect(TokenKind::RightParen)?;
             Ok(TypeExpr::Tuple(TupleTypeExpr {
@@ -311,13 +394,18 @@ impl<'src> Parser<'src> {
             }))
         } else {
             let name = self.expect_identifier()?;
-            let mut ty = TypeExpr::Named(NamedTypeExpr { span: name.span, name: name.clone() });
+            let mut ty = TypeExpr::Named(NamedTypeExpr {
+                span: name.span,
+                name: name.clone(),
+            });
             if self.at(TokenKind::LeftBracket) {
                 let _start = self.advance();
                 let mut arguments = Vec::new();
                 while !self.at(TokenKind::RightBracket) && !self.at(TokenKind::EndOfFile) {
                     arguments.push(self.parse_type()?);
-                    if !self.eat(TokenKind::Comma) { break; }
+                    if !self.eat(TokenKind::Comma) {
+                        break;
+                    }
                 }
                 let end = self.expect(TokenKind::RightBracket)?;
                 if let TypeExpr::Named(base) = ty {
@@ -341,7 +429,7 @@ impl<'src> Parser<'src> {
         }
 
         let end_token = self.expect(TokenKind::RightBrace)?;
-        
+
         Ok(Block {
             span: Span::new(start_token.span.start, end_token.span.end),
             statements,
@@ -356,7 +444,11 @@ impl<'src> Parser<'src> {
             let initializer = self.parse_expression()?;
             let end_token = self.current();
             self.eat(TokenKind::Semicolon);
-            Ok(Statement::Let(LetStatement { span: Span::new(start_token.span.start, end_token.span.end), name, initializer }))
+            Ok(Statement::Let(LetStatement {
+                span: Span::new(start_token.span.start, end_token.span.end),
+                name,
+                initializer,
+            }))
         } else if self.at(TokenKind::Var) {
             let start_token = self.advance();
             let name = self.expect_identifier()?;
@@ -364,7 +456,11 @@ impl<'src> Parser<'src> {
             let initializer = self.parse_expression()?;
             let end_token = self.current();
             self.eat(TokenKind::Semicolon);
-            Ok(Statement::Var(VarStatement { span: Span::new(start_token.span.start, end_token.span.end), name, initializer }))
+            Ok(Statement::Var(VarStatement {
+                span: Span::new(start_token.span.start, end_token.span.end),
+                name,
+                initializer,
+            }))
         } else if self.at(TokenKind::Return) {
             let start_token = self.advance();
             let value = if !self.at(TokenKind::Semicolon) && !self.at(TokenKind::RightBrace) {
@@ -374,7 +470,10 @@ impl<'src> Parser<'src> {
             };
             let end_token = self.current();
             self.eat(TokenKind::Semicolon);
-            Ok(Statement::Return(ReturnStatement { span: Span::new(start_token.span.start, end_token.span.end), value }))
+            Ok(Statement::Return(ReturnStatement {
+                span: Span::new(start_token.span.start, end_token.span.end),
+                value,
+            }))
         } else if self.at(TokenKind::Break) {
             let token = self.advance();
             self.eat(TokenKind::Semicolon);
@@ -395,12 +494,21 @@ impl<'src> Parser<'src> {
             };
             let body = self.parse_block()?;
             let span = Span::new(start_token.span.start, body.span.end);
-            Ok(Statement::For(ForStatement { span, binding, iterable, filter, body }))
+            Ok(Statement::For(ForStatement {
+                span,
+                binding,
+                iterable,
+                filter,
+                body,
+            }))
         } else {
             let expression = self.parse_expression()?;
             let end_token = self.current();
             self.eat(TokenKind::Semicolon);
-            Ok(Statement::Expression(ExpressionStatement { span: Span::new(expression.span().start, end_token.span.end), expression }))
+            Ok(Statement::Expression(ExpressionStatement {
+                span: Span::new(expression.span().start, end_token.span.end),
+                expression,
+            }))
         }
     }
 
@@ -419,7 +527,7 @@ impl<'src> Parser<'src> {
             let right = self.parse_binary_expression(precedence + 1)?;
             let left_span = left.span();
             let right_span = right.span();
-            
+
             left = Expression::Binary(BinaryExpr {
                 span: Span::new(left_span.start, right_span.end),
                 left: Box::new(left),
@@ -427,7 +535,7 @@ impl<'src> Parser<'src> {
                 right: Box::new(right),
             });
         }
-        
+
         Ok(left)
     }
 
@@ -474,7 +582,7 @@ impl<'src> Parser<'src> {
                         // Named argument
                         seen_named = true;
                         let name = self.expect_identifier()?;
-                        
+
                         let name_str = self.text(name.span);
                         if !named_keys.insert(name_str.to_string()) {
                             return Err(ParseError {
@@ -482,7 +590,7 @@ impl<'src> Parser<'src> {
                                 span: name.span,
                             });
                         }
-                        
+
                         self.expect(TokenKind::Equal)?;
                         let value = self.parse_expression()?;
                         arguments.push(CallArgument::Named(NamedArgument {
@@ -494,7 +602,8 @@ impl<'src> Parser<'src> {
                         // Positional argument
                         if seen_named {
                             return Err(ParseError {
-                                message: "Positional argument cannot follow named arguments".to_string(),
+                                message: "Positional argument cannot follow named arguments"
+                                    .to_string(),
                                 span: self.current().span,
                             });
                         }
@@ -504,7 +613,9 @@ impl<'src> Parser<'src> {
                             value,
                         }));
                     }
-                    if !self.eat(TokenKind::Comma) { break; }
+                    if !self.eat(TokenKind::Comma) {
+                        break;
+                    }
                 }
                 let end = self.expect(TokenKind::RightParen)?;
                 expr = Expression::Call(CallExpr {
@@ -523,7 +634,8 @@ impl<'src> Parser<'src> {
             } else if self.at(TokenKind::LeftBracket) {
                 self.advance();
                 let index_or_start = self.parse_expression()?;
-                if self.eat(TokenKind::DotDot) { // Slice
+                if self.eat(TokenKind::DotDot) {
+                    // Slice
                     let end_expr = self.parse_expression()?;
                     let end_bracket = self.expect(TokenKind::RightBracket)?;
                     expr = Expression::Slice(SliceExpr {
@@ -532,7 +644,8 @@ impl<'src> Parser<'src> {
                         start: Box::new(index_or_start),
                         end: Box::new(end_expr),
                     });
-                } else { // Index
+                } else {
+                    // Index
                     let end_bracket = self.expect(TokenKind::RightBracket)?;
                     expr = Expression::Index(IndexExpr {
                         span: Span::new(expr.span().start, end_bracket.span.end),
@@ -561,18 +674,19 @@ impl<'src> Parser<'src> {
 
     fn parse_primary_expression(&mut self) -> Result<Expression, ParseError> {
         let token = self.current();
-        
+
         match token.kind {
             TokenKind::Identifier => {
                 let ident = self.advance();
-                
+
                 let mut is_struct_literal = false;
                 if self.at(TokenKind::LeftBrace) {
                     let next = self.tokens.get(self.position + 1).map(|t| t.kind);
                     let next2 = self.tokens.get(self.position + 2).map(|t| t.kind);
                     if next == Some(TokenKind::RightBrace) {
                         is_struct_literal = true;
-                    } else if next == Some(TokenKind::Identifier) && next2 == Some(TokenKind::Colon) {
+                    } else if next == Some(TokenKind::Identifier) && next2 == Some(TokenKind::Colon)
+                    {
                         is_struct_literal = true;
                     }
                 }
@@ -589,7 +703,9 @@ impl<'src> Parser<'src> {
                             name: f_name,
                             value: f_val,
                         });
-                        if !self.eat(TokenKind::Comma) { break; }
+                        if !self.eat(TokenKind::Comma) {
+                            break;
+                        }
                     }
                     let end = self.expect(TokenKind::RightBrace)?;
                     return Ok(Expression::StructLiteral(StructLiteralExpr {
@@ -599,43 +715,66 @@ impl<'src> Parser<'src> {
                         update_from: None,
                     }));
                 }
-                Ok(Expression::Identifier(IdentifierExpr { span: ident.span, name: ident }))
+                Ok(Expression::Identifier(IdentifierExpr {
+                    span: ident.span,
+                    name: ident,
+                }))
             }
             TokenKind::IntegerLiteral => {
                 self.advance();
-                Ok(Expression::Integer(IntegerExpr { span: token.span, token }))
+                Ok(Expression::Integer(IntegerExpr {
+                    span: token.span,
+                    token,
+                }))
             }
             TokenKind::FloatLiteral => {
                 self.advance();
-                Ok(Expression::Float(FloatExpr { span: token.span, token }))
+                Ok(Expression::Float(FloatExpr {
+                    span: token.span,
+                    token,
+                }))
             }
             TokenKind::StringLiteral => {
                 self.advance();
-                Ok(Expression::String(StringExpr { span: token.span, token }))
+                Ok(Expression::String(StringExpr {
+                    span: token.span,
+                    token,
+                }))
             }
             TokenKind::True | TokenKind::False => {
                 self.advance();
-                Ok(Expression::Bool(BoolExpr { span: token.span, token }))
+                Ok(Expression::Bool(BoolExpr {
+                    span: token.span,
+                    token,
+                }))
             }
             TokenKind::LeftBracket => {
                 let start = self.advance();
                 let mut elements = Vec::new();
                 while !self.at(TokenKind::RightBracket) && !self.at(TokenKind::EndOfFile) {
                     elements.push(self.parse_expression()?);
-                    if !self.eat(TokenKind::Comma) { break; }
+                    if !self.eat(TokenKind::Comma) {
+                        break;
+                    }
                 }
                 let end = self.expect(TokenKind::RightBracket)?;
-                Ok(Expression::Array(ArrayExpr { span: Span::new(start.span.start, end.span.end), elements }))
+                Ok(Expression::Array(ArrayExpr {
+                    span: Span::new(start.span.start, end.span.end),
+                    elements,
+                }))
             }
             TokenKind::LeftBrace => {
                 let block = self.parse_block()?;
-                Ok(Expression::Block(BlockExpr { span: block.span, block }))
+                Ok(Expression::Block(BlockExpr {
+                    span: block.span,
+                    block,
+                }))
             }
             TokenKind::LeftParen => {
                 let start = self.advance();
                 let mut exprs = Vec::new();
                 let mut has_comma = false;
-                
+
                 while !self.at(TokenKind::RightParen) && !self.at(TokenKind::EndOfFile) {
                     exprs.push(self.parse_expression()?);
                     if self.eat(TokenKind::Comma) {
@@ -646,7 +785,10 @@ impl<'src> Parser<'src> {
                 }
                 let end = self.expect(TokenKind::RightParen)?;
                 if has_comma || exprs.len() != 1 {
-                    Ok(Expression::Tuple(TupleExpr { span: Span::new(start.span.start, end.span.end), elements: exprs }))
+                    Ok(Expression::Tuple(TupleExpr {
+                        span: Span::new(start.span.start, end.span.end),
+                        elements: exprs,
+                    }))
                 } else {
                     Ok(exprs.into_iter().next().unwrap())
                 }
@@ -665,16 +807,19 @@ impl<'src> Parser<'src> {
                         else_branch = Some(Box::new(e_expr));
                     } else {
                         let e_block = self.parse_block()?;
-                        let b_expr = Expression::Block(BlockExpr { span: e_block.span, block: e_block.clone() });
+                        let b_expr = Expression::Block(BlockExpr {
+                            span: e_block.span,
+                            block: e_block.clone(),
+                        });
                         end_span = b_expr.span().end;
                         else_branch = Some(Box::new(b_expr));
                     }
                 }
-                Ok(Expression::If(IfExpr { 
+                Ok(Expression::If(IfExpr {
                     span: Span::new(start_token.span.start, end_span),
-                    condition, 
-                    then_block, 
-                    else_branch 
+                    condition,
+                    then_block,
+                    else_branch,
                 }))
             }
             TokenKind::Match => {
@@ -713,40 +858,59 @@ impl<'src> Parser<'src> {
                 let body = self.parse_block()?;
                 Ok(Expression::For(ForExpr {
                     span: Span::new(start_token.span.start, body.span.end),
-                    binding, iterable, filter, body
+                    binding,
+                    iterable,
+                    filter,
+                    body,
                 }))
             }
-            _ => {
-                Err(ParseError {
-                    message: format!("Unexpected token in expression: {:?}", token.kind),
-                    span: token.span,
-                })
-            }
+            _ => Err(ParseError {
+                message: format!("Unexpected token in expression: {:?}", token.kind),
+                span: token.span,
+            }),
         }
     }
 
     fn parse_pattern(&mut self) -> Result<Pattern, ParseError> {
         let token = self.current();
         if self.eat(TokenKind::Underscore) {
-            Ok(Pattern::Wildcard(WildcardPattern { span: token.span, token }))
-        } else if matches!(token.kind, TokenKind::IntegerLiteral | TokenKind::StringLiteral | TokenKind::True | TokenKind::False) {
+            Ok(Pattern::Wildcard(WildcardPattern {
+                span: token.span,
+                token,
+            }))
+        } else if matches!(
+            token.kind,
+            TokenKind::IntegerLiteral
+                | TokenKind::StringLiteral
+                | TokenKind::True
+                | TokenKind::False
+        ) {
             self.advance();
-            Ok(Pattern::Literal(LiteralPattern { span: token.span, token }))
+            Ok(Pattern::Literal(LiteralPattern {
+                span: token.span,
+                token,
+            }))
         } else {
             let name = self.expect_identifier()?;
             if self.eat(TokenKind::LeftParen) {
                 let mut arguments = Vec::new();
                 while !self.at(TokenKind::RightParen) && !self.at(TokenKind::EndOfFile) {
                     arguments.push(self.parse_pattern()?);
-                    if !self.eat(TokenKind::Comma) { break; }
+                    if !self.eat(TokenKind::Comma) {
+                        break;
+                    }
                 }
                 let end = self.expect(TokenKind::RightParen)?;
                 Ok(Pattern::EnumCase(EnumCasePattern {
                     span: Span::new(name.span.start, end.span.end),
-                    name, arguments
+                    name,
+                    arguments,
                 }))
             } else {
-                Ok(Pattern::Identifier(IdentifierPattern { span: name.span, name }))
+                Ok(Pattern::Identifier(IdentifierPattern {
+                    span: name.span,
+                    name,
+                }))
             }
         }
     }
@@ -757,15 +921,22 @@ impl<'src> Parser<'src> {
     }
 
     fn peek(&self, offset: usize) -> Token {
-        self.tokens.get(self.position + offset).copied().unwrap_or_else(|| {
-            Token { kind: TokenKind::EndOfFile, span: Span { start: self.source.len() as u32, end: self.source.len() as u32 } }
-        })
+        self.tokens
+            .get(self.position + offset)
+            .copied()
+            .unwrap_or_else(|| Token {
+                kind: TokenKind::EndOfFile,
+                span: Span {
+                    start: self.source.len() as u32,
+                    end: self.source.len() as u32,
+                },
+            })
     }
-    
+
     fn at(&self, kind: TokenKind) -> bool {
         self.current().kind == kind
     }
-    
+
     fn advance(&mut self) -> Token {
         let token = self.current();
         if token.kind != TokenKind::EndOfFile {
@@ -773,7 +944,7 @@ impl<'src> Parser<'src> {
         }
         token
     }
-    
+
     fn expect(&mut self, kind: TokenKind) -> Result<Token, ParseError> {
         if self.at(kind) {
             Ok(self.advance())
@@ -785,7 +956,7 @@ impl<'src> Parser<'src> {
             })
         }
     }
-    
+
     fn eat(&mut self, kind: TokenKind) -> bool {
         if self.at(kind) {
             self.advance();
@@ -794,7 +965,7 @@ impl<'src> Parser<'src> {
             false
         }
     }
-    
+
     fn expect_identifier(&mut self) -> Result<Token, ParseError> {
         self.expect(TokenKind::Identifier)
     }

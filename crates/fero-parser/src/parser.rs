@@ -525,13 +525,35 @@ impl<'src> Parser<'src> {
             }
             let operator = self.advance();
             if operator.kind == TokenKind::Is {
-                let ty = self.parse_type()?;
-                let left_span = left.span();
-                left = Expression::Is(IsExpr {
-                    span: Span::new(left_span.start, ty.span().end),
-                    value: Box::new(left),
-                    ty,
-                });
+                let is_pattern = {
+                    let next = self.current();
+                    if next.kind == TokenKind::Underscore {
+                        true
+                    } else if next.kind == TokenKind::Identifier {
+                        let name = &self.source[next.span.start as usize..next.span.end as usize];
+                        name == "Some" || name == "None" || name == "Ok" || name == "Err" || name.starts_with(|c: char| c.is_lowercase())
+                    } else {
+                        false
+                    }
+                };
+
+                if is_pattern {
+                    let pattern = self.parse_pattern()?;
+                    let left_span = left.span();
+                    left = Expression::IsPattern(IsPatternExpr {
+                        span: Span::new(left_span.start, pattern.span().end),
+                        value: Box::new(left),
+                        pattern,
+                    });
+                } else {
+                    let ty = self.parse_type()?;
+                    let left_span = left.span();
+                    left = Expression::Is(IsExpr {
+                        span: Span::new(left_span.start, ty.span().end),
+                        value: Box::new(left),
+                        ty,
+                    });
+                }
             } else if operator.kind == TokenKind::As {
                 if self.eat(TokenKind::QuestionMark) {
                     let ty = self.parse_type()?;

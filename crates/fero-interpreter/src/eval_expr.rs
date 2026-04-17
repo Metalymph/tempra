@@ -447,6 +447,15 @@ impl Interpreter {
                     &is_expr.ty,
                 ))))
             }
+            HirExpression::IsPattern(is_expr) => {
+                let value = match self.eval_expression(&is_expr.value, env)? {
+                    ControlFlow::Value(v) => v,
+                    cf => return Ok(cf),
+                };
+                let mut bindings = Vec::new();
+                let is_match = Self::value_matches_pattern(&value, &is_expr.pattern, &mut bindings);
+                Ok(ControlFlow::Value(Value::Bool(is_match)))
+            }
             HirExpression::AsOptional(expr) => {
                 let value = match self.eval_expression(&expr.expr, env)? {
                     ControlFlow::Value(v) => v,
@@ -986,7 +995,26 @@ impl Interpreter {
                 }
             }
             HirExpression::If(if_expr) => {
-                let cond = match self.eval_expression(&if_expr.condition, env)? {
+                let condition_res;
+                let mut bindings = Vec::new();
+                let mut is_pattern_match = false;
+                
+                if let HirExpression::IsPattern(is_pat) = &*if_expr.condition {
+                    is_pattern_match = true;
+                    let val = match self.eval_expression(&is_pat.value, env)? {
+                        ControlFlow::Value(v) => v,
+                        cf => return Ok(cf),
+                    };
+                    if Self::value_matches_pattern(&val, &is_pat.pattern, &mut bindings) {
+                        condition_res = Ok(ControlFlow::Value(Value::Bool(true)));
+                    } else {
+                        condition_res = Ok(ControlFlow::Value(Value::Bool(false)));
+                    }
+                } else {
+                    condition_res = self.eval_expression(&if_expr.condition, env);
+                }
+
+                let cond = match condition_res? {
                     ControlFlow::Value(v) => v,
                     cf => return Ok(cf),
                 };
@@ -996,7 +1024,17 @@ impl Interpreter {
                 };
 
                 if is_true {
-                    self.eval_block(&if_expr.then_block, env)
+                    if is_pattern_match && !bindings.is_empty() {
+                        env.push_scope();
+                        for (name, val) in bindings {
+                            env.insert(name, val);
+                        }
+                        let res = self.eval_block(&if_expr.then_block, env);
+                        env.pop_scope();
+                        res
+                    } else {
+                        self.eval_block(&if_expr.then_block, env)
+                    }
                 } else if let Some(else_branch) = &if_expr.else_branch {
                     self.eval_expression(else_branch, env)
                 } else {
@@ -1158,6 +1196,56 @@ impl Interpreter {
                 }
             }
             HirExpression::Match(_) => Err("Match expressions are not fully supported yet".into()),
+        }
+    }
+
+    fn value_matches_pattern(value: &Value, pattern: &HirPattern, bindings: &mut Vec<(String, Value)>) -> bool {
+        match pattern {
+            HirPattern::Wildcard(_) => true,
+            HirPattern::Identifier(_, name) => {
+                bindings.push((name.clone(), value.clone()));
+                true
+            }
+            HirPattern::EnumCase(_, name, args) => {
+                match name.as_str() {
+                    "Some" => {
+                        if let Value::Option(crate::value::OptionValue::Some(inner)) = value {
+                            if args.len() == 1 {
+                                Self::value_matches_pattern(inner, &args[0], bindings)
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        }
+                    }
+                    "None" => {
+                        matches!(value, Value::Option(crate::value::OptionValue::None))
+                    }
+                    "Ok" => {
+                        if let Value::Result(res) = value {
+                            if let crate::value::ValueResult::Ok(inner) = res.as_ref() {
+                                if args.len() == 1 {
+                                    return Self::value_matches_pattern(inner, &args[0], bindings);
+                                }
+                            }
+                        }
+                        false
+                    }
+                    "Err" => {
+                        if let Value::Result(res) = value {
+                            if let crate::value::ValueResult::Err(inner) = res.as_ref() {
+                                if args.len() == 1 {
+                                    return Self::value_matches_pattern(inner, &args[0], bindings);
+                                }
+                            }
+                        }
+                        false
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
         }
     }
 

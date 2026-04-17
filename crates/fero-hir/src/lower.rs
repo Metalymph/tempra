@@ -233,6 +233,11 @@ impl<'src> Lowerer<'src> {
                 value: Box::new(self.lower_expression(&e.value)),
                 ty: self.lower_type(&e.ty),
             }),
+            ast::Expression::IsPattern(e) => HirExpression::IsPattern(HirIsPatternExpr {
+                span: e.span,
+                value: Box::new(self.lower_expression(&e.value)),
+                pattern: self.lower_pattern(&e.pattern),
+            }),
             ast::Expression::AsOptional(e) => HirExpression::AsOptional(HirAsOptionalExpr {
                 span: e.span,
                 expr: Box::new(self.lower_expression(&e.expression)),
@@ -352,7 +357,7 @@ impl<'src> Lowerer<'src> {
             ast::Pattern::Wildcard(p) => HirPattern::Wildcard(p.span),
             ast::Pattern::Identifier(p) => HirPattern::Identifier(p.span, self.text(p.name.span)),
             ast::Pattern::Literal(p) => {
-                HirPattern::Literal(p.span, self.lower_expression_from_token(p.token))
+                HirPattern::Literal(p.span, Box::new(self.lower_expression_from_token(p.token)))
             }
             ast::Pattern::EnumCase(p) => HirPattern::EnumCase(
                 p.span,

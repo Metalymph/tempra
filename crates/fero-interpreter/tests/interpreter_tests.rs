@@ -66,6 +66,83 @@ fn test_as_optional_result_casts() {
 }
 
 #[test]
+fn test_is_pattern_some_success() {
+    let source = r#"
+    fn main() {
+        let x = Some("hello")
+        let hit = false
+        if x is Some(v) {
+            expect(v == "hello")
+            hit = true
+        }
+        expect(hit)
+        "ok"
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::String("ok".to_string()));
+}
+
+#[test]
+fn test_is_pattern_some_failure() {
+    let source = r#"
+    fn main() {
+        let x = None
+        if x is Some(v) {
+            crash("should not happen")
+        }
+        "ok"
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::String("ok".to_string()));
+}
+
+#[test]
+fn test_is_pattern_none_success() {
+    let source = r#"
+    fn main() {
+        let x = None
+        let hit = false
+        if x is None {
+            hit = true
+        }
+        expect(hit)
+        "ok"
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::String("ok".to_string()));
+}
+
+#[test]
+fn test_is_pattern_ok() {
+    let source = r#"
+    fn main() {
+        let r = Ok("hello")
+        if r is Ok(v) {
+            expect(v == "hello")
+        }
+        "ok"
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::String("ok".to_string()));
+}
+
+#[test]
+fn test_is_pattern_isolation() {
+    let source = r#"
+    fn main() {
+        let x = 1
+        let y = Some(2)
+        if y is Some(x) {
+            expect(x == 2)
+        }
+        expect(x == 1)
+        "ok"
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::String("ok".to_string()));
+}
+
+#[test]
 fn test_as_forced_interpreter_success() {
     let source = r#"
     fn main() {

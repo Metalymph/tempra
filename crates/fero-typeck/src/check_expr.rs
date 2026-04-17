@@ -16,6 +16,7 @@ pub fn check_expression(ctx: &mut TypeContext, expr: &HirExpression) -> Type {
         HirExpression::Unary(u) => check_unary(ctx, u),
         HirExpression::Binary(b) => check_binary(ctx, b),
         HirExpression::Is(i) => check_is(ctx, i),
+        HirExpression::IsPattern(i) => check_is_pattern(ctx, i),
         HirExpression::AsOptional(a) => check_as_optional(ctx, a),
         HirExpression::AsForced(a) => check_as_forced(ctx, a),
         HirExpression::Call(c) => check_call(ctx, c),
@@ -41,6 +42,71 @@ fn check_is(ctx: &mut TypeContext, i: &HirIsExpr) -> Type {
         ctx.error("Unknown type in 'is' check".to_string(), i.ty.span());
     }
     Type::Bool
+}
+
+fn check_is_pattern(ctx: &mut TypeContext, i: &HirIsPatternExpr) -> Type {
+    let val_ty = check_expression(ctx, &i.value);
+    if val_ty != Type::Error {
+        validate_pattern_type(ctx, &val_ty, &i.pattern);
+    }
+    Type::Bool
+}
+
+fn validate_pattern_type(ctx: &mut TypeContext, val_ty: &Type, pattern: &HirPattern) {
+    match pattern {
+        HirPattern::Wildcard(_) | HirPattern::Identifier(_, _) => {}
+        HirPattern::EnumCase(span, name, args) => {
+            match name.as_str() {
+                "Some" => {
+                    if let Type::Option(inner) = val_ty {
+                        if args.len() == 1 {
+                            validate_pattern_type(ctx, inner, &args[0]);
+                        } else {
+                            ctx.error("Some pattern expects 1 argument", *span);
+                        }
+                    } else {
+                        ctx.error(format!("Cannot match {} against Option", val_ty), *span);
+                    }
+                }
+                "None" => {
+                    if !matches!(val_ty, Type::Option(_)) {
+                        ctx.error(format!("Cannot match {} against Option", val_ty), *span);
+                    }
+                    if !args.is_empty() {
+                        ctx.error("None pattern expects 0 arguments", *span);
+                    }
+                }
+                "Ok" => {
+                    if let Type::Result(ok_ty, _) = val_ty {
+                        if args.len() == 1 {
+                            validate_pattern_type(ctx, ok_ty, &args[0]);
+                        } else {
+                            ctx.error("Ok pattern expects 1 argument", *span);
+                        }
+                    } else {
+                        ctx.error(format!("Cannot match {} against Result", val_ty), *span);
+                    }
+                }
+                "Err" => {
+                    if let Type::Result(_, err_ty) = val_ty {
+                        if args.len() == 1 {
+                            validate_pattern_type(ctx, err_ty, &args[0]);
+                        } else {
+                            ctx.error("Err pattern expects 1 argument", *span);
+                        }
+                    } else {
+                        ctx.error(format!("Cannot match {} against Result", val_ty), *span);
+                    }
+                }
+                _ => {
+                    ctx.error("Unsupported pattern case (only Some, None, Ok, Err allowed in v1)", *span);
+                }
+            }
+        }
+        HirPattern::Literal(span, _) => {
+            ctx.error("Literal patterns not supported in v1", *span);
+        }
+    }
 }
 
 fn check_as_optional(ctx: &mut TypeContext, a: &HirAsOptionalExpr) -> Type {
@@ -1258,6 +1324,64 @@ fn check_block_expr(ctx: &mut TypeContext, block: &HirBlock) -> Type {
     crate::check_stmt::check_block(ctx, block)
 }
 
+fn get_branch_bindings(ctx: &mut TypeContext, expr: &HirExpression) -> Vec<(String, Type)> {
+    match expr {
+        HirExpression::Is(is_expr) => {
+            if let HirExpression::Name(_, var_name) = &*is_expr.value {
+                let narrowed_ty = ctx.resolve_hir_type(&is_expr.ty);
+                if narrowed_ty != Type::Unknown {
+                    if ctx.scopes.lookup(var_name).is_some() {
+                        return vec![(var_name.clone(), narrowed_ty)];
+                    }
+                }
+            }
+            vec![]
+        }
+        HirExpression::IsPattern(i) => {
+            let mut bindings = Vec::new();
+            let val_ty = check_expression(ctx, &i.value);
+            extract_pattern_bindings(&val_ty, &i.pattern, &mut bindings);
+            bindings
+        }
+        _ => vec![],
+    }
+}
+
+fn extract_pattern_bindings(val_ty: &Type, pattern: &HirPattern, out: &mut Vec<(String, Type)>) {
+    match pattern {
+        HirPattern::Identifier(_, name) => {
+            out.push((name.clone(), val_ty.clone()));
+        }
+        HirPattern::EnumCase(_, name, args) => {
+            match name.as_str() {
+                "Some" => {
+                    if let Type::Option(inner) = val_ty {
+                        if args.len() == 1 {
+                            extract_pattern_bindings(inner, &args[0], out);
+                        }
+                    }
+                }
+                "Ok" => {
+                    if let Type::Result(ok_ty, _) = val_ty {
+                        if args.len() == 1 {
+                            extract_pattern_bindings(ok_ty, &args[0], out);
+                        }
+                    }
+                }
+                "Err" => {
+                    if let Type::Result(_, err_ty) = val_ty {
+                        if args.len() == 1 {
+                            extract_pattern_bindings(err_ty, &args[0], out);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        _ => {}
+    }
+}
+
 fn check_if(ctx: &mut TypeContext, i: &HirIf) -> Type {
     let cond = check_expression(ctx, &i.condition);
     if cond != Type::Bool && cond != Type::Error {
@@ -1265,15 +1389,9 @@ fn check_if(ctx: &mut TypeContext, i: &HirIf) -> Type {
     }
 
     ctx.scopes.push_scope();
-    if let HirExpression::Is(is_expr) = &*i.condition {
-        if let HirExpression::Name(_, var_name) = &*is_expr.value {
-            let narrowed_ty = ctx.resolve_hir_type(&is_expr.ty);
-            if narrowed_ty != Type::Unknown {
-                if ctx.scopes.lookup(var_name).is_some() {
-                    ctx.scopes.insert(var_name.clone(), narrowed_ty);
-                }
-            }
-        }
+    let bindings = get_branch_bindings(ctx, &i.condition);
+    for (name, ty) in bindings {
+        ctx.scopes.insert(name, ty);
     }
 
     let then_ty = crate::check_stmt::check_block(ctx, &i.then_block);

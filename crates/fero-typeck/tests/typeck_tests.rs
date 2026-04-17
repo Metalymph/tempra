@@ -99,6 +99,66 @@ fn test_narrowing_option() {
 }
 
 #[test]
+fn test_is_pattern_some_binding() {
+    expect_ok(
+        r#"
+        fn main() {
+            let x = Some("hello");
+            if x is Some(v) {
+                let l = v.len();
+            }
+        }
+    "#,
+    );
+}
+
+#[test]
+fn test_is_pattern_err_binding() {
+    expect_ok(
+        r#"
+        fn main() {
+            let r = Err("error");
+            if r is Err(e) {
+                let l = e.len();
+            }
+        }
+    "#,
+    );
+}
+
+#[test]
+fn test_is_pattern_isolation() {
+    expect_ok(
+        r#"
+        fn main() {
+            let x = 1;
+            let y = Some("hello");
+
+            if y is Some(x) {
+                let l = x.len(); // inner x is String
+            }
+            let a = x + 1; // outer x is Int
+        }
+    "#,
+    );
+}
+
+#[test]
+fn test_is_pattern_negative_leak() {
+    expect_err(
+        r#"
+        fn main() {
+            let y = Some("hello");
+            if y is Some(v) {
+                let l = v.len();
+            }
+            let l = v.len(); // v should not exist here
+        }
+    "#,
+    );
+}
+
+#[test]
 fn test_literal_typing() {
     expect_ok(
         r#"

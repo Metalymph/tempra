@@ -799,3 +799,55 @@ fn test_slice_model_interpreter() {
     "#;
     assert_eq!(assert_runs(source), Value::Int64(0));
 }
+
+#[test]
+fn test_string_bytes() {
+    // bytes().len() == size()
+    let source = r#"
+    fn main() {
+        let s = "hé"
+        let bs = s.bytes()
+        bs.len()
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::Int64(3)); // "hé" = 3 UTF-8 bytes
+
+    // ASCII: bytes() indexing
+    let source = r#"
+    fn main() {
+        let bs = "A".bytes()
+        bs[0]
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::Int64(65)); // 'A' = 65
+
+    // bytes() len for ASCII matches size()
+    let source = r#"
+    fn main() {
+        "hello".bytes().len()
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::Int64(5));
+
+    // bytes() slicing
+    let source = r#"
+    fn main() {
+        let bs = "hé".bytes()
+        let part = bs[0..1]
+        part.len()
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::Int64(1));
+
+    // bytes() iteration count
+    let source = r#"
+    fn main() {
+        var count = 0
+        for b in "hé".bytes() {
+            count = count + 1
+        }
+        count
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::Int64(3)); // 3 bytes in "hé"
+}

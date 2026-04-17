@@ -1,0 +1,22 @@
+// String.bytes() — explicit UTF-8 byte access
+// "héllo" = 6 bytes (é is 2 bytes), 5 Unicode scalars
+
+let s = "héllo"
+
+print("string:     ", s)
+print("len():      ", s.len())   // Unicode scalar count = 5
+print("size():     ", s.size())  // UTF-8 byte count     = 6
+
+let bs = s.bytes()
+print("bytes:      ", bs)        // [104, 195, 169, 108, 108, 111]
+print("bytes.len():", bs.len())  // 6
+
+// Iterate over raw bytes
+for b in bs {
+    print(b)
+}
+
+// Byte slicing — first byte only
+let first = bs[0..1]
+print("first byte: ", first)
+print("first[0]:   ", first[0])  // 104 = 'h'

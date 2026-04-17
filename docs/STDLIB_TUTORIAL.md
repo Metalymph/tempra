@@ -120,3 +120,47 @@ To add a method to a type (e.g., `String.trim()`), add logic to `check_call` and
 1. **Type Checker Tests**: Add a test case in `crates/fero-typeck/tests/typeck_tests.rs` using `expect_ok` and `expect_err`.
 2. **Interpreter Tests**: Add an execution test in `crates/fero-interpreter/tests/interpreter_tests.rs`.
 3. **Example**: Add a new `.fero` file in `examples/` to demonstrate usage.
+
+---
+
+## 5. Byte Slice Model
+
+`String.bytes()` returns a `Value::Slice` backed by `SliceParent::Bytes(Rc<Vec<u8>>)`.
+
+This is distinct from `SliceParent::Values(Rc<Vec<Value>>)` used for array slices.
+
+### Type annotation returned
+
+```
+Type::Slice(Box::new(Type::UInt8))
+```
+
+### Runtime value
+
+```rust
+Value::Slice(SliceValue {
+    parent: SliceParent::Bytes(Rc::new(s.as_bytes().to_vec())),
+    start: 0,
+    end: s.len(),
+})
+```
+
+Byte slices support `.len()`, `s[i]` (yields `Value::Int64`), `s[a..b]`, and `for b in s` iteration — identical to value slices.
+
+> Do NOT expose implicit byte-to-string conversions. Byte access must remain explicit.
+
+---
+
+## 6. Array/Slice Parity Invariant
+
+All read-only operations must behave identically for `Array(T)` and `Slice(T)`:
+
+| Operation       | Array       | Slice       |
+|-----------------|-------------|-------------|
+| `.len()`        | ✅          | ✅          |
+| `xs[i]`         | ✅          | ✅          |
+| `xs[a..b]`      | `Slice(T)`  | `Slice(T)`  |
+| `for x in xs`   | ✅          | ✅          |
+| `print/dbg/fmt` | `[1, 2, 3]` | `[1, 2, 3]` |
+
+Slices are always read-only. Any mutation through a slice must be rejected.

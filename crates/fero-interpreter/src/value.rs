@@ -45,8 +45,14 @@ pub struct CommandResultValue {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum SliceParent {
+    Values(Rc<Vec<Value>>),
+    Bytes(Rc<Vec<u8>>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct SliceValue {
-    pub parent: Rc<Vec<Value>>,
+    pub parent: SliceParent,
     pub start: usize,
     pub end: usize,
 }
@@ -58,7 +64,10 @@ impl SliceValue {
 
     pub fn get(&self, index: usize) -> Option<Value> {
         if index < self.len() {
-            Some(self.parent[self.start + index].clone())
+            match &self.parent {
+                SliceParent::Values(v) => Some(v[self.start + index].clone()),
+                SliceParent::Bytes(b) => Some(Value::Int64(b[self.start + index] as i64)),
+            }
         } else {
             None
         }

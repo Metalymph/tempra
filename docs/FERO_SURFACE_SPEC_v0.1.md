@@ -262,9 +262,14 @@ Rules:
   - dynamic arrays
   - static arrays
   - slices
-- slices are zero-copy views over arrays or other slices
-- slices support `.len()`, indexing `s[i]`, and further slicing `s[a..b]`
-- slices are read-only views at the language level in v0.1
+- slices are **zero-copy views** over arrays or other slices
+- arrays and slices share identical **read-only** semantics:
+  - `.len()` → `Int`
+  - `xs[i]` → element type
+  - `xs[a..b]` → `Slice(T)`
+  - `for x in xs { ... }` — iteration
+  - `print(xs)` / `dbg(xs)` — identical human-readable formatting `[1, 2, 3]`
+- slices are **read-only** at the language level in v0.1 (no write-through)
 - no large family of built-in container types in v0
 
 ---
@@ -281,10 +286,12 @@ Rules:
 - UTF-8 internal representation
 - `s.len()` returns the number of **Unicode scalar values**
 - `s.size()` returns the number of **UTF-8 bytes**
+- `s.bytes()` returns a read-only `Slice(UInt8)` view of the UTF-8 bytes
 - `for ch in s` iterates over **Unicode scalar values** (binding `ch` as a single-scalar `String`)
-- no multiple public string types
-- string slices are part of the runtime model
-- string indexing and slicing via `s[i]` is not yet supported
+- `for b in s.bytes()` iterates over raw UTF-8 bytes (`b` as `Int` / `UInt8`)
+- **string indexing `s[i]` is intentionally unsupported**
+- **string slicing `s[a..b]` is intentionally unsupported**
+- no implicit byte-to-string conversions
 
 ---
 

@@ -1,0 +1,24 @@
+// Array/Slice read-only parity demonstration
+// Arrays and Slices share identical semantics for: len, indexing, slicing, iteration, formatting
+
+let xs = [1, 2, 3, 4, 5]
+let ys = xs[1..4]          // Slice(Int): zero-copy view over xs
+
+print("xs=",    xs)        // [1, 2, 3, 4, 5]
+print("ys=",    ys)        // [2, 3, 4]
+
+print("xs len=", xs.len()) // 5
+print("ys len=", ys.len()) // 3
+
+print("xs[0]=", xs[0])    // 1
+print("ys[0]=", ys[0])    // 2  (index 0 of the slice = element 1 of the array)
+
+// Nested slice — still zero-copy
+let zs = ys[1..3]
+print("zs=",    zs)        // [3, 4]
+print("zs len=", zs.len()) // 2
+
+// Iteration over slice is identical to array
+for v in ys {
+    print(v)
+}

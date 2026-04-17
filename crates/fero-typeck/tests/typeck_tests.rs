@@ -626,3 +626,24 @@ fn test_slice_model_typeck() {
         }
     "#);
 }
+
+#[test]
+fn test_string_bytes_typeck() {
+    // bytes() returns Slice[UInt8]
+    expect_ok(r#"
+        fn main() {
+            let bs = "hé".bytes()
+            let n = bs.len()
+        }
+    "#);
+}
+
+#[test]
+fn test_string_bytes_no_args_typeck() {
+    // bytes() with arg must fail
+    expect_err(r#"
+        fn main() {
+            let bs = "hello".bytes(1)
+        }
+    "#);
+}

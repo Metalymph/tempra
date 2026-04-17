@@ -643,6 +643,12 @@ fn check_string_method(ctx: &mut TypeContext, name: &str, args: &[HirCallArgumen
             }
             Type::Int
         }
+        "bytes" => {
+            if !args.is_empty() {
+                ctx.error("'bytes' method expects 0 arguments", span);
+            }
+            Type::Slice(Box::new(Type::UInt8))
+        }
         "trim" | "trim_start" | "trim_end" | "to_lower" | "to_upper" => {
             if !args.is_empty() {
                 ctx.error(format!("'{}' method expects 0 arguments", name), span);

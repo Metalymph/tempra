@@ -747,7 +747,7 @@ impl Interpreter {
                 };
 
                 let (parent, parent_len, start_offset) = match &obj {
-                    Value::Array(arr) => (arr.clone(), arr.len(), 0),
+                    Value::Array(arr) => (crate::value::SliceParent::Values(arr.clone()), arr.len(), 0),
                     Value::Slice(s) => (s.parent.clone(), s.len(), s.start),
                     _ => return Err("Slice requires an array or slice".into()),
                 };
@@ -1151,14 +1151,22 @@ impl Interpreter {
     }
 
 
-    fn eval_string_method(&self, s: &str, name: &str, args: &[Value], named_args: &HashMap<String, Value>) -> Result<Value, String> {
+    fn eval_string_method(&mut self, s: &str, name: &str, args: &[Value], _named_args: &HashMap<std::string::String, Value>) -> Result<Value, String> {
         let get_arg = |idx: usize, arg_name: &str| -> Option<&Value> {
-            args.get(idx).or_else(|| named_args.get(arg_name))
+            args.get(idx).or_else(|| _named_args.get(arg_name))
         };
 
         match name {
             "len" => Ok(Value::Int64(s.chars().count() as i64)),
             "size" => Ok(Value::Int64(s.len() as i64)),
+            "bytes" => {
+                let bytes = std::rc::Rc::new(s.as_bytes().to_vec());
+                Ok(Value::Slice(crate::value::SliceValue {
+                    parent: crate::value::SliceParent::Bytes(bytes),
+                    start: 0,
+                    end: s.len(),
+                }))
+            }
             "trim" => Ok(Value::String(s.trim().to_string())),
             "trim_start" => Ok(Value::String(s.trim_start().to_string())),
             "trim_end" => Ok(Value::String(s.trim_end().to_string())),

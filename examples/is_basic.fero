@@ -1,0 +1,11 @@
+let x = "hello"
+
+if x is String {
+    print("string")
+}
+
+let y = Some(1)
+
+if y is Int? {
+    print("optional int")
+}

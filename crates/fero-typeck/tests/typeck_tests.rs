@@ -22,6 +22,42 @@ fn expect_err(source: &str) {
 }
 
 #[test]
+fn test_as_optional_success() {
+    expect_ok(
+        r#"
+        fn main() {
+            let s = "hello" as? String;
+            let n = 123 as? String;
+            let o = Some("hello") as? String?;
+        }
+    "#,
+    );
+}
+
+#[test]
+fn test_as_forced_success() {
+    expect_ok(
+        r#"
+        fn main() {
+            let s = "hello" as! String;
+            let n = 123 as! Int;
+            let o = Some(1) as! Int?;
+        }
+    "#,
+    );
+}
+
+#[test]
+fn test_as_plain_failure() {
+    let source = r#"
+        fn main() {
+            let s = "hello" as String;
+        }
+    "#;
+    assert!(parse_source(source).is_err());
+}
+
+#[test]
 fn test_literal_typing() {
     expect_ok(
         r#"
@@ -987,6 +1023,43 @@ fn test_option_result_distinction_typeck() {
         fn main() {
             print(maybe())
             print(load())
+        }
+    "#,
+    );
+}
+
+#[test]
+fn test_is_operator_primitives_typeck() {
+    expect_ok(
+        r#"
+        fn main() {
+            let x = "abc"
+            expect(x is String)
+            expect(!(x is Int))
+        }
+    "#,
+    );
+}
+
+#[test]
+fn test_is_operator_option_typeck() {
+    expect_ok(
+        r#"
+        fn main() {
+            let x = Some(1)
+            expect(x is Int?)
+        }
+    "#,
+    );
+}
+
+#[test]
+fn test_is_operator_result_typeck() {
+    expect_ok(
+        r#"
+        fn main() {
+            let x = Ok("hello")
+            expect(x is String!)
         }
     "#,
     );

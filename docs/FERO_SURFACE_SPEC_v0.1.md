@@ -351,6 +351,29 @@ Meaning family (disambiguated by position):
 - `expr?` in expression position: Result propagation
 - `expr!` in expression position: unwrap/crash behavior
 
+### `is` Operator (v0)
+
+Fero supports runtime type checks as boolean expressions:
+
+```fero
+value is Type
+```
+
+Rules:
+
+- result type is always `Bool`
+- no binding (`is T(x)` is not supported)
+- no type narrowing in branches (for now)
+- works with primitive, struct, `Option`, and `Result` checks
+
+Examples:
+
+```fero
+"abc" is String
+Some(1) is Int?
+Ok("x") is String!
+```
+
 ### Regex (v0)
 
 `Regex` is a first-class value type built using composable constructors, not a text mini-language as primary API.

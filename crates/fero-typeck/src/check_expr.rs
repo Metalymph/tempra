@@ -15,6 +15,9 @@ pub fn check_expression(ctx: &mut TypeContext, expr: &HirExpression) -> Type {
         HirExpression::Bool(_, _) => Type::Bool,
         HirExpression::Unary(u) => check_unary(ctx, u),
         HirExpression::Binary(b) => check_binary(ctx, b),
+        HirExpression::Is(i) => check_is(ctx, i),
+        HirExpression::AsOptional(a) => check_as_optional(ctx, a),
+        HirExpression::AsForced(a) => check_as_forced(ctx, a),
         HirExpression::Call(c) => check_call(ctx, c),
         HirExpression::Member(m) => check_member(ctx, m),
         HirExpression::Index(i) => check_index(ctx, i),
@@ -29,6 +32,33 @@ pub fn check_expression(ctx: &mut TypeContext, expr: &HirExpression) -> Type {
         HirExpression::Try(e) => check_try(ctx, e),
         HirExpression::Unwrap(e) => check_unwrap(ctx, e),
     }
+}
+
+fn check_is(ctx: &mut TypeContext, i: &HirIsExpr) -> Type {
+    let _ = check_expression(ctx, &i.value);
+    let ty = ctx.resolve_hir_type(&i.ty);
+    if ty == Type::Unknown {
+        ctx.error("Unknown type in 'is' check".to_string(), i.ty.span());
+    }
+    Type::Bool
+}
+
+fn check_as_optional(ctx: &mut TypeContext, a: &HirAsOptionalExpr) -> Type {
+    let _ = check_expression(ctx, &a.expr);
+    let ty = ctx.resolve_hir_type(&a.ty);
+    if ty == Type::Unknown {
+        ctx.error("Unknown type in 'as?' cast".to_string(), a.ty.span());
+    }
+    Type::Option(Box::new(ty))
+}
+
+fn check_as_forced(ctx: &mut TypeContext, a: &HirAsForcedExpr) -> Type {
+    let _ = check_expression(ctx, &a.expr);
+    let ty = ctx.resolve_hir_type(&a.ty);
+    if ty == Type::Unknown {
+        ctx.error("Unknown type in 'as!' cast".to_string(), a.ty.span());
+    }
+    ty
 }
 
 fn check_unwrap(ctx: &mut TypeContext, e: &HirUnwrapExpr) -> Type {

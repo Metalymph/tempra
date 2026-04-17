@@ -524,16 +524,49 @@ impl<'src> Parser<'src> {
                 break;
             }
             let operator = self.advance();
-            let right = self.parse_binary_expression(precedence + 1)?;
-            let left_span = left.span();
-            let right_span = right.span();
+            if operator.kind == TokenKind::Is {
+                let ty = self.parse_type()?;
+                let left_span = left.span();
+                left = Expression::Is(IsExpr {
+                    span: Span::new(left_span.start, ty.span().end),
+                    value: Box::new(left),
+                    ty,
+                });
+            } else if operator.kind == TokenKind::As {
+                if self.eat(TokenKind::QuestionMark) {
+                    let ty = self.parse_type()?;
+                    let left_span = left.span();
+                    left = Expression::AsOptional(AsOptionalExpr {
+                        span: Span::new(left_span.start, ty.span().end),
+                        expression: Box::new(left),
+                        ty,
+                    });
+                } else if self.eat(TokenKind::Bang) {
+                    let ty = self.parse_type()?;
+                    let left_span = left.span();
+                    left = Expression::AsForced(AsForcedExpr {
+                        span: Span::new(left_span.start, ty.span().end),
+                        expression: Box::new(left),
+                        ty,
+                    });
+                } else {
+                    return Err(ParseError {
+                        message: "Expected '?' or '!' after 'as'".to_string(),
+                        span: operator.span,
+                    });
+                }
+            } else {
+                let right = self.parse_binary_expression(precedence + 1)?;
+                let left_span = left.span();
+                let right_span = right.span();
 
-            left = Expression::Binary(BinaryExpr {
-                span: Span::new(left_span.start, right_span.end),
-                left: Box::new(left),
-                operator,
-                right: Box::new(right),
-            });
+                left = Expression::Binary(BinaryExpr {
+                    span: Span::new(left_span.start, right_span.end),
+                    left: Box::new(left),
+                    operator,
+                    right: Box::new(right),
+                });
+            }
         }
 
         Ok(left)
@@ -544,7 +577,7 @@ impl<'src> Parser<'src> {
             TokenKind::Equal => Some(1),
             TokenKind::OrOr => Some(2),
             TokenKind::AndAnd => Some(3),
-            TokenKind::EqualEqual | TokenKind::BangEqual => Some(4),
+            TokenKind::EqualEqual | TokenKind::BangEqual | TokenKind::Is | TokenKind::As => Some(4),
             TokenKind::Less | TokenKind::Greater => Some(5),
             TokenKind::Pipe => Some(6),
             TokenKind::ShiftRight => Some(7),

@@ -14,6 +14,53 @@ fn assert_runs_with_args(source: &str, args: Vec<String>) -> Value {
 }
 
 #[test]
+fn test_as_optional_interpreter() {
+    let source = r#"
+    fn main() {
+        let x = "hello" as? String
+        expect(x is String?)
+        expect(x == Some("hello"))
+
+        let y = 1 as? String
+        expect(y == None)
+        
+        "ok"
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::String("ok".to_string()));
+}
+
+#[test]
+fn test_as_forced_interpreter_success() {
+    let source = r#"
+    fn main() {
+        let x = "hello" as! String
+        expect(x == "hello")
+        "ok"
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::String("ok".to_string()));
+}
+
+#[test]
+fn test_as_forced_interpreter_crash() {
+    let source = r#"
+    fn main() {
+        let x = 1 as! String
+    }
+    "#;
+    let ast = parse_source(source).unwrap();
+    let hir = lower_file(source, &ast);
+    let result = fero_interpreter::run(&hir);
+    match result {
+        Err(fero_interpreter::RuntimeError::Crash(msg)) => {
+            assert!(msg.contains("invalid cast to String"));
+        }
+        other => panic!("Expected Crash for invalid cast, got {:?}", other),
+    }
+}
+
+#[test]
 fn test_os_args() {
     let source = r#"
     fn main() {
@@ -1126,4 +1173,54 @@ fn test_option_function_return_none() {
     }
     "#;
     assert_eq!(assert_runs(source), Value::Option(OptionValue::None));
+}
+
+#[test]
+fn test_is_operator_primitives_runtime() {
+    let source = r#"
+    fn main() {
+        expect("abc" is String)
+        expect(!(1 is String))
+        true
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::Bool(true));
+}
+
+#[test]
+fn test_is_operator_option_runtime() {
+    let source = r#"
+    fn main() {
+        expect(Some(1) is Int?)
+        expect(None is Int?)
+        expect(!(Some(1) is String?))
+        true
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::Bool(true));
+}
+
+#[test]
+fn test_is_operator_result_runtime() {
+    let source = r#"
+    struct IoError {}
+
+    fn main() {
+        expect(Ok("x") is String!)
+        expect(Err(IoError {}) is String!IoError)
+        expect(!(Ok("x") is Int!))
+        true
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::Bool(true));
+}
+
+#[test]
+fn test_is_operator_option_string_runtime() {
+    let source = r#"
+    let x = Some("hello")
+    expect(x is String?)
+    expect(!(x is Int?))
+    "#;
+    assert_eq!(assert_runs(source), Value::Result(Box::new(ValueResult::Ok(Value::Unit))));
 }

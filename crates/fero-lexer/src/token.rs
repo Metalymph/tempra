@@ -22,6 +22,8 @@ pub enum TokenKind {
     Match,
     For,
     In,
+    Is,
+    As,
     Struct,
     Enum,
     Extend,
@@ -35,39 +37,39 @@ pub enum TokenKind {
     Pub,
 
     // Delimiters
-    LeftParen,      // (
-    RightParen,     // )
-    LeftBrace,      // {
-    RightBrace,     // }
-    LeftBracket,    // [
-    RightBracket,   // ]
-    Comma,          // ,
-    Dot,            // .
-    Colon,          // :
-    Semicolon,      // ;
-    Underscore,     // _
+    LeftParen,    // (
+    RightParen,   // )
+    LeftBrace,    // {
+    RightBrace,   // }
+    LeftBracket,  // [
+    RightBracket, // ]
+    Comma,        // ,
+    Dot,          // .
+    Colon,        // :
+    Semicolon,    // ;
+    Underscore,   // _
 
     // Multi-char punctuation
-    Arrow,          // ->
-    FatArrow,       // =>
-    DotDot,         // ..
-    ShiftRight,     // >>
+    Arrow,      // ->
+    FatArrow,   // =>
+    DotDot,     // ..
+    ShiftRight, // >>
 
     // Operators
-    Equal,          // =
-    EqualEqual,     // ==
-    Bang,           // !
-    BangEqual,      // !=
-    Plus,           // +
-    Minus,          // -
-    Star,           // *
-    Slash,          // /
-    Less,           // <
-    Greater,        // >
-    Pipe,           // |
-    AndAnd,         // &&
-    OrOr,           // ||
-    QuestionMark,   // ?
+    Equal,        // =
+    EqualEqual,   // ==
+    Bang,         // !
+    BangEqual,    // !=
+    Plus,         // +
+    Minus,        // -
+    Star,         // *
+    Slash,        // /
+    Less,         // <
+    Greater,      // >
+    Pipe,         // |
+    AndAnd,       // &&
+    OrOr,         // ||
+    QuestionMark, // ?
 }
 
 /// A single lexical token produced by the lexer.
@@ -88,6 +90,8 @@ pub fn keyword_kind(text: &str) -> Option<TokenKind> {
         "match" => Some(TokenKind::Match),
         "for" => Some(TokenKind::For),
         "in" => Some(TokenKind::In),
+        "is" => Some(TokenKind::Is),
+        "as" => Some(TokenKind::As),
         "struct" => Some(TokenKind::Struct),
         "enum" => Some(TokenKind::Enum),
         "extend" => Some(TokenKind::Extend),

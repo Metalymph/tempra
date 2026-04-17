@@ -62,6 +62,7 @@ fn test_binary_precedence() {
     assert_valid_parse("fn foo() { (a + b) * c; }");
     assert_valid_parse("fn foo() { a && b || c; }");
     assert_valid_parse("fn foo() { a || b && c; }");
+    assert_valid_parse("fn foo() { x is String; y is String?; z is String!IoError; }");
 }
 
 #[test]

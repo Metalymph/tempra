@@ -228,6 +228,21 @@ impl<'src> Lowerer<'src> {
                 op: self.lower_binary_op(e.operator),
                 right: Box::new(self.lower_expression(&e.right)),
             }),
+            ast::Expression::Is(e) => HirExpression::Is(HirIsExpr {
+                span: e.span,
+                value: Box::new(self.lower_expression(&e.value)),
+                ty: self.lower_type(&e.ty),
+            }),
+            ast::Expression::AsOptional(e) => HirExpression::AsOptional(HirAsOptionalExpr {
+                span: e.span,
+                expr: Box::new(self.lower_expression(&e.expression)),
+                ty: self.lower_type(&e.ty),
+            }),
+            ast::Expression::AsForced(e) => HirExpression::AsForced(HirAsForcedExpr {
+                span: e.span,
+                expr: Box::new(self.lower_expression(&e.expression)),
+                ty: self.lower_type(&e.ty),
+            }),
             ast::Expression::Try(e) => HirExpression::Try(HirTryExpr {
                 span: e.span,
                 expr: Box::new(self.lower_expression(&e.expression)),

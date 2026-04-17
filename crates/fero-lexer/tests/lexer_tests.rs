@@ -15,62 +15,75 @@ macro_rules! assert_tokens {
 
 #[test]
 fn test_identifiers() {
-    assert_tokens!("let x = 1", [
-        TokenKind::Let,
-        TokenKind::Identifier,
-        TokenKind::Equal,
-        TokenKind::IntegerLiteral,
-    ]);
+    assert_tokens!(
+        "let x = 1",
+        [
+            TokenKind::Let,
+            TokenKind::Identifier,
+            TokenKind::Equal,
+            TokenKind::IntegerLiteral,
+        ]
+    );
 }
 
 #[test]
 fn test_keywords() {
-    assert_tokens!("fn if else for match", [
-        TokenKind::Fn,
-        TokenKind::If,
-        TokenKind::Else,
-        TokenKind::For,
-        TokenKind::Match,
-    ]);
+    assert_tokens!(
+        "fn if else for match is",
+        [
+            TokenKind::Fn,
+            TokenKind::If,
+            TokenKind::Else,
+            TokenKind::For,
+            TokenKind::Match,
+            TokenKind::Is,
+        ]
+    );
 }
 
 #[test]
 fn test_numbers() {
-    assert_tokens!("1 42 3.14 1..3", [
-        TokenKind::IntegerLiteral,
-        TokenKind::IntegerLiteral,
-        TokenKind::FloatLiteral,
-        TokenKind::IntegerLiteral,
-        TokenKind::DotDot,
-        TokenKind::IntegerLiteral,
-    ]);
+    assert_tokens!(
+        "1 42 3.14 1..3",
+        [
+            TokenKind::IntegerLiteral,
+            TokenKind::IntegerLiteral,
+            TokenKind::FloatLiteral,
+            TokenKind::IntegerLiteral,
+            TokenKind::DotDot,
+            TokenKind::IntegerLiteral,
+        ]
+    );
 }
 
 #[test]
 fn test_strings() {
-    assert_tokens!("\"hello\" \"a\\nb\"", [
-        TokenKind::StringLiteral,
-        TokenKind::StringLiteral,
-    ]);
+    assert_tokens!(
+        "\"hello\" \"a\\nb\"",
+        [TokenKind::StringLiteral, TokenKind::StringLiteral,]
+    );
 }
 
 #[test]
 fn test_operators() {
-    assert_tokens!("= == ! != -> => .. >> && || | < >", [
-        TokenKind::Equal,
-        TokenKind::EqualEqual,
-        TokenKind::Bang,
-        TokenKind::BangEqual,
-        TokenKind::Arrow,
-        TokenKind::FatArrow,
-        TokenKind::DotDot,
-        TokenKind::ShiftRight,
-        TokenKind::AndAnd,
-        TokenKind::OrOr,
-        TokenKind::Pipe,
-        TokenKind::Less,
-        TokenKind::Greater,
-    ]);
+    assert_tokens!(
+        "= == ! != -> => .. >> && || | < >",
+        [
+            TokenKind::Equal,
+            TokenKind::EqualEqual,
+            TokenKind::Bang,
+            TokenKind::BangEqual,
+            TokenKind::Arrow,
+            TokenKind::FatArrow,
+            TokenKind::DotDot,
+            TokenKind::ShiftRight,
+            TokenKind::AndAnd,
+            TokenKind::OrOr,
+            TokenKind::Pipe,
+            TokenKind::Less,
+            TokenKind::Greater,
+        ]
+    );
 }
 
 #[test]
@@ -81,17 +94,20 @@ fn test_struct_sample() {
             var bank_value: UInt64
         }
     "#;
-    assert_tokens!(source, [
-        TokenKind::Struct,
-        TokenKind::Identifier,
-        TokenKind::LeftBrace,
-        TokenKind::Identifier,
-        TokenKind::Colon,
-        TokenKind::Identifier,
-        TokenKind::Var,
-        TokenKind::Identifier,
-        TokenKind::Colon,
-        TokenKind::Identifier,
-        TokenKind::RightBrace,
-    ]);
+    assert_tokens!(
+        source,
+        [
+            TokenKind::Struct,
+            TokenKind::Identifier,
+            TokenKind::LeftBrace,
+            TokenKind::Identifier,
+            TokenKind::Colon,
+            TokenKind::Identifier,
+            TokenKind::Var,
+            TokenKind::Identifier,
+            TokenKind::Colon,
+            TokenKind::Identifier,
+            TokenKind::RightBrace,
+        ]
+    );
 }

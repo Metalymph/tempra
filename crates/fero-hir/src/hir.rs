@@ -130,6 +130,9 @@ pub enum HirExpression {
 
     Unary(HirUnary),
     Binary(HirBinary),
+    Is(HirIsExpr),
+    AsOptional(HirAsOptionalExpr),
+    AsForced(HirAsForcedExpr),
     Try(HirTryExpr),
     Unwrap(HirUnwrapExpr),
 
@@ -158,6 +161,9 @@ impl HirExpression {
             HirExpression::Bool(span, _) => *span,
             HirExpression::Unary(e) => e.span,
             HirExpression::Binary(e) => e.span,
+            HirExpression::Is(e) => e.span,
+            HirExpression::AsOptional(e) => e.span,
+            HirExpression::AsForced(e) => e.span,
             HirExpression::Try(e) => e.span,
             HirExpression::Call(e) => e.span,
             HirExpression::Member(e) => e.span,
@@ -194,6 +200,27 @@ pub struct HirBinary {
     pub left: Box<HirExpression>,
     pub op: HirBinaryOp,
     pub right: Box<HirExpression>,
+}
+
+#[derive(Debug, Clone)]
+pub struct HirIsExpr {
+    pub span: Span,
+    pub value: Box<HirExpression>,
+    pub ty: HirType,
+}
+
+#[derive(Debug, Clone)]
+pub struct HirAsOptionalExpr {
+    pub span: Span,
+    pub expr: Box<HirExpression>,
+    pub ty: HirType,
+}
+
+#[derive(Debug, Clone)]
+pub struct HirAsForcedExpr {
+    pub span: Span,
+    pub expr: Box<HirExpression>,
+    pub ty: HirType,
 }
 
 #[derive(Debug, Clone)]

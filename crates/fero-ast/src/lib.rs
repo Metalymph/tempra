@@ -323,6 +323,9 @@ pub enum Expression {
 
     Unary(UnaryExpr),
     Binary(BinaryExpr),
+    Is(IsExpr),
+    AsOptional(AsOptionalExpr),
+    AsForced(AsForcedExpr),
 
     Try(TryExpr),
     Unwrap(UnwrapExpr),
@@ -354,6 +357,9 @@ impl Expression {
 
             Expression::Unary(expr) => expr.span,
             Expression::Binary(expr) => expr.span,
+            Expression::Is(expr) => expr.span,
+            Expression::AsOptional(expr) => expr.span,
+            Expression::AsForced(expr) => expr.span,
 
             Expression::Try(expr) => expr.span,
             Expression::Unwrap(expr) => expr.span,
@@ -463,6 +469,27 @@ pub struct BinaryExpr {
     pub left: Box<Expression>,
     pub operator: Token,
     pub right: Box<Expression>,
+}
+
+#[derive(Debug, Clone)]
+pub struct IsExpr {
+    pub span: Span,
+    pub value: Box<Expression>,
+    pub ty: TypeExpr,
+}
+
+#[derive(Debug, Clone)]
+pub struct AsOptionalExpr {
+    pub span: Span,
+    pub expression: Box<Expression>,
+    pub ty: TypeExpr,
+}
+
+#[derive(Debug, Clone)]
+pub struct AsForcedExpr {
+    pub span: Span,
+    pub expression: Box<Expression>,
+    pub ty: TypeExpr,
 }
 
 #[derive(Debug, Clone)]

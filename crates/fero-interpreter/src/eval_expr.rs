@@ -79,6 +79,29 @@ fn value_to_string(value: &Value) -> String {
     }
 }
 
+fn format_hir_type(ty: &HirType) -> String {
+    match ty {
+        HirType::Named(_, n) => n.clone(),
+        HirType::Array(_, inner) => format!("[{}]", format_hir_type(inner)),
+        HirType::Tuple(_, elems) => {
+            let inner = elems.iter().map(|e| format_hir_type(e)).collect::<Vec<_>>().join(", ");
+            format!("({})", inner)
+        }
+        HirType::Generic(_, base, args) => {
+            let inner = args.iter().map(|a| format_hir_type(a)).collect::<Vec<_>>().join(", ");
+            format!("{}[{}]", base, inner)
+        }
+        HirType::Option(_, inner) => format!("{}?", format_hir_type(inner)),
+        HirType::Result(_, ok, err) => {
+            if let Some(e) = err {
+                format!("{}!{}", format_hir_type(ok), format_hir_type(e))
+            } else {
+                format!("{}!", format_hir_type(ok))
+            }
+        }
+    }
+}
+
 impl Interpreter {
     pub fn eval_expression(
         &mut self,
@@ -412,6 +435,38 @@ impl Interpreter {
                         _ => Err("|| requires Bool".into()),
                     },
                     _ => Err("Unsupported binary operator".into()),
+                }
+            }
+            HirExpression::Is(is_expr) => {
+                let value = match self.eval_expression(&is_expr.value, env)? {
+                    ControlFlow::Value(v) => v,
+                    cf => return Ok(cf),
+                };
+                Ok(ControlFlow::Value(Value::Bool(Self::value_is_type(
+                    &value,
+                    &is_expr.ty,
+                ))))
+            }
+            HirExpression::AsOptional(expr) => {
+                let value = match self.eval_expression(&expr.expr, env)? {
+                    ControlFlow::Value(v) => v,
+                    cf => return Ok(cf),
+                };
+                if Self::value_is_type(&value, &expr.ty) {
+                    Ok(ControlFlow::Value(Value::Option(OptionValue::Some(Box::new(value)))))
+                } else {
+                    Ok(ControlFlow::Value(Value::Option(OptionValue::None)))
+                }
+            }
+            HirExpression::AsForced(expr) => {
+                let value = match self.eval_expression(&expr.expr, env)? {
+                    ControlFlow::Value(v) => v,
+                    cf => return Ok(cf),
+                };
+                if Self::value_is_type(&value, &expr.ty) {
+                    Ok(ControlFlow::Value(value))
+                } else {
+                    Ok(ControlFlow::Crash(format!("invalid cast to {}", format_hir_type(&expr.ty))))
                 }
             }
             HirExpression::Call(call) => {
@@ -1103,6 +1158,76 @@ impl Interpreter {
                 }
             }
             HirExpression::Match(_) => Err("Match expressions are not fully supported yet".into()),
+        }
+    }
+
+    fn value_is_type(value: &Value, ty: &HirType) -> bool {
+        match ty {
+            HirType::Named(_, name) => match name.as_str() {
+                "Unit" => matches!(value, Value::Unit),
+                "Bool" => matches!(value, Value::Bool(_)),
+                "String" => matches!(value, Value::String(_)),
+                "Int" | "Int64" => matches!(value, Value::Int64(_)),
+                "UInt8" => matches!(value, Value::UInt8(_)),
+                "Error" => matches!(value, Value::Error(_)),
+                _ => {
+                    if let Value::Struct(s) = value {
+                        s.name == *name
+                    } else {
+                        false
+                    }
+                }
+            },
+            HirType::Array(_, _) => matches!(value, Value::Array(_)),
+            HirType::Tuple(_, elems) => {
+                if let Value::Tuple(values) = value {
+                    values.len() == elems.len()
+                        && values
+                            .iter()
+                            .zip(elems.iter())
+                            .all(|(v, t)| Self::value_is_type(v, t))
+                } else {
+                    false
+                }
+            }
+            HirType::Generic(_, name, args) if name == "Option" && args.len() == 1 => {
+                Self::value_is_type(
+                    value,
+                    &HirType::Option(ty.span(), Box::new(args[0].clone())),
+                )
+            }
+            HirType::Generic(_, name, args)
+                if name == "Result" && (args.len() == 1 || args.len() == 2) =>
+            {
+                let err = if args.len() == 2 {
+                    Some(Box::new(args[1].clone()))
+                } else {
+                    None
+                };
+                Self::value_is_type(
+                    value,
+                    &HirType::Result(ty.span(), Box::new(args[0].clone()), err),
+                )
+            }
+            HirType::Generic(_, _, _) => false,
+            HirType::Option(_, inner) => match value {
+                Value::Option(OptionValue::None) => true,
+                Value::Option(OptionValue::Some(v)) => Self::value_is_type(v, inner),
+                _ => false,
+            },
+            HirType::Result(_, ok, err) => match value {
+                Value::Result(res) => match res.as_ref() {
+                    crate::value::ValueResult::Ok(v) => Self::value_is_type(v, ok),
+                    crate::value::ValueResult::Err(e) => {
+                        if let Some(err_ty) = err {
+                            Self::value_is_type(e, err_ty)
+                        } else {
+                            true
+                        }
+                    }
+                },
+                _ => false,
+            },
         }
     }
 

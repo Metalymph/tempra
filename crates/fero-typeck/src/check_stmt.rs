@@ -1,7 +1,7 @@
-use fero_hir::*;
-use crate::types::Type;
-use crate::context::TypeContext;
 use crate::check_expr::check_expression;
+use crate::context::TypeContext;
+use crate::types::Type;
+use fero_hir::*;
 
 /// Check a block and return the type of its last expression (or Unit).
 pub fn check_block(ctx: &mut TypeContext, block: &HirBlock) -> Type {
@@ -39,7 +39,10 @@ pub fn check_statement(ctx: &mut TypeContext, stmt: &HirStatement) -> Type {
                         None => fero_span::Span::new(0, 0), // Use meaningful span if possible
                     };
                     ctx.error(
-                        format!("Return type mismatch: expected {}, found {}", expected, actual),
+                        format!(
+                            "Return type mismatch: expected {}, found {}",
+                            expected, actual
+                        ),
                         span,
                     );
                 }
@@ -57,11 +60,15 @@ pub fn check_statement(ctx: &mut TypeContext, stmt: &HirStatement) -> Type {
             let iter_ty = check_expression(ctx, &f.iterable);
             let elem_ty = match &iter_ty {
                 Type::Array(inner) => *inner.clone(),
+                Type::Slice(inner) => *inner.clone(),
                 Type::String => Type::String,
                 _ => {
                     if iter_ty != Type::Error {
                         ctx.error(
-                            format!("For iterable must be an array or string, found {}", iter_ty),
+                            format!(
+                                "For iterable must be an array, slice, or string, found {}",
+                                iter_ty
+                            ),
                             f.span,
                         );
                     }
@@ -75,7 +82,10 @@ pub fn check_statement(ctx: &mut TypeContext, stmt: &HirStatement) -> Type {
             if let Some(filter) = &f.filter {
                 let filter_ty = check_expression(ctx, filter);
                 if filter_ty != Type::Bool && filter_ty != Type::Error {
-                    ctx.error(format!("For filter must be Bool, found {}", filter_ty), f.span);
+                    ctx.error(
+                        format!("For filter must be Bool, found {}", filter_ty),
+                        f.span,
+                    );
                 }
             }
 

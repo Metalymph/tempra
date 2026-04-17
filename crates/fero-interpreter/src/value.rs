@@ -6,6 +6,7 @@ pub enum Value {
     Unit,
     Bool(bool),
     Int64(i64),
+    UInt8(u8),
     Float64(f64),
     String(String),
 
@@ -20,6 +21,7 @@ pub enum Value {
 
     Result(Box<ValueResult>),
     Error(String),
+    Regex(RegexValue),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -66,10 +68,191 @@ impl SliceValue {
         if index < self.len() {
             match &self.parent {
                 SliceParent::Values(v) => Some(v[self.start + index].clone()),
-                SliceParent::Bytes(b) => Some(Value::Int64(b[self.start + index] as i64)),
+                SliceParent::Bytes(b) => Some(Value::UInt8(b[self.start + index])),
             }
         } else {
             None
+        }
+    }
+}
+
+/// The structured Regex IR — a real value type, not just a text pattern.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RegexValue {
+    Text(String),
+    Any,
+    Seq(Vec<RegexValue>),
+    Alt(Vec<RegexValue>),
+    Optional(Box<RegexValue>),
+    ZeroOrMore(Box<RegexValue>),
+    OneOrMore(Box<RegexValue>),
+    Start,
+    End,
+    Digit,
+    Space,
+    Word,
+}
+
+impl RegexValue {
+    pub fn is_match(&self, text: &str) -> bool {
+        let chars: Vec<char> = text.chars().collect();
+        for pos in 0..=chars.len() {
+            if Self::match_here(self, &chars, pos).is_some() {
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn replace_all(&self, text: &str, replacement: &str) -> String {
+        let chars: Vec<char> = text.chars().collect();
+        let mut result = String::new();
+        let mut pos = 0;
+        while pos < chars.len() {
+            match Self::match_here(self, &chars, pos) {
+                Some(end) if end > pos => {
+                    result.push_str(replacement);
+                    pos = end;
+                }
+                _ => {
+                    result.push(chars[pos]);
+                    pos += 1;
+                }
+            }
+        }
+        result
+    }
+
+    fn match_here(re: &RegexValue, chars: &[char], pos: usize) -> Option<usize> {
+        match re {
+            RegexValue::Text(s) => {
+                let tc: Vec<char> = s.chars().collect();
+                if pos + tc.len() > chars.len() {
+                    return None;
+                }
+                for (i, &c) in tc.iter().enumerate() {
+                    if chars[pos + i] != c {
+                        return None;
+                    }
+                }
+                Some(pos + tc.len())
+            }
+            RegexValue::Any => {
+                if pos < chars.len() {
+                    Some(pos + 1)
+                } else {
+                    None
+                }
+            }
+            RegexValue::Seq(parts) => {
+                let mut cur = pos;
+                for p in parts {
+                    cur = Self::match_here(p, chars, cur)?;
+                }
+                Some(cur)
+            }
+            RegexValue::Alt(alts) => {
+                for a in alts {
+                    if let Some(end) = Self::match_here(a, chars, pos) {
+                        return Some(end);
+                    }
+                }
+                None
+            }
+            RegexValue::Optional(inner) => Some(Self::match_here(inner, chars, pos).unwrap_or(pos)),
+            RegexValue::ZeroOrMore(inner) => {
+                let mut cur = pos;
+                loop {
+                    match Self::match_here(inner, chars, cur) {
+                        Some(next) if next > cur => cur = next,
+                        _ => break,
+                    }
+                }
+                Some(cur)
+            }
+            RegexValue::OneOrMore(inner) => {
+                let first = Self::match_here(inner, chars, pos)?;
+                let mut cur = first;
+                loop {
+                    match Self::match_here(inner, chars, cur) {
+                        Some(next) if next > cur => cur = next,
+                        _ => break,
+                    }
+                }
+                Some(cur)
+            }
+            RegexValue::Start => {
+                if pos == 0 {
+                    Some(0)
+                } else {
+                    None
+                }
+            }
+            RegexValue::End => {
+                if pos == chars.len() {
+                    Some(pos)
+                } else {
+                    None
+                }
+            }
+            RegexValue::Digit => {
+                if pos < chars.len() && chars[pos].is_ascii_digit() {
+                    Some(pos + 1)
+                } else {
+                    None
+                }
+            }
+            RegexValue::Space => {
+                if pos < chars.len() && chars[pos].is_whitespace() {
+                    Some(pos + 1)
+                } else {
+                    None
+                }
+            }
+            RegexValue::Word => {
+                if pos < chars.len() && (chars[pos].is_alphanumeric() || chars[pos] == '_') {
+                    Some(pos + 1)
+                } else {
+                    None
+                }
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for RegexValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RegexValue::Text(s) => write!(f, "Regex.text({:?})", s),
+            RegexValue::Any => write!(f, "Regex.any()"),
+            RegexValue::Seq(parts) => {
+                write!(f, "Regex.seq(")?;
+                for (i, p) in parts.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", p)?;
+                }
+                write!(f, ")")
+            }
+            RegexValue::Alt(alts) => {
+                write!(f, "Regex.alt(")?;
+                for (i, a) in alts.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", a)?;
+                }
+                write!(f, ")")
+            }
+            RegexValue::Optional(inner) => write!(f, "Regex.optional({})", inner),
+            RegexValue::ZeroOrMore(inner) => write!(f, "Regex.zero_or_more({})", inner),
+            RegexValue::OneOrMore(inner) => write!(f, "Regex.one_or_more({})", inner),
+            RegexValue::Start => write!(f, "Regex.start()"),
+            RegexValue::End => write!(f, "Regex.end()"),
+            RegexValue::Digit => write!(f, "Regex.digit()"),
+            RegexValue::Space => write!(f, "Regex.space()"),
+            RegexValue::Word => write!(f, "Regex.word()"),
         }
     }
 }
@@ -100,7 +283,9 @@ impl Value {
                 format!("({})", elems.join(", "))
             }
             Value::Struct(s) => {
-                let mut fields: Vec<String> = s.fields.iter()
+                let mut fields: Vec<String> = s
+                    .fields
+                    .iter()
                     .map(|(k, v)| format!("{}: {}", k, v.to_repr()))
                     .collect();
                 fields.sort();
@@ -117,12 +302,15 @@ impl std::fmt::Display for Value {
             Value::Unit => write!(f, "()"),
             Value::Bool(b) => write!(f, "{}", b),
             Value::Int64(i) => write!(f, "{}", i),
+            Value::UInt8(i) => write!(f, "{}", i),
             Value::Float64(fl) => write!(f, "{}", fl),
             Value::String(s) => write!(f, "{}", s), // Direct string output for print
             Value::Array(arr) => {
                 write!(f, "[")?;
                 for (i, val) in arr.iter().enumerate() {
-                    if i > 0 { write!(f, ", ")?; }
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
                     write!(f, "{}", val.to_repr())?;
                 }
                 write!(f, "]")
@@ -130,7 +318,9 @@ impl std::fmt::Display for Value {
             Value::Slice(slice) => {
                 write!(f, "[")?;
                 for i in 0..slice.len() {
-                    if i > 0 { write!(f, ", ")?; }
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
                     write!(f, "{}", slice.get(i).unwrap().to_repr())?;
                 }
                 write!(f, "]")
@@ -138,7 +328,9 @@ impl std::fmt::Display for Value {
             Value::Tuple(tup) => {
                 write!(f, "(")?;
                 for (i, val) in tup.iter().enumerate() {
-                    if i > 0 { write!(f, ", ")?; }
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
                     write!(f, "{}", val.to_repr())?;
                 }
                 write!(f, ")")
@@ -148,7 +340,9 @@ impl std::fmt::Display for Value {
                 let mut keys: Vec<&String> = s.fields.keys().collect();
                 keys.sort();
                 for (i, k) in keys.iter().enumerate() {
-                    if i > 0 { write!(f, ", ")?; }
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
                     write!(f, "{}: {}", k, s.fields.get(*k).unwrap().to_repr())?;
                 }
                 write!(f, " }}")
@@ -163,12 +357,17 @@ impl std::fmt::Display for Value {
                 }
                 write!(f, ")")
             }
-            Value::CommandResult(r) => write!(f, "CommandResult(exit_code={}, success={})", r.exit_code, r.success),
+            Value::CommandResult(r) => write!(
+                f,
+                "CommandResult(exit_code={}, success={})",
+                r.exit_code, r.success
+            ),
             Value::Result(res) => match res.as_ref() {
                 ValueResult::Ok(v) => write!(f, "Ok({})", v.to_repr()),
                 ValueResult::Err(v) => write!(f, "Err({})", v.to_repr()),
             },
             Value::Error(msg) => write!(f, "Error(\"{}\")", msg),
+            Value::Regex(re) => write!(f, "{}", re),
         }
     }
 }

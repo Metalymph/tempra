@@ -46,14 +46,13 @@ fn test_os_cwd_chdir() {
     let val = assert_runs(source);
     // Restoration is handled by the script itself above, but let's be double safe
     std::env::set_current_dir(&initial_cwd).unwrap();
-    
+
     if let Value::String(s) = val {
         assert!(s.len() < initial_cwd.to_string_lossy().len());
     } else {
-         panic!("Expected string, got {:?}", val);
+        panic!("Expected string, got {:?}", val);
     }
 }
-
 
 #[test]
 fn test_1() {
@@ -261,12 +260,15 @@ fn test_read_file() {
     std::fs::write(&path, "test_hello_world").unwrap();
     let path_str = path.to_str().unwrap().replace("\\", "\\\\");
 
-    let source = format!(r#"
+    let source = format!(
+        r#"
     fn main() {{
         fs.read("{}")!
     }}
-    "#, path_str);
-    
+    "#,
+        path_str
+    );
+
     let val = assert_runs(&source);
     if let Value::String(s) = val {
         assert_eq!(s, "test_hello_world");
@@ -281,15 +283,18 @@ fn test_write_file() {
     let path = dir.join("test_write.txt");
     let path_str = path.to_str().unwrap().replace("\\", "\\\\");
 
-    let source = format!(r#"
+    let source = format!(
+        r#"
     fn main() {{
         fs.write("{}", "hello_fero")!
     }}
-    "#, path_str);
-    
+    "#,
+        path_str
+    );
+
     let val = assert_runs(&source);
     assert!(matches!(val, Value::Unit));
-    
+
     let content = std::fs::read_to_string(&path).unwrap();
     assert_eq!(content, "hello_fero");
 }
@@ -301,15 +306,18 @@ fn test_append_file() {
     std::fs::write(&path, "hello").unwrap();
     let path_str = path.to_str().unwrap().replace("\\", "\\\\");
 
-    let source = format!(r#"
+    let source = format!(
+        r#"
     fn main() {{
         fs.append("{}", " world")!
     }}
-    "#, path_str);
-    
+    "#,
+        path_str
+    );
+
     let val = assert_runs(&source);
     assert!(matches!(val, Value::Unit));
-    
+
     let content = std::fs::read_to_string(&path).unwrap();
     assert_eq!(content, "hello world");
 }
@@ -321,11 +329,11 @@ fn test_exit_propagates() {
         exit(5)
     }
     "#;
-    
+
     let ast = fero_parser::parse_source(source).unwrap();
     let hir = fero_hir::lower_file(source, &ast);
     let result = fero_interpreter::run(&hir);
-    
+
     match result {
         Err(fero_interpreter::RuntimeError::Exit(5)) => {}
         other => panic!("Expected Exit(5) signal, got {:?}", other),
@@ -454,7 +462,8 @@ fn test_fs_exists() {
     std::fs::write(&path, "exists").unwrap();
     let path_str = path.to_str().unwrap().replace("\\", "\\\\");
 
-    let source = format!(r#"
+    let source = format!(
+        r#"
     fn main() {{
         let e = fs.exists("{}")!
         expect(e)
@@ -462,8 +471,10 @@ fn test_fs_exists() {
         expect(!non_existent)
         "ok"
     }}
-    "#, path_str);
-    
+    "#,
+        path_str
+    );
+
     let val = assert_runs(&source);
     assert_eq!(val, Value::String("ok".to_string()));
 }
@@ -475,15 +486,18 @@ fn test_fs_remove() {
     std::fs::write(&path, "remove me").unwrap();
     let path_str = path.to_str().unwrap().replace("\\", "\\\\");
 
-    let source = format!(r#"
+    let source = format!(
+        r#"
     fn main() {{
         expect(fs.exists("{}")!)
         fs.remove("{}")!
         expect(!fs.exists("{}")!)
         "removed"
     }}
-    "#, path_str, path_str, path_str);
-    
+    "#,
+        path_str, path_str, path_str
+    );
+
     let val = assert_runs(&source);
     assert_eq!(val, Value::String("removed".to_string()));
 }
@@ -503,7 +517,10 @@ fn test_named_arguments_execution() {
     "#;
     let val = assert_runs(source);
     if let Value::String(s) = val {
-        assert_eq!(s, "Hello Lorenzo, you are 25 | Hello Antigravity, you are 30 | Hello Pair, you are 100");
+        assert_eq!(
+            s,
+            "Hello Lorenzo, you are 25 | Hello Antigravity, you are 30 | Hello Pair, you are 100"
+        );
     } else {
         panic!("Expected String, got {:?}", val);
     }
@@ -696,14 +713,20 @@ fn test_struct_formatting() {
     "#;
     let val = assert_runs(source);
     // Fields should be sorted for consistency
-    assert_eq!(val, Value::String("User { age: 29, name: \"Lorenzo\" }".to_string()));
+    assert_eq!(
+        val,
+        Value::String("User { age: 29, name: \"Lorenzo\" }".to_string())
+    );
 }
 
 #[test]
 fn test_string_unicode_interpreter() {
     // ASCII
     assert_eq!(assert_runs(r#"fn main() { "abc".len() }"#), Value::Int64(3));
-    assert_eq!(assert_runs(r#"fn main() { "abc".size() }"#), Value::Int64(3));
+    assert_eq!(
+        assert_runs(r#"fn main() { "abc".size() }"#),
+        Value::Int64(3)
+    );
 
     // Unicode (h + é)
     // "é" is U+00E9, which is 2 bytes in UTF-8 (C3 A9)
@@ -721,7 +744,7 @@ fn test_string_unicode_interpreter() {
     }
     "#;
     assert_eq!(assert_runs(source), Value::Int64(2));
-    
+
     // Values
     let source = r#"
     fn main() {
@@ -819,7 +842,7 @@ fn test_string_bytes() {
         bs[0]
     }
     "#;
-    assert_eq!(assert_runs(source), Value::Int64(65)); // 'A' = 65
+    assert_eq!(assert_runs(source), Value::UInt8(65)); // 'A' = 65
 
     // bytes() len for ASCII matches size()
     let source = r#"
@@ -850,4 +873,138 @@ fn test_string_bytes() {
     }
     "#;
     assert_eq!(assert_runs(source), Value::Int64(3)); // 3 bytes in "hé"
+}
+
+#[test]
+fn test_regex_text_match() {
+    let source = r#"
+    fn main() {
+        let re = Regex.text("abc")
+        expect(re.is_match("zabcx"))
+        expect(!re.is_match("zzz"))
+        true
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::Bool(true));
+}
+
+#[test]
+fn test_regex_seq() {
+    let source = r#"
+    fn main() {
+        let re = Regex.seq(Regex.text("a"), Regex.text("b"))
+        expect(re.is_match("xabcy"))
+        expect(!re.is_match("xacy"))
+        true
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::Bool(true));
+}
+
+#[test]
+fn test_regex_alt() {
+    let source = r#"
+    fn main() {
+        let re = Regex.alt(Regex.text("cat"), Regex.text("dog"))
+        expect(re.is_match("hotdog"))
+        expect(re.is_match("catnap"))
+        expect(!re.is_match("bird"))
+        true
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::Bool(true));
+}
+
+#[test]
+fn test_regex_optional() {
+    let source = r#"
+    fn main() {
+        let re = Regex.seq(Regex.text("a"), Regex.optional(Regex.text("b")), Regex.text("c"))
+        expect(re.is_match("abc"))
+        expect(re.is_match("ac"))
+        true
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::Bool(true));
+}
+
+#[test]
+fn test_regex_zero_or_more() {
+    let source = r#"
+    fn main() {
+        let re = Regex.seq(Regex.text("a"), Regex.zero_or_more(Regex.text("b")), Regex.text("c"))
+        expect(re.is_match("ac"))
+        expect(re.is_match("abbbc"))
+        true
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::Bool(true));
+}
+
+#[test]
+fn test_regex_one_or_more() {
+    let source = r#"
+    fn main() {
+        let re = Regex.seq(Regex.text("a"), Regex.one_or_more(Regex.text("b")), Regex.text("c"))
+        expect(!re.is_match("ac"))
+        expect(re.is_match("abc"))
+        expect(re.is_match("abbbc"))
+        true
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::Bool(true));
+}
+
+#[test]
+fn test_regex_start_end() {
+    let source = r#"
+    fn main() {
+        let re = Regex.seq(Regex.start(), Regex.text("abc"), Regex.end())
+        expect(re.is_match("abc"))
+        expect(!re.is_match("zabc"))
+        expect(!re.is_match("abcz"))
+        true
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::Bool(true));
+}
+
+#[test]
+fn test_regex_digit_word_space() {
+    let source = r#"
+    fn main() {
+        expect(Regex.digit().is_match("a1"))
+        expect(!Regex.digit().is_match("ab"))
+        expect(Regex.word().is_match("!a"))
+        expect(!Regex.word().is_match("!?"))
+        expect(Regex.space().is_match("x y"))
+        expect(!Regex.space().is_match("xy"))
+        true
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::Bool(true));
+}
+
+#[test]
+fn test_regex_replace() {
+    let source = r#"
+    fn main() {
+        let re = Regex.text("abc")
+        re.replace("abc xyz abc", "X")
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::String("X xyz X".to_string()));
+}
+
+#[test]
+fn test_regex_unicode_scalar_sanity() {
+    let source = r#"
+    fn main() {
+        let re = Regex.text("é")
+        expect(re.is_match("héllo"))
+        expect(!re.is_match("hello"))
+        true
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::Bool(true));
 }

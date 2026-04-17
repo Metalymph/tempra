@@ -1,0 +1,8 @@
+let re = Regex.seq(
+    Regex.start(),
+    Regex.one_or_more(Regex.word()),
+    Regex.end(),
+)
+
+print(re.is_match("hello"))
+print(re.is_match("hello world"))

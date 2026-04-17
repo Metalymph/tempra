@@ -1,7 +1,7 @@
-use fero_hir::*;
-use crate::types::Type;
-use crate::context::{TypeContext, FunctionSignature, StructInfo, EnumInfo, StructFieldInfo};
 use crate::check_stmt::check_block;
+use crate::context::{EnumInfo, FunctionSignature, StructFieldInfo, StructInfo, TypeContext};
+use crate::types::Type;
+use fero_hir::*;
 use std::collections::HashMap;
 
 /// Check a single item (function body, struct, enum, etc.)
@@ -36,19 +36,22 @@ fn check_function(ctx: &mut TypeContext, f: &HirFunction) {
     }
 
     let body_ty = check_block(ctx, &f.body);
-    
+
     // Check final expression return type
     if let Some(expected) = &ctx.current_return_type {
         if body_ty != Type::Error && body_ty != *expected {
             // Special case: implicit Ok(()) for fallible Unit functions
-            let is_implicit_ok_unit = f.is_fallible 
+            let is_implicit_ok_unit = f.is_fallible
                 && matches!(f.return_type, None | Some(HirType::Named(_, _))) // Simplified check for Unit success
                 && body_ty == Type::Unit
                 && *expected == Type::Result(Box::new(Type::Unit), Box::new(Type::BuiltinError));
 
             if !is_implicit_ok_unit {
                 ctx.error(
-                    format!("Function body return type mismatch: expected {}, found {}", expected, body_ty),
+                    format!(
+                        "Function body return type mismatch: expected {}, found {}",
+                        expected, body_ty
+                    ),
                     f.body.span,
                 );
             }
@@ -80,11 +83,11 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
                 }
                 ctx.functions.insert(
                     f.name.clone(),
-                    FunctionSignature { 
+                    FunctionSignature {
                         visibility: f.visibility,
-                        params, 
-                        return_type, 
-                        is_fallible: f.is_fallible 
+                        params,
+                        return_type,
+                        is_fallible: f.is_fallible,
                     },
                 );
             }

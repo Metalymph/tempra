@@ -1,7 +1,7 @@
 use crate::control_flow::ControlFlow;
 use crate::env::RuntimeEnv;
 use crate::interpreter::Interpreter;
-use crate::value::{StructInstance, Value};
+use crate::value::{RegexValue, StructInstance, Value};
 use fero_hir::*;
 use std::collections::HashMap;
 
@@ -20,18 +20,28 @@ fn run_command(c: &crate::value::CommandValue) -> Result<Value, String> {
     };
 
     if c.check && !res.success {
-        Ok(Value::Result(Box::new(crate::value::ValueResult::Err(Value::Error(format!("Command '{}' failed with exit code {}", c.program, res.exit_code))))))
+        Ok(Value::Result(Box::new(crate::value::ValueResult::Err(
+            Value::Error(format!(
+                "Command '{}' failed with exit code {}",
+                c.program, res.exit_code
+            )),
+        ))))
     } else {
-        Ok(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::CommandResult(res)))))
+        Ok(Value::Result(Box::new(crate::value::ValueResult::Ok(
+            Value::CommandResult(res),
+        ))))
     }
 }
 
-fn pipe_commands(left: &crate::value::CommandValue, right: &crate::value::CommandValue) -> Result<Value, String> {
+fn pipe_commands(
+    left: &crate::value::CommandValue,
+    right: &crate::value::CommandValue,
+) -> Result<Value, String> {
     let left_output = std::process::Command::new(&left.program)
         .args(&left.args)
         .output()
         .map_err(|e| format!("Left command error: {}", e))?;
-    
+
     use std::io::Write;
     let mut right_child = std::process::Command::new(&right.program)
         .args(&right.args)
@@ -40,12 +50,14 @@ fn pipe_commands(left: &crate::value::CommandValue, right: &crate::value::Comman
         .stderr(std::process::Stdio::piped())
         .spawn()
         .map_err(|e| format!("Right command error: {}", e))?;
-        
+
     if let Some(mut stdin) = right_child.stdin.take() {
         let _ = stdin.write_all(&left_output.stdout);
     }
-    
-    let output = right_child.wait_with_output().map_err(|e| format!("Right wait error: {}", e))?;
+
+    let output = right_child
+        .wait_with_output()
+        .map_err(|e| format!("Right wait error: {}", e))?;
     Ok(Value::CommandResult(crate::value::CommandResultValue {
         exit_code: output.status.code().unwrap_or(-1),
         stdout: String::from_utf8_lossy(&output.stdout).to_string(),
@@ -59,6 +71,7 @@ fn value_to_string(value: &Value) -> String {
         Value::String(s) => s.clone(),
         Value::Bool(b) => b.to_string(),
         Value::Int64(i) => i.to_string(),
+        Value::UInt8(i) => i.to_string(),
         Value::Float64(f) => f.to_string(),
         // For other types, we use their Display implementation if they have one,
         // but the prompt is specific about which types to support in the helper.
@@ -131,7 +144,9 @@ impl Interpreter {
                         let res_v = run_command(cmd_left)?;
                         let success = match res_v {
                             Value::Result(ref r) => match r.as_ref() {
-                                crate::value::ValueResult::Ok(Value::CommandResult(cr)) => cr.success,
+                                crate::value::ValueResult::Ok(Value::CommandResult(cr)) => {
+                                    cr.success
+                                }
                                 crate::value::ValueResult::Err(_) => false,
                                 _ => unreachable!(),
                             },
@@ -147,7 +162,9 @@ impl Interpreter {
                         if let Value::Command(cmd_right) = right {
                             return run_command(&cmd_right).map(ControlFlow::Value);
                         } else {
-                            return Err("&& right operand must be Command if left is Command".into());
+                            return Err(
+                                "&& right operand must be Command if left is Command".into()
+                            );
                         }
                     }
                     v_left = Some(left);
@@ -162,7 +179,9 @@ impl Interpreter {
                         let res_v = run_command(cmd_left)?;
                         let success = match res_v {
                             Value::Result(ref r) => match r.as_ref() {
-                                crate::value::ValueResult::Ok(Value::CommandResult(cr)) => cr.success,
+                                crate::value::ValueResult::Ok(Value::CommandResult(cr)) => {
+                                    cr.success
+                                }
                                 crate::value::ValueResult::Err(_) => false,
                                 _ => unreachable!(),
                             },
@@ -178,7 +197,9 @@ impl Interpreter {
                         if let Value::Command(cmd_right) = right {
                             return run_command(&cmd_right).map(ControlFlow::Value);
                         } else {
-                            return Err("|| right operand must be Command if left is Command".into());
+                            return Err(
+                                "|| right operand must be Command if left is Command".into()
+                            );
                         }
                     }
                     v_left = Some(left);
@@ -217,7 +238,7 @@ impl Interpreter {
                     match &*binary.left {
                         HirExpression::Name(_, name) => {
                             if !env.update(name, right.clone()) {
-                                // Fallback for top-level if not found? 
+                                // Fallback for top-level if not found?
                                 // Actually, it should be there because of register_items or previous defs
                                 env.insert(name.clone(), right.clone());
                             }
@@ -227,12 +248,14 @@ impl Interpreter {
                             // Target: m.object . m.field
                             // We only support first-level struct member assignment for now
                             if let HirExpression::Name(_, obj_name) = &*m.object {
-                                let mut obj_val = env.get(obj_name).ok_or_else(|| format!("Variable {} not found", obj_name))?;
+                                let mut obj_val = env
+                                    .get(obj_name)
+                                    .ok_or_else(|| format!("Variable {} not found", obj_name))?;
                                 if let Value::Struct(ref mut s) = obj_val {
                                     s.fields.insert(m.field.clone(), right.clone());
                                     // Re-insert using update to ensure it goes back to the correct scope
                                     if !env.update(obj_name, obj_val.clone()) {
-                                         env.insert(obj_name.clone(), obj_val);
+                                        env.insert(obj_name.clone(), obj_val);
                                     }
                                     return Ok(ControlFlow::Value(right));
                                 } else {
@@ -258,6 +281,9 @@ impl Interpreter {
                         (Value::Int64(a), Value::Int64(b)) => {
                             Ok(ControlFlow::Value(Value::Int64(a + b)))
                         }
+                        (Value::UInt8(a), Value::UInt8(b)) => {
+                            Ok(ControlFlow::Value(Value::UInt8(a.wrapping_add(b))))
+                        }
                         (Value::Float64(a), Value::Float64(b)) => {
                             Ok(ControlFlow::Value(Value::Float64(a + b)))
                         }
@@ -270,6 +296,9 @@ impl Interpreter {
                         (Value::Int64(a), Value::Int64(b)) => {
                             Ok(ControlFlow::Value(Value::Int64(a - b)))
                         }
+                        (Value::UInt8(a), Value::UInt8(b)) => {
+                            Ok(ControlFlow::Value(Value::UInt8(a.wrapping_sub(b))))
+                        }
                         (Value::Float64(a), Value::Float64(b)) => {
                             Ok(ControlFlow::Value(Value::Float64(a - b)))
                         }
@@ -278,6 +307,9 @@ impl Interpreter {
                     HirBinaryOp::Mul => match (left, right) {
                         (Value::Int64(a), Value::Int64(b)) => {
                             Ok(ControlFlow::Value(Value::Int64(a * b)))
+                        }
+                        (Value::UInt8(a), Value::UInt8(b)) => {
+                            Ok(ControlFlow::Value(Value::UInt8(a.wrapping_mul(b))))
                         }
                         (Value::Float64(a), Value::Float64(b)) => {
                             Ok(ControlFlow::Value(Value::Float64(a * b)))
@@ -288,6 +320,9 @@ impl Interpreter {
                         (Value::Int64(a), Value::Int64(b)) => {
                             Ok(ControlFlow::Value(Value::Int64(a / b)))
                         }
+                        (Value::UInt8(a), Value::UInt8(b)) => {
+                            Ok(ControlFlow::Value(Value::UInt8(a / b)))
+                        }
                         (Value::Float64(a), Value::Float64(b)) => {
                             Ok(ControlFlow::Value(Value::Float64(a / b)))
                         }
@@ -295,6 +330,9 @@ impl Interpreter {
                     },
                     HirBinaryOp::Eq => match (left, right) {
                         (Value::Int64(a), Value::Int64(b)) => {
+                            Ok(ControlFlow::Value(Value::Bool(a == b)))
+                        }
+                        (Value::UInt8(a), Value::UInt8(b)) => {
                             Ok(ControlFlow::Value(Value::Bool(a == b)))
                         }
                         (Value::Float64(a), Value::Float64(b)) => {
@@ -312,6 +350,9 @@ impl Interpreter {
                         (Value::Int64(a), Value::Int64(b)) => {
                             Ok(ControlFlow::Value(Value::Bool(a != b)))
                         }
+                        (Value::UInt8(a), Value::UInt8(b)) => {
+                            Ok(ControlFlow::Value(Value::Bool(a != b)))
+                        }
                         (Value::Float64(a), Value::Float64(b)) => {
                             Ok(ControlFlow::Value(Value::Bool(a != b)))
                         }
@@ -327,6 +368,9 @@ impl Interpreter {
                         (Value::Int64(a), Value::Int64(b)) => {
                             Ok(ControlFlow::Value(Value::Bool(a < b)))
                         }
+                        (Value::UInt8(a), Value::UInt8(b)) => {
+                            Ok(ControlFlow::Value(Value::Bool(a < b)))
+                        }
                         (Value::Float64(a), Value::Float64(b)) => {
                             Ok(ControlFlow::Value(Value::Bool(a < b)))
                         }
@@ -334,6 +378,9 @@ impl Interpreter {
                     },
                     HirBinaryOp::Greater => match (left, right) {
                         (Value::Int64(a), Value::Int64(b)) => {
+                            Ok(ControlFlow::Value(Value::Bool(a > b)))
+                        }
+                        (Value::UInt8(a), Value::UInt8(b)) => {
                             Ok(ControlFlow::Value(Value::Bool(a > b)))
                         }
                         (Value::Float64(a), Value::Float64(b)) => {
@@ -372,7 +419,9 @@ impl Interpreter {
                                     }
                                     HirCallArgument::Named(n) => {
                                         match self.eval_expression(&n.value, env)? {
-                                            ControlFlow::Value(v) => { named_args.insert(n.name.clone(), v); }
+                                            ControlFlow::Value(v) => {
+                                                named_args.insert(n.name.clone(), v);
+                                            }
                                             cf => return Ok(cf),
                                         }
                                     }
@@ -393,7 +442,9 @@ impl Interpreter {
                                     }
                                     HirCallArgument::Named(n) => {
                                         match self.eval_expression(&n.value, env)? {
-                                            ControlFlow::Value(v) => { named_args.insert(n.name.clone(), v); }
+                                            ControlFlow::Value(v) => {
+                                                named_args.insert(n.name.clone(), v);
+                                            }
                                             cf => return Ok(cf),
                                         }
                                     }
@@ -414,7 +465,9 @@ impl Interpreter {
                                     }
                                     HirCallArgument::Named(n) => {
                                         match self.eval_expression(&n.value, env)? {
-                                            ControlFlow::Value(v) => { named_args.insert(n.name.clone(), v); }
+                                            ControlFlow::Value(v) => {
+                                                named_args.insert(n.name.clone(), v);
+                                            }
                                             cf => return Ok(cf),
                                         }
                                     }
@@ -422,12 +475,34 @@ impl Interpreter {
                             }
                             return self.eval_os_builtin(&member.field, &args, &named_args);
                         }
+                        if obj_name == "Regex" {
+                            let mut args = Vec::new();
+                            for arg in &call.args {
+                                match arg {
+                                    HirCallArgument::Positional(arg_expr) => {
+                                        match self.eval_expression(arg_expr, env)? {
+                                            ControlFlow::Value(v) => args.push(v),
+                                            cf => return Ok(cf),
+                                        }
+                                    }
+                                    HirCallArgument::Named(_) => {
+                                        return Err(
+                                            "Regex constructors only support positional arguments"
+                                                .into(),
+                                        );
+                                    }
+                                }
+                            }
+                            let re = Self::eval_regex_constructor(&member.field, &args)?;
+                            return Ok(ControlFlow::Value(Value::Regex(re)));
+                        }
                     }
-                        let obj = match self.eval_expression(&member.object, env)? {
-                            ControlFlow::Value(v) => v,
-                            cf => return Ok(cf),
-                        };
-                        if let Value::String(s) = obj {
+                    let obj = match self.eval_expression(&member.object, env)? {
+                        ControlFlow::Value(v) => v,
+                        cf => return Ok(cf),
+                    };
+                    match obj {
+                        Value::String(s) => {
                             let mut args = Vec::new();
                             let mut named_args = HashMap::new();
                             for arg in &call.args {
@@ -440,64 +515,84 @@ impl Interpreter {
                                     }
                                     HirCallArgument::Named(n) => {
                                         match self.eval_expression(&n.value, env)? {
-                                            ControlFlow::Value(v) => { named_args.insert(n.name.clone(), v); }
+                                            ControlFlow::Value(v) => {
+                                                named_args.insert(n.name.clone(), v);
+                                            }
                                             cf => return Ok(cf),
                                         }
                                     }
                                 }
                             }
-                            return self.eval_string_method(&s, &member.field, &args, &named_args).map(ControlFlow::Value);
+                            return self
+                                .eval_string_method(&s, &member.field, &args, &named_args)
+                                .map(ControlFlow::Value);
                         }
-                        if let Value::Array(arr) = obj {
+                        Value::Array(arr) => {
                             if member.field == "len" {
                                 if !call.args.is_empty() {
                                     return Err("Method 'len' expects 0 arguments".into());
                                 }
                                 return Ok(ControlFlow::Value(Value::Int64(arr.len() as i64)));
-                            } else {
-                                return Err(format!("Unknown method '{}' on Array", member.field));
                             }
+                            return Err(format!("Unknown method '{}' on Array", member.field));
                         }
-                        if let Value::Slice(slice) = obj {
+                        Value::Slice(slice) => {
                             if member.field == "len" {
                                 if !call.args.is_empty() {
                                     return Err("Method 'len' expects 0 arguments".into());
                                 }
                                 return Ok(ControlFlow::Value(Value::Int64(slice.len() as i64)));
-                            } else {
-                                return Err(format!("Unknown method '{}' on Slice", member.field));
                             }
+                            return Err(format!("Unknown method '{}' on Slice", member.field));
                         }
-                        if let Value::Command(cmd) = obj {
+                        Value::Command(cmd) => {
                             if member.field == "run" {
                                 if !call.args.is_empty() {
                                     return Err("Method 'run' expects 0 arguments".into());
                                 }
                                 return run_command(&cmd).map(ControlFlow::Value);
-                            } else {
-                                return Err(format!("Unknown method '{}' on Command", member.field));
                             }
-                        } else {
-                            return Err(format!("Method call on unsupported type: {:?}", obj));
+                            return Err(format!("Unknown method '{}' on Command", member.field));
                         }
+                        Value::Regex(re) => {
+                            let mut args = Vec::new();
+                            for arg in &call.args {
+                                match arg {
+                                    HirCallArgument::Positional(arg_expr) => {
+                                        match self.eval_expression(arg_expr, env)? {
+                                            ControlFlow::Value(v) => args.push(v),
+                                            cf => return Ok(cf),
+                                        }
+                                    }
+                                    HirCallArgument::Named(_) => {
+                                        return Err(
+                                            "Regex methods only support positional arguments"
+                                                .into(),
+                                        );
+                                    }
+                                }
+                            }
+                            return Self::eval_regex_method(&re, &member.field, &args)
+                                .map(ControlFlow::Value);
+                        }
+                        _ => return Err(format!("Method call on unsupported type: {:?}", obj)),
                     }
+                }
 
                 let mut positional_values = Vec::new();
                 let mut named_values = HashMap::new();
                 for arg in &call.args {
                     match arg {
-                        HirCallArgument::Positional(e) => {
-                            match self.eval_expression(e, env)? {
-                                ControlFlow::Value(v) => positional_values.push(v),
-                                cf => return Ok(cf),
+                        HirCallArgument::Positional(e) => match self.eval_expression(e, env)? {
+                            ControlFlow::Value(v) => positional_values.push(v),
+                            cf => return Ok(cf),
+                        },
+                        HirCallArgument::Named(n) => match self.eval_expression(&n.value, env)? {
+                            ControlFlow::Value(v) => {
+                                named_values.insert(n.name.clone(), v);
                             }
-                        }
-                        HirCallArgument::Named(n) => {
-                            match self.eval_expression(&n.value, env)? {
-                                ControlFlow::Value(v) => { named_values.insert(n.name.clone(), v); }
-                                cf => return Ok(cf),
-                            }
-                        }
+                            cf => return Ok(cf),
+                        },
                     }
                 }
 
@@ -505,7 +600,10 @@ impl Interpreter {
                     // Builtins
                     match name.as_str() {
                         "exit" => {
-                            let val = positional_values.get(0).or_else(|| named_values.get("code")).ok_or("Missing argument 'code' for exit")?;
+                            let val = positional_values
+                                .get(0)
+                                .or_else(|| named_values.get("code"))
+                                .ok_or("Missing argument 'code' for exit")?;
                             if let Value::Int64(code) = val {
                                 return Ok(ControlFlow::Exit(*code as i32));
                             } else {
@@ -533,7 +631,10 @@ impl Interpreter {
                             return Ok(ControlFlow::Value(Value::Unit));
                         }
                         "crash" => {
-                            let val = positional_values.get(0).or_else(|| named_values.get("message")).ok_or("Missing argument 'message' for crash")?;
+                            let val = positional_values
+                                .get(0)
+                                .or_else(|| named_values.get("message"))
+                                .ok_or("Missing argument 'message' for crash")?;
                             return Ok(ControlFlow::Crash(value_to_string(val)));
                         }
                         "fmt" => {
@@ -541,7 +642,8 @@ impl Interpreter {
                             if let Some(Value::String(sep)) = named_values.get("separator") {
                                 separator = sep;
                             }
-                            let s = positional_values.iter()
+                            let s = positional_values
+                                .iter()
                                 .map(|v| value_to_string(v))
                                 .collect::<Vec<_>>()
                                 .join(separator);
@@ -564,22 +666,30 @@ impl Interpreter {
                                             }
                                         }
                                     }
-                                    Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::String(input))))))
+                                    Ok(ControlFlow::Value(Value::Result(Box::new(
+                                        crate::value::ValueResult::Ok(Value::String(input)),
+                                    ))))
                                 }
-                                Err(e) => {
-                                    Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Err(Value::Error(format!("Failed to read stdin: {}", e)))))))
-                                }
-                            }
+                                Err(e) => Ok(ControlFlow::Value(Value::Result(Box::new(
+                                    crate::value::ValueResult::Err(Value::Error(format!(
+                                        "Failed to read stdin: {}",
+                                        e
+                                    ))),
+                                )))),
+                            };
                         }
                         "cmd" => {
-                            let program = match positional_values.get(0).or_else(|| named_values.get("program")) {
+                            let program = match positional_values
+                                .get(0)
+                                .or_else(|| named_values.get("program"))
+                            {
                                 Some(Value::String(s)) => s.clone(),
                                 _ => return Err("cmd requires a String program name".into()),
                             };
-                            
+
                             let mut cmd_args = Vec::new();
-                            // If second arg is an array, use it as args? 
-                            // No, prompt says cmd("grep", "hello", "file.txt"). 
+                            // If second arg is an array, use it as args?
+                            // No, prompt says cmd("grep", "hello", "file.txt").
                             // So positional args 1..N are command args.
                             for v in positional_values.iter().skip(1) {
                                 cmd_args.push(value_to_string(v));
@@ -593,25 +703,42 @@ impl Interpreter {
                             if let Some(Value::Bool(b)) = named_values.get("check") {
                                 check = *b;
                             }
-                            
-                            return Ok(ControlFlow::Value(Value::Command(crate::value::CommandValue { 
-                                program, 
-                                args: cmd_args,
-                                cwd,
-                                check,
-                            })));
+
+                            return Ok(ControlFlow::Value(Value::Command(
+                                crate::value::CommandValue {
+                                    program,
+                                    args: cmd_args,
+                                    cwd,
+                                    check,
+                                },
+                            )));
                         }
                         "Ok" => {
-                            let val = positional_values.get(0).or_else(|| named_values.get("value")).ok_or("Missing argument for Ok")?;
-                            return Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(val.clone())))));
+                            let val = positional_values
+                                .get(0)
+                                .or_else(|| named_values.get("value"))
+                                .ok_or("Missing argument for Ok")?;
+                            return Ok(ControlFlow::Value(Value::Result(Box::new(
+                                crate::value::ValueResult::Ok(val.clone()),
+                            ))));
                         }
                         "Err" => {
-                            let val = positional_values.get(0).or_else(|| named_values.get("error")).ok_or("Missing argument for Err")?;
-                            return Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Err(val.clone())))));
+                            let val = positional_values
+                                .get(0)
+                                .or_else(|| named_values.get("error"))
+                                .ok_or("Missing argument for Err")?;
+                            return Ok(ControlFlow::Value(Value::Result(Box::new(
+                                crate::value::ValueResult::Err(val.clone()),
+                            ))));
                         }
                         "expect" => {
-                            let cond_val = positional_values.get(0).or_else(|| named_values.get("condition")).ok_or("Missing argument 'condition' for expect")?;
-                            let msg_val = positional_values.get(1).or_else(|| named_values.get("message"));
+                            let cond_val = positional_values
+                                .get(0)
+                                .or_else(|| named_values.get("condition"))
+                                .ok_or("Missing argument 'condition' for expect")?;
+                            let msg_val = positional_values
+                                .get(1)
+                                .or_else(|| named_values.get("message"));
 
                             if let Value::Bool(b) = cond_val {
                                 if *b {
@@ -629,7 +756,10 @@ impl Interpreter {
                             }
                         }
                         "dbg" => {
-                            let val = positional_values.get(0).or_else(|| named_values.get("value")).ok_or("Missing argument for dbg")?;
+                            let val = positional_values
+                                .get(0)
+                                .or_else(|| named_values.get("value"))
+                                .ok_or("Missing argument for dbg")?;
                             let mut label = "dbg";
                             if let Some(Value::String(s)) = named_values.get("label") {
                                 label = s;
@@ -647,7 +777,7 @@ impl Interpreter {
                         .get(name)
                         .cloned()
                         .ok_or_else(|| format!("Function {} not found", name))?;
-                    
+
                     let mut final_args = vec![None; func.parameters.len()];
                     for (i, v) in positional_values.into_iter().enumerate() {
                         if i < final_args.len() {
@@ -663,18 +793,26 @@ impl Interpreter {
                             }
                             final_args[idx] = Some(v);
                         } else {
-                            return Err(format!("Unknown named argument {} for function {}", n, name));
+                            return Err(format!(
+                                "Unknown named argument {} for function {}",
+                                n, name
+                            ));
                         }
                     }
-                    
+
                     let mut args = Vec::new();
                     for (i, opt_v) in final_args.into_iter().enumerate() {
                         match opt_v {
                             Some(v) => args.push(v),
-                            None => return Err(format!("Missing argument for parameter {}", func.parameters[i].name)),
+                            None => {
+                                return Err(format!(
+                                    "Missing argument for parameter {}",
+                                    func.parameters[i].name
+                                ))
+                            }
                         }
                     }
-                    
+
                     return self.call_function(&func, args);
                 } else {
                     Err("Only named functions are supported".into())
@@ -701,7 +839,9 @@ impl Interpreter {
                     },
                     Value::Command(c) => match member.field.as_str() {
                         "program" => Ok(ControlFlow::Value(Value::String(c.program.clone()))),
-                        "args" => Ok(ControlFlow::Value(Value::Array(std::rc::Rc::new(c.args.iter().map(|s| Value::String(s.clone())).collect())))),
+                        "args" => Ok(ControlFlow::Value(Value::Array(std::rc::Rc::new(
+                            c.args.iter().map(|s| Value::String(s.clone())).collect(),
+                        )))),
                         _ => Err(format!("Field {} not found on Command", member.field)),
                     },
                     _ => Err("Member access requires a struct, Command, or CommandResult".into()),
@@ -717,19 +857,19 @@ impl Interpreter {
                     cf => return Ok(cf),
                 };
                 match (obj, idx) {
-                    (Value::Array(arr), Value::Int64(i)) => {
-                        arr.get(i as usize)
-                            .cloned()
-                            .map(ControlFlow::Value)
-                            .ok_or_else(|| "Index out of bounds".into())
+                    (Value::Array(arr), Value::Int64(i)) => arr
+                        .get(i as usize)
+                        .cloned()
+                        .map(ControlFlow::Value)
+                        .ok_or_else(|| "Index out of bounds".into()),
+                    (Value::Slice(slice), Value::Int64(i)) => slice
+                        .get(i as usize)
+                        .map(ControlFlow::Value)
+                        .ok_or_else(|| "Index out of bounds".into()),
+                    (Value::Array(_), _) | (Value::Slice(_), _) => {
+                        Err("Index must be Int64".into())
                     }
-                    (Value::Slice(slice), Value::Int64(i)) => {
-                        slice.get(i as usize)
-                            .map(ControlFlow::Value)
-                            .ok_or_else(|| "Index out of bounds".into())
-                    }
-                    (Value::Array(_), _) | (Value::Slice(_), _) => Err("Index must be Int64".into()),
-                    _ => Err("Index access requires an array or slice".into())
+                    _ => Err("Index access requires an array or slice".into()),
                 }
             }
             HirExpression::Slice(slice) => {
@@ -747,14 +887,19 @@ impl Interpreter {
                 };
 
                 let (parent, parent_len, start_offset) = match &obj {
-                    Value::Array(arr) => (crate::value::SliceParent::Values(arr.clone()), arr.len(), 0),
+                    Value::Array(arr) => {
+                        (crate::value::SliceParent::Values(arr.clone()), arr.len(), 0)
+                    }
                     Value::Slice(s) => (s.parent.clone(), s.len(), s.start),
                     _ => return Err("Slice requires an array or slice".into()),
                 };
 
                 if let (Value::Int64(start), Value::Int64(end)) = (start_val, end_val) {
                     if start < 0 || end < 0 || start > end || end > parent_len as i64 {
-                        return Ok(ControlFlow::Crash(format!("Slice bounds out of range: [{}..{}] for length {}", start, end, parent_len)));
+                        return Ok(ControlFlow::Crash(format!(
+                            "Slice bounds out of range: [{}..{}] for length {}",
+                            start, end, parent_len
+                        )));
                     }
                     Ok(ControlFlow::Value(Value::Slice(crate::value::SliceValue {
                         parent,
@@ -808,7 +953,9 @@ impl Interpreter {
                 let mut fields = HashMap::new();
                 for (name, expr) in &s.fields {
                     match self.eval_expression(expr, env)? {
-                        ControlFlow::Value(v) => { fields.insert(name.clone(), v); },
+                        ControlFlow::Value(v) => {
+                            fields.insert(name.clone(), v);
+                        }
                         cf => return Ok(cf),
                     }
                 }
@@ -820,7 +967,9 @@ impl Interpreter {
                             if let Some(default_expr) = &field.default_value {
                                 // Evaluate default expression in the CURRENT environment
                                 match self.eval_expression(default_expr, env)? {
-                                    ControlFlow::Value(v) => { fields.insert(field.name.clone(), v); },
+                                    ControlFlow::Value(v) => {
+                                        fields.insert(field.name.clone(), v);
+                                    }
                                     cf => return Ok(cf),
                                 }
                             }
@@ -911,9 +1060,9 @@ impl Interpreter {
                 match val {
                     Value::Result(res) => match res.as_ref() {
                         crate::value::ValueResult::Ok(v) => Ok(ControlFlow::Value(v.clone())),
-                        crate::value::ValueResult::Err(v) => {
-                            Ok(ControlFlow::Return(Value::Result(Box::new(crate::value::ValueResult::Err(v.clone())))))
-                        }
+                        crate::value::ValueResult::Err(v) => Ok(ControlFlow::Return(
+                            Value::Result(Box::new(crate::value::ValueResult::Err(v.clone()))),
+                        )),
                     },
                     _ => Err("'?' expects a Result value".into()),
                 }
@@ -937,7 +1086,11 @@ impl Interpreter {
         }
     }
 
-    fn eval_block(&mut self, block: &HirBlock, env: &mut RuntimeEnv) -> Result<ControlFlow, String> {
+    fn eval_block(
+        &mut self,
+        block: &HirBlock,
+        env: &mut RuntimeEnv,
+    ) -> Result<ControlFlow, String> {
         env.push_scope();
         let mut last_val = Value::Unit;
         for stmt in &block.statements {
@@ -970,33 +1123,57 @@ impl Interpreter {
         Ok(ControlFlow::Value(last_val))
     }
 
-    fn eval_fs_builtin(&mut self, name: &str, positional_args: &[Value], named_args: &HashMap<String, Value>) -> Result<ControlFlow, String> {
+    fn eval_fs_builtin(
+        &mut self,
+        name: &str,
+        positional_args: &[Value],
+        named_args: &HashMap<String, Value>,
+    ) -> Result<ControlFlow, String> {
         let get_arg = |idx: usize, arg_name: &str| -> Option<&Value> {
-            positional_args.get(idx).or_else(|| named_args.get(arg_name))
+            positional_args
+                .get(idx)
+                .or_else(|| named_args.get(arg_name))
         };
 
         match name {
             "read" => {
-                let path_val = get_arg(0, "path").ok_or_else(|| format!("'fs.read' missing argument 'path'"))?;
+                let path_val = get_arg(0, "path")
+                    .ok_or_else(|| format!("'fs.read' missing argument 'path'"))?;
                 if let Value::String(path) = path_val {
                     return match std::fs::read_to_string(path) {
-                        Ok(text) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::String(text)))))),
-                        Err(e) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Err(Value::Error(format!("Failed to read '{}': {}", path, e))))))),
-                    }
+                        Ok(text) => Ok(ControlFlow::Value(Value::Result(Box::new(
+                            crate::value::ValueResult::Ok(Value::String(text)),
+                        )))),
+                        Err(e) => Ok(ControlFlow::Value(Value::Result(Box::new(
+                            crate::value::ValueResult::Err(Value::Error(format!(
+                                "Failed to read '{}': {}",
+                                path, e
+                            ))),
+                        )))),
+                    };
                 } else {
                     return Err("'fs.read' requires a String for 'path'".into());
                 }
             }
             "write" | "append" => {
-                let path_val = get_arg(0, "path").ok_or_else(|| format!("'fs.{}' missing argument 'path'", name))?;
-                let text_val = get_arg(1, "text").ok_or_else(|| format!("'fs.{}' missing argument 'text'", name))?;
+                let path_val = get_arg(0, "path")
+                    .ok_or_else(|| format!("'fs.{}' missing argument 'path'", name))?;
+                let text_val = get_arg(1, "text")
+                    .ok_or_else(|| format!("'fs.{}' missing argument 'text'", name))?;
 
                 if let (Value::String(path), Value::String(text)) = (path_val, text_val) {
                     if name == "write" {
                         return match std::fs::write(path, text) {
-                            Ok(_) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::Unit))))),
-                            Err(e) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Err(Value::Error(format!("Failed to write to '{}': {}", path, e))))))),
-                        }
+                            Ok(_) => Ok(ControlFlow::Value(Value::Result(Box::new(
+                                crate::value::ValueResult::Ok(Value::Unit),
+                            )))),
+                            Err(e) => Ok(ControlFlow::Value(Value::Result(Box::new(
+                                crate::value::ValueResult::Err(Value::Error(format!(
+                                    "Failed to write to '{}': {}",
+                                    path, e
+                                ))),
+                            )))),
+                        };
                     } else {
                         use std::io::Write;
                         let res = (|| -> Result<(), String> {
@@ -1004,59 +1181,88 @@ impl Interpreter {
                                 .create(true)
                                 .append(true)
                                 .open(path)
-                                .map_err(|e| format!("Failed to open '{}' for appending: {}", path, e))?;
+                                .map_err(|e| {
+                                    format!("Failed to open '{}' for appending: {}", path, e)
+                                })?;
                             file.write_all(text.as_bytes())
                                 .map_err(|e| format!("Failed to append to '{}': {}", path, e))?;
                             Ok(())
                         })();
                         return match res {
-                            Ok(_) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::Unit))))),
-                            Err(msg) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Err(Value::Error(msg)))))),
-                        }
+                            Ok(_) => Ok(ControlFlow::Value(Value::Result(Box::new(
+                                crate::value::ValueResult::Ok(Value::Unit),
+                            )))),
+                            Err(msg) => Ok(ControlFlow::Value(Value::Result(Box::new(
+                                crate::value::ValueResult::Err(Value::Error(msg)),
+                            )))),
+                        };
                     }
                 } else {
                     return Err(format!("'fs.{}' requires two String arguments", name));
                 }
             }
             "exists" => {
-                let path_val = get_arg(0, "path").ok_or_else(|| format!("'fs.exists' missing argument 'path'"))?;
+                let path_val = get_arg(0, "path")
+                    .ok_or_else(|| format!("'fs.exists' missing argument 'path'"))?;
                 if let Value::String(path) = path_val {
                     let exists = std::path::Path::new(path).exists();
-                    Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::Bool(exists))))))
+                    Ok(ControlFlow::Value(Value::Result(Box::new(
+                        crate::value::ValueResult::Ok(Value::Bool(exists)),
+                    ))))
                 } else {
                     return Err("'fs.exists' requires a String for 'path'".into());
                 }
             }
             "remove" | "mkdir" | "list_dir" => {
-                let path_val = get_arg(0, "path").ok_or_else(|| format!("'fs.{}' missing argument 'path'", name))?;
+                let path_val = get_arg(0, "path")
+                    .ok_or_else(|| format!("'fs.{}' missing argument 'path'", name))?;
                 if let Value::String(path) = path_val {
                     match name {
-                        "remove" => {
-                            match std::fs::remove_file(path) {
-                                Ok(_) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::Unit))))),
-                                Err(e) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Err(Value::Error(format!("Failed to remove '{}': {}", path, e))))))),
-                            }
-                        }
-                        "mkdir" => {
-                            match std::fs::create_dir(path) {
-                                Ok(_) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::Unit))))),
-                                Err(e) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Err(Value::Error(format!("Failed to create directory '{}': {}", path, e))))))),
-                            }
-                        }
-                        "list_dir" => {
-                            match std::fs::read_dir(path) {
-                                Ok(entries) => {
-                                    let mut names = Vec::new();
-                                    for entry in entries {
-                                        if let Ok(entry) = entry {
-                                            names.push(Value::String(entry.file_name().to_string_lossy().to_string()));
-                                        }
+                        "remove" => match std::fs::remove_file(path) {
+                            Ok(_) => Ok(ControlFlow::Value(Value::Result(Box::new(
+                                crate::value::ValueResult::Ok(Value::Unit),
+                            )))),
+                            Err(e) => Ok(ControlFlow::Value(Value::Result(Box::new(
+                                crate::value::ValueResult::Err(Value::Error(format!(
+                                    "Failed to remove '{}': {}",
+                                    path, e
+                                ))),
+                            )))),
+                        },
+                        "mkdir" => match std::fs::create_dir(path) {
+                            Ok(_) => Ok(ControlFlow::Value(Value::Result(Box::new(
+                                crate::value::ValueResult::Ok(Value::Unit),
+                            )))),
+                            Err(e) => Ok(ControlFlow::Value(Value::Result(Box::new(
+                                crate::value::ValueResult::Err(Value::Error(format!(
+                                    "Failed to create directory '{}': {}",
+                                    path, e
+                                ))),
+                            )))),
+                        },
+                        "list_dir" => match std::fs::read_dir(path) {
+                            Ok(entries) => {
+                                let mut names = Vec::new();
+                                for entry in entries {
+                                    if let Ok(entry) = entry {
+                                        names.push(Value::String(
+                                            entry.file_name().to_string_lossy().to_string(),
+                                        ));
                                     }
-                    Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::Array(std::rc::Rc::new(names)))))))
                                 }
-                                Err(e) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Err(Value::Error(format!("Failed to read directory '{}': {}", path, e))))))),
+                                Ok(ControlFlow::Value(Value::Result(Box::new(
+                                    crate::value::ValueResult::Ok(Value::Array(std::rc::Rc::new(
+                                        names,
+                                    ))),
+                                ))))
                             }
-                        }
+                            Err(e) => Ok(ControlFlow::Value(Value::Result(Box::new(
+                                crate::value::ValueResult::Err(Value::Error(format!(
+                                    "Failed to read directory '{}': {}",
+                                    path, e
+                                ))),
+                            )))),
+                        },
                         _ => unreachable!(),
                     }
                 } else {
@@ -1064,8 +1270,10 @@ impl Interpreter {
                 }
             }
             "rename" | "copy" => {
-                let from_val = get_arg(0, "from").ok_or_else(|| format!("'fs.{}' missing argument 'from'", name))?;
-                let to_val = get_arg(1, "to").ok_or_else(|| format!("'fs.{}' missing argument 'to'", name))?;
+                let from_val = get_arg(0, "from")
+                    .ok_or_else(|| format!("'fs.{}' missing argument 'from'", name))?;
+                let to_val = get_arg(1, "to")
+                    .ok_or_else(|| format!("'fs.{}' missing argument 'to'", name))?;
                 if let (Value::String(from), Value::String(to)) = (from_val, to_val) {
                     let res = if name == "rename" {
                         std::fs::rename(from, to).map(|_| ())
@@ -1073,8 +1281,15 @@ impl Interpreter {
                         std::fs::copy(from, to).map(|_| ())
                     };
                     match res {
-                        Ok(_) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::Unit))))),
-                        Err(e) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Err(Value::Error(format!("Failed to {} '{}' to '{}': {}", name, from, to, e))))))),
+                        Ok(_) => Ok(ControlFlow::Value(Value::Result(Box::new(
+                            crate::value::ValueResult::Ok(Value::Unit),
+                        )))),
+                        Err(e) => Ok(ControlFlow::Value(Value::Result(Box::new(
+                            crate::value::ValueResult::Err(Value::Error(format!(
+                                "Failed to {} '{}' to '{}': {}",
+                                name, from, to, e
+                            ))),
+                        )))),
                     }
                 } else {
                     return Err(format!("'fs.{}' requires two String arguments", name));
@@ -1084,23 +1299,38 @@ impl Interpreter {
         }
     }
 
-    fn eval_env_builtin(&mut self, name: &str, positional_args: &[Value], named_args: &HashMap<String, Value>) -> Result<ControlFlow, String> {
+    fn eval_env_builtin(
+        &mut self,
+        name: &str,
+        positional_args: &[Value],
+        named_args: &HashMap<String, Value>,
+    ) -> Result<ControlFlow, String> {
         let get_arg = |idx: usize, arg_name: &str| -> Option<&Value> {
-            positional_args.get(idx).or_else(|| named_args.get(arg_name))
+            positional_args
+                .get(idx)
+                .or_else(|| named_args.get(arg_name))
         };
 
         match name {
             "get" => {
-                let name_val = get_arg(0, "name").ok_or_else(|| format!("'env.get' missing argument 'name'"))?;
+                let name_val = get_arg(0, "name")
+                    .ok_or_else(|| format!("'env.get' missing argument 'name'"))?;
                 if let Value::String(key) = name_val {
                     match std::env::var(key) {
-                        Ok(val) => Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::String(val)))))),
-                        Err(std::env::VarError::NotPresent) => {
-                            Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Err(Value::Error(format!("Environment variable '{}' not found", key)))))))
-                        }
-                        Err(e) => {
-                            Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Err(Value::Error(format!("Failed to get environment variable '{}': {}", key, e)))))))
-                        }
+                        Ok(val) => Ok(ControlFlow::Value(Value::Result(Box::new(
+                            crate::value::ValueResult::Ok(Value::String(val)),
+                        )))),
+                        Err(std::env::VarError::NotPresent) => Ok(ControlFlow::Value(
+                            Value::Result(Box::new(crate::value::ValueResult::Err(Value::Error(
+                                format!("Environment variable '{}' not found", key),
+                            )))),
+                        )),
+                        Err(e) => Ok(ControlFlow::Value(Value::Result(Box::new(
+                            crate::value::ValueResult::Err(Value::Error(format!(
+                                "Failed to get environment variable '{}': {}",
+                                key, e
+                            ))),
+                        )))),
                     }
                 } else {
                     return Err("'env.get' requires a String for 'name'".into());
@@ -1110,7 +1340,12 @@ impl Interpreter {
         }
     }
 
-    fn eval_os_builtin(&self, name: &str, args: &[Value], named_args: &HashMap<String, Value>) -> Result<ControlFlow, String> {
+    fn eval_os_builtin(
+        &self,
+        name: &str,
+        args: &[Value],
+        named_args: &HashMap<String, Value>,
+    ) -> Result<ControlFlow, String> {
         let get_arg = |idx: usize, arg_name: &str| -> Option<&Value> {
             args.get(idx).or_else(|| named_args.get(arg_name))
         };
@@ -1120,27 +1355,33 @@ impl Interpreter {
                 let val_args = self.args.iter().map(|s| Value::String(s.clone())).collect();
                 Ok(ControlFlow::Value(Value::Array(std::rc::Rc::new(val_args))))
             }
-            "cwd" => {
-                match std::env::current_dir() {
-                    Ok(path) => {
-                        let path_str = path.to_string_lossy().to_string();
-                        Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::String(path_str))))))
-                    }
-                    Err(e) => {
-                        Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Err(Value::Error(format!("Failed to get cwd: {}", e)))))))
-                    }
+            "cwd" => match std::env::current_dir() {
+                Ok(path) => {
+                    let path_str = path.to_string_lossy().to_string();
+                    Ok(ControlFlow::Value(Value::Result(Box::new(
+                        crate::value::ValueResult::Ok(Value::String(path_str)),
+                    ))))
                 }
-            }
+                Err(e) => Ok(ControlFlow::Value(Value::Result(Box::new(
+                    crate::value::ValueResult::Err(Value::Error(format!(
+                        "Failed to get cwd: {}",
+                        e
+                    ))),
+                )))),
+            },
             "chdir" => {
                 let path_val = get_arg(0, "path").ok_or("Missing argument 'path' for os.chdir")?;
                 if let Value::String(path_str) = path_val {
                     match std::env::set_current_dir(path_str) {
-                        Ok(_) => {
-                            Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::Unit)))))
-                        }
-                        Err(e) => {
-                            Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Err(Value::Error(format!("Failed to chdir: {}", e)))))))
-                        }
+                        Ok(_) => Ok(ControlFlow::Value(Value::Result(Box::new(
+                            crate::value::ValueResult::Ok(Value::Unit),
+                        )))),
+                        Err(e) => Ok(ControlFlow::Value(Value::Result(Box::new(
+                            crate::value::ValueResult::Err(Value::Error(format!(
+                                "Failed to chdir: {}",
+                                e
+                            ))),
+                        )))),
                     }
                 } else {
                     Err("os.chdir requires a String argument".into())
@@ -1150,8 +1391,13 @@ impl Interpreter {
         }
     }
 
-
-    fn eval_string_method(&mut self, s: &str, name: &str, args: &[Value], _named_args: &HashMap<std::string::String, Value>) -> Result<Value, String> {
+    fn eval_string_method(
+        &mut self,
+        s: &str,
+        name: &str,
+        args: &[Value],
+        _named_args: &HashMap<std::string::String, Value>,
+    ) -> Result<Value, String> {
         let get_arg = |idx: usize, arg_name: &str| -> Option<&Value> {
             args.get(idx).or_else(|| _named_args.get(arg_name))
         };
@@ -1173,7 +1419,9 @@ impl Interpreter {
             "to_lower" => Ok(Value::String(s.to_lowercase())),
             "to_upper" => Ok(Value::String(s.to_uppercase())),
             "contains" => {
-                let pattern = get_arg(0, "pattern").or_else(|| get_arg(0, "substr")).ok_or("Missing argument for contains")?;
+                let pattern = get_arg(0, "pattern")
+                    .or_else(|| get_arg(0, "substr"))
+                    .ok_or("Missing argument for contains")?;
                 if let Value::String(p) = pattern {
                     Ok(Value::Bool(s.contains(p)))
                 } else {
@@ -1181,7 +1429,9 @@ impl Interpreter {
                 }
             }
             "starts_with" => {
-                let prefix = get_arg(0, "prefix").or_else(|| get_arg(0, "pattern")).ok_or("Missing argument for starts_with")?;
+                let prefix = get_arg(0, "prefix")
+                    .or_else(|| get_arg(0, "pattern"))
+                    .ok_or("Missing argument for starts_with")?;
                 if let Value::String(p) = prefix {
                     Ok(Value::Bool(s.starts_with(p)))
                 } else {
@@ -1189,7 +1439,9 @@ impl Interpreter {
                 }
             }
             "ends_with" => {
-                let suffix = get_arg(0, "suffix").or_else(|| get_arg(0, "pattern")).ok_or("Missing argument for ends_with")?;
+                let suffix = get_arg(0, "suffix")
+                    .or_else(|| get_arg(0, "pattern"))
+                    .ok_or("Missing argument for ends_with")?;
                 if let Value::String(p) = suffix {
                     Ok(Value::Bool(s.ends_with(p)))
                 } else {
@@ -1197,9 +1449,13 @@ impl Interpreter {
                 }
             }
             "split" => {
-                let sep = get_arg(0, "separator").ok_or("Missing argument 'separator' for split")?;
+                let sep =
+                    get_arg(0, "separator").ok_or("Missing argument 'separator' for split")?;
                 if let Value::String(p) = sep {
-                    let parts = s.split(p).map(|part| Value::String(part.to_string())).collect();
+                    let parts = s
+                        .split(p)
+                        .map(|part| Value::String(part.to_string()))
+                        .collect();
                     Ok(Value::Array(std::rc::Rc::new(parts)))
                 } else {
                     Err("split expects String".into())
@@ -1215,6 +1471,117 @@ impl Interpreter {
                 }
             }
             _ => Err(format!("Unknown String method '{}'", name)),
+        }
+    }
+
+    fn eval_regex_constructor(name: &str, args: &[Value]) -> Result<RegexValue, String> {
+        let require_regex = |v: &Value| -> Result<RegexValue, String> {
+            if let Value::Regex(re) = v {
+                Ok(re.clone())
+            } else {
+                Err("Expected Regex argument".into())
+            }
+        };
+
+        match name {
+            "text" => match args {
+                [Value::String(s)] => Ok(RegexValue::Text(s.clone())),
+                [_] => Err("'Regex.text' expects a String argument".into()),
+                _ => Err("'Regex.text' expects exactly 1 argument".into()),
+            },
+            "any" => {
+                if args.is_empty() {
+                    Ok(RegexValue::Any)
+                } else {
+                    Err("'Regex.any' expects 0 arguments".into())
+                }
+            }
+            "seq" => {
+                if args.len() < 2 {
+                    return Err("'Regex.seq' expects at least 2 Regex arguments".into());
+                }
+                let mut parts = Vec::with_capacity(args.len());
+                for arg in args {
+                    parts.push(require_regex(arg)?);
+                }
+                Ok(RegexValue::Seq(parts))
+            }
+            "alt" => {
+                if args.len() < 2 {
+                    return Err("'Regex.alt' expects at least 2 Regex arguments".into());
+                }
+                let mut parts = Vec::with_capacity(args.len());
+                for arg in args {
+                    parts.push(require_regex(arg)?);
+                }
+                Ok(RegexValue::Alt(parts))
+            }
+            "optional" => match args {
+                [arg] => Ok(RegexValue::Optional(Box::new(require_regex(arg)?))),
+                _ => Err("'Regex.optional' expects exactly 1 Regex argument".into()),
+            },
+            "zero_or_more" => match args {
+                [arg] => Ok(RegexValue::ZeroOrMore(Box::new(require_regex(arg)?))),
+                _ => Err("'Regex.zero_or_more' expects exactly 1 Regex argument".into()),
+            },
+            "one_or_more" => match args {
+                [arg] => Ok(RegexValue::OneOrMore(Box::new(require_regex(arg)?))),
+                _ => Err("'Regex.one_or_more' expects exactly 1 Regex argument".into()),
+            },
+            "start" => {
+                if args.is_empty() {
+                    Ok(RegexValue::Start)
+                } else {
+                    Err("'Regex.start' expects 0 arguments".into())
+                }
+            }
+            "end" => {
+                if args.is_empty() {
+                    Ok(RegexValue::End)
+                } else {
+                    Err("'Regex.end' expects 0 arguments".into())
+                }
+            }
+            "digit" => {
+                if args.is_empty() {
+                    Ok(RegexValue::Digit)
+                } else {
+                    Err("'Regex.digit' expects 0 arguments".into())
+                }
+            }
+            "space" => {
+                if args.is_empty() {
+                    Ok(RegexValue::Space)
+                } else {
+                    Err("'Regex.space' expects 0 arguments".into())
+                }
+            }
+            "word" => {
+                if args.is_empty() {
+                    Ok(RegexValue::Word)
+                } else {
+                    Err("'Regex.word' expects 0 arguments".into())
+                }
+            }
+            _ => Err(format!("Unknown Regex constructor 'Regex.{}'", name)),
+        }
+    }
+
+    fn eval_regex_method(re: &RegexValue, name: &str, args: &[Value]) -> Result<Value, String> {
+        match name {
+            "is_match" => match args {
+                [Value::String(text)] => Ok(Value::Bool(re.is_match(text))),
+                [_] => Err("'is_match' expects a String argument".into()),
+                _ => Err("'is_match' expects exactly 1 argument".into()),
+            },
+            "replace" => match args {
+                [Value::String(text), Value::String(with)] => {
+                    Ok(Value::String(re.replace_all(text, with)))
+                }
+                [_, _] => Err("'replace' expects (String, String)".into()),
+                _ => Err("'replace' expects exactly 2 arguments".into()),
+            },
+            _ => Err(format!("Unknown Regex method '{}'", name)),
         }
     }
 }

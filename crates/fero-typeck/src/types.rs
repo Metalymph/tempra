@@ -34,6 +34,7 @@ pub enum Type {
 
     Command,
     CommandResult,
+    Regex,
 
     /// Used during partial checking when a type is not yet known.
     Unknown,
@@ -92,6 +93,10 @@ impl Type {
                 | Type::Int16
                 | Type::Int32
                 | Type::Int64
+                | Type::UInt8
+                | Type::UInt16
+                | Type::UInt32
+                | Type::UInt64
                 | Type::Float32
                 | Type::Float64
                 | Type::Array(_)
@@ -102,6 +107,7 @@ impl Type {
                 | Type::Result(_, _)
                 | Type::Struct(_)
                 | Type::Enum(_)
+                | Type::Regex
         )
     }
 }
@@ -128,7 +134,9 @@ impl fmt::Display for Type {
             Type::Tuple(elems) => {
                 write!(f, "(")?;
                 for (i, t) in elems.iter().enumerate() {
-                    if i > 0 { write!(f, ", ")?; }
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
                     write!(f, "{}", t)?;
                 }
                 write!(f, ")")
@@ -137,6 +145,7 @@ impl fmt::Display for Type {
             Type::Enum(name) => write!(f, "{}", name),
             Type::Command => write!(f, "Command"),
             Type::CommandResult => write!(f, "CommandResult"),
+            Type::Regex => write!(f, "Regex"),
             Type::Unknown => write!(f, "?"),
             Type::Error => write!(f, "<error>"),
             Type::BuiltinError => write!(f, "Error"),
@@ -163,6 +172,7 @@ pub fn resolve_named_type(name: &str) -> Type {
         "Float64" => Type::Float64,
         "Command" => Type::Command,
         "CommandResult" => Type::CommandResult,
+        "Regex" => Type::Regex,
         "Error" => Type::BuiltinError,
         _ => Type::Unknown, // caller decides if this is struct/enum
     }

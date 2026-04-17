@@ -288,10 +288,45 @@ Rules:
 - `s.size()` returns the number of **UTF-8 bytes**
 - `s.bytes()` returns a read-only `Slice(UInt8)` view of the UTF-8 bytes
 - `for ch in s` iterates over **Unicode scalar values** (binding `ch` as a single-scalar `String`)
-- `for b in s.bytes()` iterates over raw UTF-8 bytes (`b` as `Int` / `UInt8`)
+- `for b in s.bytes()` iterates over raw UTF-8 bytes (`b` as `UInt8`)
 - **string indexing `s[i]` is intentionally unsupported**
 - **string slicing `s[a..b]` is intentionally unsupported**
 - no implicit byte-to-string conversions
+
+### Regex (v0)
+
+`Regex` is a first-class value type built using composable constructors, not a text mini-language as primary API.
+
+Supported constructors:
+
+- `Regex.text(String)`
+- `Regex.any()`
+- `Regex.seq(Regex, Regex, ...)`
+- `Regex.alt(Regex, Regex, ...)`
+- `Regex.optional(Regex)`
+- `Regex.zero_or_more(Regex)`
+- `Regex.one_or_more(Regex)`
+- `Regex.start()`
+- `Regex.end()`
+- `Regex.digit()`
+- `Regex.space()`
+- `Regex.word()`
+
+Supported methods:
+
+- `re.is_match(text: String) -> Bool`
+- `re.replace(text: String, with: String) -> String` (global replacement, no captures)
+
+Explicitly not part of v0:
+
+- capture groups and named groups
+- backreferences
+- lookaround
+- flags system
+
+Rationale:
+
+- constructor-based regex values are structured data and are ready for future compile-time and AOT optimizations.
 
 ---
 

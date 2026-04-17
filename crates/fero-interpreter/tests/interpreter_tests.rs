@@ -17,13 +17,48 @@ fn assert_runs_with_args(source: &str, args: Vec<String>) -> Value {
 fn test_as_optional_interpreter() {
     let source = r#"
     fn main() {
-        let x = "hello" as? String
-        expect(x is String?)
-        expect(x == Some("hello"))
+        expect(("hello" as? String) == Some("hello"))
+        expect((123 as? String) == None)
+        expect(((123 as! Int) as? String) == None)
+        "ok"
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::String("ok".to_string()));
+}
 
-        let y = 1 as? String
-        expect(y == None)
-        
+#[test]
+fn test_as_optional_option_casts() {
+    let source = r#"
+    fn main() {
+        let x = Some("hello")
+        let y = x as? String?
+        expect(y == Some(Some("hello"))) // No unwrap, correctly wrapped Option
+
+        let a = Some(123)
+        let b = a as? String?
+        expect(b == None)
+
+        let i = None
+        let j = i as? String?
+        expect(j == Some(None))
+        "ok"
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::String("ok".to_string()));
+}
+
+#[test]
+fn test_as_optional_result_casts() {
+    let source = r#"
+    fn main() {
+        let x = Ok("hello")
+        let y = x as? String!
+        expect(y is (String!)?)
+        expect(y == Some(Ok("hello")))
+
+        let a = Ok(123)
+        let b = a as? String!
+        expect(b == None)
         "ok"
     }
     "#;

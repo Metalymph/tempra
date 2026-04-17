@@ -58,6 +58,47 @@ fn test_as_plain_failure() {
 }
 
 #[test]
+fn test_narrowing_primitive() {
+    expect_ok(
+        r#"
+        fn main() {
+            let x = "hello" as? String;
+            if x is String {
+                let l = x.len(); // Method exists on String
+            }
+        }
+    "#,
+    );
+}
+
+#[test]
+fn test_narrowing_negative() {
+    expect_err(
+        r#"
+        fn main() {
+            let x = 123 as? String;
+            if x is String {
+            }
+            let l = x.len(); // Should fail because x is Option outside if
+        }
+    "#,
+    );
+}
+
+#[test]
+fn test_narrowing_option() {
+    expect_ok(
+        r#"
+        fn main() {
+            let x = Some("hello") as? String?;
+            if x is String? {
+            }
+        }
+    "#,
+    );
+}
+
+#[test]
 fn test_literal_typing() {
     expect_ok(
         r#"

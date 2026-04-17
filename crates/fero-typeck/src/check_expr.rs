@@ -1264,7 +1264,20 @@ fn check_if(ctx: &mut TypeContext, i: &HirIf) -> Type {
         ctx.error(format!("If condition must be Bool, found {}", cond), i.span);
     }
 
+    ctx.scopes.push_scope();
+    if let HirExpression::Is(is_expr) = &*i.condition {
+        if let HirExpression::Name(_, var_name) = &*is_expr.value {
+            let narrowed_ty = ctx.resolve_hir_type(&is_expr.ty);
+            if narrowed_ty != Type::Unknown {
+                if ctx.scopes.lookup(var_name).is_some() {
+                    ctx.scopes.insert(var_name.clone(), narrowed_ty);
+                }
+            }
+        }
+    }
+
     let then_ty = crate::check_stmt::check_block(ctx, &i.then_block);
+    ctx.scopes.pop_scope();
 
     if let Some(else_branch) = &i.else_branch {
         let else_ty = check_expression(ctx, else_branch);

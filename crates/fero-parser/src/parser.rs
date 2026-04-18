@@ -962,10 +962,20 @@ impl<'src> Parser<'src> {
                     arguments,
                 }))
             } else {
-                Ok(Pattern::Identifier(IdentifierPattern {
-                    span: name.span,
-                    name,
-                }))
+                // Known zero-arg constructors are always EnumCase, never bindings.
+                let name_str = &self.source[name.span.start as usize..name.span.end as usize];
+                if matches!(name_str, "None" | "Some" | "Ok" | "Err") {
+                    Ok(Pattern::EnumCase(EnumCasePattern {
+                        span: name.span,
+                        name,
+                        arguments: vec![],
+                    }))
+                } else {
+                    Ok(Pattern::Identifier(IdentifierPattern {
+                        span: name.span,
+                        name,
+                    }))
+                }
             }
         }
     }

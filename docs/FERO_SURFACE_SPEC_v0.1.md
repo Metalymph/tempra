@@ -123,6 +123,16 @@ Rules:
 - Bindings are scoped to the arm body.
 - Non-exhaustive matches crash at runtime in v0.1.
 
+### Exhaustiveness Checking (v0.1)
+
+Static exhaustiveness analysis applies only to `Option` and `Result` scrutinees:
+
+- A match over `Option[T]` **must** cover `Some(...)` **and** `None`, or have a catch-all (`_` or binding).
+- A match over `Result[T, E]` **must** cover `Ok(...)` **and** `Err(...)`, or have a catch-all.
+- Arms after a catch-all (`_` or naked binding) are rejected as unreachable.
+- Duplicate arms for the same finite constructor (`None`, `None`) are rejected.
+- For unsupported scrutinee types (e.g. structs), exhaustiveness is **not** checked statically; runtime crash remains the fallback.
+
 ---
 
 ## 8. For

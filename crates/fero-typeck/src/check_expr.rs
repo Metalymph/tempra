@@ -1426,13 +1426,60 @@ fn check_match(ctx: &mut TypeContext, m: &HirMatch) -> Type {
     let val_ty = check_expression(ctx, &m.value);
 
     let mut result_ty: Option<Type> = None;
+
+    let track_option = matches!(val_ty, Type::Option(_));
+    let track_result = matches!(val_ty, Type::Result(_, _));
+
+    let mut seen_some = false;
+    let mut seen_none = false;
+    let mut seen_ok   = false;
+    let mut seen_err  = false;
+    let mut seen_catch_all = false;
+
     for arm in &m.arms {
+        // Arms after a catch-all are unreachable.
+        if seen_catch_all {
+            ctx.error(
+                "Unreachable match arm: a previous catch-all already covers all remaining cases",
+                arm.span,
+            );
+        }
+
+        // Duplicate finite-constructor detection for Option / Result.
+        if track_option || track_result {
+            if let Some(name) = match_arm_constructor_name(&arm.pattern) {
+                let is_dup = match name {
+                    "Some" => seen_some,
+                    "None" => seen_none,
+                    "Ok"   => seen_ok,
+                    "Err"  => seen_err,
+                    _      => false,
+                };
+                if is_dup {
+                    ctx.error(
+                        format!("Duplicate '{}' arm: this constructor was already matched", name),
+                        arm.span,
+                    );
+                }
+            }
+        }
+
+        // Update coverage flags.
+        match match_arm_kind(&arm.pattern) {
+            MatchArmKind::CatchAll => seen_catch_all = true,
+            MatchArmKind::Some     => seen_some = true,
+            MatchArmKind::None     => seen_none = true,
+            MatchArmKind::Ok       => seen_ok   = true,
+            MatchArmKind::Err      => seen_err  = true,
+            MatchArmKind::Other    => {}
+        }
+
+        // Validate pattern and typecheck arm body.
         if val_ty != Type::Error {
             validate_pattern_type(ctx, &val_ty, &arm.pattern);
         }
 
         ctx.scopes.push_scope();
-
         if val_ty != Type::Error {
             let mut bindings = Vec::new();
             extract_pattern_bindings(&val_ty, &arm.pattern, &mut bindings);
@@ -1440,18 +1487,13 @@ fn check_match(ctx: &mut TypeContext, m: &HirMatch) -> Type {
                 ctx.scopes.insert(name, ty);
             }
         }
-
         let arm_ty = check_expression(ctx, &arm.value);
-
         ctx.scopes.pop_scope();
 
         if let Some(ref expected) = result_ty {
             if arm_ty != Type::Error && *expected != Type::Error && arm_ty != *expected {
                 ctx.error(
-                    format!(
-                        "Match arms have incompatible types: {} vs {}",
-                        expected, arm_ty
-                    ),
+                    format!("Match arms have incompatible types: {} vs {}", expected, arm_ty),
                     arm.span,
                 );
             }
@@ -1459,7 +1501,67 @@ fn check_match(ctx: &mut TypeContext, m: &HirMatch) -> Type {
             result_ty = Some(arm_ty);
         }
     }
+
+    // Emit non-exhaustive errors for supported scrutinee types.
+    if val_ty != Type::Error && !seen_catch_all {
+        if track_option && !(seen_some && seen_none) {
+            let missing = match (seen_some, seen_none) {
+                (false, false) => "Some(_) and None",
+                (true,  false) => "None",
+                (false, true)  => "Some(_)",
+                _              => unreachable!(),
+            };
+            ctx.error(
+                format!("Non-exhaustive match on Option: missing arm for {}", missing),
+                m.span,
+            );
+        }
+        if track_result && !(seen_ok && seen_err) {
+            let missing = match (seen_ok, seen_err) {
+                (false, false) => "Ok(_) and Err(_)",
+                (true,  false) => "Err(_)",
+                (false, true)  => "Ok(_)",
+                _              => unreachable!(),
+            };
+            ctx.error(
+                format!("Non-exhaustive match on Result: missing arm for {}", missing),
+                m.span,
+            );
+        }
+    }
+
     result_ty.unwrap_or(Type::Unit)
+}
+
+#[derive(Debug, PartialEq)]
+enum MatchArmKind { CatchAll, Some, None, Ok, Err, Other }
+
+fn match_arm_kind(pat: &HirPattern) -> MatchArmKind {
+    match pat {
+        HirPattern::Wildcard(_)            => MatchArmKind::CatchAll,
+        HirPattern::Identifier(_, _)       => MatchArmKind::CatchAll,
+        HirPattern::EnumCase(_, name, _) => match name.as_str() {
+            "Some" => MatchArmKind::Some,
+            "None" => MatchArmKind::None,
+            "Ok"   => MatchArmKind::Ok,
+            "Err"  => MatchArmKind::Err,
+            _      => MatchArmKind::Other,
+        },
+        _ => MatchArmKind::Other,
+    }
+}
+
+fn match_arm_constructor_name(pat: &HirPattern) -> Option<&'static str> {
+    if let HirPattern::EnumCase(_, name, _) = pat {
+        return match name.as_str() {
+            "Some" => Some("Some"),
+            "None" => Some("None"),
+            "Ok"   => Some("Ok"),
+            "Err"  => Some("Err"),
+            _      => None,
+        };
+    }
+    None
 }
 
 fn check_for_expr(ctx: &mut TypeContext, f: &HirForExpr) -> Type {

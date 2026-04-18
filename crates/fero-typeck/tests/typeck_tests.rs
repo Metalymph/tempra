@@ -1282,3 +1282,174 @@ fn test_match_scope_isolation() {
     "#,
     );
 }
+
+// ── Exhaustiveness checking ────────────────────────────────────────────────
+
+#[test]
+fn test_match_exhaustive_option_some_none() {
+    expect_ok(r#"
+        fn main() {
+            let x = Some("hello");
+            let y = match x {
+                Some(v) => v,
+                None => "default",
+            };
+        }
+    "#);
+}
+
+#[test]
+fn test_match_exhaustive_option_wildcard() {
+    expect_ok(r#"
+        fn main() {
+            let x = Some("hello");
+            let y = match x {
+                Some(v) => v,
+                _ => "default",
+            };
+        }
+    "#);
+}
+
+#[test]
+fn test_match_exhaustive_option_binding_catchall() {
+    expect_ok(r#"
+        fn main() {
+            let x = Some("hello");
+            let y = match x {
+                Some(v) => v,
+                other => "default",
+            };
+        }
+    "#);
+}
+
+#[test]
+fn test_match_nonexhaustive_option_missing_none() {
+    expect_err(r#"
+        fn main() {
+            let x = Some("hello");
+            let y = match x {
+                Some(v) => v,
+            };
+        }
+    "#);
+}
+
+#[test]
+fn test_match_nonexhaustive_option_missing_some() {
+    expect_err(r#"
+        fn main() {
+            let x = Some("hello");
+            let y = match x {
+                None => "default",
+            };
+        }
+    "#);
+}
+
+#[test]
+fn test_match_duplicate_none_arm() {
+    expect_err(r#"
+        fn main() {
+            let x = Some("hello");
+            let y = match x {
+                None => "a",
+                None => "b",
+                Some(v) => v,
+            };
+        }
+    "#);
+}
+
+#[test]
+fn test_match_unreachable_after_wildcard() {
+    expect_err(r#"
+        fn main() {
+            let x = Some("hello");
+            let y = match x {
+                _ => "a",
+                None => "b",
+            };
+        }
+    "#);
+}
+
+#[test]
+fn test_match_unreachable_after_binding_catchall() {
+    expect_err(r#"
+        fn main() {
+            let x = Some("hello");
+            let y = match x {
+                other => "a",
+                None => "b",
+            };
+        }
+    "#);
+}
+
+#[test]
+fn test_match_exhaustive_result_ok_err() {
+    expect_ok(r#"
+        fn main() {
+            let r = Ok("hello");
+            let y = match r {
+                Ok(v) => v,
+                Err(e) => "fallback",
+            };
+        }
+    "#);
+}
+
+#[test]
+fn test_match_nonexhaustive_result_missing_err() {
+    expect_err(r#"
+        fn main() {
+            let r = Ok("hello");
+            let y = match r {
+                Ok(v) => v,
+            };
+        }
+    "#);
+}
+
+#[test]
+fn test_match_duplicate_ok_arm() {
+    expect_err(r#"
+        fn main() {
+            let r = Ok("hello");
+            let y = match r {
+                Ok(v) => v,
+                Ok(w) => w,
+                Err(e) => "fallback",
+            };
+        }
+    "#);
+}
+
+#[test]
+fn test_match_result_catchall_first_unreachable() {
+    expect_err(r#"
+        fn main() {
+            let r = Ok("hello");
+            let y = match r {
+                x => "fallback",
+                Err(e) => "never",
+            };
+        }
+    "#);
+}
+
+#[test]
+fn test_match_unsupported_scrutinee_no_static_check() {
+    // Struct scrutinee: no static exhaustiveness, wildcard is fine
+    expect_ok(r#"
+        struct User { name: String }
+        fn main() {
+            let u = User { name: "a" };
+            let y = match u {
+                _ => "ok",
+            };
+        }
+    "#);
+}

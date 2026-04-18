@@ -1336,3 +1336,93 @@ fn test_is_operator_option_string_runtime() {
     "#;
     assert_eq!(assert_runs(source), Value::Result(Box::new(ValueResult::Ok(Value::Unit))));
 }
+
+#[test]
+fn test_match_runtime_some_none() {
+    let source = r#"
+    fn main() {
+        let x = Some("hello")
+        let y = match x {
+            Some(v) => v,
+            None => "default",
+        }
+        expect(y == "hello")
+
+        let x2 = None
+        let y2 = match x2 {
+            Some(v) => v,
+            None => "default",
+        }
+        expect(y2 == "default")
+        "ok"
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::String("ok".to_string()));
+}
+
+#[test]
+fn test_match_runtime_ok_err() {
+    let source = r#"
+    struct MyError {}
+    fn main() {
+        let r = Ok("hello")
+        let y = match r {
+            Ok(v) => v,
+            Err(e) => "fallback",
+        }
+        expect(y == "hello")
+
+        let r2 = Err(MyError {})
+        let y2 = match r2 {
+            Ok(v) => "ok",
+            Err(e) => "fallback",
+        }
+        expect(y2 == "fallback")
+        "ok"
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::String("ok".to_string()));
+}
+
+#[test]
+fn test_match_runtime_wildcard() {
+    let source = r#"
+    fn main() {
+        let y = match Some("hello") {
+            _ => "x",
+        }
+        expect(y == "x")
+        "ok"
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::String("ok".to_string()));
+}
+
+#[test]
+fn test_match_runtime_binding() {
+    let source = r#"
+    fn main() {
+        let y = match Some("hello") {
+            v => v,
+        }
+        expect(y == Some("hello"))
+        "ok"
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::String("ok".to_string()));
+}
+
+#[test]
+fn test_match_runtime_precedence() {
+    let source = r#"
+    fn main() {
+        let y = match Some("hello") {
+            Some(v) => "first",
+            _ => "second",
+        }
+        expect(y == "first")
+        "ok"
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::String("ok".to_string()));
+}

@@ -1423,11 +1423,28 @@ fn check_if(ctx: &mut TypeContext, i: &HirIf) -> Type {
 }
 
 fn check_match(ctx: &mut TypeContext, m: &HirMatch) -> Type {
-    let _value_ty = check_expression(ctx, &m.value);
+    let val_ty = check_expression(ctx, &m.value);
 
     let mut result_ty: Option<Type> = None;
     for arm in &m.arms {
+        if val_ty != Type::Error {
+            validate_pattern_type(ctx, &val_ty, &arm.pattern);
+        }
+
+        ctx.scopes.push_scope();
+
+        if val_ty != Type::Error {
+            let mut bindings = Vec::new();
+            extract_pattern_bindings(&val_ty, &arm.pattern, &mut bindings);
+            for (name, ty) in bindings {
+                ctx.scopes.insert(name, ty);
+            }
+        }
+
         let arm_ty = check_expression(ctx, &arm.value);
+
+        ctx.scopes.pop_scope();
+
         if let Some(ref expected) = result_ty {
             if arm_ty != Type::Error && *expected != Type::Error && arm_ty != *expected {
                 ctx.error(

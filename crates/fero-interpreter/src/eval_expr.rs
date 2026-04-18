@@ -1195,7 +1195,27 @@ impl Interpreter {
                     _ => Err("'!' expects a Result value".into()),
                 }
             }
-            HirExpression::Match(_) => Err("Match expressions are not fully supported yet".into()),
+            HirExpression::Match(match_expr) => {
+                let value = match self.eval_expression(&match_expr.value, env)? {
+                    ControlFlow::Value(v) => v,
+                    cf => return Ok(cf),
+                };
+
+                for arm in &match_expr.arms {
+                    let mut bindings = Vec::new();
+                    if Self::value_matches_pattern(&value, &arm.pattern, &mut bindings) {
+                        env.push_scope();
+                        for (name, val) in bindings {
+                            env.insert(name, val);
+                        }
+                        let res = self.eval_expression(&arm.value, env);
+                        env.pop_scope();
+                        return res;
+                    }
+                }
+
+                Ok(ControlFlow::Crash("non-exhaustive match".to_string()))
+            }
         }
     }
 

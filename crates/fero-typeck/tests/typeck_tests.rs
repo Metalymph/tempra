@@ -1193,3 +1193,92 @@ fn test_is_operator_result_typeck() {
     "#,
     );
 }
+
+#[test]
+fn test_match_option() {
+    expect_ok(
+        r#"
+        fn main() {
+            let x = Some("hello");
+            let y = match x {
+                Some(v) => v,
+                None => "default",
+            };
+        }
+    "#,
+    );
+}
+
+#[test]
+fn test_match_result() {
+    expect_ok(
+        r#"
+        fn main() {
+            let r = Ok("hello");
+            let y = match r {
+                Ok(v) => v,
+                Err(e) => "fallback",
+            };
+        }
+    "#,
+    );
+}
+
+#[test]
+fn test_match_wildcard() {
+    expect_ok(
+        r#"
+        fn main() {
+            let x = Some("hello");
+            let y = match x {
+                _ => "anything",
+            };
+        }
+    "#,
+    );
+}
+
+#[test]
+fn test_match_binding() {
+    expect_ok(
+        r#"
+        fn main() {
+            let x = Some("hello");
+            let y = match x {
+                v => v,
+            };
+        }
+    "#,
+    );
+}
+
+#[test]
+fn test_match_incompatible_arms() {
+    expect_err(
+        r#"
+        fn main() {
+            let x = Some("hello");
+            let y = match x {
+                Some(v) => v,
+                None => 123,
+            };
+        }
+    "#,
+    );
+}
+
+#[test]
+fn test_match_scope_isolation() {
+    expect_ok(
+        r#"
+        fn main() {
+            let x = "outer";
+            let y = match Some("inner") {
+                Some(x) => x,
+                None => "none",
+            };
+            let z = x.len(); // outer x String
+        }
+    "#,
+    );
+}

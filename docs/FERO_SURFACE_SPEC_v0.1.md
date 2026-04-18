@@ -112,10 +112,16 @@ let text = match result {
 
 v0.1 supports:
 
-- literal patterns
-- `_` wildcard
-- simple bindings
-- enum cases
+- **Wildcard:** `_` matches anything without binding.
+- **Binding:** Identifiers bind the full matched value (e.g., `x => ...`).
+- **Constructor patterns:** `Some(x)`, `None`, `Ok(v)`, `Err(e)`.
+
+Rules:
+- `match` is an expression.
+- Arm bodies may be single expressions or blocks.
+- First matching arm wins.
+- Bindings are scoped to the arm body.
+- Non-exhaustive matches crash at runtime in v0.1.
 
 ---
 
@@ -361,10 +367,14 @@ value is Type
 
 Rules:
 
-- result type is always `Bool`
-- no binding (`is T(x)` is not supported)
-- no type narrowing in branches (for now)
-- works with primitive, struct, `Option`, and `Result` checks
+- Result type is always `Bool`.
+- Supports two forms:
+  1. **Type form:** `value is Type`. Returns true if `value` conforms to `Type`.
+  2. **Pattern form:** `value is Pattern`. Returns true if `value` matches the pattern.
+- **Type Narrowing:** If used in an `if` condition, `value` is narrowed to `Type` inside the `then` block.
+- **Pattern Binding:** If used in an `if` condition with a pattern (e.g., `if opt is Some(x)`), bindings are available inside the `then` block.
+- Naked binding `value is x` is intentionally forbidden to prevent ambiguity.
+- Works with primitive, struct, `Option`, and `Result` checks.
 
 Examples:
 

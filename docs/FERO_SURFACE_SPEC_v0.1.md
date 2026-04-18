@@ -113,9 +113,11 @@ let text = match result {
 v0.1 supports:
 
 - **Wildcard:** `_` matches anything without binding.
-- **Binding:** Identifiers bind the full matched value (lowercase identifiers like `x => ...`).
+- **Binding:** Lowercase identifiers bind the full matched value (e.g., `x => ...`).
 - **Literal:** Match by value equality (e.g., `0`, `"ok"`, `true`).
-- **Constructor:** Match enum variants or tagged values (uppercase identifiers like `Some(x)`, `None`).
+- **Constructor:** Recognized by shape or casing fallback:
+  - **Shape-based:** Any identifier followed by arguments `Name(...)` is always a constructor pattern (e.g., `Some(x)`, `foo(v)`).
+  - **Casing fallback:** For nullary (zero-arg) constructors, an uppercase identifier is treated as a constructor candidate (e.g., `None`).
 
 Rules:
 - `match` is an expression.
@@ -382,11 +384,11 @@ Rules:
 - Supports two forms:
   1. **Type form:** `value is Type`. Returns true if `value` conforms to `Type`.
   2. **Pattern form:** `value is Pattern`. Returns true if `value` matches the pattern.
-- **Ambiguity Rule:** In `is`, a single identifier (e.g., `x is String`) is prioritized as a **Type form** test if it resolves to a type name, otherwise it is treated as a zero-arg **Constructor pattern**.
-- **Contextual Restriction:** Literal patterns are not supported after `is` in v0.1; they are reserved for `match`.
-- **Type Narrowing:** If used in an `if` condition, `value` is narrowed to `Type` (or the equivalent constructor type) inside the `then` block.
-- **Pattern Binding:** If used in an `if` condition with a pattern (e.g., `if opt is Some(x)`), bindings are available inside the `then` block.
-- Naked binding `value is x` (lowercase) is intentionally forbidden to prevent ambiguity.
+- **Shape-based Recognition:** In `is`, RHS starting with `Identifier(` is always treated as a pattern.
+- **Ambiguity Rule:** For a bare identifier RHS (e.g., `x is String`):
+  - Prioritized as a **Type form** test if it resolves to a type name.
+  - Treated as a zero-arg **Constructor pattern** if it is uppercase and not followed by type modifiers.
+- **Contextual Restriction:** Bare lowercase identifiers (naked bindings like `if x is y`) are strictly forbidden; they are parsed as types and will fail if no such type exists.
 - Works with primitive, struct, `Option`, and `Result` checks.
 
 Examples:

@@ -1531,3 +1531,87 @@ fn test_is_naked_lowercase_rejected() {
         }
     "#);
 }
+
+// ── Shape-based pattern & Strict 'is' ──────────────────────────────────────
+
+#[test]
+fn test_match_constructor_shape_lowercase() {
+    // Structural check only in parser; typechecker currently allows generic constructors in v1.
+    expect_ok(r#"
+        fn main() {
+            let x = Some(1);
+            let y = match x {
+                foo(a) => 1,
+                _ => 0,
+            };
+        }
+    "#);
+}
+
+#[test]
+fn test_match_bare_binding_remains_binding() {
+    expect_ok(r#"
+        fn main() {
+            let x = 123;
+            let y = match x {
+                my_binding => my_binding,
+            };
+            expect(y == 123);
+        }
+    "#);
+}
+
+#[test]
+fn test_match_uppercase_fallback_works() {
+    expect_ok(r#"
+        fn main() {
+            let x = Some(1);
+            let y = match x {
+                None => 0,
+                Some(v) => v,
+            };
+        }
+    "#);
+}
+
+#[test]
+fn test_is_strict_naked_binding_forbidden() {
+    // Should fail because 'y' is parsed as a Type, and no such type exists.
+    expect_err(r#"
+        fn main() {
+            let x = 1;
+            if x is y { }
+        }
+    "#);
+}
+
+#[test]
+fn test_is_constructor_shape_lowercase_works() {
+    // if x is foo(y) parses as pattern
+    expect_ok(r#"
+        fn main() {
+            let x = Some(1);
+            if x is some_ctor(y) { }
+        }
+    "#);
+}
+
+#[test]
+fn test_is_none_fallback_works() {
+    expect_ok(r#"
+        fn main() {
+            let x = Some(1);
+            if x is None { }
+        }
+    "#);
+}
+
+#[test]
+fn test_is_type_uppercase_works() {
+    expect_ok(r#"
+        fn main() {
+            let x = 1;
+            if x is Int { }
+        }
+    "#);
+}

@@ -531,23 +531,26 @@ impl<'src> Parser<'src> {
                         true
                     } else if next.kind == TokenKind::Identifier {
                         let next2 = self.peek(1);
-                        // If it's followed by a modifier (? ! [), it's definitely a type.
-                        // If it's followed by (, it's a constructor pattern.
-                        // If it's None, Some, Ok, Err, it's a pattern.
-                        // If it's just an uppercase identifier, it's ambiguous. 
-                        // To keep 'x is Int' working as a type test, we only trigger pattern mode
-                        // for uppercase if it has '(' or if it's one of the known variants.
-                        // BUT the user said "replace hardcoded list with uppercase heuristic".
-                        // So I will use the heuristic but exclude cases with '?' '!' etc.
-                        let first_char = self.source[next.span.start as usize..]
-                            .chars()
-                            .next()
-                            .unwrap_or('\0');
-                        
-                        if first_char.is_uppercase() {
-                             !matches!(next2.kind, TokenKind::QuestionMark | TokenKind::Bang | TokenKind::LeftBracket)
+                        // Shape-based primary signal: Identifier + ( is always a constructor pattern.
+                        if next2.kind == TokenKind::LeftParen {
+                            true
                         } else {
-                            false
+                            // Bare identifier: Priority is Type expression.
+                            // Falling back to unit constructor candidate only for Uppercase identifiers
+                            // that are not followed by type modifiers.
+                            let first_char = self.source[next.span.start as usize..]
+                                .chars()
+                                .next()
+                                .unwrap_or('\0');
+                            
+                            if first_char.is_uppercase() {
+                                 // Not a type modifier -> assume constructor candidate (like 'is None').
+                                 !matches!(next2.kind, TokenKind::QuestionMark | TokenKind::Bang | TokenKind::LeftBracket)
+                            } else {
+                                // Lowercase bare identifier is intentionally forbidden as a binding pattern in 'is'.
+                                // It will be parsed as a Type and likely produce a "Type not found" error during typecheck.
+                                false
+                            }
                         }
                     } else {
                         false
@@ -979,9 +982,10 @@ impl<'src> Parser<'src> {
                     arguments,
                 }))
             } else {
-                // Generalized rule:
-                // An uppercase-starting identifier with no following `(` is a zero-arg constructor.
-                // A lowercase-starting identifier is a binding.
+                // Bare identifier rule:
+                // - Uppercase identifier: parsed as a nullary constructor pattern (Unit case fallback).
+                // - Lowercase identifier: parsed as an identifier binding pattern.
+                // NOTE: This fallback heuristic is temporary for v1 until full symbol resolution is added.
                 let first_char = self.source[name.span.start as usize..]
                     .chars()
                     .next()

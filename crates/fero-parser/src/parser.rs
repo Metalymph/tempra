@@ -530,8 +530,25 @@ impl<'src> Parser<'src> {
                     if next.kind == TokenKind::Underscore {
                         true
                     } else if next.kind == TokenKind::Identifier {
-                        let name = &self.source[next.span.start as usize..next.span.end as usize];
-                        name == "Some" || name == "None" || name == "Ok" || name == "Err"
+                        let next2 = self.peek(1);
+                        // If it's followed by a modifier (? ! [), it's definitely a type.
+                        // If it's followed by (, it's a constructor pattern.
+                        // If it's None, Some, Ok, Err, it's a pattern.
+                        // If it's just an uppercase identifier, it's ambiguous. 
+                        // To keep 'x is Int' working as a type test, we only trigger pattern mode
+                        // for uppercase if it has '(' or if it's one of the known variants.
+                        // BUT the user said "replace hardcoded list with uppercase heuristic".
+                        // So I will use the heuristic but exclude cases with '?' '!' etc.
+                        let first_char = self.source[next.span.start as usize..]
+                            .chars()
+                            .next()
+                            .unwrap_or('\0');
+                        
+                        if first_char.is_uppercase() {
+                             !matches!(next2.kind, TokenKind::QuestionMark | TokenKind::Bang | TokenKind::LeftBracket)
+                        } else {
+                            false
+                        }
                     } else {
                         false
                     }
@@ -962,9 +979,14 @@ impl<'src> Parser<'src> {
                     arguments,
                 }))
             } else {
-                // Known zero-arg constructors are always EnumCase, never bindings.
-                let name_str = &self.source[name.span.start as usize..name.span.end as usize];
-                if matches!(name_str, "None" | "Some" | "Ok" | "Err") {
+                // Generalized rule:
+                // An uppercase-starting identifier with no following `(` is a zero-arg constructor.
+                // A lowercase-starting identifier is a binding.
+                let first_char = self.source[name.span.start as usize..]
+                    .chars()
+                    .next()
+                    .unwrap_or('\0');
+                if first_char.is_uppercase() {
                     Ok(Pattern::EnumCase(EnumCasePattern {
                         span: name.span,
                         name,

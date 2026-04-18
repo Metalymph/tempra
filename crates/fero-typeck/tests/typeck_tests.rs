@@ -1453,3 +1453,81 @@ fn test_match_unsupported_scrutinee_no_static_check() {
         }
     "#);
 }
+
+// ── Generalized patterns & literal patterns ────────────────────────────────
+
+#[test]
+fn test_match_literal_integer() {
+    expect_ok(r#"
+        fn main() {
+            let x = 0;
+            let y = match x {
+                0 => "zero",
+                1 => "one",
+                _ => "many",
+            };
+        }
+    "#);
+}
+
+#[test]
+fn test_match_literal_string() {
+    expect_ok(r#"
+        fn main() {
+            let s = "yes";
+            let y = match s {
+                "yes" => true,
+                "no" => false,
+                _ => false,
+            };
+        }
+    "#);
+}
+
+#[test]
+fn test_match_literal_bool() {
+    expect_ok(r#"
+        fn main() {
+            let b = true;
+            let y = match b {
+                true => 1,
+                false => 0,
+            };
+        }
+    "#);
+}
+
+#[test]
+fn test_match_literal_type_mismatch() {
+    expect_err(r#"
+        fn main() {
+            let s = "hello";
+            let y = match s {
+                0 => "zero",
+                _ => "other",
+            };
+        }
+    "#);
+}
+
+#[test]
+fn test_is_uppercase_constructor_pattern_ok() {
+    expect_ok(r#"
+        fn main() {
+            let x = Some("hello");
+            if x is Some(v) {
+                let l = v.len();
+            }
+        }
+    "#);
+}
+
+#[test]
+fn test_is_naked_lowercase_rejected() {
+    expect_err(r#"
+        fn main() {
+            let x = "hello";
+            if x is foo { }
+        }
+    "#);
+}

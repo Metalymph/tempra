@@ -1426,3 +1426,78 @@ fn test_match_runtime_precedence() {
     "#;
     assert_eq!(assert_runs(source), Value::String("ok".to_string()));
 }
+
+// ── Literal patterns & Generalized constructors ────────────────────────────
+
+#[test]
+fn test_match_runtime_literal_int() {
+    let source = r#"
+    fn main() {
+        let x = 1
+        let res = match x {
+            0 => "zero",
+            1 => "one",
+            _ => "many",
+        }
+        expect(res == "one")
+        "ok"
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::String("ok".to_string()));
+}
+
+#[test]
+fn test_match_runtime_literal_string() {
+    let source = r#"
+    fn main() {
+        let s = "no"
+        let res = match s {
+            "yes" => true,
+            "no" => false,
+            _ => false,
+        }
+        expect(res == false)
+        "ok"
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::String("ok".to_string()));
+}
+
+#[test]
+fn test_match_runtime_literal_bool() {
+    let source = r#"
+    fn main() {
+        let b = false
+        let res = match b {
+            true => 1,
+            false => 0,
+        }
+        expect(res == 0)
+        "ok"
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::String("ok".to_string()));
+}
+
+#[test]
+fn test_match_runtime_precedence_with_literals() {
+    let source = r#"
+    fn main() {
+        let x = 1
+        let res = match x {
+            1 => "first",
+            i => "second",
+        }
+        expect(res == "first")
+
+        let x2 = 2
+        let res2 = match x2 {
+            1 => "first",
+            i => "second",
+        }
+        expect(res2 == "second")
+        "ok"
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::String("ok".to_string()));
+}

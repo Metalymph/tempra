@@ -1231,16 +1231,13 @@ impl Interpreter {
                     "Some" => {
                         if let Value::Option(crate::value::OptionValue::Some(inner)) = value {
                             if args.len() == 1 {
-                                Self::value_matches_pattern(inner, &args[0], bindings)
-                            } else {
-                                false
+                                return Self::value_matches_pattern(inner, &args[0], bindings);
                             }
-                        } else {
-                            false
                         }
+                        false
                     }
                     "None" => {
-                        matches!(value, Value::Option(crate::value::OptionValue::None))
+                        args.is_empty() && matches!(value, Value::Option(crate::value::OptionValue::None))
                     }
                     "Ok" => {
                         if let Value::Result(res) = value {
@@ -1262,10 +1259,52 @@ impl Interpreter {
                         }
                         false
                     }
-                    _ => false,
+                    _ => {
+                        if args.is_empty() {
+                            // Fallback for "x is Int" cases parsed as patterns:
+                            // Check if the constructor name matches the type name of the value.
+                            match (name.as_str(), value) {
+                                ("Unit", Value::Unit) => true,
+                                ("Bool", Value::Bool(_)) => true,
+                                ("String", Value::String(_)) => true,
+                                ("Int" | "Int64", Value::Int64(_)) => true,
+                                ("UInt8", Value::UInt8(_)) => true,
+                                ("Float32" | "Float64", Value::Float64(_)) => true,
+                                ("Error", Value::Error(_)) => true,
+                                _ => false,
+                            }
+                        } else {
+                            false
+                        }
+                    }
                 }
             }
-            _ => false,
+            HirPattern::Literal(_, lit_expr) => {
+                // Evaluate the literal and compare by value equality.
+                let mut dummy_bindings = Vec::new();
+                match lit_expr.as_ref() {
+                    HirExpression::Integer(_, s) => {
+                        if let Ok(n) = s.parse::<i64>() {
+                            return matches!(value, Value::Int64(v) if *v == n);
+                        }
+                        false
+                    }
+                    HirExpression::Float(_, s) => {
+                        if let Ok(f) = s.parse::<f64>() {
+                            return matches!(value, Value::Float64(v) if *v == f);
+                        }
+                        false
+                    }
+                    HirExpression::String(_, s) => {
+                        let s = s.trim_matches('"');
+                        matches!(value, Value::String(v) if v == s)
+                    }
+                    HirExpression::Bool(_, b) => {
+                        matches!(value, Value::Bool(v) if *v == *b)
+                    }
+                    other => Self::value_matches_pattern(value, &HirPattern::Wildcard(other.span()), &mut dummy_bindings),
+                }
+            }
         }
     }
 

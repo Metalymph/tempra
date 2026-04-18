@@ -73,12 +73,12 @@ fn validate_pattern_type(ctx: &mut TypeContext, val_ty: &Type, pattern: &HirPatt
                             ctx.error("Some pattern expects 1 argument", *span);
                         }
                     } else {
-                        ctx.error(format!("Cannot match {} against Option", val_ty), *span);
+                        ctx.error(format!("Cannot match {} with 'Some' pattern (expected Option)", val_ty), *span);
                     }
                 }
                 "None" => {
                     if !matches!(val_ty, Type::Option(_)) {
-                        ctx.error(format!("Cannot match {} against Option", val_ty), *span);
+                        ctx.error(format!("Cannot match {} with 'None' pattern (expected Option)", val_ty), *span);
                     }
                     if !args.is_empty() {
                         ctx.error("None pattern expects 0 arguments", *span);
@@ -92,7 +92,7 @@ fn validate_pattern_type(ctx: &mut TypeContext, val_ty: &Type, pattern: &HirPatt
                             ctx.error("Ok pattern expects 1 argument", *span);
                         }
                     } else {
-                        ctx.error(format!("Cannot match {} against Result", val_ty), *span);
+                        ctx.error(format!("Cannot match {} with 'Ok' pattern (expected Result)", val_ty), *span);
                     }
                 }
                 "Err" => {
@@ -103,16 +103,31 @@ fn validate_pattern_type(ctx: &mut TypeContext, val_ty: &Type, pattern: &HirPatt
                             ctx.error("Err pattern expects 1 argument", *span);
                         }
                     } else {
-                        ctx.error(format!("Cannot match {} against Result", val_ty), *span);
+                        ctx.error(format!("Cannot match {} with 'Err' pattern (expected Result)", val_ty), *span);
                     }
                 }
                 _ => {
-                    ctx.error("Unsupported pattern case (only Some, None, Ok, Err allowed in v1)", *span);
+                    // Generic constructor: valid structurally but not fully type-checked yet for user enums.
+                    // Leave for future enum support.
                 }
             }
         }
-        HirPattern::Literal(span, _) => {
-            ctx.error("Literal patterns not supported in v1", *span);
+        HirPattern::Literal(span, lit_expr) => {
+            let lit_ty = match lit_expr.as_ref() {
+                HirExpression::Integer(_, _) => Type::Int,
+                HirExpression::Float(_, _)   => Type::Float64,
+                HirExpression::String(_, _)  => Type::String,
+                HirExpression::Bool(_, _)    => Type::Bool,
+                _ => Type::Unknown,
+            };
+            if lit_ty != Type::Unknown && *val_ty != Type::Error && *val_ty != lit_ty {
+                // Allow Int and Int64 compatibility if possible, or just stay strict for now.
+                // In Fero, Type::Int is the default for literals.
+                ctx.error(
+                    format!("Literal pattern of type {} cannot match scrutinee of type {}", lit_ty, val_ty),
+                    *span,
+                );
+            }
         }
     }
 }
@@ -1349,6 +1364,20 @@ fn get_branch_bindings(ctx: &mut TypeContext, expr: &HirExpression) -> Vec<(Stri
             let mut bindings = Vec::new();
             let val_ty = check_expression(ctx, &i.value);
             extract_pattern_bindings(&val_ty, &i.pattern, &mut bindings);
+            
+            // --- NARROWING FALLBACK FOR PATTERNS ---
+            // If it's a unit constructor pattern like 'is String', we should also narrow the variable.
+            if let (HirExpression::Name(_, var_name), HirPattern::EnumCase(_, name, args)) = (&*i.value, &i.pattern) {
+                if args.is_empty() {
+                    let hir_type = HirType::Named(i.pattern.span(), name.clone());
+                    let possible_ty = ctx.resolve_hir_type(&hir_type);
+                    if possible_ty != Type::Unknown && possible_ty != Type::Error {
+                         // It's a type name! Apply narrowing.
+                         bindings.push((var_name.clone(), possible_ty));
+                    }
+                }
+            }
+            
             bindings
         }
         _ => vec![],

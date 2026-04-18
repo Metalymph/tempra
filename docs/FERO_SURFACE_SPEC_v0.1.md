@@ -113,8 +113,9 @@ let text = match result {
 v0.1 supports:
 
 - **Wildcard:** `_` matches anything without binding.
-- **Binding:** Identifiers bind the full matched value (e.g., `x => ...`).
-- **Constructor patterns:** `Some(x)`, `None`, `Ok(v)`, `Err(e)`.
+- **Binding:** Identifiers bind the full matched value (lowercase identifiers like `x => ...`).
+- **Literal:** Match by value equality (e.g., `0`, `"ok"`, `true`).
+- **Constructor:** Match enum variants or tagged values (uppercase identifiers like `Some(x)`, `None`).
 
 Rules:
 - `match` is an expression.
@@ -381,9 +382,11 @@ Rules:
 - Supports two forms:
   1. **Type form:** `value is Type`. Returns true if `value` conforms to `Type`.
   2. **Pattern form:** `value is Pattern`. Returns true if `value` matches the pattern.
-- **Type Narrowing:** If used in an `if` condition, `value` is narrowed to `Type` inside the `then` block.
+- **Ambiguity Rule:** In `is`, a single identifier (e.g., `x is String`) is prioritized as a **Type form** test if it resolves to a type name, otherwise it is treated as a zero-arg **Constructor pattern**.
+- **Contextual Restriction:** Literal patterns are not supported after `is` in v0.1; they are reserved for `match`.
+- **Type Narrowing:** If used in an `if` condition, `value` is narrowed to `Type` (or the equivalent constructor type) inside the `then` block.
 - **Pattern Binding:** If used in an `if` condition with a pattern (e.g., `if opt is Some(x)`), bindings are available inside the `then` block.
-- Naked binding `value is x` is intentionally forbidden to prevent ambiguity.
+- Naked binding `value is x` (lowercase) is intentionally forbidden to prevent ambiguity.
 - Works with primitive, struct, `Option`, and `Result` checks.
 
 Examples:

@@ -617,6 +617,8 @@ pub enum Pattern {
     Identifier(IdentifierPattern),
     Literal(LiteralPattern),
     EnumCase(EnumCasePattern),
+    Struct(StructPattern),
+    Tuple(TuplePattern),
 }
 
 impl Pattern {
@@ -626,6 +628,8 @@ impl Pattern {
             Pattern::Identifier(pattern) => pattern.span,
             Pattern::Literal(pattern) => pattern.span,
             Pattern::EnumCase(pattern) => pattern.span,
+            Pattern::Struct(pattern) => pattern.span,
+            Pattern::Tuple(pattern) => pattern.span,
         }
     }
 }
@@ -653,4 +657,17 @@ pub struct EnumCasePattern {
     pub span: Span,
     pub name: Token,
     pub arguments: Vec<Pattern>,
+}
+
+#[derive(Debug, Clone)]
+pub struct StructPattern {
+    pub span: Span,
+    pub name: Token,
+    pub fields: Vec<Token>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TuplePattern {
+    pub span: Span,
+    pub items: Vec<Pattern>,
 }

@@ -1,9 +1,10 @@
 use fero_hir::*;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 pub fn register_item(
     functions: &mut HashMap<String, HirFunction>,
     structs: &mut HashMap<String, HirStruct>,
+    enums: &mut BTreeMap<String, HirEnum>,
     item: &HirItem
 ) {
     match item {
@@ -12,6 +13,9 @@ pub fn register_item(
         }
         HirItem::Struct(s) => {
             structs.insert(s.name.clone(), s.clone());
+        }
+        HirItem::Enum(e) => {
+            enums.insert(e.name.clone(), e.clone());
         }
         _ => {}
     }

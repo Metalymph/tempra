@@ -80,6 +80,22 @@ pub struct HirEnumVariant {
 }
 
 #[derive(Debug, Clone)]
+pub struct HirEnumConstructor {
+    pub span: Span,
+    pub enum_name: String,
+    pub variant_name: String,
+    pub payloads: Vec<HirExpression>,
+}
+
+#[derive(Debug, Clone)]
+pub struct HirEnumConstructorPattern {
+    pub span: Span,
+    pub enum_name: String,
+    pub variant_name: String,
+    pub payloads: Vec<HirPattern>,
+}
+
+#[derive(Debug, Clone)]
 pub struct HirExtend {
     pub span: Span,
     pub target: HirType,
@@ -150,6 +166,7 @@ pub enum HirExpression {
     Tuple(Span, Vec<HirExpression>),
     Array(Span, Vec<HirExpression>),
     StructLiteral(HirStructLiteral),
+    EnumConstructor(HirEnumConstructor),
 }
 
 impl HirExpression {
@@ -179,6 +196,7 @@ impl HirExpression {
             HirExpression::Array(span, _) => *span,
             HirExpression::StructLiteral(e) => e.span,
             HirExpression::Unwrap(e) => e.span,
+            HirExpression::EnumConstructor(e) => e.span,
         }
     }
 }
@@ -376,6 +394,9 @@ pub enum HirPattern {
     Identifier(Span, String),
     Literal(Span, Box<HirExpression>),
     EnumCase(Span, String, Vec<HirPattern>),
+    Struct(Span, String, Vec<String>),
+    Tuple(Span, Vec<HirPattern>),
+    EnumConstructor(HirEnumConstructorPattern),
 }
 
 impl HirPattern {
@@ -385,6 +406,9 @@ impl HirPattern {
             HirPattern::Identifier(span, _) => *span,
             HirPattern::Literal(span, _) => *span,
             HirPattern::EnumCase(span, _, _) => *span,
+            HirPattern::Struct(span, _, _) => *span,
+            HirPattern::Tuple(span, _) => *span,
+            HirPattern::EnumConstructor(e) => e.span,
         }
     }
 }

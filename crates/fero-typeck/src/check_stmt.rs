@@ -4,21 +4,23 @@ use crate::types::{types_compatible, Type};
 use fero_hir::*;
 
 /// Check a block and return the type of its last expression (or Unit).
-pub fn check_block(ctx: &mut TypeContext, block: &HirBlock) -> Type {
+pub fn check_block(ctx: &mut TypeContext, block: &mut HirBlock, expected: Option<&Type>) -> Type {
     ctx.scopes.push_scope();
     let mut last_ty = Type::Unit;
-    for stmt in &block.statements {
-        last_ty = check_statement(ctx, stmt);
+    let len = block.statements.len();
+    for (i, stmt) in block.statements.iter_mut().enumerate() {
+        let is_last = i == len - 1;
+        last_ty = check_statement(ctx, stmt, if is_last { expected } else { None });
     }
     ctx.scopes.pop_scope();
     last_ty
 }
 
 /// Check a single statement and return the type it produces.
-pub fn check_statement(ctx: &mut TypeContext, stmt: &HirStatement) -> Type {
+pub fn check_statement(ctx: &mut TypeContext, stmt: &mut HirStatement, expected: Option<&Type>) -> Type {
     match stmt {
         HirStatement::Let(l) => {
-            let value_ty = check_expression(ctx, &l.value);
+            let value_ty = check_expression(ctx, &mut l.value, None);
             if matches!(&l.value, HirExpression::Name(_, n) if n == "None") {
                 ctx.error(
                     "Ambiguous 'None' without Option context; use it where an Option[T] is expected"
@@ -30,7 +32,7 @@ pub fn check_statement(ctx: &mut TypeContext, stmt: &HirStatement) -> Type {
             Type::Unit
         }
         HirStatement::Var(v) => {
-            let value_ty = check_expression(ctx, &v.value);
+            let value_ty = check_expression(ctx, &mut v.value, None);
             if matches!(&v.value, HirExpression::Name(_, n) if n == "None") {
                 ctx.error(
                     "Ambiguous 'None' without Option context; use it where an Option[T] is expected"
@@ -42,8 +44,9 @@ pub fn check_statement(ctx: &mut TypeContext, stmt: &HirStatement) -> Type {
             Type::Unit
         }
         HirStatement::Return(value) => {
+            let expected_ret = ctx.current_return_type.clone();
             let actual = match value {
-                Some(expr) => check_expression(ctx, expr),
+                Some(expr) => check_expression(ctx, expr, expected_ret.as_ref()),
                 None => Type::Unit,
             };
             if let Some(expected) = &ctx.current_return_type {
@@ -71,7 +74,7 @@ pub fn check_statement(ctx: &mut TypeContext, stmt: &HirStatement) -> Type {
         }
         HirStatement::Break(_) | HirStatement::Continue(_) => Type::Unit,
         HirStatement::For(f) => {
-            let iter_ty = check_expression(ctx, &f.iterable);
+            let iter_ty = check_expression(ctx, &mut f.iterable, None);
             let elem_ty = match &iter_ty {
                 Type::Array(inner) => *inner.clone(),
                 Type::Slice(inner) => *inner.clone(),
@@ -93,8 +96,8 @@ pub fn check_statement(ctx: &mut TypeContext, stmt: &HirStatement) -> Type {
             ctx.scopes.push_scope();
             ctx.scopes.insert(f.binding.clone(), elem_ty);
 
-            if let Some(filter) = &f.filter {
-                let filter_ty = check_expression(ctx, filter);
+            if let Some(ref mut filter) = f.filter {
+                let filter_ty = check_expression(ctx, filter, Some(&Type::Bool));
                 if filter_ty != Type::Bool && filter_ty != Type::Error {
                     ctx.error(
                         format!("For filter must be Bool, found {}", filter_ty),
@@ -103,10 +106,10 @@ pub fn check_statement(ctx: &mut TypeContext, stmt: &HirStatement) -> Type {
                 }
             }
 
-            check_block(ctx, &f.body);
+            check_block(ctx, &mut f.body, None);
             ctx.scopes.pop_scope();
             Type::Unit
         }
-        HirStatement::Expr(expr) => check_expression(ctx, expr),
+        HirStatement::Expr(expr) => check_expression(ctx, expr, expected),
     }
 }

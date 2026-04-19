@@ -115,26 +115,22 @@ v0.1 supports:
 - **Wildcard:** `_` matches anything without binding.
 - **Binding:** Lowercase identifiers bind the full matched value (e.g., `x => ...`).
 - **Literal:** Match by value equality (e.g., `0`, `"ok"`, `true`).
+- **Tuple Pattern:** `(a, b)` destructures any tuple. Must have arity >= 2. Nested patterns are not supported (shorthand bindings only).
+- **Struct Pattern:** `User { name }` destructures a struct. Shorthand bindings only (no renaming, no nesting).
 - **Constructor:** Recognized by shape or casing fallback:
-  - **Shape-based:** Any identifier followed by arguments `Name(...)` is always a constructor pattern (e.g., `Some(x)`, `foo(v)`).
-  - **Casing fallback:** For nullary (zero-arg) constructors, an uppercase identifier is treated as a constructor candidate (e.g., `None`).
+  - **Shape-based:** Any identifier followed by arguments `Name(...)` is always a constructor pattern.
+  - **Casing fallback:** For nullary (zero-arg) constructors, an uppercase identifier is treated as a constructor candidate.
+- **Nested Constructors:** Enum constructor patterns can be nested (e.g., `Nested(Data(v))`, `Some(Ok(x))`).
 
 Rules:
 - `match` is an expression.
 - Arm bodies may be single expressions or blocks.
 - First matching arm wins.
 - Bindings are scoped to the arm body.
-- Non-exhaustive matches crash at runtime in v0.1.
-
-### Exhaustiveness Checking (v0.1)
-
-Static exhaustiveness analysis applies only to `Option` and `Result` scrutinees:
-
-- A match over `Option[T]` **must** cover `Some(...)` **and** `None`, or have a catch-all (`_` or binding).
-- A match over `Result[T, E]` **must** cover `Ok(...)` **and** `Err(...)`, or have a catch-all.
-- Arms after a catch-all (`_` or naked binding) are rejected as unreachable.
-- Duplicate arms for the same finite constructor (`None`, `None`) are rejected.
-- For unsupported scrutinee types (e.g. structs), exhaustiveness is **not** checked statically; runtime crash remains the fallback.
+- Non-exhaustive matches crash at runtime in v0.1 (static checks for Bool/Option/Result).
+- Struct and Tuple patterns are supported ONLY in `match` arms, not after the `is` operator.
+- Constructors are strictly validated against the scrutinee type.
+- Nested pattern support in v1 is officially guaranteed ONLY for enum constructors.
 
 ---
 
@@ -235,8 +231,11 @@ let r = Ok("done")
 
 Rules:
 
-- enum constructors can be inferred from context
-- `Enum::Case` is not required
+- **Construction**: Enum constructors are resolved contextually.
+- **Lexical Priority**: If a name matches a variable or function in scope, it is NOT treated as a constructor. Shadowing is explicit.
+- **Ambiguity**: If multiple enums share a variant name, the `expected` type (from function signatures or explicit context) is used to disambiguate. If ambiguity remains, it is a type error.
+- **Payload Arity**: v1 supports 0 or 1 positional payload components.
+- **Pattern Matching**: Enum variants can be matched in `match` and `is`. Payloads are bound to identifiers or matched with nested patterns.
 
 ---
 

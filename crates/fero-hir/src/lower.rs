@@ -364,6 +364,15 @@ impl<'src> Lowerer<'src> {
                 self.text(p.name.span),
                 p.arguments.iter().map(|a| self.lower_pattern(a)).collect(),
             ),
+            ast::Pattern::Struct(p) => HirPattern::Struct(
+                p.span,
+                self.text(p.name.span),
+                p.fields.iter().map(|f| self.text(f.span)).collect(),
+            ),
+            ast::Pattern::Tuple(p) => HirPattern::Tuple(
+                p.span,
+                p.items.iter().map(|i| self.lower_pattern(i)).collect(),
+            ),
         }
     }
 

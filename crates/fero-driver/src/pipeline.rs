@@ -14,9 +14,9 @@ pub fn run_source_with_args(source: &str, args: &[String]) -> Result<(), DriverE
     let ast = parse_source(source)
         .map_err(|e| DriverError::ParseError(format!("{:?}", e)))?;
     
-    let hir = lower_file(source, &ast);
+    let mut hir = lower_file(source, &ast);
     
-    typeck_check_file(&hir)
+    typeck_check_file(&mut hir)
         .map_err(|errs| DriverError::TypeError(format!("{:?}", errs)))?;
     
     let value = fero_interpreter::run_with_args(&hir, args.to_vec())
@@ -48,9 +48,9 @@ pub fn check_source(source: &str) -> Result<(), DriverError> {
     let ast = parse_source(source)
         .map_err(|e| DriverError::ParseError(format!("{:?}", e)))?;
     
-    let hir = lower_file(source, &ast);
+    let mut hir = lower_file(source, &ast);
     
-    typeck_check_file(&hir)
+    typeck_check_file(&mut hir)
         .map_err(|errs| DriverError::TypeError(format!("{:?}", errs)))?;
     
     Ok(())
@@ -65,9 +65,9 @@ pub fn test_source(source: &str) -> Result<(), DriverError> {
     let ast = parse_source(source)
         .map_err(|e| DriverError::ParseError(format!("{:?}", e)))?;
     
-    let hir = lower_file(source, &ast);
+    let mut hir = lower_file(source, &ast);
     
-    typeck_check_file(&hir)
+    typeck_check_file(&mut hir)
         .map_err(|errs| DriverError::TypeError(format!("{:?}", errs)))?;
     
     let value = run(&hir)

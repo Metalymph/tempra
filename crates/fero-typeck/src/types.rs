@@ -44,6 +44,8 @@ pub enum Type {
 
     BuiltinError,
     Result(Box<Type>, Box<Type>),
+    /// Magic type for builtin namespaces like fs, os, env, Regex constructors.
+    Namespace(std::string::String),
 }
 
 impl Type {
@@ -153,6 +155,7 @@ impl fmt::Display for Type {
             Type::Error => write!(f, "<error>"),
             Type::BuiltinError => write!(f, "Error"),
             Type::Result(t, e) => write!(f, "Result[{}, {}]", t, e),
+            Type::Namespace(n) => write!(f, "Namespace({})", n),
         }
     }
 }

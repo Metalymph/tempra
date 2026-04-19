@@ -128,9 +128,27 @@ impl Interpreter {
                 Ok(ControlFlow::Value(Value::String(unquoted)))
             }
             HirExpression::Bool(_, b) => Ok(ControlFlow::Value(Value::Bool(*b))),
+            HirExpression::EnumConstructor(cons) => {
+                let mut payloads = Vec::new();
+                for arg in &cons.payloads {
+                    match self.eval_expression(arg, env)? {
+                        ControlFlow::Value(v) => payloads.push(v),
+                        cf => return Ok(cf),
+                    }
+                }
+                Ok(ControlFlow::Value(Value::Enum(Box::new(
+                    crate::value::EnumValue {
+                        enum_name: cons.enum_name.clone(),
+                        variant_name: cons.variant_name.clone(),
+                        payloads,
+                    },
+                ))))
+            }
             HirExpression::Name(_, name) => {
                 if name == "None" {
                     Ok(ControlFlow::Value(Value::Option(OptionValue::None)))
+                } else if let Some(val) = env.get(name) {
+                    Ok(ControlFlow::Value(val))
                 } else {
                     env.get(name)
                         .map(ControlFlow::Value)
@@ -854,13 +872,8 @@ impl Interpreter {
                         }
                         _ => {}
                     }
-
                     // User function
-                    let func = self
-                        .functions
-                        .get(name)
-                        .cloned()
-                        .ok_or_else(|| format!("Function {} not found", name))?;
+                    let func = self.functions.get(name).cloned().ok_or_else(|| format!("Function {} not found", name))?;
 
                     let mut final_args = vec![None; func.parameters.len()];
                     for (i, v) in positional_values.into_iter().enumerate() {
@@ -1227,6 +1240,25 @@ impl Interpreter {
                 true
             }
             HirPattern::EnumCase(_, name, args) => {
+                // 1. User-defined Enum
+                if let Value::Enum(e) = value {
+                    if &e.variant_name == name {
+                        if args.len() == e.payloads.len() {
+                            let mut temp_bindings = Vec::new();
+                            for (arg_pat, arg_val) in args.iter().zip(e.payloads.iter()) {
+                                if !Self::value_matches_pattern(arg_val, arg_pat, &mut temp_bindings) {
+                                    return false;
+                                }
+                            }
+                            bindings.extend(temp_bindings);
+                            return true;
+                        }
+                    }
+                    if args.is_empty() && &e.enum_name == name {
+                        return true;
+                    }
+                }
+
                 match name.as_str() {
                     "Some" => {
                         if let Value::Option(crate::value::OptionValue::Some(inner)) = value {
@@ -1281,7 +1313,7 @@ impl Interpreter {
             }
             HirPattern::Literal(_, lit_expr) => {
                 // Evaluate the literal and compare by value equality.
-                let mut dummy_bindings = Vec::new();
+                let mut _dummy_bindings = Vec::new();
                 match lit_expr.as_ref() {
                     HirExpression::Integer(_, s) => {
                         if let Ok(n) = s.parse::<i64>() {
@@ -1302,11 +1334,58 @@ impl Interpreter {
                     HirExpression::Bool(_, b) => {
                         matches!(value, Value::Bool(v) if *v == *b)
                     }
-                    other => Self::value_matches_pattern(value, &HirPattern::Wildcard(other.span()), &mut dummy_bindings),
+                    other => Self::value_matches_pattern(value, &HirPattern::Wildcard(other.span()), &mut _dummy_bindings),
                 }
             }
+            HirPattern::Struct(_, name, fields) => {
+                if let Value::Struct(struct_val) = value {
+                    if struct_val.name == *name {
+                        for field_name in fields {
+                            if let Some(field_value) = struct_val.fields.get(field_name) {
+                                bindings.push((field_name.clone(), field_value.clone()));
+                            } else {
+                                return false;
+                            }
+                        }
+                        return true;
+                    }
+                }
+                false
+            }
+        HirPattern::Tuple(_, items) => {
+            if let Value::Tuple(elements) = value {
+                if elements.len() == items.len() {
+                    let mut temp_bindings = Vec::new();
+                    for (item_pat, item_val) in items.iter().zip(elements.iter()) {
+                        if !Self::value_matches_pattern(item_val, item_pat, &mut temp_bindings) {
+                            return false;
+                        }
+                    }
+                    bindings.extend(temp_bindings);
+                    return true;
+                }
+            }
+            false
+        }
+        HirPattern::EnumConstructor(cons) => {
+            if let Value::Enum(e) = value {
+                if e.enum_name == cons.enum_name && e.variant_name == cons.variant_name {
+                    if cons.payloads.len() == e.payloads.len() {
+                        let mut temp_bindings = Vec::new();
+                        for (p_pat, p_val) in cons.payloads.iter().zip(e.payloads.iter()) {
+                            if !Self::value_matches_pattern(p_val, p_pat, &mut temp_bindings) {
+                                return false;
+                            }
+                        }
+                        bindings.extend(temp_bindings);
+                        return true;
+                    }
+                }
+            }
+            false
         }
     }
+}
 
     fn value_is_type(value: &Value, ty: &HirType) -> bool {
         match ty {
@@ -1320,6 +1399,8 @@ impl Interpreter {
                 _ => {
                     if let Value::Struct(s) = value {
                         s.name == *name
+                    } else if let Value::Enum(e) = value {
+                        e.enum_name == *name
                     } else {
                         false
                     }

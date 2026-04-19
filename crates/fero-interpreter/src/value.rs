@@ -23,6 +23,14 @@ pub enum Value {
     Option(OptionValue),
     Error(String),
     Regex(RegexValue),
+    Enum(Box<EnumValue>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumValue {
+    pub enum_name: String,
+    pub variant_name: String,
+    pub payloads: Vec<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -327,6 +335,14 @@ impl Value {
                 fields.sort();
                 format!("{} {{ {} }}", s.name, fields.join(", "))
             }
+            Value::Enum(e) => {
+                if e.payloads.is_empty() {
+                    e.variant_name.clone()
+                } else {
+                    let elems: Vec<String> = e.payloads.iter().map(|v| v.to_repr()).collect();
+                    format!("{}({})", e.variant_name, elems.join(", "))
+                }
+            }
             _ => self.to_string(),
         }
     }
@@ -408,6 +424,20 @@ impl std::fmt::Display for Value {
                 OptionValue::Some(v) => write!(f, "Some({})", v.to_repr()),
                 OptionValue::None => write!(f, "None"),
             },
+            Value::Enum(e) => {
+                if e.payloads.is_empty() {
+                    write!(f, "{}", e.variant_name)
+                } else {
+                    write!(f, "{}(", e.variant_name)?;
+                    for (i, p) in e.payloads.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "{}", p.to_repr())?;
+                    }
+                    write!(f, ")")
+                }
+            }
         }
     }
 }

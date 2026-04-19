@@ -44,6 +44,7 @@ pub struct TypeContext {
     pub functions: HashMap<String, FunctionSignature>,
     pub structs: HashMap<String, StructInfo>,
     pub enums: HashMap<String, EnumInfo>,
+    pub variant_to_enums: HashMap<String, Vec<String>>,
     pub scopes: ScopeStack,
     pub errors: Vec<TypeError>,
     pub current_return_type: Option<Type>,
@@ -56,6 +57,7 @@ impl TypeContext {
             functions: HashMap::new(),
             structs: HashMap::new(),
             enums: HashMap::new(),
+            variant_to_enums: HashMap::new(),
             scopes: ScopeStack::new(),
             errors: Vec::new(),
             current_return_type: None,
@@ -67,22 +69,25 @@ impl TypeContext {
         self.errors.push(TypeError::new(message, span));
     }
 
+    /// Resolves a simple type name into a semantic Type, checking builtins then user types.
+    pub fn resolve_type_name(&self, name: &str) -> Type {
+        let base = resolve_named_type(name);
+        if base != Type::Unknown {
+            return base;
+        }
+        if self.structs.contains_key(name) {
+            return Type::Struct(name.to_string());
+        }
+        if self.enums.contains_key(name) {
+            return Type::Enum(name.to_string());
+        }
+        Type::Unknown
+    }
+
     /// Resolve an HIR type node into a semantic Type.
     pub fn resolve_hir_type(&self, hir_type: &HirType) -> Type {
         match hir_type {
-            HirType::Named(_, name) => {
-                let base = resolve_named_type(name);
-                if base != Type::Unknown {
-                    return base;
-                }
-                if self.structs.contains_key(name.as_str()) {
-                    return Type::Struct(name.clone());
-                }
-                if self.enums.contains_key(name.as_str()) {
-                    return Type::Enum(name.clone());
-                }
-                Type::Unknown
-            }
+            HirType::Named(_, name) => self.resolve_type_name(name),
             HirType::Array(_, inner) => Type::Array(Box::new(self.resolve_hir_type(inner))),
             HirType::Tuple(_, elems) => {
                 Type::Tuple(elems.iter().map(|e| self.resolve_hir_type(e)).collect())
@@ -115,6 +120,29 @@ impl TypeContext {
                     .unwrap_or(Type::BuiltinError);
                 Type::Result(Box::new(ok_ty), Box::new(err_ty))
             }
+        }
+    }
+    /// Finds which enum owns a variant, using the expected type as a hint to resolve ambiguity.
+    pub fn find_enum_for_variant(&self, variant: &str, expected: Option<&Type>) -> Result<String, String> {
+        let candidates = match self.variant_to_enums.get(variant) {
+            Some(c) => c,
+            None => return Err(format!("Unknown constructor '{}'", variant)),
+        };
+
+        if let Some(Type::Enum(expected_name)) = expected {
+            if candidates.contains(expected_name) {
+                return Ok(expected_name.clone());
+            }
+        }
+
+        if candidates.len() == 1 {
+            Ok(candidates[0].clone())
+        } else {
+            Err(format!(
+                "ambiguous constructor '{}'. Multiple enums found: {}. Use a type hint to resolve this.",
+                variant,
+                candidates.join(", ")
+            ))
         }
     }
 }

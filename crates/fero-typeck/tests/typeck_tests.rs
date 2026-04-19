@@ -3,9 +3,9 @@ use fero_parser::parse_source;
 use fero_typeck::check_file;
 
 fn expect_ok(source: &str) {
-    let ast = parse_source(source).unwrap();
-    let hir = lower_file(source, &ast);
-    if let Err(errors) = check_file(&hir) {
+    let ast = parse_source(source).expect("Failed to parse source");
+    let mut hir = lower_file(source, &ast);
+    if let Err(errors) = check_file(&mut hir) {
         panic!(
             "Type checking failed for source:\n{}\nErrors: {:?}",
             source, errors
@@ -14,11 +14,18 @@ fn expect_ok(source: &str) {
 }
 
 fn expect_err(source: &str) {
-    let ast = parse_source(source).unwrap();
-    let hir = lower_file(source, &ast);
-    if check_file(&hir).is_ok() {
-        panic!("Expected type error, but succeeded for source:\n{}", source);
+    let ast = match parse_source(source) {
+        Ok(ast) => ast,
+        Err(_) => return, // Parse error is also a form of error
+    };
+    let mut hir = lower_file(source, &ast);
+    if let Err(errs) = check_file(&mut hir) {
+        if errs.is_empty() {
+             panic!("check_file returned Err but with no errors? for source:\n{}", source);
+        }
+        return;
     }
+    panic!("Expected error, but succeeded for source:\n{}", source);
 }
 
 #[test]
@@ -1535,9 +1542,9 @@ fn test_is_naked_lowercase_rejected() {
 // ── Shape-based pattern & Strict 'is' ──────────────────────────────────────
 
 #[test]
-fn test_match_constructor_shape_lowercase() {
-    // Structural check only in parser; typechecker currently allows generic constructors in v1.
-    expect_ok(r#"
+fn test_match_constructor_hardening() {
+    // Should FAIL now because foo(a) is not valid for Option
+    expect_err(r#"
         fn main() {
             let x = Some(1);
             let y = match x {
@@ -1586,12 +1593,91 @@ fn test_is_strict_naked_binding_forbidden() {
 }
 
 #[test]
-fn test_is_constructor_shape_lowercase_works() {
-    // if x is foo(y) parses as pattern
-    expect_ok(r#"
+fn test_is_constructor_hardening() {
+    // Should FAIL now because some_ctor(y) is not valid for Option
+    expect_err(r#"
         fn main() {
             let x = Some(1);
             if x is some_ctor(y) { }
+        }
+    "#);
+}
+
+#[test]
+fn test_is_restricted_struct_pattern_forbidden() {
+    // 1) if x is User { name } { } (Must fail)
+    expect_err(r#"
+        struct User { name: String }
+        fn main() {
+            let x = User { name: "L" };
+            if x is User { name } { }
+        }
+    "#);
+}
+
+#[test]
+fn test_is_restricted_tuple_pattern_forbidden() {
+    // 2) if x is (a, b) { } (Must fail)
+    expect_err(r#"
+        fn main() {
+            let x = ("a", 1);
+            if x is (a, b) { }
+        }
+    "#);
+}
+
+#[test]
+fn test_match_tuple_arity_one_forbidden() {
+    // 3) match x { (a) => a } (Must fail)
+    expect_err(r#"
+        fn main() {
+            let x = (1, 2);
+            match x {
+                (a) => a,
+                _ => 0,
+            };
+        }
+    "#);
+}
+
+#[test]
+fn test_match_struct_renaming_forbidden() {
+    // 4) match u { User { name: n } => n } (Must fail)
+    expect_err(r#"
+        struct User { name: String }
+        fn main() {
+            let u = User { name: "L" };
+            match u {
+                User { name: n } => n,
+            };
+        }
+    "#);
+}
+
+#[test]
+fn test_match_struct_ok() {
+    expect_ok(r#"
+        struct User { name: String, age: Int }
+        fn main() {
+            let u = User { name: "L", age: 30 };
+            let n = match u {
+                User { name, age } => name,
+            };
+        }
+    "#);
+}
+
+#[test]
+fn test_match_tuple_ok() {
+    expect_ok(r#"
+        fn main() {
+            let t = ("hello", 42);
+            let s = match t {
+                (msg, val) => msg,
+            };
+            let v = match t {
+                (_, val) => val,
+            };
         }
     "#);
 }
@@ -1612,6 +1698,139 @@ fn test_is_type_uppercase_works() {
         fn main() {
             let x = 1;
             if x is Int { }
+        }
+    "#);
+}
+
+
+// ── Bool Exhaustiveness ─────────────────────────────────────────────────────
+
+#[test]
+fn test_match_bool_exhaustive() {
+    expect_ok(r#"
+        fn main() {
+            let b = true;
+            let x = match b {
+                true => 1,
+                false => 0,
+            };
+        }
+    "#);
+}
+
+#[test]
+fn test_match_bool_wildcard() {
+    expect_ok(r#"
+        fn main() {
+            let b = true;
+            let x = match b {
+                true => 1,
+                _ => 0,
+            };
+        }
+    "#);
+}
+
+#[test]
+fn test_match_bool_binding_catchall() {
+    expect_ok(r#"
+        fn main() {
+            let b = true;
+            let x = match b {
+                true => 1,
+                other => 0,
+            };
+        }
+    "#);
+}
+
+#[test]
+fn test_match_bool_non_exhaustive_only_true() {
+    expect_err(r#"
+        fn main() {
+            let b = true;
+            let x = match b {
+                true => 1,
+            };
+        }
+    "#);
+}
+
+#[test]
+fn test_match_bool_non_exhaustive_only_false() {
+    expect_err(r#"
+        fn main() {
+            let b = true;
+            let x = match b {
+                false => 0,
+            };
+        }
+    "#);
+}
+
+#[test]
+fn test_match_bool_duplicate_true() {
+    expect_err(r#"
+        fn main() {
+            let b = true;
+            let x = match b {
+                true => 1,
+                true => 2,
+                false => 0,
+            };
+        }
+    "#);
+}
+
+#[test]
+fn test_match_bool_duplicate_false() {
+    expect_err(r#"
+        fn main() {
+            let b = true;
+            let x = match b {
+                true => 1,
+                false => 0,
+                false => 2,
+            };
+        }
+    "#);
+}
+
+#[test]
+fn test_match_bool_unreachable_after_wildcard() {
+    expect_err(r#"
+        fn main() {
+            let b = true;
+            let x = match b {
+                _ => 1,
+                true => 2,
+            };
+        }
+    "#);
+}
+
+#[test]
+fn test_match_bool_unreachable_after_binding() {
+    expect_err(r#"
+        fn main() {
+            let b = true;
+            let x = match b {
+                x => 1,
+                false => 0,
+            };
+        }
+    "#);
+}
+
+#[test]
+fn test_match_bool_false_binding_catchall() {
+    expect_ok(r#"
+        fn main() {
+            let b = true;
+            let x = match b {
+                false => 0,
+                x => 1,
+            };
         }
     "#);
 }

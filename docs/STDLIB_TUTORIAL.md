@@ -49,15 +49,24 @@ fn check_my_module_builtin(ctx: &mut TypeContext, name: &str, args: &[HirCallArg
 }
 ```
 
-### Step 1.2: Register in `check_call`
+### Step 1.2: Register in `resolve_callee` and `check_call`
 
-Add your namespace check to the `check_call` logic.
+First, ensure your namespace is recognized as a root in `resolve_name`:
 
 ```rust
-if let HirExpression::Member(m) = &*c.callee {
-    if let HirExpression::Name(_, ref obj_name) = *m.object {
-        if obj_name == "my_module" {
-            return self::check_my_module_builtin(ctx, &m.field, &c.args, c.span);
+if name == "my_module" {
+    return Ok(ResolvedName::Namespace(name.to_string()));
+}
+```
+
+Then, handle the call dispatch in `check_call`:
+
+```rust
+ResolvedCallee::Namespace(ns, method) => {
+    if let HirExpression::Call(ref mut c) = expr {
+        match ns.as_str() {
+            "my_module" => return check_my_module_builtin(ctx, &method, &mut c.args, c.span),
+            // ...
         }
     }
 }

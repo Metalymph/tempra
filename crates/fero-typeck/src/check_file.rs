@@ -8,14 +8,14 @@ use crate::check_item::{register_items, check_item};
 /// Type-check a complete HIR file.
 ///
 /// Returns `Ok(())` if the file is well-typed, or a list of type errors.
-pub fn check_file(file: &HirFile) -> Result<(), Vec<TypeError>> {
+pub fn check_file(file: &mut HirFile) -> Result<(), Vec<TypeError>> {
     let mut ctx = TypeContext::new();
 
     // Pass 1: register all top-level items (functions, structs, enums)
     register_items(&mut ctx, &file.items);
 
     // Pass 2: check item bodies
-    for item in &file.items {
+    for item in &mut file.items {
         check_item(&mut ctx, item);
     }
     
@@ -24,8 +24,8 @@ pub fn check_file(file: &HirFile) -> Result<(), Vec<TypeError>> {
         ctx.current_is_fallible = true;
         ctx.current_return_type = None; // Returns unit, but let's just leave it None to prevent explicit return 
         ctx.scopes.push_scope();
-        for stmt in &file.top_level_statements {
-            crate::check_stmt::check_statement(&mut ctx, stmt);
+        for stmt in &mut file.top_level_statements {
+            crate::check_stmt::check_statement(&mut ctx, stmt, None);
         }
         ctx.scopes.pop_scope();
         ctx.current_is_fallible = false;

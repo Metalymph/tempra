@@ -544,8 +544,22 @@ impl<'src> Parser<'src> {
                                 .unwrap_or('\0');
                             
                             if first_char.is_uppercase() {
-                                 // Not a type modifier -> assume constructor candidate (like 'is None').
-                                 !matches!(next2.kind, TokenKind::QuestionMark | TokenKind::Bang | TokenKind::LeftBracket)
+                                 let name = self.text(next.span);
+                                 let is_builtin_type = matches!(
+                                     name,
+                                     "Unit" | "Bool" | "String" | "Int" | "Int8" | "Int16" | "Int32" | "Int64" |
+                                     "UInt8" | "UInt16" | "UInt32" | "UInt64" | "Float32" | "Float64" |
+                                     "Command" | "CommandResult" | "Regex" | "Error"
+                                 );
+                                 
+                                 if is_builtin_type {
+                                     false
+                                 } else {
+                                     // Not a type modifier -> assume constructor candidate (like 'is None').
+                                     // Note: Even if followed by '{', we treat it as a unit constructor pattern (fallback)
+                                     // and let parse_pattern(allow_struct=false) handle it (leaving '{' for the 'if' block).
+                                     !matches!(next2.kind, TokenKind::QuestionMark | TokenKind::Bang | TokenKind::LeftBracket)
+                                 }
                             } else {
                                 // Lowercase bare identifier is intentionally forbidden as a binding pattern in 'is'.
                                 // It will be parsed as a Type and likely produce a "Type not found" error during typecheck.
@@ -553,12 +567,14 @@ impl<'src> Parser<'src> {
                             }
                         }
                     } else {
+                        // next.kind is not Underscore or Identifier (e.g. it is LeftParen for a tuple pattern).
+                        // User requirement: no tuple patterns in 'is' yet.
                         false
                     }
                 };
 
                 if is_pattern {
-                    let pattern = self.parse_pattern()?;
+                    let pattern = self.parse_pattern_ext(false, false)?;
                     let left_span = left.span();
                     left = Expression::IsPattern(IsPatternExpr {
                         span: Span::new(left_span.start, pattern.span().end),
@@ -947,11 +963,37 @@ impl<'src> Parser<'src> {
     }
 
     fn parse_pattern(&mut self) -> Result<Pattern, ParseError> {
+        // By default, we allow everything (used in match arms)
+        self.parse_pattern_ext(true, true)
+    }
+
+    fn parse_pattern_ext(&mut self, allow_struct: bool, allow_tuple: bool) -> Result<Pattern, ParseError> {
         let token = self.current();
         if self.eat(TokenKind::Underscore) {
             Ok(Pattern::Wildcard(WildcardPattern {
                 span: token.span,
                 token,
+            }))
+        } else if allow_tuple && self.at(TokenKind::LeftParen) {
+            let start = self.advance();
+            let mut items = Vec::new();
+            while !self.at(TokenKind::RightParen) && !self.at(TokenKind::EndOfFile) {
+                // Nested patterns are forbidden in v1, so we call with false, false
+                items.push(self.parse_pattern_ext(false, false)?);
+                if !self.eat(TokenKind::Comma) {
+                    break;
+                }
+            }
+            let end = self.expect(TokenKind::RightParen)?;
+            if items.len() < 2 {
+                return Err(ParseError {
+                    message: "Tuple patterns must have at least 2 elements in v1 (grouped patterns (x) are not supported)".to_string(),
+                    span: Span::new(start.span.start, end.span.end),
+                });
+            }
+            Ok(Pattern::Tuple(TuplePattern {
+                span: Span::new(start.span.start, end.span.end),
+                items,
             }))
         } else if matches!(
             token.kind,
@@ -970,7 +1012,8 @@ impl<'src> Parser<'src> {
             if self.eat(TokenKind::LeftParen) {
                 let mut arguments = Vec::new();
                 while !self.at(TokenKind::RightParen) && !self.at(TokenKind::EndOfFile) {
-                    arguments.push(self.parse_pattern()?);
+                    // Nested patterns are forbidden in v1, so we call with false, false
+                    arguments.push(self.parse_pattern_ext(false, false)?);
                     if !self.eat(TokenKind::Comma) {
                         break;
                     }
@@ -980,6 +1023,27 @@ impl<'src> Parser<'src> {
                     span: Span::new(name.span.start, end.span.end),
                     name,
                     arguments,
+                }))
+            } else if allow_struct && self.eat(TokenKind::LeftBrace) {
+                let mut fields = Vec::new();
+                while !self.at(TokenKind::RightBrace) && !self.at(TokenKind::EndOfFile) {
+                    let field = self.expect_identifier()?;
+                    if self.at(TokenKind::Colon) {
+                        return Err(ParseError {
+                            message: "Renaming fields in struct patterns is not supported in v1 (shorthand only)".to_string(),
+                            span: self.current().span,
+                        });
+                    }
+                    fields.push(field);
+                    if !self.eat(TokenKind::Comma) {
+                        break;
+                    }
+                }
+                let end = self.expect(TokenKind::RightBrace)?;
+                Ok(Pattern::Struct(StructPattern {
+                    span: Span::new(name.span.start, end.span.end),
+                    name,
+                    fields,
                 }))
             } else {
                 // Bare identifier rule:

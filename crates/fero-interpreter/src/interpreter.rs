@@ -2,7 +2,7 @@ use crate::control_flow::ControlFlow;
 use crate::env::RuntimeEnv;
 use crate::value::Value;
 use fero_hir::*;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 #[derive(Debug)]
 pub enum RuntimeSignal {
@@ -12,6 +12,7 @@ pub enum RuntimeSignal {
 pub struct Interpreter {
     pub functions: HashMap<String, HirFunction>,
     pub structs: HashMap<String, HirStruct>,
+    pub enums: BTreeMap<String, HirEnum>,
     pub top_level_statements: Vec<HirStatement>,
     pub args: Vec<String>,
 }
@@ -20,12 +21,14 @@ impl Interpreter {
     pub fn new(file: &HirFile) -> Self {
         let mut functions = HashMap::new();
         let mut structs = HashMap::new();
+        let mut enums = BTreeMap::new();
         for item in &file.items {
-            crate::eval_item::register_item(&mut functions, &mut structs, item);
+            crate::eval_item::register_item(&mut functions, &mut structs, &mut enums, item);
         }
         Self { 
             functions,
             structs,
+            enums,
             top_level_statements: file.top_level_statements.clone(),
             args: Vec::new(),
         }

@@ -1501,3 +1501,81 @@ fn test_match_runtime_precedence_with_literals() {
     "#;
     assert_eq!(assert_runs(source), Value::String("ok".to_string()));
 }
+
+#[test]
+fn test_match_runtime_struct_destructuring() {
+    let source = r#"
+    struct User { name: String, age: Int }
+    fn main() {
+        let u = User { name: "Antigravity", age: 1 }
+        let res = match u {
+            User { name, age } => name,
+        }
+        expect(res == "Antigravity")
+        "ok"
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::String("ok".to_string()));
+}
+
+#[test]
+fn test_match_runtime_tuple_destructuring() {
+    let source = r#"
+    fn main() {
+        let t = ("Antigravity", 1)
+        let res = match t {
+            (name, age) => name,
+        }
+        expect(res == "Antigravity")
+        "ok"
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::String("ok".to_string()));
+}
+
+#[test]
+fn test_match_runtime_tuple_wildcard() {
+    let source = r#"
+    fn main() {
+        let t = ("Antigravity", 1)
+        let res = match t {
+            (_, age) => age,
+        }
+        expect(res == 1)
+        "ok"
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::String("ok".to_string()));
+}
+
+#[test]
+fn test_match_runtime_bool_exact() {
+    let source = r#"
+    fn main() {
+        let b = false
+        let x = match b {
+            true => 1,
+            false => 0,
+        }
+        expect(x == 0)
+        "ok"
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::String("ok".to_string()));
+}
+
+#[test]
+fn test_match_runtime_bool_wildcard() {
+    let source = r#"
+    fn main() {
+        let b = false
+        let x = match b {
+            true => 1,
+            _ => 0,
+        }
+        expect(x == 0)
+        "ok"
+    }
+    "#;
+    assert_eq!(assert_runs(source), Value::String("ok".to_string()));
+}

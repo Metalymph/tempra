@@ -5,7 +5,7 @@ use fero_hir::*;
 use std::collections::HashMap;
 
 /// Check a single item (function body, struct, enum, etc.)
-pub fn check_item(ctx: &mut TypeContext, item: &HirItem) {
+pub fn check_item(ctx: &mut TypeContext, item: &mut HirItem) {
     match item {
         HirItem::Function(f) => check_function(ctx, f),
         // Structs and enums are checked during registration
@@ -14,7 +14,7 @@ pub fn check_item(ctx: &mut TypeContext, item: &HirItem) {
 }
 
 /// Check a function body against its declared signature.
-fn check_function(ctx: &mut TypeContext, f: &HirFunction) {
+fn check_function(ctx: &mut TypeContext, f: &mut HirFunction) {
     let mut return_type = f
         .return_type
         .as_ref()
@@ -36,7 +36,8 @@ fn check_function(ctx: &mut TypeContext, f: &HirFunction) {
         ctx.scopes.insert(p.name.clone(), ty);
     }
 
-    let body_ty = check_block(ctx, &f.body);
+    let expected_ret = ctx.current_return_type.clone();
+    let body_ty = check_block(ctx, &mut f.body, expected_ret.as_ref());
 
     // Check final expression return type
     if let Some(expected) = &ctx.current_return_type {
@@ -117,19 +118,32 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
                 );
             }
             HirItem::Enum(e) => {
-                let mut variants = HashMap::new();
-                for v in &e.variants {
-                    let payload: Vec<Type> =
-                        v.payload.iter().map(|t| ctx.resolve_hir_type(t)).collect();
-                    variants.insert(v.name.clone(), payload);
-                }
+                // Pre-insert the enum to allow self-referential variants (e.g. enum Node { Next(Node) })
                 ctx.enums.insert(
                     e.name.clone(),
                     EnumInfo {
                         visibility: e.visibility,
-                        variants,
+                        variants: HashMap::new(),
                     },
                 );
+
+                let mut resolved_variants = HashMap::new();
+                for v in &e.variants {
+                    let payload: Vec<Type> =
+                        v.payload.iter().map(|t| ctx.resolve_hir_type(t)).collect();
+                    resolved_variants.insert(v.name.clone(), payload);
+                    
+                    // Track which enums have this variant for ambiguity detection
+                    ctx.variant_to_enums
+                        .entry(v.name.clone())
+                        .or_default()
+                        .push(e.name.clone());
+                }
+                
+                // Update with resolved variants
+                if let Some(info) = ctx.enums.get_mut(&e.name) {
+                    info.variants = resolved_variants;
+                }
             }
             HirItem::Import(_) | HirItem::Extend(_) => {}
         }

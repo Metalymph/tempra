@@ -1,4 +1,4 @@
-# Fero Pattern Matching Spec (v1.5)
+# Fero Pattern Matching Spec (v1.6)
 
 ## 1. Match Expression
 
@@ -91,14 +91,29 @@ User { name: n, meta: (age, _), active }
 ---
 
 ### 2.6 Tuple Patterns
-```fero
-(a, b) => expr
-((a, b), c) => expr
-(_, x) => expr
-```
-- Arity must match the scrutinee tuple exactly.
-- Arity >= 2 only. Single-element grouped patterns `(a)` are not supported.
-- Patterns are recursive.
+
+Tuple patterns are written as:
+
+    (p1, p2, ..., pn)
+
+Constraints:
+- n ≥ 2
+- single-element tuple patterns are not allowed
+- empty tuple patterns are not supported
+
+The rejection of `(a)` / `(a,)` / `()` must happen in pattern parsing, not later in typechecking.
+
+Examples:
+
+    (a, b)
+    (_, value)
+    (User { name }, age)
+
+Invalid:
+
+    (a)
+    (a,)
+    ()
 
 ---
 
@@ -129,7 +144,8 @@ match x {
 | Duplicate struct field | `duplicate field 'f' in struct pattern` |
 | Wrong subpattern shape | `cannot match <type> with ...` |
 | Tuple arity mismatch | `tuple pattern arity mismatch: expected N, found M` |
-| Single-element tuple | `tuple patterns must have at least 2 elements in v1` |
+| Empty tuple pattern | `empty tuple patterns are not supported` |
+| Single-element tuple pattern | `single-element tuple patterns are not allowed; use `a` instead` |
 | Non-exhaustive match | `non-exhaustive match on enum 'X': missing arm for variant 'Y'` |
 | Duplicate variant arm | `duplicate 'X' arm in match: this case was already covered` |
 | Unreachable after catch-all | `unreachable match arm: a previous wildcard ...` |
@@ -156,7 +172,7 @@ Rules:
 
 - OR-patterns: `A | B => ...`
 - Rest patterns: `User { name, .. }`
-- Grouped / single-element tuple patterns: `(a)`
+- Grouped patterns
 - `is` struct patterns
 - Full payload-sensitive exhaustiveness
 

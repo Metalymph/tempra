@@ -1429,6 +1429,7 @@ impl Interpreter {
                 "Int" | "Int64" => matches!(value, Value::Int64(_)),
                 "UInt8" => matches!(value, Value::UInt8(_)),
                 "Error" => matches!(value, Value::Error(_)),
+                "Never" => false,
                 _ => {
                     if let Value::Struct(s) = value {
                         s.name == *name

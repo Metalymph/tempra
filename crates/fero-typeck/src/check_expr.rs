@@ -190,7 +190,7 @@ fn validate_pattern_type(
                      // we still treat it as a Type Test (which might evaluate to false).
                      // However, to keep it simple, only return Some if it's likely a type test.
                      // Part 2.1 requires 'is Int' to work.
-                     if matches!(resolved_ty, Type::Int | Type::String | Type::Bool | Type::Struct(_) | Type::Enum(_)) {
+                     if matches!(resolved_ty, Type::Int | Type::String | Type::Bool | Type::Struct(_) | Type::Enum(_) | Type::Never) {
                          return Some(resolved_ty);
                      }
                  }
@@ -858,7 +858,7 @@ fn check_builtin(
                     ctx.error("missing argument 'code' for 'exit'", span);
                 }
             }
-            Some(Type::Unit)
+            Some(Type::Never)
         }
         "read_line" => {
             for arg in args {
@@ -1021,7 +1021,7 @@ fn check_builtin(
                     }
                 }
             }
-            Some(Type::Unit)
+            Some(Type::Never)
         }
         "expect" => {
             if args.len() < 1 {
@@ -1878,6 +1878,22 @@ fn extract_pattern_bindings(ctx: &TypeContext, val_ty: &Type, pattern: &mut HirP
     }
 }
 
+fn unify_branch_types(t1: Type, t2: Type) -> Type {
+    if t1 == Type::Error || t2 == Type::Error {
+        return Type::Error;
+    }
+    if t1 == t2 {
+        return t1;
+    }
+    if t1 == Type::Never {
+        return t2;
+    }
+    if t2 == Type::Never {
+        return t1;
+    }
+    Type::Error
+}
+
 fn check_if(ctx: &mut TypeContext, i: &mut HirIf, expected: Option<&Type>) -> Type {
     let cond = check_expression(ctx, &mut i.condition, Some(&Type::Bool));
     if cond != Type::Bool && cond != Type::Error {
@@ -1895,7 +1911,8 @@ fn check_if(ctx: &mut TypeContext, i: &mut HirIf, expected: Option<&Type>) -> Ty
 
     if let Some(ref mut else_branch) = i.else_branch {
         let else_ty = check_expression(ctx, else_branch, expected);
-        if then_ty != Type::Error && else_ty != Type::Error && then_ty != else_ty {
+        let unified = unify_branch_types(then_ty.clone(), else_ty.clone());
+        if unified == Type::Error && then_ty != Type::Error && else_ty != Type::Error {
             ctx.error(
                 format!(
                     "if branches have incompatible types: {} vs {}",
@@ -1903,75 +1920,58 @@ fn check_if(ctx: &mut TypeContext, i: &mut HirIf, expected: Option<&Type>) -> Ty
                 ),
                 i.span,
             );
+            return Type::Error;
         }
-        then_ty
+        unified
     } else {
         Type::Unit
     }
 }
 
-// ─── Coverage Model ───────────────────────────────────────────────────────────
+// ─── Exhaustiveness Groundwork v3 ─────────────────────────────────────────────
 //
-// A lightweight, structured representation of pattern coverage.
-// This is an APPROXIMATION: guards and complex payloads are treated conservatively.
+// A pattern space foundation for match exhaustiveness.
+// This model distinguishes between structural space (for reachability)
+// and coverage space (for exhaustiveness).
 //
-// Rules (by design):
-// - Guarded arms NEVER contribute coverage (Unknown).
-// - Unguarded catch-all → Complete.
-// - Unguarded top-level constructor → Finite({key}).
-// - Payload substructure is IGNORED for coverage purposes.
+// Space::Constructor(String) always represents the top-level case only.
+// Payload subpatterns are ignored at this stage.
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) enum CaseKey {
-    Bool(bool),
-    Variant(String),
-}
-
-impl CaseKey {
-    fn display(&self) -> String {
-        match self {
-            CaseKey::Bool(b) => b.to_string(),
-            CaseKey::Variant(s) => s.clone(),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-enum Coverage {
-    /// Fully covered — e.g. via an unguarded catch-all.
-    Complete,
-    /// A specific set of top-level cases is covered.
-    Finite(std::collections::HashSet<CaseKey>),
-    /// Coverage cannot be determined (guards, unsupported patterns).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Space {
+    Constructor(String),
+    Wildcard,
     Unknown,
 }
 
-impl Coverage {
-    fn empty() -> Self {
-        Coverage::Finite(std::collections::HashSet::new())
-    }
-
-    fn combine(self, other: Coverage) -> Coverage {
-        match (self, other) {
-            (Coverage::Complete, _) | (_, Coverage::Complete) => Coverage::Complete,
-            (Coverage::Finite(mut a), Coverage::Finite(b)) => {
-                a.extend(b);
-                Coverage::Finite(a)
-            }
-            (Coverage::Finite(a), Coverage::Unknown) | (Coverage::Unknown, Coverage::Finite(a)) => {
-                Coverage::Finite(a)
-            }
-            (Coverage::Unknown, Coverage::Unknown) => Coverage::Unknown,
-        }
-    }
-}
-
-/// The scrutinee's known finite domain, if any.
 #[derive(Debug, Clone)]
 enum Domain {
     Bool,
-    Enum(String), // includes Option<T>, Result<T,E>, user enums
+    Enum(String),
     Unknown,
+}
+
+fn pattern_to_structural_space(pat: &HirPattern) -> Space {
+    match pat {
+        HirPattern::Wildcard(_) | HirPattern::Identifier(_, _) => Space::Wildcard,
+        HirPattern::Literal(_, expr) => {
+            if let HirExpression::Bool(_, b) = expr.as_ref() {
+                Space::Constructor(b.to_string())
+            } else {
+                Space::Unknown
+            }
+        }
+        HirPattern::EnumCase(_, name, _) => Space::Constructor(name.clone()),
+        HirPattern::EnumConstructor(e) => Space::Constructor(e.variant_name.clone()),
+        _ => Space::Unknown,
+    }
+}
+
+fn pattern_to_coverage_space(pat: &HirPattern, has_guard: bool) -> Space {
+    if has_guard {
+        return Space::Unknown;
+    }
+    pattern_to_structural_space(pat)
 }
 
 fn domain_of_type(ty: &Type) -> Domain {
@@ -1984,106 +1984,46 @@ fn domain_of_type(ty: &Type) -> Domain {
     }
 }
 
-fn cases_of_domain<'a>(domain: &Domain, ctx: &'a TypeContext) -> Vec<CaseKey> {
-    match domain {
-        Domain::Bool => vec![CaseKey::Bool(true), CaseKey::Bool(false)],
-        Domain::Enum(name) => match name.as_str() {
-            "Option" => vec![CaseKey::Variant("Some".to_string()), CaseKey::Variant("None".to_string())],
-            "Result" => vec![CaseKey::Variant("Ok".to_string()), CaseKey::Variant("Err".to_string())],
-            _ => {
-                if let Some(info) = ctx.enums.get(name) {
-                    let mut keys: Vec<_> = info.variants.keys()
-                        .map(|k| CaseKey::Variant(k.clone()))
-                        .collect();
-                    keys.sort_by_key(|k| k.display());
-                    keys
-                } else {
-                    vec![]
-                }
-            }
-        },
-        Domain::Unknown => vec![],
-    }
-}
-
-/// Extract the coverage key for a top-level pattern (ignoring payloads).
-fn pattern_case_key(pat: &HirPattern) -> Option<CaseKey> {
-    match pat {
-        HirPattern::Literal(_, expr) => {
-            if let HirExpression::Bool(_, b) = expr.as_ref() {
-                Some(CaseKey::Bool(*b))
-            } else {
-                None
-            }
-        }
-        HirPattern::EnumCase(_, name, _) => Some(CaseKey::Variant(name.clone())),
-        HirPattern::EnumConstructor(e) => Some(CaseKey::Variant(e.variant_name.clone())),
-        _ => None,
-    }
-}
-
-fn is_catch_all_pattern(pat: &HirPattern) -> bool {
-    matches!(pat, HirPattern::Wildcard(_) | HirPattern::Identifier(_, _))
-}
-
-fn arm_coverage_contribution(arm: &HirMatchArm) -> Coverage {
-    let has_guard = arm.guard.is_some();
-    if has_guard {
-        // Guards always produce Unknown — they never contribute exhaustiveness.
-        return Coverage::Unknown;
-    }
-    if is_catch_all_pattern(&arm.pattern) {
-        return Coverage::Complete;
-    }
-    if let Some(key) = pattern_case_key(&arm.pattern) {
-        let mut set = std::collections::HashSet::new();
-        set.insert(key);
-        return Coverage::Finite(set);
-    }
-    Coverage::Unknown
-}
-
 fn check_match(ctx: &mut TypeContext, m: &mut HirMatch, expected: Option<&Type>) -> Type {
     let val_ty = check_expression(ctx, &mut m.value, None);
     let mut result_ty: Option<Type> = None;
 
-    // ── Duplicate / Unreachable pass (separate from coverage) ────────────────
-    // Tracks which unguarded keys have been committed so far.
-    let mut committed: std::collections::HashSet<CaseKey> = std::collections::HashSet::new();
-    let mut has_unguarded_catch_all = false;
+    // ── Coverage Accumulation / Unreachable Detection ───────────────────────
+    let mut seen_constructors: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut has_unconditional_wildcard = false;
+    let mut covered_constructors: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut is_fully_covered = false;
 
     for arm in m.arms.iter_mut() {
         let has_guard = arm.guard.is_some();
+        let structural_space = pattern_to_structural_space(&arm.pattern);
+        let coverage_space = pattern_to_coverage_space(&arm.pattern, has_guard);
 
-        // Everything after an unguarded catch-all is unreachable.
-        if has_unguarded_catch_all {
-            ctx.error(
-                "unreachable match arm: a previous wildcard or binding already covers all remaining cases",
-                arm.span,
-            );
+        // 1. Unreachable Detection
+        if has_unconditional_wildcard {
+            ctx.error("unreachable match arm", arm.span);
+        } else if let Space::Constructor(name) = &structural_space {
+            if seen_constructors.contains(name) && !has_guard {
+                 ctx.error(format!("duplicate match arm for variant '{}'", name), arm.span);
+            } else if seen_constructors.contains(name) {
+                 ctx.error("unreachable match arm", arm.span);
+            }
         }
 
-        if is_catch_all_pattern(&arm.pattern) {
-            if !has_guard {
-                has_unguarded_catch_all = true;
+        // 2. State Update (Ordering matters: non-guarded arms block same constructors later)
+        if !has_guard {
+            match &structural_space {
+                Space::Wildcard => has_unconditional_wildcard = true,
+                Space::Constructor(name) => { seen_constructors.insert(name.clone()); }
+                _ => {}
             }
-            // guarded catch-all: neither blocks nor commits
-        } else if let Some(k) = pattern_case_key(&arm.pattern) {
-            if !has_guard {
-                if committed.contains(&k) {
-                    ctx.error(
-                        format!("duplicate '{}' arm in match: this case was already covered", k.display()),
-                        arm.span,
-                    );
-                }
-                committed.insert(k);
-            } else {
-                // Guarded arm: unreachable if same unguarded already committed.
-                if committed.contains(&k) {
-                    ctx.error("unreachable match arm", arm.span);
-                }
-                // Otherwise fine — guards before or after unguarded are valid.
-            }
+        }
+
+        // 3. Exhaustiveness / Coverage Contribution
+        match &coverage_space {
+            Space::Wildcard => is_fully_covered = true,
+            Space::Constructor(name) => { covered_constructors.insert(name.clone()); }
+            _ => {}
         }
 
         // ── Pattern validation + arm typechecking ────────────────────────────
@@ -2110,68 +2050,67 @@ fn check_match(ctx: &mut TypeContext, m: &mut HirMatch, expected: Option<&Type>)
         let arm_ty = check_expression(ctx, &mut arm.value, expected);
         ctx.scopes.pop_scope();
 
-        if let Some(ref exp) = result_ty {
-            if arm_ty != Type::Error && *exp != Type::Error && arm_ty != *exp {
+        if let Some(exp) = result_ty {
+            let unified = unify_branch_types(exp.clone(), arm_ty.clone());
+            if unified == Type::Error && exp != Type::Error && arm_ty != Type::Error {
                 ctx.error(
                     format!("match arms have incompatible types: {} vs {}", exp, arm_ty),
                     arm.span,
                 );
+                result_ty = Some(Type::Error);
+            } else {
+                result_ty = Some(unified);
             }
         } else {
             result_ty = Some(arm_ty);
         }
     }
 
-    // ── Coverage / Exhaustiveness pass ───────────────────────────────────────
-    if val_ty != Type::Error {
-        // Accumulate coverage from all arms in order.
-        let coverage = m.arms.iter().fold(Coverage::empty(), |acc, arm| {
-            acc.combine(arm_coverage_contribution(arm))
-        });
-
+    // ── Final Exhaustiveness Check ───────────────────────────────────────────
+    if val_ty != Type::Error && !is_fully_covered {
         let domain = domain_of_type(&val_ty);
-        let domain_cases = cases_of_domain(&domain, ctx);
+        match domain {
+            Domain::Bool => {
+                let mut missing = Vec::new();
+                if !covered_constructors.contains("true") { missing.push("true"); }
+                if !covered_constructors.contains("false") { missing.push("false"); }
+                
+                if !missing.is_empty() {
+                    ctx.error(
+                        format!("non-exhaustive match on Bool: missing arm for {}", missing[0]),
+                        m.span
+                    );
+                }
+            }
+            Domain::Enum(name) => {
+                let mut expected_variants = Vec::new();
+                match name.as_str() {
+                    "Option" => expected_variants = vec!["Some".to_string(), "None".to_string()],
+                    "Result" => expected_variants = vec!["Ok".to_string(), "Err".to_string()],
+                    _ => {
+                        if let Some(info) = ctx.enums.get(&name) {
+                            expected_variants = info.variants.keys().cloned().collect();
+                            expected_variants.sort();
+                        }
+                    }
+                }
 
-        if !domain_cases.is_empty() {
-            let is_exhaustive = match &coverage {
-                Coverage::Complete => true,
-                Coverage::Finite(covered) => domain_cases.iter().all(|k| covered.contains(k)),
-                Coverage::Unknown => false,
-            };
-
-            if !is_exhaustive {
-                let missing: Vec<String> = match &coverage {
-                    Coverage::Complete => vec![], // unreachable, handled above
-                    Coverage::Finite(covered) => domain_cases.iter()
-                        .filter(|k| !covered.contains(*k))
-                        .map(|k| k.display())
-                        .collect(),
-                    Coverage::Unknown => domain_cases.iter().map(|k| k.display()).collect(),
-                };
+                let missing: Vec<_> = expected_variants.iter()
+                    .filter(|v| !covered_constructors.contains(*v))
+                    .cloned()
+                    .collect();
 
                 if !missing.is_empty() {
-                    let missing_str = if missing.len() == 1 {
-                        missing[0].clone()
-                    } else if missing.len() == 2 {
-                        format!("{} and {}", missing[0], missing[1])
+                    let message = if missing.len() == 1 {
+                        format!("non-exhaustive match on enum '{}': missing arm for variant '{}'", name, missing[0])
                     } else {
-                        missing.join(", ")
+                        let variants = missing.iter().map(|v| format!("'{}'", v)).collect::<Vec<_>>().join(", ");
+                        format!("non-exhaustive match on enum '{}': missing arms for variants {}", name, variants)
                     };
-
-                    let message = match &domain {
-                        Domain::Bool => format!(
-                            "non-exhaustive match on Bool: missing arm for {}", missing_str
-                        ),
-                        Domain::Enum(name) => format!(
-                            "non-exhaustive match on enum '{}': missing arm for variant '{}'",
-                            name, missing_str
-                        ),
-                        Domain::Unknown => unreachable!(),
-                    };
-
                     ctx.error(message, m.span);
                 }
             }
+            Domain::Unknown => {}
         }
     }
 

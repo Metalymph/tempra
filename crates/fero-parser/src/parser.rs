@@ -980,9 +980,15 @@ impl<'src> Parser<'src> {
                 }
             }
             let end = self.expect(TokenKind::RightParen)?;
+            if items.is_empty() {
+                 return Err(ParseError {
+                    message: "empty tuple patterns are not supported".to_string(),
+                    span: Span::new(start.span.start, end.span.end),
+                });
+            }
             if items.len() < 2 {
                 return Err(ParseError {
-                    message: "tuple patterns must have at least 2 elements in v1 (grouped patterns (x) are not supported)".to_string(),
+                    message: "single-element tuple patterns are not allowed; use `a` instead".to_string(),
                     span: Span::new(start.span.start, end.span.end),
                 });
             }

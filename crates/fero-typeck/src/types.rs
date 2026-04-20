@@ -37,6 +37,8 @@ pub enum Type {
     Regex,
     Option(Box<Type>),
 
+    Never,
+
     /// Used during partial checking when a type is not yet known.
     Unknown,
     /// Sentinel for expressions that already failed type checking.
@@ -151,6 +153,7 @@ impl fmt::Display for Type {
             Type::CommandResult => write!(f, "CommandResult"),
             Type::Regex => write!(f, "Regex"),
             Type::Option(inner) => write!(f, "Option[{}]", inner),
+            Type::Never => write!(f, "Never"),
             Type::Unknown => write!(f, "?"),
             Type::Error => write!(f, "<error>"),
             Type::BuiltinError => write!(f, "Error"),
@@ -181,6 +184,7 @@ pub fn resolve_named_type(name: &str) -> Type {
         "CommandResult" => Type::CommandResult,
         "Regex" => Type::Regex,
         "Error" => Type::BuiltinError,
+        "Never" => Type::Never,
         _ => Type::Unknown, // caller decides if this is struct/enum
     }
 }
@@ -191,6 +195,11 @@ pub fn types_compatible(expected: &Type, actual: &Type) -> bool {
     }
 
     if *expected == Type::Unknown || *actual == Type::Unknown {
+        return true;
+    }
+
+    // Never is the bottom type: it is compatible with any expected type.
+    if *actual == Type::Never {
         return true;
     }
 

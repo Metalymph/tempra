@@ -308,6 +308,29 @@ pub struct StructInstance {
 }
 
 impl Value {
+    /// Returns a human-readable type name for use in runtime error messages.
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            Value::Unit        => "Unit",
+            Value::Bool(_)     => "Bool",
+            Value::Int64(_)    => "Int",
+            Value::UInt8(_)    => "UInt8",
+            Value::Float64(_)  => "Float",
+            Value::String(_)   => "String",
+            Value::Array(_)    => "Array",
+            Value::Slice(_)    => "Slice",
+            Value::Tuple(_)    => "Tuple",
+            Value::Struct(_)   => "Struct",
+            Value::Command(_)  => "Command",
+            Value::CommandResult(_) => "CommandResult",
+            Value::Result(_)   => "Result",
+            Value::Option(_)   => "Option",
+            Value::Error(_)    => "Error",
+            Value::Regex(_)    => "Regex",
+            Value::Enum(_)     => "Enum",
+        }
+    }
+
     pub fn to_repr(&self) -> String {
         match self {
             Value::String(s) => format!("\"{}\"", s),

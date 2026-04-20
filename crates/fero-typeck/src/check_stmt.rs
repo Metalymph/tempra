@@ -23,7 +23,7 @@ pub fn check_statement(ctx: &mut TypeContext, stmt: &mut HirStatement, expected:
             let value_ty = check_expression(ctx, &mut l.value, None);
             if matches!(&l.value, HirExpression::Name(_, n) if n == "None") {
                 ctx.error(
-                    "Ambiguous 'None' without Option context; use it where an Option[T] is expected"
+                "ambiguous 'None' without Option context; use it where an Option? is expected"
                         .to_string(),
                     l.value.span(),
                 );
@@ -35,7 +35,7 @@ pub fn check_statement(ctx: &mut TypeContext, stmt: &mut HirStatement, expected:
             let value_ty = check_expression(ctx, &mut v.value, None);
             if matches!(&v.value, HirExpression::Name(_, n) if n == "None") {
                 ctx.error(
-                    "Ambiguous 'None' without Option context; use it where an Option[T] is expected"
+                "ambiguous 'None' without Option context; use it where an Option? is expected"
                         .to_string(),
                     v.value.span(),
                 );
@@ -57,7 +57,7 @@ pub fn check_statement(ctx: &mut TypeContext, stmt: &mut HirStatement, expected:
                     };
                     ctx.error(
                         format!(
-                            "Return type mismatch: expected {}, found {}",
+                            "return type mismatch: expected {}, found {}",
                             expected, actual
                         ),
                         span,
@@ -68,7 +68,7 @@ pub fn check_statement(ctx: &mut TypeContext, stmt: &mut HirStatement, expected:
                     Some(expr) => expr.span(),
                     None => fero_span::Span::new(0, 0),
                 };
-                ctx.error("Return statement outside of function", span);
+                ctx.error("return statement outside of function", span);
             }
             Type::Unit
         }
@@ -83,7 +83,7 @@ pub fn check_statement(ctx: &mut TypeContext, stmt: &mut HirStatement, expected:
                     if iter_ty != Type::Error {
                         ctx.error(
                             format!(
-                                "For iterable must be an array, slice, or string, found {}",
+                                "for iterable must be an array, slice, or string, found {}",
                                 iter_ty
                             ),
                             f.span,
@@ -100,7 +100,7 @@ pub fn check_statement(ctx: &mut TypeContext, stmt: &mut HirStatement, expected:
                 let filter_ty = check_expression(ctx, filter, Some(&Type::Bool));
                 if filter_ty != Type::Bool && filter_ty != Type::Error {
                     ctx.error(
-                        format!("For filter must be Bool, found {}", filter_ty),
+                        format!("for filter must be Bool, found {}", filter_ty),
                         f.span,
                     );
                 }

@@ -455,7 +455,7 @@ impl Interpreter {
                     _ => Err("Unsupported binary operator".into()),
                 }
             }
-            HirExpression::Is(is_expr) => {
+            HirExpression::IsType(is_expr) => {
                 let value = match self.eval_expression(&is_expr.value, env)? {
                     ControlFlow::Value(v) => v,
                     cf => return Ok(cf),
@@ -493,7 +493,11 @@ impl Interpreter {
                 if Self::value_is_type(&value, &expr.ty) {
                     Ok(ControlFlow::Value(value))
                 } else {
-                    Ok(ControlFlow::Crash(format!("invalid cast to {}", format_hir_type(&expr.ty))))
+                    Ok(ControlFlow::Crash(format!(
+                        "invalid cast: expected {}, got {}",
+                        format_hir_type(&expr.ty),
+                        value.type_name()
+                    )))
                 }
             }
             HirExpression::Call(call) => {
@@ -1221,13 +1225,34 @@ impl Interpreter {
                         for (name, val) in bindings {
                             env.insert(name, val);
                         }
-                        let res = self.eval_expression(&arm.value, env);
-                        env.pop_scope();
-                        return res;
+                        
+                        let mut guard_passed = true;
+                        if let Some(guard) = &arm.guard {
+                            let guard_result = match self.eval_expression(guard, env)? {
+                                ControlFlow::Value(Value::Bool(b)) => b,
+                                ControlFlow::Value(_) => unreachable!("typechecker ensures guard is Bool"),
+                                cf => {
+                                    env.pop_scope();
+                                    return Ok(cf);
+                                }
+                            };
+                            guard_passed = guard_result;
+                        }
+
+                        if guard_passed {
+                            let res = self.eval_expression(&arm.value, env);
+                            env.pop_scope();
+                            return res;
+                        } else {
+                            env.pop_scope(); // guard failed, continue to next arm
+                        }
                     }
                 }
 
-                Ok(ControlFlow::Crash("non-exhaustive match".to_string()))
+                Ok(ControlFlow::Crash(format!(
+                    "non-exhaustive match: no arm matched value {}",
+                    value.to_repr()
+                )))
             }
         }
     }
@@ -1340,13 +1365,21 @@ impl Interpreter {
             HirPattern::Struct(_, name, fields) => {
                 if let Value::Struct(struct_val) = value {
                     if struct_val.name == *name {
-                        for field_name in fields {
+                        let mut temp_bindings = Vec::new();
+                        for (field_name, field_pat) in fields {
                             if let Some(field_value) = struct_val.fields.get(field_name) {
-                                bindings.push((field_name.clone(), field_value.clone()));
+                                if let Some(pat) = field_pat {
+                                    if !Self::value_matches_pattern(field_value, pat, &mut temp_bindings) {
+                                        return false;
+                                    }
+                                } else {
+                                    temp_bindings.push((field_name.clone(), field_value.clone()));
+                                }
                             } else {
                                 return false;
                             }
                         }
+                        bindings.extend(temp_bindings);
                         return true;
                     }
                 }

@@ -26,7 +26,7 @@ fn test_invalid_member_on_namespace() {
     let result = test_source(source);
     assert!(result.is_err());
     let err = format!("{:?}", result.err().unwrap());
-    assert!(err.contains("Unknown filesystem operation") || err.contains("Unknown namespace member") || err.contains("not found") || err.contains("Undefined"));
+    assert!(err.contains("has no member") || err.contains("not found") || err.contains("Undefined") || err.contains("no method"));
 }
 
 #[test]

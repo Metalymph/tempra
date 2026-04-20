@@ -53,8 +53,8 @@ pub fn check_expression(ctx: &mut TypeContext, expr: &mut HirExpression, expecte
         HirExpression::Bool(_, _) => Type::Bool,
         HirExpression::Unary(u) => check_unary(ctx, u),
         HirExpression::Binary(b) => check_binary(ctx, b, expected),
-        HirExpression::Is(i) => check_is(ctx, i),
-        HirExpression::IsPattern(i) => check_is_pattern(ctx, i),
+        HirExpression::IsType(i) => check_is_type(ctx, i),
+        HirExpression::IsPattern(_) => check_is_pattern(ctx, expr),
         HirExpression::AsOptional(a) => check_as_optional(ctx, a),
         HirExpression::AsForced(a) => check_as_forced(ctx, a),
         HirExpression::Call(_) => unreachable!(),
@@ -86,43 +86,124 @@ fn is_valid_type(ty: &Type) -> bool {
     }
 }
 
-fn check_is(ctx: &mut TypeContext, i: &mut HirIsExpr) -> Type {
+fn check_is_type(ctx: &mut TypeContext, i: &mut HirIsTypeExpr) -> Type {
     let _ = check_expression(ctx, &mut i.value, None);
     
     if let HirType::Named(span, name) = &i.ty {
         if name.starts_with(|c: char| c.is_lowercase()) {
-            ctx.error("Naked binding patterns are not allowed after 'is'", *span);
+            ctx.error("naked binding patterns are not allowed after 'is'", *span);
             return Type::Error;
         }
     }
     
     let ty = ctx.resolve_hir_type(&i.ty);
     if !is_valid_type(&ty) {
-        ctx.error(format!("Invalid or unknown type in 'is' check: {}", ty), i.ty.span());
+        ctx.error(format!("invalid or unknown type in 'is' check: {}", ty), i.ty.span());
     }
     Type::Bool
 }
 
-fn check_is_pattern(ctx: &mut TypeContext, i: &mut HirIsPatternExpr) -> Type {
-    let val_ty = check_expression(ctx, &mut i.value, None);
-    if val_ty != Type::Error {
-        validate_pattern_type(ctx, &val_ty, &mut i.pattern);
+fn check_is_pattern(ctx: &mut TypeContext, i: &mut HirExpression) -> Type {
+    let is_pattern = match i {
+        HirExpression::IsPattern(expr) => expr,
+        _ => unreachable!(),
+    };
+
+    let val_ty = check_expression(ctx, &mut is_pattern.value, None);
+    if val_ty == Type::Error {
+        return Type::Bool;
     }
+
+    // Attempt to validate/resolve the pattern.
+    // If validate_pattern_type determines this is a Type Test, it returns Some(Type).
+    if let Some(target_ty) = validate_pattern_type(ctx, &val_ty, &mut is_pattern.pattern) {
+        // REWRITE: Transform IsPattern -> IsType
+        // This ensures the interpreter uses its unified value_is_type logic.
+        let inner = match std::mem::replace(i, HirExpression::Bool(Span::new(0, 0), false)) {
+            HirExpression::IsPattern(p) => p,
+            _ => unreachable!(),
+        };
+        
+        *i = HirExpression::IsType(HirIsTypeExpr {
+            span: inner.span,
+            value: inner.value,
+            // Construct a Named type node for the resolved type
+            // Note: We use a dummy span because the original pattern span is already handled.
+            ty: HirType::Named(inner.pattern.span(), target_ty.to_string()),
+        });
+        
+        // Re-check as a normal 'IsType' expression to ensure full validation.
+        if let HirExpression::IsType(ref mut res_is) = i {
+            return check_is_type(ctx, res_is);
+        }
+    }
+
     Type::Bool
 }
 
-fn validate_pattern_type(ctx: &mut TypeContext, val_ty: &Type, pattern: &mut HirPattern) {
+fn validate_pattern_type(
+    ctx: &mut TypeContext,
+    val_ty: &Type,
+    pattern: &mut HirPattern,
+) -> Option<Type> {
     match pattern {
-        HirPattern::Wildcard(_) | HirPattern::Identifier(_, _) => {}
+        HirPattern::Wildcard(_) | HirPattern::Identifier(_, _) => None,
         HirPattern::EnumCase(span, name, args) => {
             let span_val = *span;
             let name_val = name.clone();
             
-            // 1. Resolve against user-defined Enum
+            // 1. Centralized Resolution: Check if the name refers to a Type (Built-in, Struct, or Enum)
+            let resolved_ty = ctx.resolve_type_name(&name_val);
+            if resolved_ty != Type::Unknown {
+                 if args.is_empty() {
+                    if !crate::types::types_compatible(&resolved_ty, val_ty) && *val_ty != Type::Error {
+                         // No error for 'is' tests usually, but Fero's pattern matching can be strict.
+                    }
+                     
+                     // If it resolved to an Enum, we still need to check if the user meant 
+                     // a unit variant of THAT enum vs the enum type itself.
+                     if let Type::Enum(enum_name) = &resolved_ty {
+                         if let Some(info) = ctx.enums.get(enum_name) {
+                             if info.variants.contains_key(&name_val) {
+                                 // Ambiguity: Name is both the Enum type and a Variant name.
+                                 // Fero convention: Variant takes priority if it's a unit variant.
+                                 // But 'if x is EnumName' is a common type test.
+                             }
+                         }
+                     }
+
+                     // If it's a Type Test, we're done here.
+                     // But we should probably rewrite it to a specific TypeTest pattern 
+                     // or keep it as is if the evaluator understands it.
+                     // Actually, if enum_name == name_val, it's explicitly allowed.
+                     if let Type::Enum(enum_name) = val_ty {
+                         if enum_name == &name_val {
+                             return Some(resolved_ty);
+                         }
+                     }
+                     // For built-ins and structs:
+                     if resolved_ty == *val_ty {
+                         return Some(resolved_ty);
+                     }
+
+                     // If it resolves to a type but val_ty is different, 
+                     // we still treat it as a Type Test (which might evaluate to false).
+                     // However, to keep it simple, only return Some if it's likely a type test.
+                     // Part 2.1 requires 'is Int' to work.
+                     if matches!(resolved_ty, Type::Int | Type::String | Type::Bool | Type::Struct(_) | Type::Enum(_)) {
+                         return Some(resolved_ty);
+                     }
+                 }
+                 
+                 // If it's an Enum type but we have arguments, or it didn't match the bare name test,
+                 // fall through to variant matching.
+            }
+
+            // 2. Resolve against user-defined Enum context
             if let Type::Enum(enum_name) = val_ty {
                 // Extension: Allow 'val is EnumName' as a type test even if parsed as a pattern
                 if args.is_empty() && enum_name == name {
-                    return;
+                    return Some(Type::Enum(enum_name.clone()));
                 }
                 
                 let payloads = ctx.enums.get(enum_name).and_then(|info| info.variants.get(name).cloned());
@@ -131,7 +212,7 @@ fn validate_pattern_type(ctx: &mut TypeContext, val_ty: &Type, pattern: &mut Hir
                     if args.len() != payload_tys.len() {
                         ctx.error(
                             format!(
-                                "Variant '{}' of enum '{}' expects {} argument(s), found {}",
+                                "variant '{}' of enum '{}' expects {} arguments, found {}",
                                 name_val,
                                 enum_name,
                                 payload_tys.len(),
@@ -139,7 +220,7 @@ fn validate_pattern_type(ctx: &mut TypeContext, val_ty: &Type, pattern: &mut Hir
                             ),
                             span_val,
                         );
-                        return;
+                        return None;
                     }
                     // Validate sub-patterns
                     for (i, arg_pat) in args.iter_mut().enumerate() {
@@ -159,23 +240,22 @@ fn validate_pattern_type(ctx: &mut TypeContext, val_ty: &Type, pattern: &mut Hir
                         variant_name: name_val,
                         payloads: moved_args,
                     });
-                    return;
+                    return None;
                 }
-                // Improved diagnostic: check if the variant exists anywhere else
-                let owner_hint = if let Ok(other_enum) = ctx.find_enum_for_variant(&name_val, None) {
-                    format!(" (it belongs to enum '{}')", other_enum)
+                let owners = ctx.variant_owners(&name_val);
+                let hint = if !owners.is_empty() {
+                    format!(" (it belongs to: {})", owners.join(", "))
                 } else {
-                    String::new()
+                    "".to_string()
                 };
-
                 ctx.error(
                     format!(
-                        "Constructor '{}' does not belong to enum '{}'{}",
-                        name_val, enum_name, owner_hint
+                        "constructor '{}' does not belong to enum '{}'{}",
+                        name_val, enum_name, hint
                     ),
                     span_val,
                 );
-                return;
+                return None;
             }
 
             // 2. Generic Built-ins
@@ -188,7 +268,7 @@ fn validate_pattern_type(ctx: &mut TypeContext, val_ty: &Type, pattern: &mut Hir
                             // Optional: Could rewrite built-ins too, but spec focusing on user-defined enums.
                             // For v1, resolving user-defined enums is the priority.
                         } else {
-                            ctx.error("Some pattern expects 1 argument", span_val);
+                            ctx.error("some pattern expects 1 argument", span_val);
                         }
                     } else if *val_ty != Type::Error {
                         ctx.error(
@@ -205,7 +285,7 @@ fn validate_pattern_type(ctx: &mut TypeContext, val_ty: &Type, pattern: &mut Hir
                         );
                     }
                     if !args.is_empty() {
-                        ctx.error("None pattern expects 0 arguments", span_val);
+                        ctx.error("none pattern expects 0 arguments", span_val);
                     }
                 }
                 "Ok" => {
@@ -213,7 +293,7 @@ fn validate_pattern_type(ctx: &mut TypeContext, val_ty: &Type, pattern: &mut Hir
                         if args.len() == 1 {
                             validate_pattern_type(ctx, ok_ty, &mut args[0]);
                         } else {
-                            ctx.error("Ok pattern expects 1 argument", span_val);
+                            ctx.error("ok pattern expects 1 argument", span_val);
                         }
                     } else if *val_ty != Type::Error {
                         ctx.error(
@@ -227,7 +307,7 @@ fn validate_pattern_type(ctx: &mut TypeContext, val_ty: &Type, pattern: &mut Hir
                         if args.len() == 1 {
                             validate_pattern_type(ctx, err_ty, &mut args[0]);
                         } else {
-                            ctx.error("Err pattern expects 1 argument", span_val);
+                            ctx.error("err pattern expects 1 argument", span_val);
                         }
                     } else if *val_ty != Type::Error {
                         ctx.error(
@@ -237,15 +317,28 @@ fn validate_pattern_type(ctx: &mut TypeContext, val_ty: &Type, pattern: &mut Hir
                     }
                 }
                 _ => {
-                    ctx.error(
-                        format!(
-                            "Unsupported constructor pattern '{}' for type {}",
-                            name_val, val_ty
-                        ),
-                        span_val,
-                    );
+                    if ctx.variant_to_enums.contains_key(name_val.as_str()) {
+                        // The name is an enum constructor, but for the wrong type
+                        let owners = ctx.variant_owners(&name_val);
+                        ctx.error(
+                            format!(
+                                "constructor '{}' does not belong to type {} (it belongs to: {})",
+                                name_val, val_ty, owners.join(", ")
+                            ),
+                            span_val,
+                        );
+                    } else {
+                        ctx.error(
+                            format!(
+                                "unknown constructor '{}' in pattern for type {}",
+                                name_val, val_ty
+                            ),
+                            span_val,
+                        );
+                    }
                 }
             }
+            return None;
         }
         HirPattern::Literal(span, lit_expr) => {
             // Pattern literals are immutable here as they are simple constants.
@@ -262,41 +355,48 @@ fn validate_pattern_type(ctx: &mut TypeContext, val_ty: &Type, pattern: &mut Hir
                     *span,
                 );
             }
+            return None;
         }
         HirPattern::Struct(span, name, fields) => {
             if let Some(def) = ctx.structs.get(name).cloned() {
                 let struct_ty = Type::Struct(name.clone());
                 if *val_ty != struct_ty && *val_ty != Type::Error {
-                    ctx.error(format!("Cannot match {} with struct pattern for {}", val_ty, name), *span);
+                    ctx.error(format!("cannot match {} with struct pattern for {}", val_ty, name), *span);
                 }
                 
                 let mut seen_fields = std::collections::HashSet::new();
-                for field_name in fields {
+                for (field_name, field_pat) in fields.iter_mut() {
                     if !seen_fields.insert(field_name.clone()) {
-                        ctx.error(format!("Duplicate field '{}' in struct pattern", field_name), *span);
+                        ctx.error(format!("duplicate field '{}' in struct pattern", field_name), *span);
                     }
-                    if !def.fields.contains_key(field_name) {
-                        ctx.error(format!("Struct '{}' does not have a field named '{}'", name, field_name), *span);
+                    if let Some(field_def) = def.fields.get(field_name) {
+                        if let Some(pat) = field_pat {
+                            validate_pattern_type(ctx, &field_def.ty, pat);
+                        }
+                    } else {
+                        ctx.error(format!("struct '{}' does not have a field named '{}'", name, field_name), *span);
                     }
                 }
             } else {
-                ctx.error(format!("Unknown struct '{}'", name), *span);
+                ctx.error(format!("unknown struct '{}'", name), *span);
             }
+            return None;
         }
         HirPattern::Tuple(span, items) => {
             if let Type::Tuple(element_types) = val_ty {
                 if element_types.len() != items.len() {
-                    ctx.error(format!("Tuple pattern arity mismatch: expected {}, found {}", element_types.len(), items.len()), *span);
+                    ctx.error(format!("tuple pattern arity mismatch: expected {}, found {}", element_types.len(), items.len()), *span);
                 } else {
                     for (item_pat, item_ty) in items.iter_mut().zip(element_types.iter()) {
                         validate_pattern_type(ctx, item_ty, item_pat);
                     }
                 }
             } else if *val_ty != Type::Error {
-                ctx.error(format!("Cannot match non-tuple type {} with tuple pattern", val_ty), *span);
+                ctx.error(format!("cannot match non-tuple type {} with tuple pattern", val_ty), *span);
             }
+            return None;
         }
-        HirPattern::EnumConstructor(_) => {}
+        HirPattern::EnumConstructor(_) => return None,
     }
 }
 
@@ -304,18 +404,20 @@ fn check_as_optional(ctx: &mut TypeContext, a: &mut HirAsOptionalExpr) -> Type {
     let _ = check_expression(ctx, &mut a.expr, None);
     let ty = ctx.resolve_hir_type(&a.ty);
     if ty == Type::Unknown {
-        ctx.error("Unknown type in 'as?' cast".to_string(), a.ty.span());
+        ctx.error("unknown type in 'as?' cast".to_string(), a.ty.span());
     }
     Type::Option(Box::new(ty))
 }
 
 fn check_as_forced(ctx: &mut TypeContext, a: &mut HirAsForcedExpr) -> Type {
-    let _ = check_expression(ctx, &mut a.expr, None);
-    let ty = ctx.resolve_hir_type(&a.ty);
-    if ty == Type::Unknown {
-        ctx.error("Unknown type in 'as!' cast".to_string(), a.ty.span());
+    let expr_ty = check_expression(ctx, &mut a.expr, None);
+    let target_ty = ctx.resolve_hir_type(&a.ty);
+    if target_ty == Type::Unknown {
+        ctx.error("unknown type in 'as!' cast".to_string(), a.ty.span());
     }
-    ty
+    // Note: we track expr_ty only for the diagnostic annotation; at runtime as! can still fail
+    let _ = expr_ty;
+    target_ty
 }
 
 fn check_unwrap(ctx: &mut TypeContext, e: &mut HirUnwrapExpr) -> Type {
@@ -441,12 +543,17 @@ fn check_name(
             Type::Enum(enum_name)
         }
         Ok(ResolvedName::BuiltinFunction(f)) => {
-            ctx.error(format!("Built-in function '{}' cannot be used as a value", f), span);
+            ctx.error(format!("built-in function '{}' cannot be used as a value", f), span);
             Type::Error
         }
         Ok(ResolvedName::Function(_)) => Type::Unknown,
         Ok(ResolvedName::Unknown) => {
-            ctx.error(format!("Undefined variable '{}'", name), span);
+            // Give a richer hint: if lowercase it might be a binding pattern misuse
+            if name.starts_with(|c: char| c.is_uppercase()) {
+                ctx.error(format!("unknown constructor or type '{}': no enum defines this variant and it is not in scope", name), span);
+            } else {
+                ctx.error(format!("undefined variable '{}'", name), span);
+            }
             Type::Error
         }
         Err(msg) => {
@@ -623,7 +730,7 @@ fn check_binary(ctx: &mut TypeContext, b: &mut HirBinary, _expected: Option<&Typ
                 }
             } else if !matches!(&*b.left, HirExpression::Name(_, _)) {
                 // For now only Name and Member are assignable
-                ctx.error("Invalid assignment target".to_string(), b.span);
+                ctx.error("invalid assignment target".to_string(), b.span);
             }
 
             if !types_compatible(&left, &right) {
@@ -635,7 +742,7 @@ fn check_binary(ctx: &mut TypeContext, b: &mut HirBinary, _expected: Option<&Typ
             if left == Type::Command && right == Type::Command {
                 return Type::CommandResult;
             }
-            ctx.error("Pipe operator expects Command types".to_string(), b.span);
+            ctx.error("pipe operator expects Command types".to_string(), b.span);
             Type::Error
         }
         HirBinaryOp::ShiftRight => {
@@ -663,7 +770,7 @@ fn check_builtin(
                         let ty = check_expression(ctx, e, None);
                         if !ty.is_printable() && ty != Type::Error {
                             ctx.error(
-                                format!("'print' argument must be a printable type, found {}", ty),
+                                format!("'print' argument must be printable, found {}", ty),
                                 e.span(),
                             );
                         }
@@ -671,7 +778,7 @@ fn check_builtin(
                     HirCallArgument::Named(n) => {
                         if n.name == "newline" {
                             if newline_found {
-                                ctx.error("Duplicate named argument 'newline'", n.value.span());
+                                ctx.error("duplicate named argument 'newline'", n.value.span());
                             }
                             newline_found = true;
                             let ty = check_expression(ctx, &mut n.value, None);
@@ -700,7 +807,7 @@ fn check_builtin(
                         let ty = check_expression(ctx, e, None);
                         if !ty.is_printable() && ty != Type::Error {
                             ctx.error(
-                                format!("'fmt' argument must be a printable type, found {}", ty),
+                                format!("'fmt' argument must be printable, found {}", ty),
                                 e.span(),
                             );
                         }
@@ -708,7 +815,7 @@ fn check_builtin(
                     HirCallArgument::Named(n) => {
                         if n.name == "separator" {
                             if separator_found {
-                                ctx.error("Duplicate named argument 'separator'", n.value.span());
+                                ctx.error("duplicate named argument 'separator'", n.value.span());
                             }
                             separator_found = true;
                             let ty = check_expression(ctx, &mut n.value, None);
@@ -733,7 +840,7 @@ fn check_builtin(
             if args.is_empty() {
                 ctx.error(
                     format!(
-                        "Function 'exit' expects at least 1 argument(s), found {}",
+                        "function 'exit' expects at least 1 argument, found {}",
                         args.len()
                     ),
                     span,
@@ -743,12 +850,12 @@ fn check_builtin(
                     let p = check_expression(ctx, e, None);
                     if p != Type::Int && p != Type::Int64 && p != Type::Error {
                         ctx.error(
-                            format!("Argument 1 of 'exit': expected Int or Int64, found {}", p),
+                            format!("argument 1 of 'exit': expected Int, found {}", p),
                             e.span(),
                         );
                     }
                 } else {
-                    ctx.error("Missing argument 'code' for 'exit'", span);
+                    ctx.error("missing argument 'code' for 'exit'", span);
                 }
             }
             Some(Type::Unit)
@@ -785,7 +892,7 @@ fn check_builtin(
             if args.is_empty() {
                 ctx.error(
                     format!(
-                        "Function 'cmd' expects at least 1 positional argument (program), found {}",
+                        "function 'cmd' expects at least 1 positional argument (program), found {}",
                         args.len()
                     ),
                     span,
@@ -838,7 +945,7 @@ fn check_builtin(
                     }
                 }
                 if positional_count == 0 {
-                    ctx.error("Missing program name for 'cmd'", span);
+                    ctx.error("missing program name for 'cmd'", span);
                 }
             }
             Some(Type::Command)
@@ -846,7 +953,7 @@ fn check_builtin(
         "Ok" => {
             if args.len() != 1 {
                 ctx.error(
-                    format!("Function 'Ok' expects 1 argument(s), found {}", args.len()),
+                    format!("function 'Ok' expects 1 argument, found {}", args.len()),
                     span,
                 );
                 Some(Type::Error)
@@ -862,7 +969,7 @@ fn check_builtin(
         "Err" => {
             if args.len() != 1 {
                 ctx.error(
-                    format!("Function 'Err' expects 1 argument(s), found {}", args.len()),
+                    format!("function 'Err' expects 1 argument, found {}", args.len()),
                     span,
                 );
                 Some(Type::Error)
@@ -879,7 +986,7 @@ fn check_builtin(
             if args.len() != 1 {
                 ctx.error(
                     format!(
-                        "Function 'Some' expects 1 argument(s), found {}",
+                        "function 'Some' expects 1 argument, found {}",
                         args.len()
                     ),
                     span,
@@ -898,7 +1005,7 @@ fn check_builtin(
             if args.is_empty() {
                 ctx.error(
                     format!(
-                        "Function 'crash' expects at least 1 argument(s), found {}",
+                        "function 'crash' expects at least 1 argument, found {}",
                         args.len()
                     ),
                     span,
@@ -920,7 +1027,7 @@ fn check_builtin(
             if args.len() < 1 {
                 ctx.error(
                     format!(
-                        "Function 'expect' expects at least 1 argument(s), found {}",
+                        "function 'expect' expects at least 1 argument, found {}",
                         args.len()
                     ),
                     span,
@@ -951,7 +1058,7 @@ fn check_builtin(
             if args.is_empty() {
                 ctx.error(
                     format!(
-                        "Function 'dbg' expects at least 1 argument(s), found {}",
+                        "function 'dbg' expects at least 1 argument, found {}",
                         args.len()
                     ),
                     span,
@@ -972,7 +1079,7 @@ fn check_builtin(
                         HirCallArgument::Named(n) => {
                             if n.name == "label" {
                                 if label_found {
-                                    ctx.error("Duplicate named argument 'label'", n.value.span());
+                                    ctx.error("duplicate named argument 'label'", n.value.span());
                                 }
                                 label_found = true;
                                 let ty = check_expression(ctx, &mut n.value, None);
@@ -1008,7 +1115,7 @@ fn check_fs_builtin(
         "read" => {
             if args.len() != 1 {
                 ctx.error(
-                    format!("'fs.read' expects 1 argument(s), found {}", args.len()),
+                    format!("'fs.read' expects 1 argument, found {}", args.len()),
                     span,
                 );
             } else {
@@ -1027,7 +1134,7 @@ fn check_fs_builtin(
         "write" | "append" => {
             if args.len() != 2 {
                 ctx.error(
-                    format!("'fs.{}' expects 2 argument(s), found {}", name, args.len()),
+                    format!("'fs.{}' expects 2 arguments, found {}", name, args.len()),
                     span,
                 );
             } else {
@@ -1055,7 +1162,7 @@ fn check_fs_builtin(
         "exists" => {
             if args.len() != 1 {
                 ctx.error(
-                    format!("'fs.exists' expects 1 argument(s), found {}", args.len()),
+                    format!("'fs.exists' expects 1 argument, found {}", args.len()),
                     span,
                 );
             } else {
@@ -1074,7 +1181,7 @@ fn check_fs_builtin(
         "remove" | "mkdir" | "list_dir" => {
             if args.len() != 1 {
                 ctx.error(
-                    format!("'fs.{}' expects 1 argument(s), found {}", name, args.len()),
+                    format!("'fs.{}' expects 1 argument, found {}", name, args.len()),
                     span,
                 );
             } else {
@@ -1100,7 +1207,7 @@ fn check_fs_builtin(
         "rename" | "copy" => {
             if args.len() != 2 {
                 ctx.error(
-                    format!("'fs.{}' expects 2 argument(s), found {}", name, args.len()),
+                    format!("'fs.{}' expects 2 arguments, found {}", name, args.len()),
                     span,
                 );
             } else {
@@ -1126,7 +1233,10 @@ fn check_fs_builtin(
             Type::Result(Box::new(Type::Unit), Box::new(Type::BuiltinError))
         }
         _ => {
-            ctx.error(format!("Unknown filesystem operation 'fs.{}'", name), span);
+            ctx.error(
+                format!("namespace 'fs' has no member '{}'", name),
+                span,
+            );
             Type::Error
         }
     }
@@ -1142,7 +1252,7 @@ fn check_env_builtin(
         "get" => {
             if args.len() != 1 {
                 ctx.error(
-                    format!("'env.get' expects 1 argument(s), found {}", args.len()),
+                    format!("'env.get' expects 1 argument, found {}", args.len()),
                     span,
                 );
             } else {
@@ -1160,7 +1270,7 @@ fn check_env_builtin(
         }
         _ => {
             ctx.error(
-                format!("Unknown environment operation 'env.{}'", name),
+                format!("namespace 'env' has no member '{}'", name),
                 span,
             );
             Type::Error
@@ -1178,7 +1288,7 @@ fn check_os_builtin(
         "args" => {
             if args.len() != 0 {
                 ctx.error(
-                    format!("'os.args' expects 0 argument(s), found {}", args.len()),
+                    format!("'os.args' expects 0 arguments, found {}", args.len()),
                     span,
                 );
             }
@@ -1187,7 +1297,7 @@ fn check_os_builtin(
         "cwd" => {
             if args.len() != 0 {
                 ctx.error(
-                    format!("'os.cwd' expects 0 argument(s), found {}", args.len()),
+                    format!("'os.cwd' expects 0 arguments, found {}", args.len()),
                     span,
                 );
             }
@@ -1196,7 +1306,7 @@ fn check_os_builtin(
         "chdir" => {
             if args.len() != 1 {
                 ctx.error(
-                    format!("'os.chdir' expects 1 argument(s), found {}", args.len()),
+                    format!("'os.chdir' expects 1 argument, found {}", args.len()),
                     span,
                 );
             } else {
@@ -1213,7 +1323,10 @@ fn check_os_builtin(
             Type::Result(Box::new(Type::Unit), Box::new(Type::BuiltinError))
         }
         _ => {
-            ctx.error(format!("Unknown OS operation 'os.{}'", name), span);
+            ctx.error(
+                format!("namespace 'os' has no member '{}'", name),
+                span,
+            );
             Type::Error
         }
     }
@@ -1299,7 +1412,10 @@ fn check_string_method(
             Type::String
         }
         _ => {
-            ctx.error(format!("Unknown String method '{}'", name), span);
+            ctx.error(
+                format!("String has no method '{}'", name),
+                span,
+            );
             Type::Error
         }
     }
@@ -1319,7 +1435,10 @@ fn check_array_method(
             Type::Int
         }
         _ => {
-            ctx.error(format!("Unknown Array method '{}'", name), span);
+            ctx.error(
+                format!("Array/Slice has no method '{}'", name),
+                span,
+            );
             Type::Error
         }
     }
@@ -1339,7 +1458,10 @@ fn check_command_method(
             Type::Result(Box::new(Type::CommandResult), Box::new(Type::BuiltinError))
         }
         _ => {
-            ctx.error(format!("Unknown Command method '{}'", name), span);
+            ctx.error(
+                format!("Command has no method '{}'", name),
+                span,
+            );
             Type::Error
         }
     }
@@ -1373,7 +1495,7 @@ fn check_call(ctx: &mut TypeContext, expr: &mut HirExpression, expected: Option<
             if let HirExpression::Call(ref mut c) = expr {
                 // Arity & Arity v1 limit
                 if c.args.len() != payload_tys.len() {
-                    ctx.error(format!("Constructor '{}' of enum '{}' expects {} argument(s), found {}", variant_name, enum_name, payload_tys.len(), c.args.len()), c.span);
+                    ctx.error(format!("constructor '{}' of enum '{}' expects {} arguments, found {}", variant_name, enum_name, payload_tys.len(), c.args.len()), c.span);
                     error_occurred = true;
                 }
                 if c.args.len() > 1 {
@@ -1434,7 +1556,7 @@ fn check_call(ctx: &mut TypeContext, expr: &mut HirExpression, expected: Option<
                         // Fero doesn't have methods on structs yet, but we check field access.
                         // If it's a field of type function, we'd call it.
                         // For now, return error as "Method not found"
-                        ctx.error(format!("Type {} has no method '{}'", receiver_ty, method), c.span);
+                        ctx.error(format!("type {} has no method '{}'", receiver_ty, method), c.span);
                         return Type::Error;
                     }
                 }
@@ -1442,12 +1564,15 @@ fn check_call(ctx: &mut TypeContext, expr: &mut HirExpression, expected: Option<
         }
         ResolvedCallee::Unknown => {
             if let HirExpression::Call(ref mut c) = expr {
-                // If it was a simple name, resolve_callee already returned Unknown if not found.
-                // If it was an expression, check it and error if not callable.
+                // Try to evaluate the callee to produce a better error
                 let callee_ty = check_expression(ctx, &mut c.callee, None);
                 if callee_ty != Type::Error {
-                    ctx.error(format!("Expression of type {} is not callable", callee_ty), c.span);
+                    ctx.error(
+                        format!("value of type {} is not callable", callee_ty),
+                        c.span,
+                    );
                 }
+                // If callee_ty is Error, an error was already emitted by check_name/check_expression
                 return Type::Error;
             }
         }
@@ -1459,7 +1584,7 @@ fn get_call_arg_mut_legacy<'a>(arg: &'a mut HirCallArgument, ctx: &mut TypeConte
     match arg {
         HirCallArgument::Positional(ref mut e) => e,
         HirCallArgument::Named(n) => {
-                ctx.error("Named arguments not supported here", n.value.span());
+                ctx.error("named arguments not supported here", n.value.span());
             &mut n.value
         }
     }
@@ -1478,7 +1603,7 @@ fn check_function_call(
     let sig = match ctx.functions.get(func_name) {
         Some(sig) => sig.clone(),
         None => {
-            ctx.error(format!("Undefined function '{}'", func_name), c.span);
+            ctx.error(format!("undefined function '{}'", func_name), c.span);
             return Type::Error;
         }
     };
@@ -1492,7 +1617,7 @@ fn check_function_call(
             HirCallArgument::Positional(e) => {
                 if i >= sig.params.len() {
                     ctx.error(
-                        format!("Too many positional arguments for '{}'", func_name),
+                        format!("too many positional arguments for '{}'", func_name),
                         e.span(),
                     );
                     continue;
@@ -1504,7 +1629,7 @@ fn check_function_call(
                     // Parser already rejects duplicate named args in CallExpr,
                     // but good to be safe if HIR somehow bypasses it in future.
                     ctx.error(
-                        format!("Duplicate named argument '{}'", n.name),
+                        format!("duplicate named argument '{}'", n.name),
                         n.value.span(),
                     );
                     continue;
@@ -1515,7 +1640,7 @@ fn check_function_call(
                     Some(idx) => {
                         if resolved_args[idx].is_some() {
                             ctx.error(
-                                format!("Argument for parameter '{}' already provided", n.name),
+                                format!("argument for parameter '{}' already provided", n.name),
                                 n.value.span(),
                             );
                         } else {
@@ -1525,7 +1650,7 @@ fn check_function_call(
                     None => {
                         ctx.error(
                             format!(
-                                "Unknown named argument '{}' for function '{}'",
+                                "unknown named argument '{}' for function '{}'",
                                 n.name, func_name
                             ),
                             n.value.span(),
@@ -1545,7 +1670,7 @@ fn check_function_call(
                 if arg_ty != Type::Error && !types_compatible(param_ty, &arg_ty) {
                     ctx.error(
                         format!(
-                            "Argument for '{}' in '{}': expected {}, found {}",
+                            "argument for '{}' in '{}': expected {}, found {}",
                             param_name, func_name, param_ty, arg_ty
                         ),
                         arg_expr.span(),
@@ -1555,7 +1680,7 @@ fn check_function_call(
             None => {
                 ctx.error(
                     format!(
-                        "Missing required argument '{}' for function '{}'",
+                        "missing required argument '{}' for function '{}'",
                         param_name, func_name
                     ),
                     c.span,
@@ -1572,11 +1697,10 @@ fn check_member(ctx: &mut TypeContext, m: &mut HirMember, _expected: Option<&Typ
     if let Type::Struct(name) = &object_ty {
         if let Some(info) = ctx.structs.get(name.as_str()) {
             if let Some(field_info) = info.fields.get(&m.field) {
-                // (Future: visibility enforcement here)
                 return field_info.ty.clone();
             }
             ctx.error(
-                format!("Struct '{}' has no field '{}'", name, m.field),
+                format!("struct '{}' has no field '{}'", name, m.field),
                 m.span,
             );
             return Type::Error;
@@ -1587,14 +1711,18 @@ fn check_member(ctx: &mut TypeContext, m: &mut HirMember, _expected: Option<&Typ
             "stdout" | "stderr" => return Type::String,
             "success" => return Type::Bool,
             _ => {
-                ctx.error(format!("CommandResult has no field '{}'", m.field), m.span);
+                ctx.error(
+                    format!("CommandResult has no field '{}'", m.field),
+                    m.span,
+                );
                 return Type::Error;
             }
         }
     }
     if object_ty != Type::Error {
+        // Distinguish: shadowed namespace used as a value vs. plain wrong type
         ctx.error(
-            format!("Member access on non-struct type {}", object_ty),
+            format!("type {} has no field or method '{}'", object_ty, m.field),
             m.span,
         );
     }
@@ -1607,7 +1735,7 @@ fn check_index(ctx: &mut TypeContext, i: &mut HirIndex) -> Type {
 
     if let Type::Array(elem) | Type::Slice(elem) = &object_ty {
         if !index_ty.is_integer() && index_ty != Type::Error {
-            ctx.error(format!("Index must be integer, found {}", index_ty), i.span);
+            ctx.error(format!("index must be integer, found {}", index_ty), i.span);
         }
         return *elem.clone();
     }
@@ -1638,7 +1766,7 @@ fn check_slice(ctx: &mut TypeContext, s: &mut HirSlice) -> Type {
     }
 
     if object_ty != Type::Error {
-        ctx.error(format!("Cannot slice type {}", object_ty), s.span);
+        ctx.error(format!("cannot slice type {}", object_ty), s.span);
     }
     Type::Error
 }
@@ -1649,7 +1777,7 @@ fn check_block_expr(ctx: &mut TypeContext, block: &mut HirBlock, expected: Optio
 
 fn get_branch_bindings(ctx: &mut TypeContext, expr: &mut HirExpression) -> Vec<(String, Type)> {
     match expr {
-        HirExpression::Is(is_expr) => {
+        HirExpression::IsType(is_expr) => {
             if let HirExpression::Name(_, var_name) = &*is_expr.value {
                 let narrowed_ty = ctx.resolve_hir_type(&is_expr.ty);
                 if narrowed_ty != Type::Unknown {
@@ -1727,9 +1855,14 @@ fn extract_pattern_bindings(ctx: &TypeContext, val_ty: &Type, pattern: &mut HirP
         }
         HirPattern::Struct(_, name, fields) => {
             if let Some(def) = ctx.structs.get(name).cloned() {
-                for field_name in fields {
+                for (field_name, field_pat) in fields.iter_mut() {
                     if let Some(field_info) = def.fields.get(field_name) {
-                        out.push((field_name.clone(), field_info.ty.clone()));
+                        if let Some(pat) = field_pat {
+                            extract_pattern_bindings(ctx, &field_info.ty, pat, out);
+                        } else {
+                            // Shorthand binding
+                            out.push((field_name.clone(), field_info.ty.clone()));
+                        }
                     }
                 }
             }
@@ -1741,7 +1874,7 @@ fn extract_pattern_bindings(ctx: &TypeContext, val_ty: &Type, pattern: &mut HirP
                 }
             }
         }
-        _ => {}
+        HirPattern::Wildcard(_) | HirPattern::Literal(_, _) => {}
     }
 }
 
@@ -1765,7 +1898,7 @@ fn check_if(ctx: &mut TypeContext, i: &mut HirIf, expected: Option<&Type>) -> Ty
         if then_ty != Type::Error && else_ty != Type::Error && then_ty != else_ty {
             ctx.error(
                 format!(
-                    "If branches have incompatible types: {} vs {}",
+                    "if branches have incompatible types: {} vs {}",
                     then_ty, else_ty
                 ),
                 i.span,
@@ -1777,70 +1910,186 @@ fn check_if(ctx: &mut TypeContext, i: &mut HirIf, expected: Option<&Type>) -> Ty
     }
 }
 
+// ─── Coverage Model ───────────────────────────────────────────────────────────
+//
+// A lightweight, structured representation of pattern coverage.
+// This is an APPROXIMATION: guards and complex payloads are treated conservatively.
+//
+// Rules (by design):
+// - Guarded arms NEVER contribute coverage (Unknown).
+// - Unguarded catch-all → Complete.
+// - Unguarded top-level constructor → Finite({key}).
+// - Payload substructure is IGNORED for coverage purposes.
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum CaseKey {
+    Bool(bool),
+    Variant(String),
+}
+
+impl CaseKey {
+    fn display(&self) -> String {
+        match self {
+            CaseKey::Bool(b) => b.to_string(),
+            CaseKey::Variant(s) => s.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum Coverage {
+    /// Fully covered — e.g. via an unguarded catch-all.
+    Complete,
+    /// A specific set of top-level cases is covered.
+    Finite(std::collections::HashSet<CaseKey>),
+    /// Coverage cannot be determined (guards, unsupported patterns).
+    Unknown,
+}
+
+impl Coverage {
+    fn empty() -> Self {
+        Coverage::Finite(std::collections::HashSet::new())
+    }
+
+    fn combine(self, other: Coverage) -> Coverage {
+        match (self, other) {
+            (Coverage::Complete, _) | (_, Coverage::Complete) => Coverage::Complete,
+            (Coverage::Finite(mut a), Coverage::Finite(b)) => {
+                a.extend(b);
+                Coverage::Finite(a)
+            }
+            (Coverage::Finite(a), Coverage::Unknown) | (Coverage::Unknown, Coverage::Finite(a)) => {
+                Coverage::Finite(a)
+            }
+            (Coverage::Unknown, Coverage::Unknown) => Coverage::Unknown,
+        }
+    }
+}
+
+/// The scrutinee's known finite domain, if any.
+#[derive(Debug, Clone)]
+enum Domain {
+    Bool,
+    Enum(String), // includes Option<T>, Result<T,E>, user enums
+    Unknown,
+}
+
+fn domain_of_type(ty: &Type) -> Domain {
+    match ty {
+        Type::Bool => Domain::Bool,
+        Type::Option(_) => Domain::Enum("Option".to_string()),
+        Type::Result(_, _) => Domain::Enum("Result".to_string()),
+        Type::Enum(name) => Domain::Enum(name.clone()),
+        _ => Domain::Unknown,
+    }
+}
+
+fn cases_of_domain<'a>(domain: &Domain, ctx: &'a TypeContext) -> Vec<CaseKey> {
+    match domain {
+        Domain::Bool => vec![CaseKey::Bool(true), CaseKey::Bool(false)],
+        Domain::Enum(name) => match name.as_str() {
+            "Option" => vec![CaseKey::Variant("Some".to_string()), CaseKey::Variant("None".to_string())],
+            "Result" => vec![CaseKey::Variant("Ok".to_string()), CaseKey::Variant("Err".to_string())],
+            _ => {
+                if let Some(info) = ctx.enums.get(name) {
+                    let mut keys: Vec<_> = info.variants.keys()
+                        .map(|k| CaseKey::Variant(k.clone()))
+                        .collect();
+                    keys.sort_by_key(|k| k.display());
+                    keys
+                } else {
+                    vec![]
+                }
+            }
+        },
+        Domain::Unknown => vec![],
+    }
+}
+
+/// Extract the coverage key for a top-level pattern (ignoring payloads).
+fn pattern_case_key(pat: &HirPattern) -> Option<CaseKey> {
+    match pat {
+        HirPattern::Literal(_, expr) => {
+            if let HirExpression::Bool(_, b) = expr.as_ref() {
+                Some(CaseKey::Bool(*b))
+            } else {
+                None
+            }
+        }
+        HirPattern::EnumCase(_, name, _) => Some(CaseKey::Variant(name.clone())),
+        HirPattern::EnumConstructor(e) => Some(CaseKey::Variant(e.variant_name.clone())),
+        _ => None,
+    }
+}
+
+fn is_catch_all_pattern(pat: &HirPattern) -> bool {
+    matches!(pat, HirPattern::Wildcard(_) | HirPattern::Identifier(_, _))
+}
+
+fn arm_coverage_contribution(arm: &HirMatchArm) -> Coverage {
+    let has_guard = arm.guard.is_some();
+    if has_guard {
+        // Guards always produce Unknown — they never contribute exhaustiveness.
+        return Coverage::Unknown;
+    }
+    if is_catch_all_pattern(&arm.pattern) {
+        return Coverage::Complete;
+    }
+    if let Some(key) = pattern_case_key(&arm.pattern) {
+        let mut set = std::collections::HashSet::new();
+        set.insert(key);
+        return Coverage::Finite(set);
+    }
+    Coverage::Unknown
+}
+
 fn check_match(ctx: &mut TypeContext, m: &mut HirMatch, expected: Option<&Type>) -> Type {
     let val_ty = check_expression(ctx, &mut m.value, None);
-
     let mut result_ty: Option<Type> = None;
 
-    let track_option = matches!(val_ty, Type::Option(_));
-    let track_result = matches!(val_ty, Type::Result(_, _));
-    let track_bool   = matches!(val_ty, Type::Bool);
-
-    let mut seen_some = false;
-    let mut seen_none = false;
-    let mut seen_ok   = false;
-    let mut seen_err  = false;
-    let mut seen_true  = false;
-    let mut seen_false = false;
-    let mut seen_catch_all = false;
+    // ── Duplicate / Unreachable pass (separate from coverage) ────────────────
+    // Tracks which unguarded keys have been committed so far.
+    let mut committed: std::collections::HashSet<CaseKey> = std::collections::HashSet::new();
+    let mut has_unguarded_catch_all = false;
 
     for arm in m.arms.iter_mut() {
-        // Arms after a catch-all are unreachable.
-        if seen_catch_all {
+        let has_guard = arm.guard.is_some();
+
+        // Everything after an unguarded catch-all is unreachable.
+        if has_unguarded_catch_all {
             ctx.error(
-                "Unreachable match arm: a previous catch-all already covers all remaining cases",
+                "unreachable match arm: a previous wildcard or binding already covers all remaining cases",
                 arm.span,
             );
         }
 
-        // Duplicate finite-constructor detection for Option / Result / Bool.
-        if track_option || track_result || track_bool {
-            if let Some(name) = match_arm_constructor_name(&arm.pattern) {
-                let is_dup = match name {
-                    "Some"  => seen_some,
-                    "None"  => seen_none,
-                    "Ok"    => seen_ok,
-                    "Err"   => seen_err,
-                    "true"  => seen_true,
-                    "false" => seen_false,
-                    _       => false,
-                };
-                if is_dup {
+        if is_catch_all_pattern(&arm.pattern) {
+            if !has_guard {
+                has_unguarded_catch_all = true;
+            }
+            // guarded catch-all: neither blocks nor commits
+        } else if let Some(k) = pattern_case_key(&arm.pattern) {
+            if !has_guard {
+                if committed.contains(&k) {
                     ctx.error(
-                        format!("Duplicate '{}' arm: this case was already matched", name),
+                        format!("duplicate '{}' arm in match: this case was already covered", k.display()),
                         arm.span,
                     );
                 }
+                committed.insert(k);
+            } else {
+                // Guarded arm: unreachable if same unguarded already committed.
+                if committed.contains(&k) {
+                    ctx.error("unreachable match arm", arm.span);
+                }
+                // Otherwise fine — guards before or after unguarded are valid.
             }
         }
 
-        // Update coverage flags.
-        match match_arm_kind(&arm.pattern) {
-            MatchArmKind::CatchAll => seen_catch_all = true,
-            MatchArmKind::Some     => seen_some = true,
-            MatchArmKind::None     => seen_none = true,
-            MatchArmKind::Ok       => seen_ok   = true,
-            MatchArmKind::Err      => seen_err  = true,
-            MatchArmKind::True     => seen_true = true,
-            MatchArmKind::False    => seen_false = true,
-            MatchArmKind::Other    => {}
-        }
-
-        // Validate pattern and typecheck arm body.
+        // ── Pattern validation + arm typechecking ────────────────────────────
         if val_ty != Type::Error {
             validate_pattern_type(ctx, &val_ty, &mut arm.pattern);
         }
-
         ctx.scopes.push_scope();
         if val_ty != Type::Error {
             let mut bindings = Vec::new();
@@ -1849,13 +2098,22 @@ fn check_match(ctx: &mut TypeContext, m: &mut HirMatch, expected: Option<&Type>)
                 ctx.scopes.insert(name, ty);
             }
         }
+        if let Some(ref mut guard) = arm.guard {
+            let guard_ty = check_expression(ctx, guard, Some(&Type::Bool));
+            if guard_ty != Type::Bool && guard_ty != Type::Error {
+                ctx.error(
+                    format!("match guard must be Bool, found {}", guard_ty),
+                    guard.span(),
+                );
+            }
+        }
         let arm_ty = check_expression(ctx, &mut arm.value, expected);
         ctx.scopes.pop_scope();
 
-        if let Some(ref expected) = result_ty {
-            if arm_ty != Type::Error && *expected != Type::Error && arm_ty != *expected {
+        if let Some(ref exp) = result_ty {
+            if arm_ty != Type::Error && *exp != Type::Error && arm_ty != *exp {
                 ctx.error(
-                    format!("Match arms have incompatible types: {} vs {}", expected, arm_ty),
+                    format!("match arms have incompatible types: {} vs {}", exp, arm_ty),
                     arm.span,
                 );
             }
@@ -1864,106 +2122,62 @@ fn check_match(ctx: &mut TypeContext, m: &mut HirMatch, expected: Option<&Type>)
         }
     }
 
-    // Emit non-exhaustive errors for supported scrutinee types.
-    if val_ty != Type::Error && !seen_catch_all {
-        if track_option && !(seen_some && seen_none) {
-            let missing = match (seen_some, seen_none) {
-                (false, false) => "Some(_) and None",
-                (true,  false) => "None",
-                (false, true)  => "Some(_)",
-                _              => unreachable!(),
+    // ── Coverage / Exhaustiveness pass ───────────────────────────────────────
+    if val_ty != Type::Error {
+        // Accumulate coverage from all arms in order.
+        let coverage = m.arms.iter().fold(Coverage::empty(), |acc, arm| {
+            acc.combine(arm_coverage_contribution(arm))
+        });
+
+        let domain = domain_of_type(&val_ty);
+        let domain_cases = cases_of_domain(&domain, ctx);
+
+        if !domain_cases.is_empty() {
+            let is_exhaustive = match &coverage {
+                Coverage::Complete => true,
+                Coverage::Finite(covered) => domain_cases.iter().all(|k| covered.contains(k)),
+                Coverage::Unknown => false,
             };
-            ctx.error(
-                format!("Non-exhaustive match on Option: missing arm for {}", missing),
-                m.span,
-            );
-        }
-        if track_result && !(seen_ok && seen_err) {
-            let missing = match (seen_ok, seen_err) {
-                (false, false) => "Ok(_) and Err(_)",
-                (true,  false) => "Err(_)",
-                (false, true)  => "Ok(_)",
-                _              => unreachable!(),
-            };
-            ctx.error(
-                format!("Non-exhaustive match on Result: missing arm for {}", missing),
-                m.span,
-            );
-        }
-        if track_bool && !(seen_true && seen_false) {
-            let missing = match (seen_true, seen_false) {
-                (false, false) => "true and false",
-                (true,  false) => "false",
-                (false, true)  => "true",
-                _              => unreachable!(),
-            };
-            ctx.error(
-                format!("Non-exhaustive match on Bool: missing arm for {}", missing),
-                m.span,
-            );
+
+            if !is_exhaustive {
+                let missing: Vec<String> = match &coverage {
+                    Coverage::Complete => vec![], // unreachable, handled above
+                    Coverage::Finite(covered) => domain_cases.iter()
+                        .filter(|k| !covered.contains(*k))
+                        .map(|k| k.display())
+                        .collect(),
+                    Coverage::Unknown => domain_cases.iter().map(|k| k.display()).collect(),
+                };
+
+                if !missing.is_empty() {
+                    let missing_str = if missing.len() == 1 {
+                        missing[0].clone()
+                    } else if missing.len() == 2 {
+                        format!("{} and {}", missing[0], missing[1])
+                    } else {
+                        missing.join(", ")
+                    };
+
+                    let message = match &domain {
+                        Domain::Bool => format!(
+                            "non-exhaustive match on Bool: missing arm for {}", missing_str
+                        ),
+                        Domain::Enum(name) => format!(
+                            "non-exhaustive match on enum '{}': missing arm for variant '{}'",
+                            name, missing_str
+                        ),
+                        Domain::Unknown => unreachable!(),
+                    };
+
+                    ctx.error(message, m.span);
+                }
+            }
         }
     }
 
     result_ty.unwrap_or(Type::Unit)
 }
 
-#[derive(Debug, PartialEq)]
-enum MatchArmKind { CatchAll, Some, None, Ok, Err, True, False, Other }
-
-fn match_arm_kind(pat: &HirPattern) -> MatchArmKind {
-    match pat {
-        HirPattern::Wildcard(_)            => MatchArmKind::CatchAll,
-        HirPattern::Identifier(_, _)       => MatchArmKind::CatchAll,
-        HirPattern::EnumCase(_, name, _) => match name.as_str() {
-            "Some" => MatchArmKind::Some,
-            "None" => MatchArmKind::None,
-            "Ok"   => MatchArmKind::Ok,
-            "Err"  => MatchArmKind::Err,
-            _      => MatchArmKind::Other,
-        },
-        HirPattern::Literal(_, expr) => match expr.as_ref() {
-            HirExpression::Bool(_, true) => MatchArmKind::True,
-            HirExpression::Bool(_, false) => MatchArmKind::False,
-            _ => MatchArmKind::Other,
-        },
-        HirPattern::EnumConstructor(e) => match e.variant_name.as_str() {
-            "Some" => MatchArmKind::Some,
-            "None" => MatchArmKind::None,
-            "Ok"   => MatchArmKind::Ok,
-            "Err"  => MatchArmKind::Err,
-            _      => MatchArmKind::Other,
-        },
-        _ => MatchArmKind::Other,
-    }
-}
-
-fn match_arm_constructor_name(pat: &HirPattern) -> Option<&str> {
-    match pat {
-        HirPattern::EnumCase(_, name, _) => match name.as_str() {
-            "Some" => Some("Some"),
-            "None" => Some("None"),
-            "Ok"   => Some("Ok"),
-            "Err"  => Some("Err"),
-            _      => None,
-        },
-        HirPattern::EnumConstructor(e) => {
-            match e.variant_name.as_str() {
-                "Some"  => Some("Some"),
-                "None"  => Some("None"),
-                "Ok"    => Some("Ok"),
-                "Err"   => Some("Err"),
-                _       => None,
-            }
-        }
-        HirPattern::Literal(_, expr) => {
-            if let HirExpression::Bool(_, b) = expr.as_ref() {
-                return if *b { Some("true") } else { Some("false") };
-            }
-            None
-        }
-        _ => None,
-    }
-}
 
 fn check_for_expr(ctx: &mut TypeContext, f: &mut HirForExpr) -> Type {
     let iter_ty = check_expression(ctx, &mut f.iterable, None);
@@ -1975,7 +2189,7 @@ fn check_for_expr(ctx: &mut TypeContext, f: &mut HirForExpr) -> Type {
             if iter_ty != Type::Error {
                 ctx.error(
                     format!(
-                        "For iterable must be an array, slice, or string, found {}",
+                        "for iterable must be an array, slice, or string, found {}",
                         iter_ty
                     ),
                     f.span,
@@ -1992,7 +2206,7 @@ fn check_for_expr(ctx: &mut TypeContext, f: &mut HirForExpr) -> Type {
         let filter_ty = check_expression(ctx, filter, Some(&Type::Bool));
         if filter_ty != Type::Bool && filter_ty != Type::Error {
             ctx.error(
-                format!("For filter must be Bool, found {}", filter_ty),
+                format!("for filter must be Bool, found {}", filter_ty),
                 f.span,
             );
         }
@@ -2051,13 +2265,13 @@ fn check_regex_constructor(
                     }
                 }
                 HirCallArgument::Named(n) => {
-                    ctx.error(
-                        format!(
-                            "Regex constructors do not support named argument '{}'",
-                            n.name
-                        ),
-                        n.value.span(),
-                    );
+                        ctx.error(
+                            format!(
+                                "Regex constructors do not support named argument '{}'",
+                                n.name
+                            ),
+                            n.value.span(),
+                        );
                 }
             }
         }
@@ -2136,7 +2350,10 @@ fn check_regex_constructor(
             Type::Regex
         }
         _ => {
-            ctx.error(format!("Unknown Regex constructor 'Regex.{}'", name), span);
+            ctx.error(
+                format!("namespace 'Regex' has no constructor '{}'", name),
+                span,
+            );
             Type::Error
         }
     }
@@ -2195,7 +2412,10 @@ fn check_regex_method(
             Type::String
         }
         _ => {
-            ctx.error(format!("Unknown Regex method '{}'", name), span);
+            ctx.error(
+                format!("Regex has no method '{}'", name),
+                span,
+            );
             Type::Error
         }
     }
@@ -2248,16 +2468,22 @@ fn check_struct_literal(ctx: &mut TypeContext, s: &mut HirStructLiteral) -> Type
     }
 
     // Check that all required fields are present (those without defaults)
-    for (field_name, field_info) in &info.fields {
-        if !field_info.has_default && !provided.contains(field_name.as_str()) {
-            ctx.error(
-                format!(
-                    "Missing required field '{}' in struct literal '{}'",
-                    field_name, s.name
-                ),
-                s.span,
-            );
-        }
+    let mut missing_fields: Vec<&String> = info
+        .fields
+        .iter()
+        .filter(|(name, info)| !info.has_default && !provided.contains(name.as_str()))
+        .map(|(name, _)| name)
+        .collect();
+    missing_fields.sort();
+
+    for field_name in missing_fields {
+        ctx.error(
+            format!(
+                "Missing required field '{}' in struct literal '{}'",
+                field_name, s.name
+            ),
+            s.span,
+        );
     }
 
     Type::Struct(s.name.clone())

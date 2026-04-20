@@ -442,6 +442,7 @@ pub struct MatchExpr {
 pub struct MatchArm {
     pub span: Span,
     pub pattern: Pattern,
+    pub guard: Option<Expression>,
     pub value: Expression,
 }
 
@@ -663,7 +664,7 @@ pub struct EnumCasePattern {
 pub struct StructPattern {
     pub span: Span,
     pub name: Token,
-    pub fields: Vec<Token>,
+    pub fields: Vec<(Token, Option<Pattern>)>,
 }
 
 #[derive(Debug, Clone)]

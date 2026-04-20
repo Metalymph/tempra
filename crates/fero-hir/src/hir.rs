@@ -146,7 +146,7 @@ pub enum HirExpression {
 
     Unary(HirUnary),
     Binary(HirBinary),
-    Is(HirIsExpr),
+    IsType(HirIsTypeExpr),
     IsPattern(HirIsPatternExpr),
     AsOptional(HirAsOptionalExpr),
     AsForced(HirAsForcedExpr),
@@ -179,7 +179,7 @@ impl HirExpression {
             HirExpression::Bool(span, _) => *span,
             HirExpression::Unary(e) => e.span,
             HirExpression::Binary(e) => e.span,
-            HirExpression::Is(e) => e.span,
+            HirExpression::IsType(e) => e.span,
             HirExpression::IsPattern(e) => e.span,
             HirExpression::AsOptional(e) => e.span,
             HirExpression::AsForced(e) => e.span,
@@ -223,7 +223,7 @@ pub struct HirBinary {
 }
 
 #[derive(Debug, Clone)]
-pub struct HirIsExpr {
+pub struct HirIsTypeExpr {
     pub span: Span,
     pub value: Box<HirExpression>,
     pub ty: HirType,
@@ -340,6 +340,7 @@ pub struct HirMatch {
 pub struct HirMatchArm {
     pub span: Span,
     pub pattern: HirPattern,
+    pub guard: Option<HirExpression>,
     pub value: HirExpression,
 }
 
@@ -394,7 +395,7 @@ pub enum HirPattern {
     Identifier(Span, String),
     Literal(Span, Box<HirExpression>),
     EnumCase(Span, String, Vec<HirPattern>),
-    Struct(Span, String, Vec<String>),
+    Struct(Span, String, Vec<(String, Option<HirPattern>)>),
     Tuple(Span, Vec<HirPattern>),
     EnumConstructor(HirEnumConstructorPattern),
 }

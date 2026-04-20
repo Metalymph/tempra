@@ -228,7 +228,7 @@ impl<'src> Lowerer<'src> {
                 op: self.lower_binary_op(e.operator),
                 right: Box::new(self.lower_expression(&e.right)),
             }),
-            ast::Expression::Is(e) => HirExpression::Is(HirIsExpr {
+            ast::Expression::Is(e) => HirExpression::IsType(HirIsTypeExpr {
                 span: e.span,
                 value: Box::new(self.lower_expression(&e.value)),
                 ty: self.lower_type(&e.ty),
@@ -348,6 +348,7 @@ impl<'src> Lowerer<'src> {
         HirMatchArm {
             span: arm.span,
             pattern: self.lower_pattern(&arm.pattern),
+            guard: arm.guard.as_ref().map(|e| self.lower_expression(e)),
             value: self.lower_expression(&arm.value),
         }
     }
@@ -367,7 +368,7 @@ impl<'src> Lowerer<'src> {
             ast::Pattern::Struct(p) => HirPattern::Struct(
                 p.span,
                 self.text(p.name.span),
-                p.fields.iter().map(|f| self.text(f.span)).collect(),
+                p.fields.iter().map(|(f_tok, pat)| (self.text(f_tok.span), pat.as_ref().map(|p| self.lower_pattern(p)))).collect(),
             ),
             ast::Pattern::Tuple(p) => HirPattern::Tuple(
                 p.span,

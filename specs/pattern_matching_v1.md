@@ -1,10 +1,8 @@
-# Fero Pattern Matching Design (Minimal & Future-Proof)
+# Fero Pattern Matching Spec (v1.5)
 
-## 1. Syntax Proposal (v1)
+## 1. Match Expression
 
-### The `match` Expression
-
-`match` evaluates an operand against a series of patterns. It is an expression that yields a value.
+`match` is an expression that evaluates an operand against a series of arms. Each arm consists of a pattern, an optional guard, and a body expression.
 
 ```fero
 let x = match value {
@@ -13,131 +11,160 @@ let x = match value {
 }
 ```
 
-### The `is` Condition (Pattern Matching in `if`)
-
-Fero avoids introducing a separate `if let` construct. Instead, we unify the existing `is` operator with destructuring behavior from the pattern syntax.
-
-```fero
-if value is Some(x) {
-    print(x)
-}
-```
-
-### Forbidden Syntax in `if is`
-
-After `is`, Fero accepts only:
-
-- a **type** (`value is String`)
-- an **explicit constructor pattern** (`Some(x)`, `None`, `Ok(v)`, `Err(e)`)
-
-Naked binding patterns like `value is x` are intentionally forbidden to keep syntax clear and prevent confusing lower-cased type names with full wild bindings.
-
-### Supported Patterns
-
-- **Literals:** Exact value matches.
-
-  ```fero
-  match n {
-      1 => "one"
-      "hello" => "greeting"
-      true => "yes"
-      _ => "other"
-  }
-  ```
-
-- **Wildcard:** `_` matches anything without binding it.
-
-- **Binding:** Identifiers bind the matched value.
-
-  ```fero
-  match state {
-      x => fmt("State is: ", x)
-  }
-  ```
-
-- **Option / Result Types:** Destructuring for builtin monadic types.
-
-  ```fero
-  match res {
-      Ok(v) => v
-      Err(e) => crash(e)
-  }
-  ```
-
-- **Basic Structs:** Flat destructuring by field name.
-
-  ```fero
-  match user {
-      User { name } => name
-      _ => "Anonymous"
-  }
-  ```
+Match arms are evaluated in order. The first arm whose pattern matches (and whose guard, if present, evaluates to `true`) wins.
 
 ---
 
-## 2. Examples
+## 2. Supported Patterns
 
-### Option Handling
-
+### 2.1 Wildcard
 ```fero
-let config = match get_config() {
-    Some(c) => c
-    None => default_config()
-}
-
-// Unified with `if`
-if fetch_data() is Ok(data) {
-    process(data)
-}
+_ => expr
 ```
+Matches anything, binds nothing.
 
-### Struct Matching
+---
 
+### 2.2 Binding (Catch-all)
 ```fero
-struct Point { x: Int, y: Int }
+x => expr
+```
+Matches anything, binds the value to `x`.
 
-let description = match pt {
-    Point { x } => fmt("X is ", x) // Binds x
-}
+---
+
+### 2.3 Literal
+```fero
+42 => expr
+"hello" => expr
+true => expr
+```
+Matches an exact value.
+
+---
+
+### 2.4 Enum Constructor
+```fero
+Some(v) => expr
+None => expr
+Ok(v) => expr
+Err(e) => expr
+Present(Data(n)) => expr   // nested payload
+```
+Matches a specific enum variant. Payload patterns are fully recursive.
+
+---
+
+### 2.5 Struct Patterns
+
+Three forms are supported, all first-class:
+
+#### Shorthand binding
+```fero
+User { name }
+```
+- Matches a struct of type `User`.
+- Binds the value of field `name` to a local variable also named `name`.
+
+#### Field renaming
+```fero
+User { name: n }
+```
+- Matches a struct of type `User`.
+- Binds the value of field `name` to a local variable named `n`.
+
+#### Field subpattern
+```fero
+User { meta: (age, _) }
+User { inner: Data(v) }
+```
+- Matches a struct of type `User`.
+- Validates the field value against the given pattern.
+- Recursively extracts bindings from the subpattern.
+
+#### Combinations
+All three forms can be freely combined in a single struct pattern:
+```fero
+User { name: n, meta: (age, _), active }
 ```
 
 ---
 
-## 3. Tradeoffs vs. Other Languages
-
-### Fero vs. Rust
-
-- **Tradeoff (Fero advantage):** No separate `if let`. Fero's `if value is Pattern` seamlessly mirrors `match`, removing a learning hurdle for beginners.
-- **Tradeoff (Rust advantage):** Rust requires exhaustive patterns from Day 1. Fero defers exhaustiveness, which simplifies initial parser and type-checking design. Fero also cleanly prevents deep verbosity complexity (e.g., auto-ref/deref `&` or `ref mut` complexities).
-
-### Fero vs. Swift
-
-- **Tradeoff (Fero advantage):** No `guard let` or `if case let` madness. Swift's pattern matching syntax across `switch` and `if` is notoriously fragmented. Fero unifies `is` semantics explicitly.
-- **Tradeoff (Swift advantage):** Swift's pattern ecosystem has powerful overlapping semantics like `where` clauses (guards) natively baked in. Fero defers guards to later revisions to prioritize minimal initial footprint.
-
-### Fero vs. Roc
-
-- **Tradeoff (Fero advantage):** Familiar C/Rust-family syntax (`=>`).
-- **Tradeoff (Roc advantage):** Roc specializes in highly optimized data-driven pattern constraints leveraging structural typing to guarantee absolute totality. Fero relies more on nominal typing and deferred v2 exhaustiveness checking.
+### 2.6 Tuple Patterns
+```fero
+(a, b) => expr
+((a, b), c) => expr
+(_, x) => expr
+```
+- Arity must match the scrutinee tuple exactly.
+- Arity >= 2 only. Single-element grouped patterns `(a)` are not supported.
+- Patterns are recursive.
 
 ---
 
-## 4. Evolution & Separation (v1 vs Future)
+## 3. Match Guards
 
-### v1 (Current Scope)
+```fero
+match x {
+    Some(v) if v > 10 => 1
+    Some(v) => 2
+    None => 0
+}
+```
 
-- **Core matching**: Flat pattern matches against Literals, Bindings, `_` wildcard, `Some`/`None`, `Ok`/`Err`, and flat Struct fields.
-- **Integration**: Introduction of `if value is Pattern` (reusing the v1 parser for `match` patterns).
-- **Typing**: Identifiers introduce rigidly scoped bindings valid only on the right side of `=>` or inside the `if` block. Each match arm evaluates to a unified compatible type.
-- **Excluded**: Exhaustiveness checks, nested destructuring (`Some(Ok(x))`), guards, OR patterns (`1 | 2 =>`).
+- The guard expression must be of type `Bool`.
+- The guard sees the bindings of its arm.
+- A guarded arm does **not** contribute to exhaustiveness coverage.
+- A guarded catch-all does **not** make later arms unreachable.
+- An unguarded catch-all **does** make later arms unreachable.
 
-### v2 (Safety & Capability)
+---
 
-- **Nested Patterns:** Allowing deep matching like `Some(User { name })`.
-- **Guards:** Syntax like `Some(x) if x > 10 =>`.
-- **Exhaustiveness Check:** The compiler strictly enforces covering every possible data variant, optionally warning or failing compilation if patterns are missing.
+## 4. Diagnostics
 
-### v3 (Advanced & Ecosystem)
+| Situation | Error |
+|-----------|-------|
+| Guard not `Bool` | `match guard must be Bool, found <type>` |
+| Unknown struct field | `struct 'X' does not have a field named 'f'` |
+| Duplicate struct field | `duplicate field 'f' in struct pattern` |
+| Wrong subpattern shape | `cannot match <type> with ...` |
+| Tuple arity mismatch | `tuple pattern arity mismatch: expected N, found M` |
+| Single-element tuple | `tuple patterns must have at least 2 elements in v1` |
+| Non-exhaustive match | `non-exhaustive match on enum 'X': missing arm for variant 'Y'` |
+| Duplicate variant arm | `duplicate 'X' arm in match: this case was already covered` |
+| Unreachable after catch-all | `unreachable match arm: a previous wildcard ...` |
+| Guarded arm after same unguarded | `unreachable match arm` |
 
-- **Traits / Interfaces:** Extensible matching for user-defined ADTs or polymorphic traits.
-- **OR Patterns:** Matching multiple distinct patterns to a single arm.
+---
+
+## 5. Exhaustiveness
+
+Fero performs lightweight exhaustiveness analysis for:
+- `Bool` — requires both `true` and `false`
+- `Option<T>` — requires `Some(_)` and `None`
+- `Result<T, E>` — requires `Ok(_)` and `Err(_)`
+- User-defined enums — requires one unguarded arm per variant
+
+Rules:
+- Guarded arms do **not** satisfy exhaustiveness for their variant.
+- An unguarded wildcard or binding (`_` / `x`) satisfies exhaustiveness for all remaining cases.
+- Coverage is checked at the **top-level variant** only. Payload subpatterns do not affect variant coverage.
+
+---
+
+## 6. Unsupported (v1.5)
+
+- OR-patterns: `A | B => ...`
+- Rest patterns: `User { name, .. }`
+- Grouped / single-element tuple patterns: `(a)`
+- `is` struct patterns
+- Full payload-sensitive exhaustiveness
+
+---
+
+## 7. Semantic Invariants
+
+- Binding names introduced in a pattern are scoped to their arm only.
+- Guards can only see bindings from their own arm.
+- Failed guards do not leak bindings to subsequent arms.
+- All three struct pattern forms (`shorthand`, `rename`, `subpattern`) are first-class. None is described as a fallback of another.

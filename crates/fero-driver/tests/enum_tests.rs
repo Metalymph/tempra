@@ -86,7 +86,7 @@ fn test_enum_wrong_arity() {
     let result = test_source(source);
     assert!(result.is_err());
     let err = format!("{:?}", result.err().unwrap());
-    assert!(err.contains("expects 0 argument(s), found 1"));
+    assert!(err.contains("expects 0 arguments, found 1"));
 }
 
 #[test]
@@ -182,7 +182,7 @@ fn test_enum_match_wrong_enum_variant() {
     let result = test_source(source);
     assert!(result.is_err());
     let err = format!("{:?}", result.err().unwrap());
-    assert!(err.contains("does not belong to") || err.contains("does not have variant"));
+    assert!(err.contains("does not belong to") || err.contains("does not have variant") || err.contains("cannot be used"));
 }
 
 #[test]

@@ -166,7 +166,7 @@ fn test_as_forced_interpreter_crash() {
     let result = fero_interpreter::run(&hir);
     match result {
         Err(fero_interpreter::RuntimeError::Crash(msg)) => {
-            assert!(msg.contains("invalid cast to String"));
+            assert!(msg.contains("invalid cast: expected String"));
         }
         other => panic!("Expected Crash for invalid cast, got {:?}", other),
     }

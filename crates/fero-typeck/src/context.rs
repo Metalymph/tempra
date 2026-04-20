@@ -122,11 +122,19 @@ impl TypeContext {
             }
         }
     }
+    /// Returns the list of enums that own a given variant name (for diagnostic use).
+    pub fn variant_owners(&self, variant: &str) -> &[String] {
+        self.variant_to_enums
+            .get(variant)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
     /// Finds which enum owns a variant, using the expected type as a hint to resolve ambiguity.
     pub fn find_enum_for_variant(&self, variant: &str, expected: Option<&Type>) -> Result<String, String> {
         let candidates = match self.variant_to_enums.get(variant) {
             Some(c) => c,
-            None => return Err(format!("Unknown constructor '{}'", variant)),
+            None => return Err(format!("Unknown constructor '{}': no enum defines this variant", variant)),
         };
 
         if let Some(Type::Enum(expected_name)) = expected {
@@ -138,10 +146,12 @@ impl TypeContext {
         if candidates.len() == 1 {
             Ok(candidates[0].clone())
         } else {
+            let mut sorted = candidates.clone();
+            sorted.sort();
+            let list = sorted.join(", ");
             Err(format!(
-                "ambiguous constructor '{}'. Multiple enums found: {}. Use a type hint to resolve this.",
-                variant,
-                candidates.join(", ")
+                "ambiguous constructor '{}' — candidates: {}. Add a type annotation to disambiguate.",
+                variant, list
             ))
         }
     }

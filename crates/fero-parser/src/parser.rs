@@ -355,7 +355,7 @@ impl<'src> Parser<'src> {
 
         if consumed_suffix && (self.at(TokenKind::QuestionMark) || self.at(TokenKind::Bang)) {
             return Err(ParseError {
-                message: "Chained type suffixes (? / !) are not supported in this position"
+                message: "chained type suffixes (? / !) are not supported in this position"
                     .to_string(),
                 span: self.current().span,
             });
@@ -543,24 +543,13 @@ impl<'src> Parser<'src> {
                                 .next()
                                 .unwrap_or('\0');
                             
-                            if first_char.is_uppercase() {
-                                 let name = self.text(next.span);
-                                 let is_builtin_type = matches!(
-                                     name,
-                                     "Unit" | "Bool" | "String" | "Int" | "Int8" | "Int16" | "Int32" | "Int64" |
-                                     "UInt8" | "UInt16" | "UInt32" | "UInt64" | "Float32" | "Float64" |
-                                     "Command" | "CommandResult" | "Regex" | "Error"
-                                 );
-                                 
-                                 if is_builtin_type {
-                                     false
-                                 } else {
-                                     // Not a type modifier -> assume constructor candidate (like 'is None').
-                                     // Note: Even if followed by '{', we treat it as a unit constructor pattern (fallback)
-                                     // and let parse_pattern(allow_struct=false) handle it (leaving '{' for the 'if' block).
-                                     !matches!(next2.kind, TokenKind::QuestionMark | TokenKind::Bang | TokenKind::LeftBracket)
-                                 }
-                            } else {
+                             if first_char.is_uppercase() {
+                                 // Bare identifier starting with uppercase.
+                                 // Heuristic: If followed by '?', '!', or '[', it's definitely a complex type (Option, Result, Array).
+                                 // Otherwise, we treat it as a potential pattern (Enum Constructor or Type Test).
+                                 // The typechecker will disambiguate based on semantic registration.
+                                 !matches!(next2.kind, TokenKind::QuestionMark | TokenKind::Bang | TokenKind::LeftBracket)
+                             } else {
                                 // Lowercase bare identifier is intentionally forbidden as a binding pattern in 'is'.
                                 // It will be parsed as a Type and likely produce a "Type not found" error during typecheck.
                                 false
@@ -609,7 +598,7 @@ impl<'src> Parser<'src> {
                     });
                 } else {
                     return Err(ParseError {
-                        message: "Expected '?' or '!' after 'as'".to_string(),
+                        message: "expected '?' or '!' after 'as'".to_string(),
                         span: operator.span,
                     });
                 }
@@ -677,7 +666,7 @@ impl<'src> Parser<'src> {
                         let name_str = self.text(name.span);
                         if !named_keys.insert(name_str.to_string()) {
                             return Err(ParseError {
-                                message: format!("Duplicate named argument '{}'", name_str),
+                                message: format!("duplicate named argument '{}'", name_str),
                                 span: name.span,
                             });
                         }
@@ -693,7 +682,7 @@ impl<'src> Parser<'src> {
                         // Positional argument
                         if seen_named {
                             return Err(ParseError {
-                                message: "Positional argument cannot follow named arguments"
+                                message: "positional argument cannot follow named arguments"
                                     .to_string(),
                                 span: self.current().span,
                             });
@@ -920,11 +909,17 @@ impl<'src> Parser<'src> {
                 let mut arms = Vec::new();
                 while !self.at(TokenKind::RightBrace) && !self.at(TokenKind::EndOfFile) {
                     let pat = self.parse_pattern()?;
+                    let guard = if self.eat(TokenKind::If) {
+                        Some(self.parse_expression()?)
+                    } else {
+                        None
+                    };
                     self.expect(TokenKind::FatArrow)?;
                     let body = self.parse_expression()?;
                     arms.push(MatchArm {
                         span: Span::new(pat.span().start, body.span().end),
                         pattern: pat,
+                        guard,
                         value: body,
                     });
                     self.eat(TokenKind::Comma);
@@ -956,7 +951,7 @@ impl<'src> Parser<'src> {
                 }))
             }
             _ => Err(ParseError {
-                message: format!("Unexpected token in expression: {:?}", token.kind),
+                message: format!("unexpected token in expression: {}", token.kind),
                 span: token.span,
             }),
         }
@@ -978,8 +973,8 @@ impl<'src> Parser<'src> {
             let start = self.advance();
             let mut items = Vec::new();
             while !self.at(TokenKind::RightParen) && !self.at(TokenKind::EndOfFile) {
-                // Nested patterns are forbidden in v1, so we call with false, false
-                items.push(self.parse_pattern_ext(false, false)?);
+                // Nested tuple patterns are now supported
+                items.push(self.parse_pattern_ext(true, true)?);
                 if !self.eat(TokenKind::Comma) {
                     break;
                 }
@@ -987,7 +982,7 @@ impl<'src> Parser<'src> {
             let end = self.expect(TokenKind::RightParen)?;
             if items.len() < 2 {
                 return Err(ParseError {
-                    message: "Tuple patterns must have at least 2 elements in v1 (grouped patterns (x) are not supported)".to_string(),
+                    message: "tuple patterns must have at least 2 elements in v1 (grouped patterns (x) are not supported)".to_string(),
                     span: Span::new(start.span.start, end.span.end),
                 });
             }
@@ -1012,8 +1007,8 @@ impl<'src> Parser<'src> {
             if self.eat(TokenKind::LeftParen) {
                 let mut arguments = Vec::new();
                 while !self.at(TokenKind::RightParen) && !self.at(TokenKind::EndOfFile) {
-                    // Nested patterns are forbidden in v1, so we call with false, false
-                    arguments.push(self.parse_pattern_ext(false, false)?);
+                    // Nested payload patterns are supported
+                    arguments.push(self.parse_pattern_ext(true, true)?);
                     if !self.eat(TokenKind::Comma) {
                         break;
                     }
@@ -1028,13 +1023,12 @@ impl<'src> Parser<'src> {
                 let mut fields = Vec::new();
                 while !self.at(TokenKind::RightBrace) && !self.at(TokenKind::EndOfFile) {
                     let field = self.expect_identifier()?;
-                    if self.at(TokenKind::Colon) {
-                        return Err(ParseError {
-                            message: "Renaming fields in struct patterns is not supported in v1 (shorthand only)".to_string(),
-                            span: self.current().span,
-                        });
-                    }
-                    fields.push(field);
+                    let pat = if self.eat(TokenKind::Colon) {
+                        Some(self.parse_pattern_ext(true, true)?)
+                    } else {
+                        None
+                    };
+                    fields.push((field, pat));
                     if !self.eat(TokenKind::Comma) {
                         break;
                     }
@@ -1106,7 +1100,7 @@ impl<'src> Parser<'src> {
         } else {
             let current = self.current();
             Err(ParseError {
-                message: format!("Expected {:?}, but found {:?}", kind, current.kind),
+                message: format!("expected {}, but found {}", kind, current.kind),
                 span: current.span,
             })
         }

@@ -51,7 +51,7 @@ fn check_function(ctx: &mut TypeContext, f: &mut HirFunction) {
             if !is_implicit_ok_unit {
                 ctx.error(
                     format!(
-                        "Function body return type mismatch: expected {}, found {}",
+                        "function body return type mismatch: expected {}, found {}",
                         expected, body_ty
                     ),
                     f.body.span,

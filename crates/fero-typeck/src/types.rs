@@ -163,6 +163,7 @@ impl fmt::Display for Type {
 /// Resolve a named type string to a semantic Type.
 pub fn resolve_named_type(name: &str) -> Type {
     match name {
+        "Unit" => Type::Unit,
         "Bool" => Type::Bool,
         "String" => Type::String,
         "Int" => Type::Int,

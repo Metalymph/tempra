@@ -374,6 +374,10 @@ impl<'src> Lowerer<'src> {
                 p.span,
                 p.items.iter().map(|i| self.lower_pattern(i)).collect(),
             ),
+            ast::Pattern::Or(p) => HirPattern::Or(
+                p.span,
+                p.alternatives.iter().map(|a| self.lower_pattern(a)).collect(),
+            ),
         }
     }
 

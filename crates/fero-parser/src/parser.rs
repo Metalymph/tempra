@@ -963,6 +963,31 @@ impl<'src> Parser<'src> {
     }
 
     fn parse_pattern_ext(&mut self, allow_struct: bool, allow_tuple: bool) -> Result<Pattern, ParseError> {
+        let mut node = self.parse_pattern_atom(allow_struct, allow_tuple)?;
+
+        if self.at(TokenKind::Pipe) {
+            let mut alternatives = vec![node];
+            while self.eat(TokenKind::Pipe) {
+                let alt = self.parse_pattern_atom(allow_struct, allow_tuple)?;
+                // Flattening
+                if let Pattern::Or(or_pat) = alt {
+                    alternatives.extend(or_pat.alternatives);
+                } else {
+                    alternatives.push(alt);
+                }
+            }
+            let first_span = alternatives[0].span();
+            let last_span = alternatives.last().unwrap().span();
+            node = Pattern::Or(OrPattern {
+                span: Span::new(first_span.start, last_span.end),
+                alternatives,
+            });
+        }
+
+        Ok(node)
+    }
+
+    fn parse_pattern_atom(&mut self, allow_struct: bool, allow_tuple: bool) -> Result<Pattern, ParseError> {
         let token = self.current();
         if self.eat(TokenKind::Underscore) {
             Ok(Pattern::Wildcard(WildcardPattern {

@@ -620,6 +620,7 @@ pub enum Pattern {
     EnumCase(EnumCasePattern),
     Struct(StructPattern),
     Tuple(TuplePattern),
+    Or(OrPattern),
 }
 
 impl Pattern {
@@ -631,6 +632,7 @@ impl Pattern {
             Pattern::EnumCase(pattern) => pattern.span,
             Pattern::Struct(pattern) => pattern.span,
             Pattern::Tuple(pattern) => pattern.span,
+            Pattern::Or(pattern) => pattern.span,
         }
     }
 }
@@ -671,4 +673,10 @@ pub struct StructPattern {
 pub struct TuplePattern {
     pub span: Span,
     pub items: Vec<Pattern>,
+}
+
+#[derive(Debug, Clone)]
+pub struct OrPattern {
+    pub span: Span,
+    pub alternatives: Vec<Pattern>,
 }

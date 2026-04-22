@@ -1417,6 +1417,16 @@ impl Interpreter {
             }
             false
         }
+        HirPattern::Or(_, alternatives) => {
+            for alt in alternatives {
+                let mut temp_bindings = Vec::new();
+                if Self::value_matches_pattern(value, alt, &mut temp_bindings) {
+                    bindings.extend(temp_bindings);
+                    return true;
+                }
+            }
+            false
+        }
     }
 }
 

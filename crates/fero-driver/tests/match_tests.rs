@@ -78,6 +78,7 @@ fn test_nested_struct_tuple_destructuring() {
             User { name, meta: (age, _) } => {
                 resolved_age = age;
             }
+            _ => {}
         }
         expect(resolved_age == 42, \"nested struct should destruct properly\");
     }
@@ -96,6 +97,7 @@ fn test_nested_tuple() {
             ((a, b), c) => {
                 res = a;
             }
+            _ => {}
         }
         expect(res == 1, \"nested tuple bound properly\");
     }
@@ -253,6 +255,7 @@ fn test_nested_enum_inside_field() {
         match u {
             User { meta: Data(v) } => { x = v; }
             User { meta: Empty } => { x = 0; }
+            _ => {}
         }
         expect(x == 7, \"nested ok\");
     }
@@ -536,6 +539,7 @@ fn test_field_rename_simple() {
         var x = \"\";
         match u {
             User { name: n, age } => { x = n; }
+            _ => {}
         }
         expect(x == \"A\", \"field rename should bind n\");
     }
@@ -557,6 +561,7 @@ fn test_field_rename_mixed_nested() {
         var age = 0;
         match u {
             User { name: n, meta: (a, _) } => { age = a; }
+            _ => {}
         }
         expect(age == 42, \"rename + nested tuple ok\");
     }
@@ -583,6 +588,7 @@ fn test_field_rename_with_enum_subpattern() {
         match u {
             User { meta: Data(v) } => { x = v; }
             User { meta: Empty } => { x = 0; }
+            _ => {}
         }
         expect(x == 7, \"nested enum ok\");
     }
@@ -806,4 +812,301 @@ fn test_unguarded_then_guarded_same_variant() {
     assert!(result.is_err());
     let err = format!("{:?}", result.err().unwrap());
     assert!(err.contains("unreachable match arm"), "Actual err: {}", err);
+}
+
+#[test]
+fn test_guarded_only_enum_non_exhaustive() {
+    let source = "
+    enum Status { Idle, Active(Int) }
+    fn main() {
+        let x = Active(1);
+        match x {
+            Active(v) if v > 0 => { }
+        }
+    }
+    ";
+    let result = test_source(source);
+    assert!(result.is_err());
+    let err = format!("{:?}", result.err().unwrap());
+    assert!(err.contains("non-exhaustive match on enum 'Status': missing arms for variants 'Active', 'Idle'"), "Actual: {}", err);
+}
+
+#[test]
+fn test_guarded_only_bool_non_exhaustive() {
+    let source = "
+    fn main() {
+        let b = true;
+        let x = match b {
+            true if b => 1,
+        }
+    }
+    ";
+    let result = test_source(source);
+    assert!(result.is_err());
+    let err = format!("{:?}", result.err().unwrap());
+    // Since 'true' has a guard, it doesn't count. 'false' is definitely missing.
+    assert!(err.contains("non-exhaustive match on Bool: missing arm for false"), "Actual: {}", err);
+}
+
+#[test]
+fn test_struct_domain_conservative() {
+    let source = "
+    struct User { name: String }
+    fn main() {
+        let u = User { name: \"A\" };
+        match u {
+            User { name } if name == \"A\" => { }
+        }
+    }
+    ";
+    let result = test_source(source);
+    assert!(result.is_err());
+    let err = format!("{:?}", result.err().unwrap());
+    assert!(err.contains("non-exhaustive match: this domain requires an unguarded catch-all"), "Actual: {}", err);
+}
+
+#[test]
+fn test_tuple_domain_conservative() {
+    let source = "
+    fn main() {
+        let t = (1, 2);
+        match t {
+            (a, b) => { }
+        }
+    }
+    ";
+    let result = test_source(source);
+    assert!(result.is_err());
+    let err = format!("{:?}", result.err().unwrap());
+    assert!(err.contains("non-exhaustive match: this domain requires an unguarded catch-all"), "Actual: {}", err);
+}
+
+#[test]
+fn test_basic_or_pattern() {
+    let source = r#"
+    enum Msg { A, B, C }
+    fn main() {
+        let x = A;
+        let res = match x {
+            A | B => 1,
+            C => 2,
+        };
+        expect(res == 1, "basic OR-pattern failed");
+        
+        let y = B;
+        let res2 = match y {
+            A | B => 1,
+            C => 2,
+        };
+        expect(res2 == 1, "basic OR-pattern second case failed");
+    }
+    "#;
+    let result = test_source(source);
+    assert!(result.is_ok(), "Basic OR-pattern failed: {:?}", result.err());
+}
+
+#[test]
+fn test_or_pattern_with_bindings() {
+    let source = r#"
+    enum Opt { A(Int), B(Int) }
+    fn main() {
+        let x = A(10);
+        let res = match x {
+            A(v) | B(v) => v,
+        };
+        expect(res == 10, "OR-pattern with bindings failed");
+    }
+    "#;
+    let result = test_source(source);
+    assert!(result.is_ok(), "OR-pattern bindings failed: {:?}", result.err());
+}
+
+#[test]
+fn test_or_pattern_duplicate_error() {
+    let source = r#"
+    enum Msg { A, B }
+    fn main() {
+        let x = A;
+        match x {
+            A | A => 1,
+            _ => 0,
+        };
+    }
+    "#;
+    let result = test_source(source);
+    assert!(result.is_err());
+    let err = format!("{:?}", result.err().unwrap());
+    assert!(err.contains("duplicate pattern in OR-pattern"));
+}
+
+#[test]
+fn test_or_pattern_binding_mismatch_name() {
+    let source = r#"
+    enum Opt { A(Int), B(Int) }
+    fn main() {
+        let x = A(10);
+        match x {
+            A(v) | B(w) => v,
+            _ => 0,
+        };
+    }
+    "#;
+    let result = test_source(source);
+    assert!(result.is_err());
+    let err = format!("{:?}", result.err().unwrap());
+    assert!(err.contains("alternatives in OR-pattern must bind the same variables with the same types"));
+}
+
+#[test]
+fn test_or_pattern_binding_mismatch_missing() {
+    let source = r#"
+    enum Opt { A(Int), B }
+    fn main() {
+        let x = A(10);
+        match x {
+            A(v) | B => 1,
+            _ => 0,
+        };
+    }
+    "#;
+    let result = test_source(source);
+    assert!(result.is_err());
+    let err = format!("{:?}", result.err().unwrap());
+    assert!(err.contains("alternatives in OR-pattern must bind the same variables with the same types"));
+}
+
+#[test]
+fn test_or_pattern_wildcard_forbidden() {
+    let source = r#"
+    enum Msg { A, B }
+    fn main() {
+        let x = A;
+        match x {
+            A | _ => 1,
+        };
+    }
+    "#;
+    let result = test_source(source);
+    assert!(result.is_err());
+    let err = format!("{:?}", result.err().unwrap());
+    assert!(err.contains("wildcards and bindings are forbidden as direct alternatives in OR-patterns"));
+}
+
+#[test]
+fn test_or_pattern_binding_forbidden_at_top() {
+    let source = r#"
+    enum Msg { A, B }
+    fn main() {
+        let x = A;
+        match x {
+            A | v => 1,
+        };
+    }
+    "#;
+    let result = test_source(source);
+    assert!(result.is_err());
+    let err = format!("{:?}", result.err().unwrap());
+    assert!(err.contains("wildcards and bindings are forbidden as direct alternatives in OR-patterns"));
+}
+
+#[test]
+fn test_or_pattern_exhaustiveness() {
+    let source = r#"
+    enum Msg { A, B, C }
+    fn main() {
+        let x = A;
+        let res = match x {
+            A | B => 1,
+            C => 2,
+        };
+    }
+    "#;
+    let result = test_source(source);
+    assert!(result.is_ok(), "Exhaustiveness with OR failed: {:?}", result.err());
+}
+
+#[test]
+fn test_or_pattern_non_exhaustive() {
+    let source = r#"
+    enum Msg { A, B, C }
+    fn main() {
+        let x = A;
+        match x {
+            A | B => 1,
+        }; 
+    }
+    "#;
+    let result = test_source(source);
+    assert!(result.is_err());
+    let err = format!("{:?}", result.err().unwrap());
+    assert!(err.contains("non-exhaustive match"));
+}
+
+#[test]
+fn test_or_pattern_reachability() {
+    let source = r#"
+    enum Msg { A, B, C }
+    fn main() {
+        let x = A;
+        match x {
+            A | B => 1,
+            A => 2, 
+        };
+    }
+    "#;
+    let result = test_source(source);
+    assert!(result.is_err());
+    let err = format!("{:?}", result.err().unwrap());
+    assert!(err.contains("duplicate match arm for variant 'A'"));
+}
+
+#[test]
+fn test_or_pattern_nested_flattening() {
+    let source = r#"
+    enum Msg { A, B, C, D }
+    fn main() {
+        let x = A;
+        let res = match x {
+            A | (B | C) => 1,
+            D => 2,
+        };
+    }
+    "#;
+    let result = test_source(source);
+    assert!(result.is_err());
+    let err = format!("{:?}", result.err().unwrap());
+    assert!(err.contains("single-element tuple patterns are not allowed"));
+}
+
+#[test]
+fn test_or_pattern_unguarded_exhaustiveness() {
+    let source = r#"
+    enum Msg { A, B }
+    fn main() {
+        let x = A;
+        let res = match x {
+            A | B if 1 == 1 => 1,
+            _ => 0,
+        };
+    }
+    "#;
+    let result = test_source(source);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_or_pattern_guarded_non_exhaustive() {
+    let source = r#"
+    enum Msg { A, B }
+    fn main() {
+        let x = A;
+        let res = match x {
+            A | B if 1 == 1 => 1,
+        }; // Should be non-exhaustive
+    }
+    "#;
+    let result = test_source(source);
+    assert!(result.is_err());
+    let err = format!("{:?}", result.err().unwrap());
+    assert!(err.contains("non-exhaustive match"));
 }

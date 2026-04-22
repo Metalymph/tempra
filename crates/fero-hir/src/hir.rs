@@ -398,6 +398,7 @@ pub enum HirPattern {
     Struct(Span, String, Vec<(String, Option<HirPattern>)>),
     Tuple(Span, Vec<HirPattern>),
     EnumConstructor(HirEnumConstructorPattern),
+    Or(Span, Vec<HirPattern>),
 }
 
 impl HirPattern {
@@ -410,6 +411,7 @@ impl HirPattern {
             HirPattern::Struct(span, _, _) => *span,
             HirPattern::Tuple(span, _) => *span,
             HirPattern::EnumConstructor(e) => e.span,
+            HirPattern::Or(span, _) => *span,
         }
     }
 }

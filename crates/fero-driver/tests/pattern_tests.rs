@@ -7,6 +7,7 @@ fn test_tuple_destructuring_happy_path() {
         let t = ("a", 1);
         let res = match t {
             (x, y) => x,
+            _ => "default",
         };
         expect(res == "a", "tuple destructuring failed");
     }
@@ -22,6 +23,7 @@ fn test_nested_tuple_happy_path() {
         let t = (("a", 1), 2);
         let res = match t {
             ((x, _), y) => x,
+            _ => "default",
         };
         expect(res == "a", "nested tuple destructuring failed");
     }
@@ -111,6 +113,7 @@ fn test_struct_nesting_tuple() {
         let u2 = ("a", 1);
         let res = match u2 {
             (x, _) => x,
+            _ => "default",
         };
     }
     "#;

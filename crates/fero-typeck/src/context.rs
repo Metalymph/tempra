@@ -1,15 +1,22 @@
 use crate::env::ScopeStack;
 use crate::error::TypeError;
-use crate::types::{resolve_named_type, Type};
+use crate::types::{resolve_named_type, Type, GenericParamId};
 use fero_ast::Visibility;
 use fero_hir::*;
 use fero_span::Span;
 use std::collections::HashMap;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GenericParam {
+    pub id: GenericParamId,
+    pub name: String,
+}
+
 /// Metadata about a function signature used during type checking.
 #[derive(Debug, Clone)]
 pub struct FunctionSignature {
     pub visibility: Visibility,
+    pub generic_params: Vec<GenericParam>,
     pub params: Vec<(String, Type)>,
     pub return_type: Type,
     pub is_fallible: bool,
@@ -49,6 +56,8 @@ pub struct TypeContext {
     pub errors: Vec<TypeError>,
     pub current_return_type: Option<Type>,
     pub current_is_fallible: bool,
+    pub current_generic_params: Vec<GenericParam>,
+    pub next_generic_param_id: u32,
 }
 
 impl TypeContext {
@@ -62,6 +71,8 @@ impl TypeContext {
             errors: Vec::new(),
             current_return_type: None,
             current_is_fallible: false,
+            current_generic_params: Vec::new(),
+            next_generic_param_id: 0,
         }
     }
 
@@ -74,6 +85,9 @@ impl TypeContext {
         let base = resolve_named_type(name);
         if base != Type::Unknown {
             return base;
+        }
+        if let Some(param) = self.current_generic_params.iter().find(|p| p.name == name) {
+            return Type::GenericParam { id: param.id, name: name.to_string() };
         }
         if self.structs.contains_key(name) {
             return Type::Struct(name.to_string());

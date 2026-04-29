@@ -156,27 +156,47 @@ impl<'src> Parser<'src> {
         let name = self.expect_identifier()?;
 
         self.expect(TokenKind::LeftParen)?;
+        let mut generic_parameters = Vec::new();
         let mut parameters = Vec::new();
+        let mut seen_runtime_param = false;
+
         while !self.at(TokenKind::RightParen) && !self.at(TokenKind::EndOfFile) {
             let p_start = self.current().span.start;
-            let is_inout = self.eat(TokenKind::Inout);
-            let p_name = self.expect_identifier()?;
-            let p_ty = if self.eat(TokenKind::Colon) {
-                self.parse_type()?
+            
+            if self.eat(TokenKind::Type) {
+                if seen_runtime_param {
+                    return Err(ParseError {
+                        message: "generic parameters must appear before runtime parameters".into(),
+                        span: self.tokens[self.position - 1].span,
+                    });
+                }
+                let g_name = self.expect_identifier()?;
+                let g_end = g_name.span.end;
+                generic_parameters.push(GenericParameter {
+                    span: Span::new(p_start, g_end),
+                    name: g_name,
+                });
             } else {
-                TypeExpr::Named(NamedTypeExpr {
-                    span: p_name.span,
-                    name: p_name,
-                })
-            };
+                seen_runtime_param = true;
+                let is_inout = self.eat(TokenKind::Inout);
+                let p_name = self.expect_identifier()?;
+                let p_ty = if self.eat(TokenKind::Colon) {
+                    self.parse_type()?
+                } else {
+                    TypeExpr::Named(NamedTypeExpr {
+                        span: p_name.span,
+                        name: p_name,
+                    })
+                };
 
-            let p_end = p_ty.span().end;
-            parameters.push(Parameter {
-                span: Span::new(p_start, p_end),
-                name: p_name,
-                ty: p_ty,
-                is_inout,
-            });
+                let p_end = p_ty.span().end;
+                parameters.push(Parameter {
+                    span: Span::new(p_start, p_end),
+                    name: p_name,
+                    ty: p_ty,
+                    is_inout,
+                });
+            }
             if !self.eat(TokenKind::Comma) {
                 break;
             }
@@ -201,6 +221,7 @@ impl<'src> Parser<'src> {
             span,
             visibility,
             name,
+            generic_parameters,
             parameters,
             return_type,
             is_fallible,
@@ -647,60 +668,66 @@ impl<'src> Parser<'src> {
         self.parse_postfix_expression()
     }
 
+    fn parse_call_args(&mut self) -> Result<(Vec<CallArgument>, Token), ParseError> {
+        self.expect(TokenKind::LeftParen)?;
+        let mut arguments = Vec::new();
+        let mut seen_named = false;
+        let mut named_keys = std::collections::HashSet::new();
+
+        while !self.at(TokenKind::RightParen) && !self.at(TokenKind::EndOfFile) {
+            if self.at(TokenKind::Identifier) && self.peek(1).kind == TokenKind::Equal {
+                // Named argument
+                seen_named = true;
+                let name = self.expect_identifier()?;
+
+                let name_str = self.text(name.span);
+                if !named_keys.insert(name_str.to_string()) {
+                    return Err(ParseError {
+                        message: format!("duplicate named argument '{}'", name_str),
+                        span: name.span,
+                    });
+                }
+
+                self.expect(TokenKind::Equal)?;
+                let value = self.parse_expression()?;
+                arguments.push(CallArgument::Named(NamedArgument {
+                    span: Span::new(name.span.start, value.span().end),
+                    name,
+                    value,
+                }));
+            } else {
+                // Positional argument
+                if seen_named {
+                    return Err(ParseError {
+                        message: "positional argument cannot follow named arguments"
+                            .to_string(),
+                        span: self.current().span,
+                    });
+                }
+                let value = self.parse_expression()?;
+                arguments.push(CallArgument::Positional(PositionalArgument {
+                    span: value.span(),
+                    value,
+                }));
+            }
+            if !self.eat(TokenKind::Comma) {
+                break;
+            }
+        }
+        let end = self.expect(TokenKind::RightParen)?;
+        Ok((arguments, end))
+    }
+
     fn parse_postfix_expression(&mut self) -> Result<Expression, ParseError> {
         let mut expr = self.parse_primary_expression()?;
 
         loop {
             if self.at(TokenKind::LeftParen) {
-                let _paren = self.advance();
-                let mut arguments = Vec::new();
-                let mut seen_named = false;
-                let mut named_keys = std::collections::HashSet::new();
-
-                while !self.at(TokenKind::RightParen) && !self.at(TokenKind::EndOfFile) {
-                    if self.at(TokenKind::Identifier) && self.peek(1).kind == TokenKind::Equal {
-                        // Named argument
-                        seen_named = true;
-                        let name = self.expect_identifier()?;
-
-                        let name_str = self.text(name.span);
-                        if !named_keys.insert(name_str.to_string()) {
-                            return Err(ParseError {
-                                message: format!("duplicate named argument '{}'", name_str),
-                                span: name.span,
-                            });
-                        }
-
-                        self.expect(TokenKind::Equal)?;
-                        let value = self.parse_expression()?;
-                        arguments.push(CallArgument::Named(NamedArgument {
-                            span: Span::new(name.span.start, value.span().end),
-                            name,
-                            value,
-                        }));
-                    } else {
-                        // Positional argument
-                        if seen_named {
-                            return Err(ParseError {
-                                message: "positional argument cannot follow named arguments"
-                                    .to_string(),
-                                span: self.current().span,
-                            });
-                        }
-                        let value = self.parse_expression()?;
-                        arguments.push(CallArgument::Positional(PositionalArgument {
-                            span: value.span(),
-                            value,
-                        }));
-                    }
-                    if !self.eat(TokenKind::Comma) {
-                        break;
-                    }
-                }
-                let end = self.expect(TokenKind::RightParen)?;
+                let (arguments, end) = self.parse_call_args()?;
                 expr = Expression::Call(CallExpr {
                     span: Span::new(expr.span().start, end.span.end),
                     callee: Box::new(expr),
+                    type_args: None,
                     arguments,
                 });
             } else if self.at(TokenKind::Dot) {
@@ -712,6 +739,22 @@ impl<'src> Parser<'src> {
                     member,
                 });
             } else if self.at(TokenKind::LeftBracket) {
+                let saved_pos = self.position;
+                if let Some(type_args) = self.try_parse_specialization_args() {
+                    if self.at(TokenKind::LeftParen) {
+                        let (arguments, end) = self.parse_call_args()?;
+                        expr = Expression::Call(CallExpr {
+                            span: Span::new(expr.span().start, end.span.end),
+                            callee: Box::new(expr),
+                            type_args: Some(type_args),
+                            arguments,
+                        });
+                        continue;
+                    }
+                    // Not a call, backtrack to '['
+                    self.position = saved_pos;
+                }
+
                 self.advance();
                 let index_or_start = self.parse_expression()?;
                 if self.eat(TokenKind::DotDot) {
@@ -1148,6 +1191,51 @@ impl<'src> Parser<'src> {
 
     fn expect_identifier(&mut self) -> Result<Token, ParseError> {
         self.expect(TokenKind::Identifier)
+    }
+
+    fn try_parse_specialization_args(&mut self) -> Option<Vec<TypeExpr>> {
+        let saved_pos = self.position;
+        self.advance(); // consume '['
+
+        let mut args = Vec::new();
+        let mut is_specialization = true;
+
+        if self.at(TokenKind::RightBracket) {
+            // empty foo[]
+            self.advance();
+            return Some(args);
+        }
+
+        while !self.at(TokenKind::RightBracket) && !self.at(TokenKind::EndOfFile) {
+            let ty_res = self.parse_type();
+            match ty_res {
+                Ok(ty) => {
+                    // Disambiguate: if it's a lowercase named type, it's likely an expression (variable)
+                    if let TypeExpr::Named(NamedTypeExpr { name, .. }) = &ty {
+                        let text = self.text(name.span);
+                        if text.chars().next().map(|c| c.is_lowercase()).unwrap_or(false) {
+                            is_specialization = false;
+                            break;
+                        }
+                    }
+                    args.push(ty);
+                }
+                Err(_) => {
+                    is_specialization = false;
+                    break;
+                }
+            }
+            if !self.eat(TokenKind::Comma) {
+                break;
+            }
+        }
+
+        if is_specialization && self.eat(TokenKind::RightBracket) {
+            Some(args)
+        } else {
+            self.position = saved_pos;
+            None
+        }
     }
 }
 

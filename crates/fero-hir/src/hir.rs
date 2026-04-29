@@ -32,6 +32,7 @@ pub struct HirFunction {
     pub span: Span,
     pub visibility: Visibility,
     pub name: String,
+    pub generic_parameters: Vec<String>,
     pub parameters: Vec<HirParameter>,
     pub return_type: Option<HirType>,
     pub is_fallible: bool,
@@ -296,6 +297,7 @@ pub struct HirNamedArgument {
 pub struct HirCall {
     pub span: Span,
     pub callee: Box<HirExpression>,
+    pub type_args: Option<Vec<HirType>>,
     pub args: Vec<HirCallArgument>,
 }
 

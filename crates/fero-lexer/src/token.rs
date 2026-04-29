@@ -35,6 +35,7 @@ pub enum TokenKind {
     True,
     False,
     Pub,
+    Type,
 
     // Delimiters
     LeftParen,    // (
@@ -103,6 +104,7 @@ pub fn keyword_kind(text: &str) -> Option<TokenKind> {
         "true" => Some(TokenKind::True),
         "false" => Some(TokenKind::False),
         "pub" => Some(TokenKind::Pub),
+        "type" => Some(TokenKind::Type),
         _ => None,
     }
 }
@@ -137,6 +139,7 @@ impl std::fmt::Display for TokenKind {
             TokenKind::True => "'true'",
             TokenKind::False => "'false'",
             TokenKind::Pub => "'pub'",
+            TokenKind::Type => "'type'",
             TokenKind::LeftParen => "'('",
             TokenKind::RightParen => "')'",
             TokenKind::LeftBrace => "'{'",

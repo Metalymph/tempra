@@ -60,6 +60,11 @@ impl<'src> Lowerer<'src> {
             span: item.span,
             visibility: item.visibility,
             name: self.text(item.name.span),
+            generic_parameters: item
+                .generic_parameters
+                .iter()
+                .map(|p| self.text(p.name.span))
+                .collect(),
             parameters: item
                 .parameters
                 .iter()
@@ -259,6 +264,10 @@ impl<'src> Lowerer<'src> {
             ast::Expression::Call(e) => HirExpression::Call(HirCall {
                 span: e.span,
                 callee: Box::new(self.lower_expression(&e.callee)),
+                type_args: e
+                    .type_args
+                    .as_ref()
+                    .map(|args| args.iter().map(|a| self.lower_type(a)).collect()),
                 args: e
                     .arguments
                     .iter()

@@ -1,5 +1,8 @@
 use std::fmt;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct GenericParamId(pub u32);
+
 /// Semantic type representation for Fero v0.
 ///
 /// This is intentionally small. It covers only the types needed for the
@@ -48,6 +51,8 @@ pub enum Type {
     Result(Box<Type>, Box<Type>),
     /// Magic type for builtin namespaces like fs, os, env, Regex constructors.
     Namespace(std::string::String),
+    /// A generic parameter placeholder (e.g. T)
+    GenericParam { id: GenericParamId, name: std::string::String },
 }
 
 impl Type {
@@ -159,6 +164,7 @@ impl fmt::Display for Type {
             Type::BuiltinError => write!(f, "Error"),
             Type::Result(t, e) => write!(f, "Result[{}, {}]", t, e),
             Type::Namespace(n) => write!(f, "Namespace({})", n),
+            Type::GenericParam { name, .. } => write!(f, "{}", name),
         }
     }
 }

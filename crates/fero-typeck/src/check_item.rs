@@ -15,6 +15,8 @@ pub fn check_item(ctx: &mut TypeContext, item: &mut HirItem) {
 
 /// Check a function body against its declared signature.
 fn check_function(ctx: &mut TypeContext, f: &mut HirFunction) {
+    let sig = ctx.functions.get(&f.name).cloned().expect("Function signature missing");
+    ctx.current_generic_params = sig.generic_params.clone();
     let mut return_type = f
         .return_type
         .as_ref()
@@ -63,6 +65,7 @@ fn check_function(ctx: &mut TypeContext, f: &mut HirFunction) {
     ctx.scopes.pop_scope();
     ctx.current_return_type = None;
     ctx.current_is_fallible = false;
+    ctx.current_generic_params.clear();
 }
 
 /// Register all top-level items so that forward references work.
@@ -70,6 +73,13 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
     for item in items {
         match item {
             HirItem::Function(f) => {
+                let mut generic_params = Vec::new();
+                for name in &f.generic_parameters {
+                    let id = crate::types::GenericParamId(ctx.next_generic_param_id);
+                    ctx.next_generic_param_id += 1;
+                    generic_params.push(crate::context::GenericParam { id, name: name.clone() });
+                }
+                ctx.current_generic_params = generic_params.clone();
                 let params: Vec<(String, Type)> = f
                     .parameters
                     .iter()
@@ -87,11 +97,13 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
                     f.name.clone(),
                     FunctionSignature {
                         visibility: f.visibility,
+                        generic_params,
                         params,
                         return_type,
                         is_fallible: f.is_fallible,
                     },
                 );
+                ctx.current_generic_params.clear();
             }
             HirItem::Struct(s) => {
                 let mut fields = HashMap::new();

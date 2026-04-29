@@ -91,7 +91,7 @@ fn check_is_type(ctx: &mut TypeContext, i: &mut HirIsTypeExpr) -> Type {
     
     if let HirType::Named(span, name) = &i.ty {
         if name.starts_with(|c: char| c.is_lowercase()) {
-            ctx.error("naked binding is not allowed in is", *span);
+            ctx.error("naked binding patterns are not allowed after 'is'", *span);
             return Type::Error;
         }
     }
@@ -114,22 +114,12 @@ fn check_is_pattern(ctx: &mut TypeContext, i: &mut HirExpression) -> Type {
         return Type::Bool;
     }
 
-    // Explicit Restrictions for 'is'
-    match &is_pattern.pattern {
-        HirPattern::Or(span, _) => {
-            ctx.error("or-patterns are not allowed in is", *span);
-        }
-        HirPattern::Wildcard(span) => {
-            ctx.error("wildcard patterns are not allowed in is", *span);
-        }
-        HirPattern::Identifier(span, _) => {
-            ctx.error("naked binding is not allowed in is", *span);
-        }
-        _ => {}
+    if !crate::pattern::pattern_allowed_in_is(ctx, &is_pattern.pattern) {
+        // Restrictions already logged
     }
 
-    // If validate_pattern_type determines this is a Type Test, it returns Some(Type).
-    if let Some(target_ty) = validate_pattern_type(ctx, &val_ty, &mut is_pattern.pattern) {
+    // If crate::pattern::validate_pattern_against_type determines this is a Type Test, it returns Some(Type).
+    if let Some(target_ty) = crate::pattern::validate_pattern_against_type(ctx, &val_ty, &mut is_pattern.pattern) {
         // REWRITE: Transform IsPattern -> IsType
         // This ensures the interpreter uses its unified value_is_type logic.
         let inner = match std::mem::replace(i, HirExpression::Bool(Span::new(0, 0), false)) {
@@ -163,8 +153,8 @@ fn check_is_pattern(ctx: &mut TypeContext, i: &mut HirExpression) -> Type {
                  let is_builtin = matches!(name.as_str(), "Some" | "None" | "Ok" | "Err");
                  
                  // Only report our error if it's not a variant of val_ty and not a built-in.
-                 // Note: validate_pattern_type might have already errored if val_ty was an Enum.
-                 // But if val_ty is not an Enum (e.g. Int), validate_pattern_type returns None silently for EnumCase.
+                 // Note: crate::pattern::validate_pattern_against_type might have already errored if val_ty was an Enum.
+                 // But if val_ty is not an Enum (e.g. Int), crate::pattern::validate_pattern_against_type returns None silently for EnumCase.
                  if !is_variant && !is_builtin && !matches!(val_ty, Type::Enum(_)) {
                      ctx.error(format!("invalid or unknown type in 'is' check: {}", name), *span);
                  }
@@ -175,312 +165,7 @@ fn check_is_pattern(ctx: &mut TypeContext, i: &mut HirExpression) -> Type {
     Type::Bool
 }
 
-fn validate_pattern_type(
-    ctx: &mut TypeContext,
-    val_ty: &Type,
-    pattern: &mut HirPattern,
-) -> Option<Type> {
-    match pattern {
-        HirPattern::Wildcard(_) | HirPattern::Identifier(_, _) => None,
-        HirPattern::EnumCase(span, name, args) => {
-            let span_val = *span;
-            let name_val = name.clone();
-            
-            // 1. Centralized Resolution: Check if the name refers to a Type (Built-in, Struct, or Enum)
-            let resolved_ty = ctx.resolve_type_name(&name_val);
-            if resolved_ty != Type::Unknown {
-                 if args.is_empty() {
-                    if !crate::types::types_compatible(&resolved_ty, val_ty) && *val_ty != Type::Error {
-                         // No error for 'is' tests usually, but Fero's pattern matching can be strict.
-                    }
-                     
-                     // If it resolved to an Enum, we still need to check if the user meant 
-                     // a unit variant of THAT enum vs the enum type itself.
-                     if let Type::Enum(enum_name) = &resolved_ty {
-                         if let Some(info) = ctx.enums.get(enum_name) {
-                             if info.variants.contains_key(&name_val) {
-                                 // Ambiguity: Name is both the Enum type and a Variant name.
-                                 // Fero convention: Variant takes priority if it's a unit variant.
-                                 // But 'if x is EnumName' is a common type test.
-                             }
-                         }
-                     }
 
-                     // If it's a Type Test, we're done here.
-                     // But we should probably rewrite it to a specific TypeTest pattern 
-                     // or keep it as is if the evaluator understands it.
-                     // Actually, if enum_name == name_val, it's explicitly allowed.
-                     if let Type::Enum(enum_name) = val_ty {
-                         if enum_name == &name_val {
-                             return Some(resolved_ty);
-                         }
-                     }
-                     // For built-ins and structs:
-                     if resolved_ty == *val_ty {
-                         return Some(resolved_ty);
-                     }
-
-                     // If it resolves to a type but val_ty is different, 
-                     // we still treat it as a Type Test (which might evaluate to false).
-                     // However, to keep it simple, only return Some if it's likely a type test.
-                     // Part 2.1 requires 'is Int' to work.
-                     if matches!(resolved_ty, Type::Int | Type::String | Type::Bool | Type::Struct(_) | Type::Enum(_) | Type::Never) {
-                         return Some(resolved_ty);
-                     }
-                 }
-                 
-                 // If it's an Enum type but we have arguments, or it didn't match the bare name test,
-                 // fall through to variant matching.
-            }
-
-            // 2. Resolve against user-defined Enum context
-            if let Type::Enum(enum_name) = val_ty {
-                // Extension: Allow 'val is EnumName' as a type test even if parsed as a pattern
-                if args.is_empty() && enum_name == name {
-                    return Some(Type::Enum(enum_name.clone()));
-                }
-                
-                let payloads = ctx.enums.get(enum_name).and_then(|info| info.variants.get(name).cloned());
-                if let Some(payload_tys) = payloads {
-                    // Validate arity
-                    if args.len() != payload_tys.len() {
-                        ctx.error(
-                            format!(
-                                "variant '{}' of enum '{}' expects {} arguments, found {}",
-                                name_val,
-                                enum_name,
-                                payload_tys.len(),
-                                args.len()
-                            ),
-                            span_val,
-                        );
-                        return None;
-                    }
-                    // Validate sub-patterns
-                    for (i, arg_pat) in args.iter_mut().enumerate() {
-                        validate_pattern_type(ctx, &payload_tys[i], arg_pat);
-                    }
-
-                    // REWRITE: Transform EnumCase -> EnumConstructor
-                    // Move args out of current variant
-                    let mut moved_args = Vec::new();
-                    if let HirPattern::EnumCase(_, _, ref mut original_args) = pattern {
-                         moved_args = std::mem::take(original_args);
-                    }
-
-                    *pattern = HirPattern::EnumConstructor(HirEnumConstructorPattern {
-                        span: span_val,
-                        enum_name: enum_name.clone(),
-                        variant_name: name_val,
-                        payloads: moved_args,
-                    });
-                    return None;
-                }
-                let owners = ctx.variant_owners(&name_val);
-                let hint = if !owners.is_empty() {
-                    format!(" (it belongs to: {})", owners.join(", "))
-                } else {
-                    "".to_string()
-                };
-                ctx.error(
-                    format!(
-                        "constructor '{}' does not belong to enum '{}'{}",
-                        name_val, enum_name, hint
-                    ),
-                    span_val,
-                );
-                return None;
-            }
-
-            // 2. Generic Built-ins
-            match name_val.as_str() {
-                "Some" => {
-                    if let Type::Option(inner) = val_ty {
-                        if args.len() == 1 {
-                            validate_pattern_type(ctx, inner, &mut args[0]);
-                            
-                            // Optional: Could rewrite built-ins too, but spec focusing on user-defined enums.
-                            // For v1, resolving user-defined enums is the priority.
-                        } else {
-                            ctx.error("some pattern expects 1 argument", span_val);
-                        }
-                    } else if *val_ty != Type::Error {
-                        ctx.error(
-                            format!("Cannot match {} with 'Some' pattern (expected Option)", val_ty),
-                            span_val,
-                        );
-                    }
-                }
-                "None" => {
-                    if !matches!(val_ty, Type::Option(_)) && *val_ty != Type::Error {
-                        ctx.error(
-                            format!("Cannot match {} with 'None' pattern (expected Option)", val_ty),
-                            span_val,
-                        );
-                    }
-                    if !args.is_empty() {
-                        ctx.error("none pattern expects 0 arguments", span_val);
-                    }
-                }
-                "Ok" => {
-                    if let Type::Result(ok_ty, _) = val_ty {
-                        if args.len() == 1 {
-                            validate_pattern_type(ctx, ok_ty, &mut args[0]);
-                        } else {
-                            ctx.error("ok pattern expects 1 argument", span_val);
-                        }
-                    } else if *val_ty != Type::Error {
-                        ctx.error(
-                            format!("Cannot match {} with 'Ok' pattern (expected Result)", val_ty),
-                            span_val,
-                        );
-                    }
-                }
-                "Err" => {
-                    if let Type::Result(_, err_ty) = val_ty {
-                        if args.len() == 1 {
-                            validate_pattern_type(ctx, err_ty, &mut args[0]);
-                        } else {
-                            ctx.error("err pattern expects 1 argument", span_val);
-                        }
-                    } else if *val_ty != Type::Error {
-                        ctx.error(
-                            format!("Cannot match {} with 'Err' pattern (expected Result)", val_ty),
-                            span_val,
-                        );
-                    }
-                }
-                _ => {
-                    if ctx.variant_to_enums.contains_key(name_val.as_str()) {
-                        // The name is an enum constructor, but for the wrong type
-                        let owners = ctx.variant_owners(&name_val);
-                        ctx.error(
-                            format!(
-                                "constructor '{}' does not belong to type {} (it belongs to: {})",
-                                name_val, val_ty, owners.join(", ")
-                            ),
-                            span_val,
-                        );
-                    } else {
-                        ctx.error(
-                            format!(
-                                "unknown constructor '{}' in pattern for type {}",
-                                name_val, val_ty
-                            ),
-                            span_val,
-                        );
-                    }
-                }
-            }
-            return None;
-        }
-        HirPattern::Literal(span, lit_expr) => {
-            // Pattern literals are immutable here as they are simple constants.
-            let lit_ty = match lit_expr.as_ref() {
-                HirExpression::Integer(_, _) => Type::Int,
-                HirExpression::Float(_, _)   => Type::Float64,
-                HirExpression::String(_, _)  => Type::String,
-                HirExpression::Bool(_, _)    => Type::Bool,
-                _ => Type::Unknown,
-            };
-            if lit_ty != Type::Unknown && *val_ty != Type::Error && *val_ty != lit_ty {
-                ctx.error(
-                    format!("Literal pattern of type {} cannot match scrutinee of type {}", lit_ty, val_ty),
-                    *span,
-                );
-            }
-            return None;
-        }
-        HirPattern::Struct(span, name, fields) => {
-            if let Some(def) = ctx.structs.get(name).cloned() {
-                let struct_ty = Type::Struct(name.clone());
-                if *val_ty != struct_ty && *val_ty != Type::Error {
-                    ctx.error(format!("cannot match {} with struct pattern for {}", val_ty, name), *span);
-                }
-                
-                let mut seen_fields = std::collections::HashSet::new();
-                for (field_name, field_pat) in fields.iter_mut() {
-                    if !seen_fields.insert(field_name.clone()) {
-                        ctx.error(format!("duplicate field '{}' in struct pattern", field_name), *span);
-                    }
-                    if let Some(field_def) = def.fields.get(field_name) {
-                        if let Some(pat) = field_pat {
-                            validate_pattern_type(ctx, &field_def.ty, pat);
-                        }
-                    } else {
-                        ctx.error(format!("struct '{}' does not have a field named '{}'", name, field_name), *span);
-                    }
-                }
-            } else {
-                ctx.error(format!("unknown struct '{}'", name), *span);
-            }
-            return None;
-        }
-        HirPattern::Tuple(span, items) => {
-            if let Type::Tuple(element_types) = val_ty {
-                if element_types.len() != items.len() {
-                    ctx.error(format!("tuple pattern arity mismatch: expected {}, found {}", element_types.len(), items.len()), *span);
-                } else {
-                    for (item_pat, item_ty) in items.iter_mut().zip(element_types.iter()) {
-                        validate_pattern_type(ctx, item_ty, item_pat);
-                    }
-                }
-            } else if *val_ty != Type::Error {
-                ctx.error(format!("cannot match non-tuple type {} with tuple pattern", val_ty), *span);
-            }
-            return None;
-        }
-        HirPattern::Or(_span, alternatives) => {
-            if alternatives.is_empty() {
-                return None;
-            }
-
-            // Rule 4: No Wildcards/Identifiers at top level
-            for alt in alternatives.iter() {
-                if matches!(alt, HirPattern::Wildcard(_) | HirPattern::Identifier(_, _)) {
-                    ctx.error(
-                        "wildcards and bindings are forbidden as direct alternatives in OR-patterns",
-                        alt.span(),
-                    );
-                }
-            }
-
-            // Rule 3: No duplicate alternatives
-            for i in 0..alternatives.len() {
-                for j in i + 1..alternatives.len() {
-                    if patterns_structurally_identical(&alternatives[i], &alternatives[j]) {
-                        ctx.error("duplicate pattern in OR-pattern", alternatives[j].span());
-                    }
-                }
-            }
-
-            let mut all_bindings = Vec::new();
-            for alt in alternatives.iter_mut() {
-                validate_pattern_type(ctx, val_ty, alt);
-
-                let mut bindings = Vec::new();
-                extract_pattern_bindings(ctx, val_ty, alt, &mut bindings);
-                all_bindings.push(bindings);
-            }
-
-            // Rule 2: Binding consistency
-            if !all_bindings.is_empty() {
-                let first = &all_bindings[0];
-                for (i, other) in all_bindings.iter().enumerate().skip(1) {
-                    if !compare_bindings(first, other) {
-                        ctx.error(
-                            "alternatives in OR-pattern must bind the same variables with the same types",
-                            alternatives[i].span(),
-                        );
-                    }
-                }
-            }
-
-            return None;
-        }
-        HirPattern::EnumConstructor(_) => return None,
-    }
-}
 
 fn check_as_optional(ctx: &mut TypeContext, a: &mut HirAsOptionalExpr) -> Type {
     let _ = check_expression(ctx, &mut a.expr, None);
@@ -1566,7 +1251,10 @@ fn check_call(ctx: &mut TypeContext, expr: &mut HirExpression, expected: Option<
     match resolved {
         ResolvedCallee::Function(name) | ResolvedCallee::BuiltinFunction(name) => {
             if let HirExpression::Call(ref mut c) = expr {
-                return check_function_call(ctx, c, &name, expected);
+                let type_args = c.type_args.as_ref().map(|args| {
+                    args.iter().map(|a| ctx.resolve_hir_type(a)).collect()
+                });
+                return check_function_call(ctx, c, &name, type_args, expected);
             }
         }
         ResolvedCallee::EnumConstructor(enum_name, variant_name) => {
@@ -1662,6 +1350,59 @@ fn check_call(ctx: &mut TypeContext, expr: &mut HirExpression, expected: Option<
     unreachable!()
 }
 
+fn match_generic_types(
+    param_ty: &Type,
+    arg_ty: &Type,
+    inferred: &mut std::collections::HashMap<crate::types::GenericParamId, Type>,
+) -> Result<(), ()> {
+    match (param_ty, arg_ty) {
+        (Type::GenericParam { id, .. }, _) => {
+            if let Some(existing) = inferred.get(id) {
+                if existing != arg_ty {
+                    return Err(());
+                }
+            } else {
+                inferred.insert(*id, arg_ty.clone());
+            }
+            Ok(())
+        }
+        (Type::Array(p), Type::Array(a)) => match_generic_types(p, a, inferred),
+        (Type::Slice(p), Type::Slice(a)) => match_generic_types(p, a, inferred),
+        (Type::Option(p), Type::Option(a)) => match_generic_types(p, a, inferred),
+        (Type::Result(p_ok, p_err), Type::Result(a_ok, a_err)) => {
+            match_generic_types(p_ok, a_ok, inferred)?;
+            match_generic_types(p_err, a_err, inferred)
+        }
+        (Type::Tuple(p), Type::Tuple(a)) if p.len() == a.len() => {
+            for (pt, at) in p.iter().zip(a.iter()) {
+                match_generic_types(pt, at, inferred)?;
+            }
+            Ok(())
+        }
+        _ => {
+            if param_ty == arg_ty {
+                Ok(())
+            } else {
+                Err(())
+            }
+        }
+    }
+}
+
+fn substitute_generics(ty: &Type, map: &std::collections::HashMap<crate::types::GenericParamId, Type>) -> Type {
+    match ty {
+        Type::GenericParam { id, .. } => {
+            map.get(id).cloned().unwrap_or_else(|| ty.clone())
+        }
+        Type::Array(inner) => Type::Array(Box::new(substitute_generics(inner, map))),
+        Type::Slice(inner) => Type::Slice(Box::new(substitute_generics(inner, map))),
+        Type::Option(inner) => Type::Option(Box::new(substitute_generics(inner, map))),
+        Type::Result(ok, err) => Type::Result(Box::new(substitute_generics(ok, map)), Box::new(substitute_generics(err, map))),
+        Type::Tuple(elems) => Type::Tuple(elems.iter().map(|e| substitute_generics(e, map)).collect()),
+        _ => ty.clone(),
+    }
+}
+
 fn get_call_arg_mut_legacy<'a>(arg: &'a mut HirCallArgument, ctx: &mut TypeContext) -> &'a mut HirExpression {
     match arg {
         HirCallArgument::Positional(ref mut e) => e,
@@ -1676,6 +1417,7 @@ fn check_function_call(
     ctx: &mut TypeContext,
     c: &mut HirCall,
     func_name: &str,
+    explicit_type_args: Option<Vec<Type>>,
     _expected: Option<&Type>,
 ) -> Type {
     if let Some(builtin_ty) = check_builtin(ctx, func_name, &mut c.args, c.span) {
@@ -1708,8 +1450,6 @@ fn check_function_call(
             }
             HirCallArgument::Named(n) => {
                 if !named_keys.insert(n.name.clone()) {
-                    // Parser already rejects duplicate named args in CallExpr,
-                    // but good to be safe if HIR somehow bypasses it in future.
                     ctx.error(
                         format!("duplicate named argument '{}'", n.name),
                         n.value.span(),
@@ -1743,35 +1483,75 @@ fn check_function_call(
         }
     }
 
-    // Check types and missing arguments
-    for (i, resolved) in resolved_args.iter_mut().enumerate() {
-        let (param_name, param_ty) = &sig.params[i];
+    // Evaluate arguments to infer types
+    let mut arg_types = Vec::new();
+    for resolved in &mut resolved_args {
         match resolved {
             Some(arg_expr) => {
-                let arg_ty = check_expression(ctx, *arg_expr, Some(param_ty));
-                if arg_ty != Type::Error && !types_compatible(param_ty, &arg_ty) {
-                    ctx.error(
-                        format!(
-                            "argument for '{}' in '{}': expected {}, found {}",
-                            param_name, func_name, param_ty, arg_ty
-                        ),
-                        arg_expr.span(),
-                    );
+                let arg_ty = check_expression(ctx, *arg_expr, None);
+                arg_types.push(arg_ty);
+            }
+            None => arg_types.push(Type::Error),
+        }
+    }
+
+    let mut inferred = std::collections::HashMap::new();
+    if let Some(t_args) = explicit_type_args {
+        if t_args.len() != sig.generic_params.len() {
+            ctx.error(format!("function '{}' expects {} type arguments, found {}", func_name, sig.generic_params.len(), t_args.len()), c.span);
+            return Type::Error;
+        }
+        for (param, ty) in sig.generic_params.iter().zip(t_args.into_iter()) {
+            inferred.insert(param.id, ty);
+        }
+    } else {
+        if !sig.generic_params.is_empty() {
+            for (i, (_, param_ty)) in sig.params.iter().enumerate() {
+                if let Some(arg_ty) = arg_types.get(i) {
+                    if *arg_ty != Type::Error {
+                        if match_generic_types(param_ty, arg_ty, &mut inferred).is_err() {
+                            ctx.error(format!("type mismatch during generic inference for '{}'", func_name), c.span);
+                        }
+                    }
                 }
             }
-            None => {
-                ctx.error(
-                    format!(
-                        "missing required argument '{}' for function '{}'",
-                        param_name, func_name
-                    ),
-                    c.span,
-                );
+            for param in &sig.generic_params {
+                if !inferred.contains_key(&param.id) {
+                    ctx.error(format!("cannot infer type for generic parameter '{}'", param.name), c.span);
+                    return Type::Error;
+                }
             }
         }
     }
 
-    sig.return_type
+    // Check types and missing arguments
+    for (i, resolved) in resolved_args.iter_mut().enumerate() {
+        let (param_name, param_ty) = &sig.params[i];
+        let substituted_param_ty = substitute_generics(param_ty, &inferred);
+        let arg_ty = &arg_types[i];
+
+        if resolved.is_some() {
+            if *arg_ty != Type::Error && !crate::types::types_compatible(&substituted_param_ty, arg_ty) {
+                ctx.error(
+                    format!(
+                        "argument for '{}' in '{}': expected {}, found {}",
+                        param_name, func_name, substituted_param_ty, arg_ty
+                    ),
+                    resolved.as_ref().unwrap().span(),
+                );
+            }
+        } else {
+            ctx.error(
+                format!(
+                    "missing required argument '{}' for function '{}'",
+                    param_name, func_name
+                ),
+                c.span,
+            );
+        }
+    }
+
+    substitute_generics(&sig.return_type, &inferred)
 }
 
 fn check_member(ctx: &mut TypeContext, m: &mut HirMember, _expected: Option<&Type>) -> Type {
@@ -1857,208 +1637,25 @@ fn check_block_expr(ctx: &mut TypeContext, block: &mut HirBlock, expected: Optio
     crate::check_stmt::check_block(ctx, block, expected)
 }
 
-fn get_branch_bindings(
+fn build_refinement_from_condition(
     ctx: &mut TypeContext,
     expr: &mut HirExpression,
-) -> (Vec<(String, Type)>, Option<(String, Type)>) {
+) -> crate::pattern::Refinement {
     match expr {
-        HirExpression::IsType(is_expr) => {
-            let mut bindings = Vec::new();
-            let mut narrowed = None;
-            if let HirExpression::Name(_, var_name) = &*is_expr.value {
-                let narrowed_ty = ctx.resolve_hir_type(&is_expr.ty);
-                if narrowed_ty != Type::Unknown {
-                    // Check if variable is in scope to avoid narrowing non-variables
-                    if ctx.scopes.lookup(var_name).is_some() {
-                        narrowed = Some((var_name.clone(), narrowed_ty));
-                    }
-                }
-            }
-            (bindings, narrowed)
-        }
+        HirExpression::IsType(i) => crate::pattern::refinement_from_is_type(ctx, &i.value, &i.ty),
         HirExpression::IsPattern(i) => {
-            let mut bindings = Vec::new();
-            let mut narrowed = None;
             let val_ty = check_expression(ctx, &mut i.value, None);
-
-            // 1. Extract pattern bindings (e.g. 'v' in 'Some(v)')
-            extract_pattern_bindings(ctx, &val_ty, &mut i.pattern, &mut bindings);
-
-            // 2. Narrow the tested value itself if it's a Name
-            if let HirExpression::Name(_, var_name) = &*i.value {
-                if ctx.scopes.lookup(var_name).is_some() {
-                    // Re-bind with the current type (which is 'refined' by the pattern match)
-                    narrowed = Some((var_name.clone(), val_ty.clone()));
-                }
-            }
-            (bindings, narrowed)
+            crate::pattern::refinement_from_is_pattern(ctx, &i.value, &mut i.pattern, val_ty)
         }
         HirExpression::Binary(b) if b.op == HirBinaryOp::And => {
-            let (mut left_binds, left_narrowed) = get_branch_bindings(ctx, &mut b.left);
-            let (mut right_binds, right_narrowed) = get_branch_bindings(ctx, &mut b.right);
-            left_binds.append(&mut right_binds);
-            (left_binds, left_narrowed.or(right_narrowed))
+            let mut left = build_refinement_from_condition(ctx, &mut b.left);
+            let right = build_refinement_from_condition(ctx, &mut b.right);
+            left.bindings.extend(right.bindings);
+            // v2 behavior: keep first narrowing found
+            left.narrowed_value = left.narrowed_value.or(right.narrowed_value);
+            left
         }
-        _ => (Vec::new(), None),
-    }
-}
-
-fn extract_pattern_bindings(ctx: &TypeContext, val_ty: &Type, pattern: &mut HirPattern, out: &mut Vec<(String, Type)>) {
-    match pattern {
-        HirPattern::Identifier(_, name) => {
-            out.push((name.clone(), val_ty.clone()));
-        }
-        HirPattern::EnumConstructor(e) => {
-            if let Type::Enum(enum_name) = val_ty {
-                if enum_name == &e.enum_name {
-                    if let Some(info) = ctx.enums.get(enum_name) {
-                        if let Some(payload_tys) = info.variants.get(&e.variant_name) {
-                            for (arg_pat, arg_ty) in e.payloads.iter_mut().zip(payload_tys.iter()) {
-                                extract_pattern_bindings(ctx, arg_ty, arg_pat, out);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        HirPattern::EnumCase(_, name, args) => {
-            // Built-ins (Some, None, Ok, Err) - still using EnumCase for now
-            match name.as_str() {
-                "Some" => {
-                    if let Type::Option(inner) = val_ty {
-                        if args.len() == 1 {
-                            extract_pattern_bindings(ctx, inner, &mut args[0], out);
-                        }
-                    }
-                }
-                "Ok" => {
-                    if let Type::Result(ok_ty, _) = val_ty {
-                        if args.len() == 1 {
-                            extract_pattern_bindings(ctx, ok_ty, &mut args[0], out);
-                        }
-                    }
-                }
-                "Err" => {
-                    if let Type::Result(_, err_ty) = val_ty {
-                        if args.len() == 1 {
-                            extract_pattern_bindings(ctx, err_ty, &mut args[0], out);
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-        HirPattern::Struct(_, name, fields) => {
-            if let Some(def) = ctx.structs.get(name).cloned() {
-                for (field_name, field_pat) in fields.iter_mut() {
-                    if let Some(field_info) = def.fields.get(field_name) {
-                        if let Some(pat) = field_pat {
-                            extract_pattern_bindings(ctx, &field_info.ty, pat, out);
-                        } else {
-                            // Shorthand binding
-                            out.push((field_name.clone(), field_info.ty.clone()));
-                        }
-                    }
-                }
-            }
-        }
-        HirPattern::Tuple(_, items) => {
-            if let Type::Tuple(element_types) = val_ty {
-                for (item_pat, item_ty) in items.iter_mut().zip(element_types.iter()) {
-                    extract_pattern_bindings(ctx, item_ty, item_pat, out);
-                }
-            }
-        }
-        HirPattern::Wildcard(_) | HirPattern::Literal(_, _) => {}
-        HirPattern::Or(_, alternatives) => {
-            if let Some(first) = alternatives.get_mut(0) {
-                extract_pattern_bindings(ctx, val_ty, first, out);
-            }
-        }
-    }
-}
-
-fn compare_bindings(b1: &[(String, Type)], b2: &[(String, Type)]) -> bool {
-    if b1.len() != b2.len() {
-        return false;
-    }
-    let mut b1_sorted = b1.to_vec();
-    let mut b2_sorted = b2.to_vec();
-    b1_sorted.sort_by(|a, b| a.0.cmp(&b.0));
-    b2_sorted.sort_by(|a, b| a.0.cmp(&b.0));
-
-    for (i, (n1, t1)) in b1_sorted.iter().enumerate() {
-        let (n2, t2) = &b2_sorted[i];
-        if n1 != n2 || t1 != t2 {
-            return false;
-        }
-    }
-    true
-}
-
-fn patterns_structurally_identical(p1: &HirPattern, p2: &HirPattern) -> bool {
-    match (p1, p2) {
-        (HirPattern::Wildcard(_), HirPattern::Wildcard(_)) => true,
-        (HirPattern::Identifier(_, n1), HirPattern::Identifier(_, n2)) => n1 == n2,
-        (HirPattern::Literal(_, e1), HirPattern::Literal(_, e2)) => {
-            // Minimal structural check for literals using their debug representation
-            // Pattern literals in Fero v1 are only Int, String, Bool.
-            format!("{:?}", e1) == format!("{:?}", e2)
-        }
-        (HirPattern::EnumCase(_, n1, a1), HirPattern::EnumCase(_, n2, a2)) => {
-            n1 == n2
-                && a1.len() == a2.len()
-                && a1
-                    .iter()
-                    .zip(a2.iter())
-                    .all(|(p1, p2)| patterns_structurally_identical(p1, p2))
-        }
-        (HirPattern::EnumConstructor(c1), HirPattern::EnumConstructor(c2)) => {
-            c1.enum_name == c2.enum_name
-                && c1.variant_name == c2.variant_name
-                && c1.payloads.len() == c2.payloads.len()
-                && c1
-                    .payloads
-                    .iter()
-                    .zip(c2.payloads.iter())
-                    .all(|(p1, p2)| patterns_structurally_identical(p1, p2))
-        }
-        (HirPattern::Struct(_, n1, f1), HirPattern::Struct(_, n2, f2)) => {
-            if n1 != n2 || f1.len() != f2.len() {
-                return false;
-            }
-            for (fn1, fp1) in f1 {
-                if let Some((_, fp2)) = f2.iter().find(|(fn2, _)| fn1 == fn2) {
-                    match (fp1, fp2) {
-                        (Some(p1), Some(p2)) => {
-                            if !patterns_structurally_identical(p1, p2) {
-                                return false;
-                            }
-                        }
-                        (None, None) => {}
-                        _ => return false,
-                    }
-                } else {
-                    return false;
-                }
-            }
-            true
-        }
-        (HirPattern::Tuple(_, i1), HirPattern::Tuple(_, i2)) => {
-            i1.len() == i2.len()
-                && i1
-                    .iter()
-                    .zip(i2.iter())
-                    .all(|(p1, p2)| patterns_structurally_identical(p1, p2))
-        }
-        (HirPattern::Or(_, a1), HirPattern::Or(_, a2)) => {
-            a1.len() == a2.len()
-                && a1
-                    .iter()
-                    .zip(a2.iter())
-                    .all(|(p1, p2)| patterns_structurally_identical(p1, p2))
-        }
-        _ => false,
+        _ => crate::pattern::Refinement::empty(),
     }
 }
 
@@ -2085,13 +1682,8 @@ fn check_if(ctx: &mut TypeContext, i: &mut HirIf, expected: Option<&Type>) -> Ty
     }
 
     ctx.scopes.push_scope();
-    let (bindings, narrowed) = get_branch_bindings(ctx, &mut i.condition);
-    for (name, ty) in bindings {
-        ctx.scopes.insert(name, ty);
-    }
-    if let Some((name, ty)) = narrowed {
-        ctx.scopes.insert(name, ty);
-    }
+    let refinement = build_refinement_from_condition(ctx, &mut i.condition);
+    refinement.apply(ctx);
 
     let then_ty = crate::check_stmt::check_block(ctx, &mut i.then_block, expected);
     ctx.scopes.pop_scope();
@@ -2115,123 +1707,7 @@ fn check_if(ctx: &mut TypeContext, i: &mut HirIf, expected: Option<&Type>) -> Ty
     }
 }
 
-// ─── Exhaustiveness Groundwork v3 ─────────────────────────────────────────────
-//
-// A pattern space foundation for match exhaustiveness.
-// This model distinguishes between structural space (for reachability)
-// and coverage space (for exhaustiveness).
-//
-// Space::Constructor(String) always represents the top-level case only.
-// Payload subpatterns are ignored at this stage.
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum MatchCoverageKey {
-    Bool(bool),
-    Variant { enum_name: String, variant: String },
-}
-
-impl MatchCoverageKey {
-    fn display(&self) -> String {
-        match self {
-            MatchCoverageKey::Bool(b) => b.to_string(),
-            MatchCoverageKey::Variant { variant, .. } => variant.clone(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Space {
-    Constructor(String),
-    Wildcard,
-    Unknown,
-}
-
-#[derive(Debug, Clone)]
-enum Domain {
-    Bool,
-    Enum(String),
-    Tuple(usize),
-    Struct(String),
-    Unknown,
-}
-
-fn pattern_to_structural_space(pat: &HirPattern) -> Space {
-    match pat {
-        HirPattern::Wildcard(_) | HirPattern::Identifier(_, _) => Space::Wildcard,
-        HirPattern::Literal(_, expr) => {
-            if let HirExpression::Bool(_, b) = expr.as_ref() {
-                Space::Constructor(b.to_string())
-            } else {
-                Space::Unknown
-            }
-        }
-        HirPattern::EnumCase(_, name, _) => Space::Constructor(name.clone()),
-        HirPattern::EnumConstructor(e) => Space::Constructor(e.variant_name.clone()),
-        _ => Space::Unknown,
-    }
-}
-
-fn pattern_to_coverage_space(pat: &HirPattern, has_guard: bool) -> Space {
-    if has_guard {
-        return Space::Unknown;
-    }
-    pattern_to_structural_space(pat)
-}
-
-fn domain_of_type(ty: &Type) -> Domain {
-    match ty {
-        Type::Bool => Domain::Bool,
-        Type::Option(_) => Domain::Enum("Option".to_string()),
-        Type::Result(_, _) => Domain::Enum("Result".to_string()),
-        Type::Enum(name) => Domain::Enum(name.clone()),
-        Type::Tuple(ts) => Domain::Tuple(ts.len()),
-        Type::Struct(name) => Domain::Struct(name.clone()),
-        _ => Domain::Unknown,
-    }
-}
-
-fn cases_of_domain(domain: &Domain, ctx: &TypeContext) -> Option<Vec<MatchCoverageKey>> {
-    match domain {
-        Domain::Bool => Some(vec![MatchCoverageKey::Bool(false), MatchCoverageKey::Bool(true)]),
-        Domain::Enum(name) => {
-            match name.as_str() {
-                "Option" => Some(vec![
-                    MatchCoverageKey::Variant {
-                        enum_name: "Option".to_string(),
-                        variant: "Some".to_string(),
-                    },
-                    MatchCoverageKey::Variant {
-                        enum_name: "Option".to_string(),
-                        variant: "None".to_string(),
-                    },
-                ]),
-                "Result" => Some(vec![
-                    MatchCoverageKey::Variant {
-                        enum_name: "Result".to_string(),
-                        variant: "Ok".to_string(),
-                    },
-                    MatchCoverageKey::Variant {
-                        enum_name: "Result".to_string(),
-                        variant: "Err".to_string(),
-                    },
-                ]),
-                _ => ctx.enums.get(name).map(|info| {
-                    let mut variants: Vec<_> = info
-                        .variants
-                        .keys()
-                        .map(|k| MatchCoverageKey::Variant {
-                            enum_name: name.clone(),
-                            variant: k.clone(),
-                        })
-                        .collect();
-                    variants.sort_by_key(|v| v.display());
-                    variants
-                }),
-            }
-        }
-        Domain::Tuple(_) | Domain::Struct(_) | Domain::Unknown => None,
-    }
-}
 
 fn check_match(ctx: &mut TypeContext, m: &mut HirMatch, expected: Option<&Type>) -> Type {
     let val_ty = check_expression(ctx, &mut m.value, None);
@@ -2240,13 +1716,13 @@ fn check_match(ctx: &mut TypeContext, m: &mut HirMatch, expected: Option<&Type>)
     // ── Coverage Accumulation / Unreachable Detection ───────────────────────
     let mut seen_constructors: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut has_unconditional_wildcard = false;
-    let mut covered_constructors: std::collections::HashSet<MatchCoverageKey> =
+    let mut covered_constructors: std::collections::HashSet<crate::pattern::MatchCoverageKey> =
         std::collections::HashSet::new();
     let mut is_fully_covered = false;
 
     for arm in m.arms.iter_mut() {
         if val_ty != Type::Error {
-            validate_pattern_type(ctx, &val_ty, &mut arm.pattern);
+            crate::pattern::validate_pattern_against_type(ctx, &val_ty, &mut arm.pattern);
         }
 
         let has_guard = arm.guard.is_some();
@@ -2256,13 +1732,13 @@ fn check_match(ctx: &mut TypeContext, m: &mut HirMatch, expected: Option<&Type>)
         };
 
         for sub_pat in sub_patterns {
-            let structural_space = pattern_to_structural_space(&sub_pat);
-            let coverage_space = pattern_to_coverage_space(&sub_pat, has_guard);
+            let structural_space = crate::pattern::pattern_structural_space(&sub_pat);
+            let coverage_space = crate::pattern::pattern_coverage_space(&sub_pat, has_guard);
 
             // 1. Unreachable Detection
             if has_unconditional_wildcard {
                 ctx.error("unreachable match arm", arm.span);
-            } else if let Space::Constructor(name) = &structural_space {
+            } else if let crate::pattern::Space::Constructor(name) = &structural_space {
                 if seen_constructors.contains(name) && !has_guard {
                     ctx.error(
                         format!("duplicate match arm for variant '{}'", name),
@@ -2276,8 +1752,8 @@ fn check_match(ctx: &mut TypeContext, m: &mut HirMatch, expected: Option<&Type>)
             // 2. State Update (Ordering matters: non-guarded arms block same constructors later)
             if !has_guard {
                 match &structural_space {
-                    Space::Wildcard => has_unconditional_wildcard = true,
-                    Space::Constructor(name) => {
+                    crate::pattern::Space::Wildcard => has_unconditional_wildcard = true,
+                    crate::pattern::Space::Constructor(name) => {
                         seen_constructors.insert(name.clone());
                     }
                     _ => {}
@@ -2286,16 +1762,16 @@ fn check_match(ctx: &mut TypeContext, m: &mut HirMatch, expected: Option<&Type>)
 
             // 3. Exhaustiveness / Coverage Contribution
             match &coverage_space {
-                Space::Wildcard => is_fully_covered = true,
-                Space::Constructor(name) => {
+                crate::pattern::Space::Wildcard => is_fully_covered = true,
+                crate::pattern::Space::Constructor(name) => {
                     // Map the top-level constructor string back to a typed key based on the scrutinee type
-                    if let Some(key) = match &domain_of_type(&val_ty) {
-                        Domain::Bool => match name.as_str() {
-                            "true" => Some(MatchCoverageKey::Bool(true)),
-                            "false" => Some(MatchCoverageKey::Bool(false)),
+                    if let Some(key) = match &crate::pattern::domain_of_type(&val_ty) {
+                        crate::pattern::Domain::Bool => match name.as_str() {
+                            "true" => Some(crate::pattern::MatchCoverageKey::Bool(true)),
+                            "false" => Some(crate::pattern::MatchCoverageKey::Bool(false)),
                             _ => None,
                         },
-                        Domain::Enum(enum_name) => Some(MatchCoverageKey::Variant {
+                        crate::pattern::Domain::Enum(enum_name) => Some(crate::pattern::MatchCoverageKey::Variant {
                             enum_name: enum_name.clone(),
                             variant: name.clone(),
                         }),
@@ -2312,7 +1788,7 @@ fn check_match(ctx: &mut TypeContext, m: &mut HirMatch, expected: Option<&Type>)
         ctx.scopes.push_scope();
         if val_ty != Type::Error {
             let mut bindings = Vec::new();
-            extract_pattern_bindings(ctx, &val_ty, &mut arm.pattern, &mut bindings);
+            crate::pattern::extract_pattern_bindings(ctx, &val_ty, &mut arm.pattern, &mut bindings);
             for (name, ty) in bindings {
                 ctx.scopes.insert(name, ty);
             }
@@ -2347,8 +1823,8 @@ fn check_match(ctx: &mut TypeContext, m: &mut HirMatch, expected: Option<&Type>)
 
     // ── Final Exhaustiveness Check ───────────────────────────────────────────
     if val_ty != Type::Error && !is_fully_covered {
-        let domain = domain_of_type(&val_ty);
-        if let Some(expected_cases) = cases_of_domain(&domain, ctx) {
+        let domain = crate::pattern::domain_of_type(&val_ty);
+        if let Some(expected_cases) = crate::pattern::cases_of_domain(&domain, ctx) {
             let missing: Vec<_> = expected_cases
                 .iter()
                 .filter(|k| !covered_constructors.contains(k))
@@ -2356,7 +1832,7 @@ fn check_match(ctx: &mut TypeContext, m: &mut HirMatch, expected: Option<&Type>)
 
             if !missing.is_empty() {
                 match domain {
-                    Domain::Bool => {
+                    crate::pattern::Domain::Bool => {
                         ctx.error(
                             format!(
                                 "non-exhaustive match on Bool: missing arm for {}",
@@ -2365,7 +1841,7 @@ fn check_match(ctx: &mut TypeContext, m: &mut HirMatch, expected: Option<&Type>)
                             m.span,
                         );
                     }
-                    Domain::Enum(name) => {
+                    crate::pattern::Domain::Enum(name) => {
                         let message = if missing.len() == 1 {
                             format!(
                                 "non-exhaustive match on enum '{}': missing arm for variant '{}'",
@@ -2389,7 +1865,7 @@ fn check_match(ctx: &mut TypeContext, m: &mut HirMatch, expected: Option<&Type>)
                 }
             }
         } else {
-            // Domain cannot be proven complete (Tuple, Struct, Unknown)
+            // crate::pattern::Domain cannot be proven complete (Tuple, Struct, Unknown)
             // and we know !is_fully_covered.
             ctx.error(
                 "non-exhaustive match: this domain requires an unguarded catch-all",

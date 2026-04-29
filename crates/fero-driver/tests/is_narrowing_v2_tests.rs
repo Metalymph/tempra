@@ -11,7 +11,7 @@ fn typecheck_snippet(source: &str) -> Option<String> {
 fn test_builtin_narrowing() {
     let source = "
     fn main() {
-        let x: Option<Int> = Some(3);
+        let x = Some(3);
         if x is Int {
             let y = x + 1; // x is Int here
         }
@@ -26,9 +26,9 @@ fn test_struct_narrowing() {
     struct User { name: String }
     struct Admin { name: String }
     fn main() {
-        let x: Result<User, Admin> = Ok(User { name: \"A\" });
+        let x = Ok(User { name: \"A\" });
         if x is User {
-            let s: String = x.name;
+            let s = x.name;
         }
     }
     ";
@@ -39,7 +39,7 @@ fn test_struct_narrowing() {
 fn test_enum_binding() {
     let source = "
     fn main() {
-        let x: Option<Int> = Some(3);
+        let x = Some(3);
         if x is Some(v) {
             expect(v == 3, \"\");
         }
@@ -52,7 +52,7 @@ fn test_enum_binding() {
 fn test_nested_binding() {
     let source = "
     fn main() {
-        let x: Option<(Int, Int)> = Some((1, 2));
+        let x = Some((1, 2));
         if x is Some((a, b)) {
             expect(a == 1, \"\");
         }
@@ -65,7 +65,7 @@ fn test_nested_binding() {
 fn test_nested_narrowing_composition() {
     let source = "
     fn main() {
-        let x: Option<Int> = Some(3);
+        let x = Some(3);
         if x is Some(v) {
             if v is Int {
                 let y = v + 1;
@@ -80,7 +80,7 @@ fn test_nested_narrowing_composition() {
 fn test_no_leakage() {
     let source = "
     fn main() {
-        let x: Option<Int> = Some(3);
+        let x = Some(3);
         if x is Some(v) {
             expect(v == 3, \"\");
         }
@@ -94,7 +94,7 @@ fn test_no_leakage() {
 #[test]
 fn test_no_narrowing_on_non_variable() {
     let source = "
-    fn get() -> Option<Int> { Some(3) }
+    fn get() -> Int? { Some(3) }
     fn main() {
         if get() is Int {
             // No variable is narrowed here, but this is syntactically fine.
@@ -111,19 +111,19 @@ fn test_no_narrowing_on_non_variable() {
 fn test_naked_binding_error() {
     let source = "
     fn main() {
-        let x: Option<Int> = Some(3);
+        let x = Some(3);
         if x is y { }
     }
     ";
     let err = typecheck_snippet(source).unwrap();
-    assert!(err.contains("naked binding is not allowed in is"));
+    assert!(err.contains("naked binding patterns are not allowed after 'is'"));
 }
 
 #[test]
 fn test_or_pattern_error() {
     let source = "
     fn main() {
-        let x: Option<Int> = Some(3);
+        let x = Some(3);
         if x is Some(3) | Some(4) { }
     }
     ";
@@ -135,7 +135,7 @@ fn test_or_pattern_error() {
 fn test_wildcard_error() {
     let source = "
     fn main() {
-        let x: Option<Int> = Some(3);
+        let x = Some(3);
         if x is _ { }
     }
     ";
@@ -147,7 +147,7 @@ fn test_wildcard_error() {
 fn test_grouped_pattern_error() {
     let source = "
     fn main() {
-        let x: Option<Int> = Some(3);
+        let x = Some(3);
         // Wait, Fero parser might not support grouped patterns,
         // so this might result in a parse error.
         if x is (3) { }

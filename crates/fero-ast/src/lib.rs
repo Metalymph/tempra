@@ -92,6 +92,7 @@ pub struct FunctionItem {
     pub span: Span,
     pub visibility: Visibility,
     pub name: Token,
+    pub generic_parameters: Vec<GenericParameter>,
     pub parameters: Vec<Parameter>,
     pub return_type: Option<TypeExpr>,
     pub is_fallible: bool,
@@ -104,6 +105,12 @@ pub struct Parameter {
     pub name: Token,
     pub ty: TypeExpr,
     pub is_inout: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct GenericParameter {
+    pub span: Span,
+    pub name: Token,
 }
 
 // ----------------------------------------------------------------------------
@@ -541,6 +548,7 @@ pub struct NamedArgument {
 pub struct CallExpr {
     pub span: Span,
     pub callee: Box<Expression>,
+    pub type_args: Option<Vec<TypeExpr>>,
     pub arguments: Vec<CallArgument>,
 }
 
@@ -607,6 +615,7 @@ pub struct CommandExpr {
     pub callee: Token, // usually the `cmd` identifier in v0
     pub arguments: Vec<Expression>,
 }
+
 
 // ----------------------------------------------------------------------------
 // Patterns

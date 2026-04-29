@@ -70,9 +70,9 @@ pub fn check_statement(ctx: &mut TypeContext, stmt: &mut HirStatement, expected:
                 };
                 ctx.error("return statement outside of function", span);
             }
-            Type::Unit
+            Type::Never
         }
-        HirStatement::Break(_) | HirStatement::Continue(_) => Type::Unit,
+        HirStatement::Break(_) | HirStatement::Continue(_) => Type::Never,
         HirStatement::For(f) => {
             let iter_ty = check_expression(ctx, &mut f.iterable, None);
             let elem_ty = match &iter_ty {

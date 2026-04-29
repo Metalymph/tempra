@@ -42,6 +42,130 @@ fn test_as_optional_success() {
 }
 
 #[test]
+fn test_generic_function_inference() {
+    expect_ok(
+        r#"
+        fn identity(type T, value: T) -> T {
+            return value
+        }
+
+        fn main() {
+            let x = identity(42);
+            let y = identity("hello");
+            let z = identity(true);
+        }
+    "#,
+    );
+}
+
+#[test]
+fn test_generic_function_specialization() {
+    expect_ok(
+        r#"
+        fn identity(type T, value: T) -> T {
+            return value
+        }
+
+        fn main() {
+            let x = identity[Int](42);
+            let y = identity[String]("hello");
+        }
+    "#,
+    );
+}
+
+#[test]
+fn test_generic_function_specialization_mismatch() {
+    expect_err(
+        r#"
+        fn identity(type T, value: T) -> T {
+            return value
+        }
+
+        fn main() {
+            let x = identity[String](42);
+        }
+    "#,
+    );
+}
+
+#[test]
+fn test_recursive_substitution() {
+    expect_ok(
+        r#"
+        fn identity(type T, x: T) -> T {
+            return x
+        }
+
+        fn main() {
+            let a = identity[(Int, String)]((1, "x"));
+        }
+    "#,
+    );
+}
+
+#[test]
+fn test_nested_inference() {
+    expect_ok(
+        r#"
+        fn identity(type T, value: T) -> T {
+            return value
+        }
+        fn wrap(type T, x: T) -> T {
+            return x
+        }
+
+        fn main() {
+            let x = wrap(identity(1));
+        }
+    "#,
+    );
+}
+
+#[test]
+fn test_inference_conflict() {
+    expect_err(
+        r#"
+        fn pair(type T, a: T, b: T) {}
+
+        fn main() {
+            pair(1, "x");
+        }
+    "#,
+    );
+}
+
+#[test]
+fn test_specialization_arity_mismatch() {
+    expect_err(
+        r#"
+        fn identity(type T, value: T) -> T {
+            return value
+        }
+
+        fn main() {
+            let x = identity[Int, String](1);
+        }
+    "#,
+    );
+}
+
+#[test]
+fn test_semantic_identity_isolation() {
+    expect_ok(
+        r#"
+        fn f(type T, x: T) -> T { return x }
+        fn g(type T, x: T) -> T { return x }
+
+        fn main() {
+            let a = f(1);
+            let b = g("s");
+        }
+    "#,
+    );
+}
+
+#[test]
 fn test_as_forced_success() {
     expect_ok(
         r#"
@@ -1662,6 +1786,7 @@ fn test_match_struct_ok() {
             let u = User { name: "L", age: 30 };
             let n = match u {
                 User { name, age } => name,
+                _ => "default",
             };
         }
     "#);
@@ -1674,9 +1799,11 @@ fn test_match_tuple_ok() {
             let t = ("hello", 42);
             let s = match t {
                 (msg, val) => msg,
+                _ => "default",
             };
             let v = match t {
                 (_, val) => val,
+                _ => 0,
             };
         }
     "#);

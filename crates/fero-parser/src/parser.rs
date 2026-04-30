@@ -471,17 +471,28 @@ impl<'src> Parser<'src> {
         } else if self.at(TokenKind::LeftParen) {
             let start = self.advance();
             let mut elements = Vec::new();
+            let mut trailing_comma = false;
             while !self.at(TokenKind::RightParen) && !self.at(TokenKind::EndOfFile) {
                 elements.push(self.parse_type()?);
-                if !self.eat(TokenKind::Comma) {
+                if self.eat(TokenKind::Comma) {
+                    trailing_comma = true;
+                } else {
                     break;
                 }
             }
             let end = self.expect(TokenKind::RightParen)?;
-            Ok(TypeExpr::Tuple(TupleTypeExpr {
-                span: Span::new(start.span.start, end.span.end),
-                elements,
-            }))
+            if elements.len() == 1 && !trailing_comma {
+                // It's a grouped type, just return the inner type but with the outer span
+                let inner = elements.remove(0);
+                // We don't have a Group variant in TypeExpr, so we just return the inner one.
+                // This is fine as parentheses are just for grouping here.
+                Ok(inner)
+            } else {
+                Ok(TypeExpr::Tuple(TupleTypeExpr {
+                    span: Span::new(start.span.start, end.span.end),
+                    elements,
+                }))
+            }
         } else {
             let name = self.expect_identifier()?;
             let mut ty = TypeExpr::Named(NamedTypeExpr {

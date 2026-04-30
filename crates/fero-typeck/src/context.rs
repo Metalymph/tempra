@@ -58,7 +58,8 @@ pub struct TypeContext {
     pub errors: Vec<TypeError>,
     pub current_return_type: Option<Type>,
     pub current_is_fallible: bool,
-    pub current_generic_params: Vec<GenericParam>,
+    pub current_generic_params: Vec<GenericParamId>,
+    pub current_generic_params_info: Vec<GenericParam>,
     pub next_generic_param_id: u32,
 }
 
@@ -74,6 +75,7 @@ impl TypeContext {
             current_return_type: None,
             current_is_fallible: false,
             current_generic_params: Vec::new(),
+            current_generic_params_info: Vec::new(),
             next_generic_param_id: 0,
         }
     }
@@ -88,7 +90,7 @@ impl TypeContext {
         if base != Type::Unknown {
             return base;
         }
-        if let Some(param) = self.current_generic_params.iter().find(|p| p.name == name) {
+        if let Some(param) = self.current_generic_params_info.iter().find(|p| p.name == name) {
             return Type::GenericParam { id: param.id, name: name.to_string() };
         }
         if self.structs.contains_key(name) {
@@ -152,11 +154,18 @@ impl TypeContext {
         if let Some(Type::Enum(expected_name, _)) = expected {
             if candidates.contains(expected_name) {
                 return Ok(expected_name.clone());
+            } else {
+                return Err(format!("constructor '{}' does not belong to enum '{}'", variant, expected_name));
             }
         }
 
         if candidates.len() == 1 {
-            Ok(candidates[0].clone())
+            let enum_name = candidates[0].clone();
+            let info = &self.enums[&enum_name];
+            if !info.generic_params.is_empty() && expected.is_none() {
+                return Err(format!("cannot infer generic enum type for constructor '{}'; add a type annotation", variant));
+            }
+            Ok(enum_name)
         } else {
             let mut sorted = candidates.clone();
             sorted.sort();

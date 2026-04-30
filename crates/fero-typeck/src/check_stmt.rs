@@ -32,14 +32,18 @@ pub fn check_statement(ctx: &mut TypeContext, stmt: &mut HirStatement, expected:
                 }
                 ctx.scopes.insert(l.name.clone(), expected);
             } else {
-                if matches!(&l.value, HirExpression::Name(_, n) if n == "None") {
+                ctx.scopes.insert(l.name.clone(), value_ty.clone());
+            }
+
+            // Leakage check
+            for param_id in value_ty.get_generic_params() {
+                if !ctx.current_generic_params.contains(&param_id) {
                     ctx.error(
-                    "ambiguous 'None' without Option context; use it where an Option? is expected"
-                            .to_string(),
+                        format!("cannot infer generic type for '{}'; add a type annotation", l.name),
                         l.value.span(),
                     );
+                    break;
                 }
-                ctx.scopes.insert(l.name.clone(), value_ty);
             }
             Type::Unit
         }
@@ -56,14 +60,18 @@ pub fn check_statement(ctx: &mut TypeContext, stmt: &mut HirStatement, expected:
                 }
                 ctx.scopes.insert(v.name.clone(), expected);
             } else {
-                if matches!(&v.value, HirExpression::Name(_, n) if n == "None") {
+                ctx.scopes.insert(v.name.clone(), value_ty.clone());
+            }
+
+            // Leakage check
+            for param_id in value_ty.get_generic_params() {
+                if !ctx.current_generic_params.contains(&param_id) {
                     ctx.error(
-                    "ambiguous 'None' without Option context; use it where an Option? is expected"
-                            .to_string(),
+                        format!("cannot infer generic type for '{}'; add a type annotation", v.name),
                         v.value.span(),
                     );
+                    break;
                 }
-                ctx.scopes.insert(v.name.clone(), value_ty);
             }
             Type::Unit
         }

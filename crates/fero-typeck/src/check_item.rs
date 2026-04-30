@@ -16,7 +16,8 @@ pub fn check_item(ctx: &mut TypeContext, item: &mut HirItem) {
 /// Check a function body against its declared signature.
 fn check_function(ctx: &mut TypeContext, f: &mut HirFunction) {
     let sig = ctx.functions.get(&f.name).cloned().expect("Function signature missing");
-    ctx.current_generic_params = sig.generic_params.clone();
+    ctx.current_generic_params = sig.generic_params.iter().map(|p| p.id).collect();
+    ctx.current_generic_params_info = sig.generic_params.clone();
     let mut return_type = f
         .return_type
         .as_ref()
@@ -79,7 +80,8 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
                     ctx.next_generic_param_id += 1;
                     generic_params.push(crate::context::GenericParam { id, name: p.name.clone() });
                 }
-                ctx.current_generic_params = generic_params.clone();
+                ctx.current_generic_params = generic_params.iter().map(|p| p.id).collect();
+                ctx.current_generic_params_info = generic_params.clone();
                 let params: Vec<(String, Type)> = f
                     .parameters
                     .iter()
@@ -112,7 +114,8 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
                     ctx.next_generic_param_id += 1;
                     generic_params.push(crate::context::GenericParam { id, name: p.name.clone() });
                 }
-                ctx.current_generic_params = generic_params.clone();
+                ctx.current_generic_params = generic_params.iter().map(|p| p.id).collect();
+                ctx.current_generic_params_info = generic_params.clone();
 
                 let mut fields = HashMap::new();
                 let mut field_order = Vec::new();
@@ -146,7 +149,8 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
                     ctx.next_generic_param_id += 1;
                     generic_params.push(crate::context::GenericParam { id, name: p.name.clone() });
                 }
-                ctx.current_generic_params = generic_params.clone();
+                ctx.current_generic_params = generic_params.iter().map(|p| p.id).collect();
+                ctx.current_generic_params_info = generic_params.clone();
 
                 // Pre-insert the enum to allow self-referential variants
                 ctx.enums.insert(

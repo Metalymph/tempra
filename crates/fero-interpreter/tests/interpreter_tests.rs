@@ -51,13 +51,14 @@ fn test_as_optional_option_casts() {
 fn test_as_optional_result_casts() {
     let source = r#"
     fn main() {
-        let x = Ok("hello")
-        let y = x as? String!
-        expect(y is (String!)?)
+        let x: String! = Ok("hello")
+        let y = x as? String!;
+        let ok = y is (String!)?
+        expect(ok)
         expect(y == Some(Ok("hello")))
 
-        let a = Ok(123)
-        let b = a as? String!
+        let a: Int! = Ok(123)
+        let b = a as? String!;
         expect(b == None)
         "ok"
     }

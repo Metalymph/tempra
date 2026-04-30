@@ -234,7 +234,7 @@ fn test_is_pattern_some_binding() {
     expect_ok(
         r#"
         fn main() {
-            let x = Some("hello");
+            let x: String? = Some("hello");
             if x is Some(v) {
                 let l = v.len();
             }
@@ -248,9 +248,8 @@ fn test_is_pattern_err_binding() {
     expect_ok(
         r#"
         fn main() {
-            let r = Err("error");
-            if r is Err(e) {
-                let l = e.len();
+            if Err("fail") as! Result(Int, String) is Err(e) {
+                let s = e.len();
             }
         }
     "#,
@@ -263,9 +262,7 @@ fn test_is_pattern_isolation() {
         r#"
         fn main() {
             let x = 1;
-            let y = Some("hello");
-
-            if y is Some(x) {
+            if Some("inner") as! String? is Some(x) {
                 let l = x.len(); // inner x is String
             }
             let a = x + 1; // outer x is Int
@@ -293,9 +290,9 @@ fn test_is_pattern_naked_foo_rejected() {
     expect_err(
         r#"
         fn main() {
-            let value = "hello";
-            if value is foo {
-                print("foo");
+            let x: Int? = Some(1);
+            if x is Some {
+                print("ok")
             }
         }
     "#,
@@ -1203,7 +1200,7 @@ fn test_option_some_string_typeck() {
     expect_ok(
         r#"
         fn main() {
-            let x = Some("hello")
+            let x: String? = Some("hello")
             print(x)
         }
     "#,
@@ -1306,7 +1303,7 @@ fn test_is_operator_option_typeck() {
     expect_ok(
         r#"
         fn main() {
-            let x = Some(1)
+            let x: Int? = Some(1)
             expect(x is Int?)
         }
     "#,
@@ -1318,7 +1315,7 @@ fn test_is_operator_result_typeck() {
     expect_ok(
         r#"
         fn main() {
-            let x = Ok("hello")
+            let x: String! = Ok("hello")
             expect(x is String!)
         }
     "#,
@@ -1330,7 +1327,7 @@ fn test_match_option() {
     expect_ok(
         r#"
         fn main() {
-            let x = Some("hello");
+            let x: String? = Some("hello");
             let y = match x {
                 Some(v) => v,
                 None => "default",
@@ -1345,7 +1342,7 @@ fn test_match_result() {
     expect_ok(
         r#"
         fn main() {
-            let r = Ok("hello");
+            let r: String! = Ok("hello");
             let y = match r {
                 Ok(v) => v,
                 Err(e) => "fallback",
@@ -1360,7 +1357,7 @@ fn test_match_wildcard() {
     expect_ok(
         r#"
         fn main() {
-            let x = Some("hello");
+            let x: String? = Some("hello");
             let y = match x {
                 _ => "anything",
             };
@@ -1374,7 +1371,7 @@ fn test_match_binding() {
     expect_ok(
         r#"
         fn main() {
-            let x = Some("hello");
+            let x: String? = Some("hello");
             let y = match x {
                 v => v,
             };
@@ -1388,7 +1385,7 @@ fn test_match_incompatible_arms() {
     expect_err(
         r#"
         fn main() {
-            let x = Some("hello");
+            let x: String? = Some("hello");
             let y = match x {
                 Some(v) => v,
                 None => 123,
@@ -1404,7 +1401,7 @@ fn test_match_scope_isolation() {
         r#"
         fn main() {
             let x = "outer";
-            let y = match Some("inner") {
+            let y = match Some("inner") as! String? {
                 Some(x) => x,
                 None => "none",
             };
@@ -1420,7 +1417,7 @@ fn test_match_scope_isolation() {
 fn test_match_exhaustive_option_some_none() {
     expect_ok(r#"
         fn main() {
-            let x = Some("hello");
+            let x: String? = Some("hello");
             let y = match x {
                 Some(v) => v,
                 None => "default",
@@ -1433,7 +1430,7 @@ fn test_match_exhaustive_option_some_none() {
 fn test_match_exhaustive_option_wildcard() {
     expect_ok(r#"
         fn main() {
-            let x = Some("hello");
+            let x: String? = Some("hello");
             let y = match x {
                 Some(v) => v,
                 _ => "default",
@@ -1446,7 +1443,7 @@ fn test_match_exhaustive_option_wildcard() {
 fn test_match_exhaustive_option_binding_catchall() {
     expect_ok(r#"
         fn main() {
-            let x = Some("hello");
+            let x: String? = Some("hello");
             let y = match x {
                 Some(v) => v,
                 other => "default",
@@ -1459,7 +1456,7 @@ fn test_match_exhaustive_option_binding_catchall() {
 fn test_match_nonexhaustive_option_missing_none() {
     expect_err(r#"
         fn main() {
-            let x = Some("hello");
+            let x: String? = Some("hello");
             let y = match x {
                 Some(v) => v,
             };
@@ -1471,7 +1468,7 @@ fn test_match_nonexhaustive_option_missing_none() {
 fn test_match_nonexhaustive_option_missing_some() {
     expect_err(r#"
         fn main() {
-            let x = Some("hello");
+            let x: String? = Some("hello");
             let y = match x {
                 None => "default",
             };
@@ -1483,7 +1480,7 @@ fn test_match_nonexhaustive_option_missing_some() {
 fn test_match_duplicate_none_arm() {
     expect_err(r#"
         fn main() {
-            let x = Some("hello");
+            let x: String? = Some("hello");
             let y = match x {
                 None => "a",
                 None => "b",
@@ -1497,7 +1494,7 @@ fn test_match_duplicate_none_arm() {
 fn test_match_unreachable_after_wildcard() {
     expect_err(r#"
         fn main() {
-            let x = Some("hello");
+            let x: String? = Some("hello");
             let y = match x {
                 _ => "a",
                 None => "b",
@@ -1510,7 +1507,7 @@ fn test_match_unreachable_after_wildcard() {
 fn test_match_unreachable_after_binding_catchall() {
     expect_err(r#"
         fn main() {
-            let x = Some("hello");
+            let x: String? = Some("hello");
             let y = match x {
                 other => "a",
                 None => "b",
@@ -1523,7 +1520,7 @@ fn test_match_unreachable_after_binding_catchall() {
 fn test_match_exhaustive_result_ok_err() {
     expect_ok(r#"
         fn main() {
-            let r = Ok("hello");
+            let r: String! = Ok("hello");
             let y = match r {
                 Ok(v) => v,
                 Err(e) => "fallback",
@@ -1536,7 +1533,7 @@ fn test_match_exhaustive_result_ok_err() {
 fn test_match_nonexhaustive_result_missing_err() {
     expect_err(r#"
         fn main() {
-            let r = Ok("hello");
+            let r: String! = Ok("hello");
             let y = match r {
                 Ok(v) => v,
             };
@@ -1548,7 +1545,7 @@ fn test_match_nonexhaustive_result_missing_err() {
 fn test_match_duplicate_ok_arm() {
     expect_err(r#"
         fn main() {
-            let r = Ok("hello");
+            let r: String! = Ok("hello");
             let y = match r {
                 Ok(v) => v,
                 Ok(w) => w,
@@ -1562,7 +1559,7 @@ fn test_match_duplicate_ok_arm() {
 fn test_match_result_catchall_first_unreachable() {
     expect_err(r#"
         fn main() {
-            let r = Ok("hello");
+            let r: String! = Ok("hello");
             let y = match r {
                 x => "fallback",
                 Err(e) => "never",
@@ -1645,7 +1642,7 @@ fn test_match_literal_type_mismatch() {
 fn test_is_uppercase_constructor_pattern_ok() {
     expect_ok(r#"
         fn main() {
-            let x = Some("hello");
+            let x: String? = Some("hello");
             if x is Some(v) {
                 let l = v.len();
             }
@@ -1670,7 +1667,7 @@ fn test_match_constructor_hardening() {
     // Should FAIL now because foo(a) is not valid for Option
     expect_err(r#"
         fn main() {
-            let x = Some(1);
+            let x: Int? = Some(1);
             let y = match x {
                 foo(a) => 1,
                 _ => 0,
@@ -1696,7 +1693,7 @@ fn test_match_bare_binding_remains_binding() {
 fn test_match_uppercase_fallback_works() {
     expect_ok(r#"
         fn main() {
-            let x = Some(1);
+            let x: Int? = Some(1);
             let y = match x {
                 None => 0,
                 Some(v) => v,
@@ -1721,7 +1718,7 @@ fn test_is_constructor_hardening() {
     // Should FAIL now because some_ctor(y) is not valid for Option
     expect_err(r#"
         fn main() {
-            let x = Some(1);
+            let x: Int? = Some(1);
             if x is some_ctor(y) { }
         }
     "#);
@@ -1813,7 +1810,7 @@ fn test_match_tuple_ok() {
 fn test_is_none_fallback_works() {
     expect_ok(r#"
         fn main() {
-            let x = Some(1);
+            let x: Int? = Some(1);
             if x is None { }
         }
     "#);

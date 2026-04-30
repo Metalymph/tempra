@@ -92,6 +92,41 @@ impl Type {
         matches!(self, Type::Float32 | Type::Float64)
     }
 
+    pub fn contains_generic_param(&self) -> bool {
+        match self {
+            Type::Array(inner) | Type::Slice(inner) | Type::Option(inner) => inner.contains_generic_param(),
+            Type::Tuple(elems) => elems.iter().any(|e| e.contains_generic_param()),
+            Type::Struct(_, args) | Type::Enum(_, args) => args.iter().any(|a| a.contains_generic_param()),
+            Type::Result(ok, err) => ok.contains_generic_param() || err.contains_generic_param(),
+            Type::GenericParam { .. } => true,
+            _ => false,
+        }
+    }
+
+    pub fn get_generic_params(&self) -> Vec<GenericParamId> {
+        let mut params = Vec::new();
+        match self {
+            Type::Array(inner) | Type::Slice(inner) | Type::Option(inner) => params.extend(inner.get_generic_params()),
+            Type::Tuple(elems) => {
+                for e in elems {
+                    params.extend(e.get_generic_params());
+                }
+            }
+            Type::Struct(_, args) | Type::Enum(_, args) => {
+                for a in args {
+                    params.extend(a.get_generic_params());
+                }
+            }
+            Type::Result(ok, err) => {
+                params.extend(ok.get_generic_params());
+                params.extend(err.get_generic_params());
+            }
+            Type::GenericParam { id, .. } => params.push(*id),
+            _ => {}
+        }
+        params
+    }
+
     pub fn is_printable(&self) -> bool {
         matches!(
             self,
@@ -217,6 +252,8 @@ pub fn resolve_named_type(name: &str) -> Type {
         "Regex" => Type::Regex,
         "Error" => Type::BuiltinError,
         "Never" => Type::Never,
+        "Option" => Type::Option(Box::new(Type::Unknown)),
+        "Result" => Type::Result(Box::new(Type::Unknown), Box::new(Type::Unknown)),
         _ => Type::Unknown, // caller decides if this is struct/enum
     }
 }

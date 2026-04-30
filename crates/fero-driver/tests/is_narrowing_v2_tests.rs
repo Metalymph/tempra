@@ -11,7 +11,7 @@ fn typecheck_snippet(source: &str) -> Option<String> {
 fn test_builtin_narrowing() {
     let source = "
     fn main() {
-        let x = Some(3);
+        let x: Int? = Some(3);
         if x is Int {
             let y = x + 1; // x is Int here
         }
@@ -26,7 +26,7 @@ fn test_struct_narrowing() {
     struct User { name: String }
     struct Admin { name: String }
     fn main() {
-        let x = Ok(User { name: \"A\" });
+        let x: Result(User, Error) = Ok(User { name: \"A\" });
         if x is User {
             let s = x.name;
         }
@@ -39,7 +39,7 @@ fn test_struct_narrowing() {
 fn test_enum_binding() {
     let source = "
     fn main() {
-        let x = Some(3);
+        let x: Int? = Some(3);
         if x is Some(v) {
             expect(v == 3, \"\");
         }
@@ -52,7 +52,7 @@ fn test_enum_binding() {
 fn test_nested_binding() {
     let source = "
     fn main() {
-        let x = Some((1, 2));
+        let x: (Int, Int)? = Some((1, 2));
         if x is Some((a, b)) {
             expect(a == 1, \"\");
         }
@@ -65,7 +65,7 @@ fn test_nested_binding() {
 fn test_nested_narrowing_composition() {
     let source = "
     fn main() {
-        let x = Some(3);
+        let x: Int? = Some(3);
         if x is Some(v) {
             if v is Int {
                 let y = v + 1;

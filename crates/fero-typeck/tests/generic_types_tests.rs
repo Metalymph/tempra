@@ -126,3 +126,160 @@ fn test_generic_enum_ambiguity() {
     assert!(!errors.is_empty(), "Expected ambiguity error");
     assert!(errors[0].contains("ambiguous constructor 'Some'"));
 }
+
+#[test]
+fn test_generic_enum_no_expected_type() {
+    let source = r#"
+        enum Maybe(type T) { None, Some(T) }
+        fn main() {
+            let x = Some(1)
+        }
+    "#;
+    let errors = check_program(source);
+    assert!(!errors.is_empty(), "Expected error for missing expected type");
+    assert!(errors.iter().any(|e| e.contains("cannot infer generic enum type")));
+}
+
+#[test]
+fn test_generic_enum_nullary_success() {
+    let source = r#"
+        enum Maybe(type T) { None, Some(T) }
+        fn main() {
+            let x: Maybe(Int) = None
+        }
+    "#;
+    let errors = check_program(source);
+    assert!(errors.is_empty(), "Expected successful nullary resolution");
+}
+
+#[test]
+fn test_generic_enum_nullary_no_expected_type() {
+    let source = r#"
+        enum Maybe(type T) { None, Some(T) }
+        fn main() {
+            let x = None
+        }
+    "#;
+    let errors = check_program(source);
+    assert!(!errors.is_empty(), "Expected error for missing expected type for nullary");
+    assert!(errors.iter().any(|e| e.contains("cannot infer generic enum type")));
+}
+
+#[test]
+fn test_generic_struct_literal_no_args() {
+    let source = r#"
+        struct Box(type T) { value: T }
+        fn main() {
+            let b = Box { value: 1 }
+        }
+    "#;
+    let errors = check_program(source);
+    assert!(!errors.is_empty(), "Expected error for missing type arguments on struct literal");
+    assert!(errors.iter().any(|e| e.contains("requires 1 type argument")));
+}
+
+#[test]
+fn test_generic_struct_literal_arity_mismatch() {
+    let source = r#"
+        struct Box(type T) { value: T }
+        fn main() {
+            let b = Box(Int, String) { value: 1 }
+        }
+    "#;
+    let errors = check_program(source);
+    assert!(!errors.is_empty(), "Expected error for type argument arity mismatch");
+    assert!(errors.iter().any(|e| e.contains("requires 1 type argument")));
+}
+
+#[test]
+fn test_generic_struct_nested_fail() {
+    let source = r#"
+        struct Box(type T) { value: T }
+        struct Pair(type A, type B) { first: A, second: B }
+        fn main() {
+            let p: Pair(Int, Box(String)) = Pair(Int, Box(String)) {
+                first: 1,
+                second: Box(String) { value: 42 }
+            }
+        }
+    "#;
+    let errors = check_program(source);
+    assert!(!errors.is_empty(), "Expected nested type mismatch");
+    assert!(errors.iter().any(|e| e.contains("expected String, found Int")));
+}
+
+#[test]
+fn test_generic_enum_pattern_success() {
+    let source = r#"
+        enum Maybe(type T) { None, Some(T) }
+        fn unwrap_or(type T, value: Maybe(T), fallback: T) -> T {
+            match value {
+                Some(v) => v,
+                None => fallback,
+            }
+        }
+        fn main() {
+            let x: Maybe(Int) = Some(1)
+            let y = unwrap_or[Int](x, 0)
+        }
+    "#;
+    let errors = check_program(source);
+    assert!(errors.is_empty(), "Expected no errors in generic pattern matching, found: {:?}", errors);
+}
+
+#[test]
+fn test_generic_enum_pattern_mismatch() {
+    let source = r#"
+        enum Maybe(type T) { None, Some(T) }
+        fn unwrap_or(type T, value: Maybe(T), fallback: T) -> T {
+            match value {
+                Some(v) => v,
+                None => fallback,
+            }
+        }
+        fn main() {
+            let x: Maybe(Int) = Some(1)
+            let y = unwrap_or[Int](x, "not an int")
+        }
+    "#;
+    let errors = check_program(source);
+    assert!(!errors.is_empty(), "Expected type mismatch in generic function call");
+    assert!(errors.iter().any(|e| e.contains("expected Int, found String")));
+}
+
+#[test]
+fn test_generic_enum_is_narrowing() {
+    let source = r#"
+        enum Maybe(type T) { None, Some(T) }
+        fn main() {
+            let x: Maybe(Int) = Some(1)
+            if x is Some(v) {
+                let y: Int = v
+            }
+        }
+    "#;
+    let errors = check_program(source);
+    assert!(errors.is_empty(), "Expected no errors in generic 'is' narrowing, found: {:?}", errors);
+}
+
+#[test]
+fn test_generic_enum_exhaustiveness() {
+    let source = r#"
+        enum Maybe(type T) { None, Some(T) }
+        fn main() {
+            let x: Maybe(Int) = Some(1)
+            let y = match x {
+                Some(v) => v,
+                None => 0,
+            }
+            
+            let s: Maybe(String) = None
+            let z = match s {
+                Some(v) => v,
+                None => "empty",
+            }
+        }
+    "#;
+    let errors = check_program(source);
+    assert!(errors.is_empty(), "Expected no errors in generic exhaustiveness, found: {:?}", errors);
+}

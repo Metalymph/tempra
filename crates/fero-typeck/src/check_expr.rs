@@ -175,22 +175,20 @@ fn check_is_pattern(ctx: &mut TypeContext, i: &mut HirExpression) -> Type {
 
 
 fn check_as_optional(ctx: &mut TypeContext, a: &mut HirAsOptionalExpr) -> Type {
-    let _ = check_expression(ctx, &mut a.expr, None);
-    let ty = ctx.resolve_hir_type(&a.ty);
-    if ty == Type::Unknown {
+    let target_ty = ctx.resolve_hir_type(&a.ty);
+    let _ = check_expression(ctx, &mut a.expr, Some(&target_ty));
+    if target_ty == Type::Unknown {
         ctx.error("unknown type in 'as?' cast".to_string(), a.ty.span());
     }
-    Type::Option(Box::new(ty))
+    Type::Option(Box::new(target_ty))
 }
 
 fn check_as_forced(ctx: &mut TypeContext, a: &mut HirAsForcedExpr) -> Type {
-    let expr_ty = check_expression(ctx, &mut a.expr, None);
     let target_ty = ctx.resolve_hir_type(&a.ty);
+    let _ = check_expression(ctx, &mut a.expr, Some(&target_ty));
     if target_ty == Type::Unknown {
         ctx.error("unknown type in 'as!' cast".to_string(), a.ty.span());
     }
-    // Note: we track expr_ty only for the diagnostic annotation; at runtime as! can still fail
-    let _ = expr_ty;
     target_ty
 }
 
@@ -257,10 +255,6 @@ fn resolve_name(ctx: &TypeContext, name: &str, expected: Option<&Type>) -> Resul
         return Ok(ResolvedName::Namespace(name.to_string()));
     }
 
-    if name == "None" {
-        return Ok(ResolvedName::BuiltinConstant(Type::Option(Box::new(Type::Unknown))));
-    }
-
     let enum_res = ctx.find_enum_for_variant(name, expected);
     if let Ok(enum_name) = enum_res {
         return Ok(ResolvedName::EnumConstructor(enum_name, name.to_string()));
@@ -268,18 +262,28 @@ fn resolve_name(ctx: &TypeContext, name: &str, expected: Option<&Type>) -> Resul
 
     // If it's a built-in name, try that before reporting ambiguity/unknown for user enums
     // UNLESS it's truly ambiguous between user enums.
-    let is_builtin = matches!(name, "print" | "fmt" | "dbg" | "crash" | "expect" | "exit" | "cmd" | "read_line" | "Some" | "Ok" | "Err");
+    let is_builtin = matches!(name, "print" | "fmt" | "dbg" | "crash" | "expect" | "exit" | "cmd" | "read_line" | "Some" | "None" | "Ok" | "Err");
     
     if is_builtin {
-        // Only return built-in if no user enum candidates exist OR if we specifically expect a built-in type
+        let is_generic_builtin = matches!(name, "Some" | "None" | "Ok" | "Err");
         let has_user_candidates = ctx.variant_to_enums.contains_key(name);
+        
         let expects_builtin = match expected {
             Some(Type::Option(_)) => matches!(name, "Some" | "None"),
             Some(Type::Result(_, _)) => matches!(name, "Ok" | "Err"),
             _ => false,
         };
 
-        if !has_user_candidates || expects_builtin {
+        if is_generic_builtin && !expects_builtin {
+            // Fall through to error reporting if there are user candidates,
+            // or report missing expected type error if it's purely built-in but generic.
+            if !has_user_candidates {
+                 return Err(format!("cannot infer generic enum type for built-in constructor '{}'; add a type annotation", name));
+            }
+        } else if !has_user_candidates || expects_builtin {
+            if name == "None" {
+                return Ok(ResolvedName::BuiltinConstant(Type::Option(Box::new(Type::Unknown))));
+            }
             return Ok(ResolvedName::BuiltinFunction(name.to_string()));
         }
     }
@@ -325,6 +329,16 @@ fn check_name(
                 return Type::Error;
             }
 
+            let result_ty = if let Some(Type::Enum(exp_name, exp_args)) = expected {
+                if exp_name == &enum_name {
+                    Type::Enum(enum_name.clone(), exp_args.clone())
+                } else {
+                    Type::Enum(enum_name.clone(), vec![])
+                }
+            } else {
+                Type::Enum(enum_name.clone(), vec![])
+            };
+
             // HIR Rewrite
             *expr = HirExpression::EnumConstructor(HirEnumConstructor {
                 span,
@@ -333,7 +347,7 @@ fn check_name(
                 payloads: vec![],
             });
 
-            Type::Enum(enum_name, vec![])
+            result_ty
         }
         Ok(ResolvedName::BuiltinFunction(f)) => {
             ctx.error(format!("built-in function '{}' cannot be used as a value", f), span);
@@ -553,6 +567,7 @@ fn check_builtin(
     name: &str,
     args: &mut [HirCallArgument],
     span: Span,
+    expected: Option<&Type>,
 ) -> Option<Type> {
     match name {
         "print" => {
@@ -755,8 +770,16 @@ fn check_builtin(
                     HirCallArgument::Positional(e) => e,
                     HirCallArgument::Named(n) => &mut n.value,
                 };
-                let ty = check_expression(ctx, arg_expr, None);
-                Some(Type::Result(Box::new(ty), Box::new(Type::Unknown)))
+                let expected_inner = match expected {
+                    Some(Type::Result(ok, _)) => Some(ok.as_ref()),
+                    _ => None,
+                };
+                let ty = check_expression(ctx, arg_expr, expected_inner);
+                let err_ty = match expected {
+                    Some(Type::Result(_, err)) => err.as_ref().clone(),
+                    _ => Type::Unknown,
+                };
+                Some(Type::Result(Box::new(ty), Box::new(err_ty)))
             }
         }
         "Err" => {
@@ -771,8 +794,16 @@ fn check_builtin(
                     HirCallArgument::Positional(e) => e,
                     HirCallArgument::Named(n) => &mut n.value,
                 };
-                let err_ty = check_expression(ctx, arg_expr, None);
-                Some(Type::Result(Box::new(Type::Unknown), Box::new(err_ty)))
+                let expected_err = match expected {
+                    Some(Type::Result(_, err)) => Some(err.as_ref()),
+                    _ => None,
+                };
+                let err_ty = check_expression(ctx, arg_expr, expected_err);
+                let ok_ty = match expected {
+                    Some(Type::Result(ok, _)) => ok.as_ref().clone(),
+                    _ => Type::Unknown,
+                };
+                Some(Type::Result(Box::new(ok_ty), Box::new(err_ty)))
             }
         }
         "Some" => {
@@ -790,7 +821,11 @@ fn check_builtin(
                     HirCallArgument::Positional(e) => e,
                     HirCallArgument::Named(n) => &mut n.value,
                 };
-                let inner_ty = check_expression(ctx, arg_expr, None);
+                let expected_inner = match expected {
+                    Some(Type::Option(inner)) => Some(inner.as_ref()),
+                    _ => None,
+                };
+                let inner_ty = check_expression(ctx, arg_expr, expected_inner);
                 Some(Type::Option(Box::new(inner_ty)))
             }
         }
@@ -1493,7 +1528,7 @@ fn check_function_call(
     explicit_type_args: Option<Vec<Type>>,
     _expected: Option<&Type>,
 ) -> Type {
-    if let Some(builtin_ty) = check_builtin(ctx, func_name, &mut c.args, c.span) {
+    if let Some(builtin_ty) = check_builtin(ctx, func_name, &mut c.args, c.span, _expected) {
         return builtin_ty;
     }
 
@@ -1556,12 +1591,27 @@ fn check_function_call(
         }
     }
 
+    // Prepare inferred/explicit map early if possible to provide context to arguments
+    let mut pre_inferred = std::collections::HashMap::new();
+    if let Some(t_args) = explicit_type_args.as_ref() {
+        if t_args.len() == sig.generic_params.len() {
+            for (param, ty) in sig.generic_params.iter().zip(t_args.iter()) {
+                pre_inferred.insert(param.id, ty.clone());
+            }
+        }
+    }
+
     // Evaluate arguments to infer types
     let mut arg_types = Vec::new();
-    for resolved in &mut resolved_args {
+    for (i, resolved) in resolved_args.iter_mut().enumerate() {
         match resolved {
             Some(arg_expr) => {
-                let arg_ty = check_expression(ctx, *arg_expr, None);
+                let expected_arg_ty = if !pre_inferred.is_empty() && i < sig.params.len() {
+                    Some(substitute_generics(&sig.params[i].1, &pre_inferred))
+                } else {
+                    None
+                };
+                let arg_ty = check_expression(ctx, *arg_expr, expected_arg_ty.as_ref());
                 arg_types.push(arg_ty);
             }
             None => arg_types.push(Type::Error),
@@ -2227,10 +2277,10 @@ fn check_struct_literal(ctx: &mut TypeContext, s: &mut HirStructLiteral) -> Type
     if info.generic_params.len() != args.len() {
         ctx.error(
             format!(
-                "struct '{}' expects {} type arguments, found {}",
+                "generic struct '{}' requires {} type argument{}",
                 name,
                 info.generic_params.len(),
-                args.len()
+                if info.generic_params.len() == 1 { "" } else { "s" }
             ),
             s.span,
         );

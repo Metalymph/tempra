@@ -6,7 +6,7 @@ fn test_match_guard_happy_path() {
     enum MaybeInt { None, Some(Int) }
 
     fn main() {
-        let x = Some(20);
+        let x: MaybeInt = Some(20);
         var y = 0;
         
         // Use if to verify value, since no direct returns yet in match expressions for our spec tests without assigning.
@@ -28,7 +28,7 @@ fn test_match_guard_fallthrough() {
     enum MaybeInt { None, Some(Int) }
 
     fn main() {
-        let x = Some(5);
+        let x: MaybeInt = Some(5);
         var y = 0;
         
         match x {
@@ -49,7 +49,7 @@ fn test_match_guard_diagnostic_not_bool() {
     enum MaybeInt { None, Some(Int) }
 
     fn main() {
-        let x = Some(1);
+        let x: MaybeInt = Some(1);
         match x {
             Some(v) if v => { }
             None => { }
@@ -112,7 +112,7 @@ fn test_match_guard_scoping() {
     let v = 999;
 
     fn main() {
-        let x = Some(5);
+        let x: Int? = Some(5);
         var y = 0;
         match x {
             Some(v) if v == 5 => { y = 1; }
@@ -129,7 +129,7 @@ fn test_match_guard_scoping() {
 fn test_match_guard_not_exhaustive() {
     let source = "
     fn main() {
-        let x = Some(5);
+        let x: Int? = Some(5);
         match x {
             Some(v) if v > 10 => { }
             None => { }
@@ -148,7 +148,7 @@ fn test_match_guard_exhaustive_catchall() {
     enum MaybeInt { None, Some(Int) }
     
     fn main() {
-        let x = Some(5);
+        let x: MaybeInt = Some(5);
         var y = 0;
         match x {
             Some(v) if v > 10 => { y = 1; }

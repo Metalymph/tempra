@@ -70,7 +70,14 @@ pub fn check_expression(ctx: &mut TypeContext, expr: &mut HirExpression, expecte
         HirExpression::StructLiteral(s) => check_struct_literal(ctx, s),
         HirExpression::Try(e) => check_try(ctx, e, expected),
         HirExpression::Unwrap(e) => check_unwrap(ctx, e),
-        HirExpression::EnumConstructor(e) => Type::Enum(e.enum_name.clone()),
+        HirExpression::EnumConstructor(e) => {
+            if let Some(Type::Enum(expected_name, args)) = expected {
+                if expected_name == &e.enum_name {
+                    return Type::Enum(e.enum_name.clone(), args.clone());
+                }
+            }
+            Type::Enum(e.enum_name.clone(), vec![])
+        }
     }
 }
 
@@ -144,7 +151,7 @@ fn check_is_pattern(ctx: &mut TypeContext, i: &mut HirExpression) -> Type {
         // For EnumCase patterns with no payload that aren't variants or types, report "unknown type".
         if let HirPattern::EnumCase(span, name, args) = &is_pattern.pattern {
              if args.is_empty() {
-                 let is_variant = if let Type::Enum(enum_name) = &val_ty {
+                  let is_variant = if let Type::Enum(enum_name, _) = &val_ty {
                      ctx.enums.get(enum_name).map(|info| info.variants.contains_key(name)).unwrap_or(false)
                  } else {
                      false
@@ -155,7 +162,7 @@ fn check_is_pattern(ctx: &mut TypeContext, i: &mut HirExpression) -> Type {
                  // Only report our error if it's not a variant of val_ty and not a built-in.
                  // Note: crate::pattern::validate_pattern_against_type might have already errored if val_ty was an Enum.
                  // But if val_ty is not an Enum (e.g. Int), crate::pattern::validate_pattern_against_type returns None silently for EnumCase.
-                 if !is_variant && !is_builtin && !matches!(val_ty, Type::Enum(_)) {
+                  if !is_variant && !is_builtin && !matches!(val_ty, Type::Enum(_, _)) {
                      ctx.error(format!("invalid or unknown type in 'is' check: {}", name), *span);
                  }
              }
@@ -254,14 +261,33 @@ fn resolve_name(ctx: &TypeContext, name: &str, expected: Option<&Type>) -> Resul
         return Ok(ResolvedName::BuiltinConstant(Type::Option(Box::new(Type::Unknown))));
     }
 
-    if matches!(name, "print" | "fmt" | "dbg" | "crash" | "expect" | "exit" | "cmd" | "read_line" | "Some" | "Ok" | "Err") {
-        return Ok(ResolvedName::BuiltinFunction(name.to_string()));
+    let enum_res = ctx.find_enum_for_variant(name, expected);
+    if let Ok(enum_name) = enum_res {
+        return Ok(ResolvedName::EnumConstructor(enum_name, name.to_string()));
     }
 
-    if let Ok(enum_name) = ctx.find_enum_for_variant(name, expected) {
-        return Ok(ResolvedName::EnumConstructor(enum_name, name.to_string()));
-    } else if ctx.variant_to_enums.contains_key(name) {
-        return Err(ctx.find_enum_for_variant(name, expected).unwrap_err());
+    // If it's a built-in name, try that before reporting ambiguity/unknown for user enums
+    // UNLESS it's truly ambiguous between user enums.
+    let is_builtin = matches!(name, "print" | "fmt" | "dbg" | "crash" | "expect" | "exit" | "cmd" | "read_line" | "Some" | "Ok" | "Err");
+    
+    if is_builtin {
+        // Only return built-in if no user enum candidates exist OR if we specifically expect a built-in type
+        let has_user_candidates = ctx.variant_to_enums.contains_key(name);
+        let expects_builtin = match expected {
+            Some(Type::Option(_)) => matches!(name, "Some" | "None"),
+            Some(Type::Result(_, _)) => matches!(name, "Ok" | "Err"),
+            _ => false,
+        };
+
+        if !has_user_candidates || expects_builtin {
+            return Ok(ResolvedName::BuiltinFunction(name.to_string()));
+        }
+    }
+
+    if let Err(e) = enum_res {
+        if ctx.variant_to_enums.contains_key(name) {
+            return Err(e);
+        }
     }
 
     if ctx.functions.contains_key(name) {
@@ -307,7 +333,7 @@ fn check_name(
                 payloads: vec![],
             });
 
-            Type::Enum(enum_name)
+            Type::Enum(enum_name, vec![])
         }
         Ok(ResolvedName::BuiltinFunction(f)) => {
             ctx.error(format!("built-in function '{}' cannot be used as a value", f), span);
@@ -480,7 +506,7 @@ fn check_binary(ctx: &mut TypeContext, b: &mut HirBinary, _expected: Option<&Typ
         HirBinaryOp::Assign => {
             if let HirExpression::Member(m) = &mut *b.left {
                 let obj_ty = check_expression(ctx, &mut m.object, None);
-                if let Type::Struct(name) = &obj_ty {
+                if let Type::Struct(name, _) = &obj_ty {
                     if let Some(info) = ctx.structs.get(name) {
                         if let Some(field_info) = info.fields.get(&m.field) {
                             if !field_info.is_mutable {
@@ -1258,35 +1284,74 @@ fn check_call(ctx: &mut TypeContext, expr: &mut HirExpression, expected: Option<
             }
         }
         ResolvedCallee::EnumConstructor(enum_name, variant_name) => {
-            // Type Validation & Rewrite
-            let payload_tys = ctx.enums[&enum_name].variants[&variant_name].clone();
+            // Determine type arguments from expected type
+            let mut type_args = vec![];
+            if let Some(Type::Enum(name, args)) = expected {
+                if name == &enum_name {
+                    type_args = args.clone();
+                }
+            }
+
+            let info = ctx.enums.get(&enum_name).cloned().expect("Enum info missing");
+            
+            // If enum is generic but no type arguments provided by expected, we can't fully resolve payloads yet.
+            // In v1, we strictly require expected type or we error on generic mismatches.
+            let mut sub_map = std::collections::HashMap::new();
+            if info.generic_params.len() != type_args.len() {
+                if !info.generic_params.is_empty() {
+                     // For now, we don't implement full inference from payload to enum type args in this pass.
+                     // But we should at least not crash.
+                }
+            } else {
+                for (param, arg) in info.generic_params.iter().zip(type_args.iter()) {
+                    sub_map.insert(param.id, arg.clone());
+                }
+            }
+
+            let payload_tys: Vec<Type> = info.variants[&variant_name]
+                .iter()
+                .map(|t| substitute_generics(t, &sub_map))
+                .collect();
+
             let mut error_occurred = false;
 
             if let HirExpression::Call(ref mut c) = expr {
-                // Arity & Arity v1 limit
                 if c.args.len() != payload_tys.len() {
-                    ctx.error(format!("constructor '{}' of enum '{}' expects {} arguments, found {}", variant_name, enum_name, payload_tys.len(), c.args.len()), c.span);
+                    ctx.error(
+                        format!(
+                            "constructor '{}' of enum '{}' expects {} arguments, found {}",
+                            variant_name, enum_name, payload_tys.len(), c.args.len()
+                        ),
+                        c.span,
+                    );
                     error_occurred = true;
                 }
-                if c.args.len() > 1 {
-                    ctx.error(format!("Constructor '{}' has {} payloads; Fero v1 only supports 0 or 1 payload.", variant_name, c.args.len()), c.span);
-                }
-
+                
                 // Arg Types
                 for (i, arg) in c.args.iter_mut().enumerate() {
                     let arg_expr = get_call_arg_mut_legacy(arg, ctx);
-                    let expected_arg_ty = payload_tys.get(i);
-                    let arg_ty = check_expression(ctx, arg_expr, expected_arg_ty);
+                    let target_ty = payload_tys.get(i);
+                    let arg_ty = check_expression(ctx, arg_expr, target_ty);
                     
-                    if let Some(target_ty) = expected_arg_ty {
+                    if let Some(target_ty) = target_ty {
                         if arg_ty != Type::Error && !types_compatible(target_ty, &arg_ty) {
-                            ctx.error(format!("Constructor '{}' argument {}: expected {}, found {}", variant_name, i + 1, target_ty, arg_ty), arg_expr.span());
+                            ctx.error(
+                                format!(
+                                    "Constructor '{}' argument {}: expected {}, found {}",
+                                    variant_name, i + 1, target_ty, arg_ty
+                                ),
+                                arg_expr.span(),
+                            );
                         }
                     }
                 }
             }
 
-            if error_occurred { return Type::Error; }
+            if error_occurred {
+                return Type::Error;
+            }
+            
+            let result_ty = Type::Enum(enum_name.clone(), type_args);
 
             // REWRITE
             if let HirExpression::Call(c) = std::mem::replace(expr, HirExpression::Integer(call_span, "0".to_string())) {
@@ -1298,7 +1363,7 @@ fn check_call(ctx: &mut TypeContext, expr: &mut HirExpression, expected: Option<
                      payloads,
                  });
             }
-            return Type::Enum(enum_name);
+            return result_ty;
         }
         ResolvedCallee::Namespace(ns, method) => {
             if let HirExpression::Call(ref mut c) = expr {
@@ -1389,7 +1454,7 @@ fn match_generic_types(
     }
 }
 
-fn substitute_generics(ty: &Type, map: &std::collections::HashMap<crate::types::GenericParamId, Type>) -> Type {
+pub(crate) fn substitute_generics(ty: &Type, map: &std::collections::HashMap<crate::types::GenericParamId, Type>) -> Type {
     match ty {
         Type::GenericParam { id, .. } => {
             map.get(id).cloned().unwrap_or_else(|| ty.clone())
@@ -1399,6 +1464,14 @@ fn substitute_generics(ty: &Type, map: &std::collections::HashMap<crate::types::
         Type::Option(inner) => Type::Option(Box::new(substitute_generics(inner, map))),
         Type::Result(ok, err) => Type::Result(Box::new(substitute_generics(ok, map)), Box::new(substitute_generics(err, map))),
         Type::Tuple(elems) => Type::Tuple(elems.iter().map(|e| substitute_generics(e, map)).collect()),
+        Type::Struct(name, args) => Type::Struct(
+            name.clone(),
+            args.iter().map(|a| substitute_generics(a, map)).collect(),
+        ),
+        Type::Enum(name, args) => Type::Enum(
+            name.clone(),
+            args.iter().map(|a| substitute_generics(a, map)).collect(),
+        ),
         _ => ty.clone(),
     }
 }
@@ -1556,10 +1629,16 @@ fn check_function_call(
 
 fn check_member(ctx: &mut TypeContext, m: &mut HirMember, _expected: Option<&Type>) -> Type {
     let object_ty = check_expression(ctx, &mut m.object, None);
-    if let Type::Struct(name) = &object_ty {
-        if let Some(info) = ctx.structs.get(name.as_str()) {
+    if let Type::Struct(name, args) = &object_ty {
+        if let Some(info) = ctx.structs.get(name.as_str()).cloned() {
             if let Some(field_info) = info.fields.get(&m.field) {
-                return field_info.ty.clone();
+                let mut sub_map = std::collections::HashMap::new();
+                if info.generic_params.len() == args.len() {
+                    for (param, arg) in info.generic_params.iter().zip(args.iter()) {
+                        sub_map.insert(param.id, arg.clone());
+                    }
+                }
+                return substitute_generics(&field_info.ty, &sub_map);
             }
             ctx.error(
                 format!("struct '{}' has no field '{}'", name, m.field),
@@ -1881,6 +1960,10 @@ fn check_match(ctx: &mut TypeContext, m: &mut HirMatch, expected: Option<&Type>)
 fn check_for_expr(ctx: &mut TypeContext, f: &mut HirForExpr) -> Type {
     let iter_ty = check_expression(ctx, &mut f.iterable, None);
     let elem_ty = match &iter_ty {
+        Type::Struct(_, _) | Type::Enum(_, _) => {
+            ctx.error(format!("structs and enums are not iterable, found {}", iter_ty), f.span);
+            Type::Error
+        }
         Type::Array(inner) => *inner.clone(),
         Type::Slice(inner) => *inner.clone(),
         Type::String => Type::String,
@@ -2121,13 +2204,41 @@ fn check_regex_method(
 }
 
 fn check_struct_literal(ctx: &mut TypeContext, s: &mut HirStructLiteral) -> Type {
-    let info = match ctx.structs.get(&s.name) {
-        Some(info) => info.clone(),
-        None => {
-            ctx.error(format!("Unknown struct '{}'", s.name), s.span);
+    let ty = ctx.resolve_hir_type(&s.ty);
+    let (name, args) = match &ty {
+        Type::Struct(name, args) => (name.clone(), args.clone()),
+        Type::Error => return Type::Error,
+        _ => {
+            ctx.error(format!("expected struct type, found {}", ty), s.span);
             return Type::Error;
         }
     };
+
+    let info = match ctx.structs.get(&name) {
+        Some(info) => info.clone(),
+        None => {
+            ctx.error(format!("Unknown struct '{}'", name), s.span);
+            return Type::Error;
+        }
+    };
+
+    // Prepare substitution map if generic
+    let mut sub_map = std::collections::HashMap::new();
+    if info.generic_params.len() != args.len() {
+        ctx.error(
+            format!(
+                "struct '{}' expects {} type arguments, found {}",
+                name,
+                info.generic_params.len(),
+                args.len()
+            ),
+            s.span,
+        );
+    } else {
+        for (param, arg) in info.generic_params.iter().zip(args.iter()) {
+            sub_map.insert(param.id, arg.clone());
+        }
+    }
 
     // Check each provided field
     let mut provided = std::collections::HashSet::new();
@@ -2136,22 +2247,24 @@ fn check_struct_literal(ctx: &mut TypeContext, s: &mut HirStructLiteral) -> Type
             ctx.error(
                 format!(
                     "Duplicate field '{}' in struct literal '{}'",
-                    field_name, s.name
+                    field_name, name
                 ),
                 field_expr.span(),
             );
         }
 
-        let expected_ty = info.fields.get(field_name.as_str()).map(|f| &f.ty);
-        let actual_ty = check_expression(ctx, field_expr, expected_ty);
-        match info.fields.get(field_name.as_str()) {
+        let field_info = info.fields.get(field_name.as_str());
+        let expected_ty = field_info.map(|f| substitute_generics(&f.ty, &sub_map));
+        let actual_ty = check_expression(ctx, field_expr, expected_ty.as_ref());
+
+        match field_info {
             Some(field_info) => {
-                let expected_ty = &field_info.ty;
-                if actual_ty != Type::Error && actual_ty != *expected_ty {
+                let expected = substitute_generics(&field_info.ty, &sub_map);
+                if actual_ty != Type::Error && !types_compatible(&expected, &actual_ty) {
                     ctx.error(
                         format!(
                             "Field '{}' of '{}': expected {}, found {}",
-                            field_name, s.name, expected_ty, actual_ty
+                            field_name, name, expected, actual_ty
                         ),
                         field_expr.span(),
                     );
@@ -2159,7 +2272,7 @@ fn check_struct_literal(ctx: &mut TypeContext, s: &mut HirStructLiteral) -> Type
             }
             None => {
                 ctx.error(
-                    format!("Struct '{}' has no field '{}'", s.name, field_name),
+                    format!("Struct '{}' has no field '{}'", name, field_name),
                     field_expr.span(),
                 );
             }
@@ -2179,11 +2292,11 @@ fn check_struct_literal(ctx: &mut TypeContext, s: &mut HirStructLiteral) -> Type
         ctx.error(
             format!(
                 "Missing required field '{}' in struct literal '{}'",
-                field_name, s.name
+                field_name, name
             ),
             s.span,
         );
     }
 
-    Type::Struct(s.name.clone())
+    ty
 }

@@ -315,6 +315,7 @@ dependencies = [
  "anyhow",
  "fero-ast",
  "fero-hir",
+ "fero-lexer",
  "fero-parser",
  "fero-span",
 ]

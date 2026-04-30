@@ -87,22 +87,99 @@ fn format_hir_type(ty: &HirType) -> String {
             let inner = elems.iter().map(|e| format_hir_type(e)).collect::<Vec<_>>().join(", ");
             format!("({})", inner)
         }
-        HirType::Generic(_, base, args) => {
+        HirType::Apply(_, callee, args) => {
+            let base = format_hir_type(callee);
             let inner = args.iter().map(|a| format_hir_type(a)).collect::<Vec<_>>().join(", ");
-            format!("{}[{}]", base, inner)
+            format!("{}({})", base, inner)
         }
-        HirType::Option(_, inner) => format!("{}?", format_hir_type(inner)),
+        HirType::Optional(_, inner) => format!("{}?", format_hir_type(inner)),
         HirType::Result(_, ok, err) => {
-            if let Some(e) = err {
-                format!("{}!{}", format_hir_type(ok), format_hir_type(e))
-            } else {
-                format!("{}!", format_hir_type(ok))
-            }
+            format!("Result({}, {})", format_hir_type(ok), format_hir_type(err))
         }
     }
 }
 
 impl Interpreter {
+    fn get_type_name(ty: &HirType) -> String {
+        match ty {
+            HirType::Named(_, n) => n.clone(),
+            HirType::Apply(_, callee, _) => Self::get_type_name(callee),
+            _ => "Unknown".to_string(),
+        }
+    }
+
+    fn value_is_type(value: &Value, ty: &HirType) -> bool {
+        match ty {
+            HirType::Named(_, name) => match name.as_str() {
+                "Unit" => matches!(value, Value::Unit),
+                "Bool" => matches!(value, Value::Bool(_)),
+                "String" => matches!(value, Value::String(_)),
+                "Int" | "Int64" => matches!(value, Value::Int64(_)),
+                "UInt8" => matches!(value, Value::UInt8(_)),
+                "Float64" => matches!(value, Value::Float64(_)),
+                "Error" => matches!(value, Value::Error(_)),
+                "Never" => false,
+                _ => {
+                    if let Value::Struct(s) = value {
+                        s.name == *name
+                    } else if let Value::Enum(e) = value {
+                        e.enum_name == *name
+                    } else {
+                        false
+                    }
+                }
+            },
+            HirType::Array(_, _) => matches!(value, Value::Array(_)),
+            HirType::Tuple(_, elems) => {
+                if let Value::Tuple(values) = value {
+                    values.len() == elems.len()
+                        && values
+                            .iter()
+                            .zip(elems.iter())
+                            .all(|(v, t)| Self::value_is_type(v, t))
+                } else {
+                    false
+                }
+            }
+            HirType::Apply(_, callee, args) => {
+                let name = Self::get_type_name(callee);
+                if name == "Option" && args.len() == 1 {
+                    Self::value_is_type(
+                        value,
+                        &HirType::Optional(callee.span(), Box::new(args[0].clone())),
+                    )
+                } else if name == "Result" && args.len() == 2 {
+                    Self::value_is_type(
+                        value,
+                        &HirType::Result(
+                            callee.span(),
+                            Box::new(args[0].clone()),
+                            Box::new(args[1].clone()),
+                        ),
+                    )
+                } else {
+                    match value {
+                        Value::Struct(s) => s.name == name,
+                        Value::Enum(e) => e.enum_name == name,
+                        _ => false,
+                    }
+                }
+            }
+            HirType::Optional(_, inner) => match value {
+                Value::Option(OptionValue::None) => true,
+                Value::Option(OptionValue::Some(v)) => Self::value_is_type(v, inner),
+                _ => false,
+            },
+            HirType::Result(_, ok, err) => match value {
+                Value::Result(res) => match res.as_ref() {
+                    crate::value::ValueResult::Ok(v) => Self::value_is_type(v, ok),
+                    crate::value::ValueResult::Err(e) => Self::value_is_type(e, err),
+                },
+                _ => false,
+            },
+        }
+    }
+
     pub fn eval_expression(
         &mut self,
         expr: &HirExpression,
@@ -1090,8 +1167,9 @@ impl Interpreter {
                     }
                 }
 
+                let struct_name = Self::get_type_name(&s.ty);
                 // Fill defaults
-                if let Some(def) = self.structs.get(&s.name).cloned() {
+                if let Some(def) = self.structs.get(&struct_name).cloned() {
                     for field in &def.fields {
                         if !fields.contains_key(&field.name) {
                             if let Some(default_expr) = &field.default_value {
@@ -1108,7 +1186,7 @@ impl Interpreter {
                 }
 
                 Ok(ControlFlow::Value(Value::Struct(StructInstance {
-                    name: s.name.clone(),
+                    name: struct_name,
                     fields,
                 })))
             }
@@ -1430,78 +1508,6 @@ impl Interpreter {
     }
 }
 
-    fn value_is_type(value: &Value, ty: &HirType) -> bool {
-        match ty {
-            HirType::Named(_, name) => match name.as_str() {
-                "Unit" => matches!(value, Value::Unit),
-                "Bool" => matches!(value, Value::Bool(_)),
-                "String" => matches!(value, Value::String(_)),
-                "Int" | "Int64" => matches!(value, Value::Int64(_)),
-                "UInt8" => matches!(value, Value::UInt8(_)),
-                "Error" => matches!(value, Value::Error(_)),
-                "Never" => false,
-                _ => {
-                    if let Value::Struct(s) = value {
-                        s.name == *name
-                    } else if let Value::Enum(e) = value {
-                        e.enum_name == *name
-                    } else {
-                        false
-                    }
-                }
-            },
-            HirType::Array(_, _) => matches!(value, Value::Array(_)),
-            HirType::Tuple(_, elems) => {
-                if let Value::Tuple(values) = value {
-                    values.len() == elems.len()
-                        && values
-                            .iter()
-                            .zip(elems.iter())
-                            .all(|(v, t)| Self::value_is_type(v, t))
-                } else {
-                    false
-                }
-            }
-            HirType::Generic(_, name, args) if name == "Option" && args.len() == 1 => {
-                Self::value_is_type(
-                    value,
-                    &HirType::Option(ty.span(), Box::new(args[0].clone())),
-                )
-            }
-            HirType::Generic(_, name, args)
-                if name == "Result" && (args.len() == 1 || args.len() == 2) =>
-            {
-                let err = if args.len() == 2 {
-                    Some(Box::new(args[1].clone()))
-                } else {
-                    None
-                };
-                Self::value_is_type(
-                    value,
-                    &HirType::Result(ty.span(), Box::new(args[0].clone()), err),
-                )
-            }
-            HirType::Generic(_, _, _) => false,
-            HirType::Option(_, inner) => match value {
-                Value::Option(OptionValue::None) => true,
-                Value::Option(OptionValue::Some(v)) => Self::value_is_type(v, inner),
-                _ => false,
-            },
-            HirType::Result(_, ok, err) => match value {
-                Value::Result(res) => match res.as_ref() {
-                    crate::value::ValueResult::Ok(v) => Self::value_is_type(v, ok),
-                    crate::value::ValueResult::Err(e) => {
-                        if let Some(err_ty) = err {
-                            Self::value_is_type(e, err_ty)
-                        } else {
-                            true
-                        }
-                    }
-                },
-                _ => false,
-            },
-        }
-    }
 
     fn eval_block(
         &mut self,

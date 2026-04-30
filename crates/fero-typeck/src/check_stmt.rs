@@ -20,27 +20,51 @@ pub fn check_block(ctx: &mut TypeContext, block: &mut HirBlock, expected: Option
 pub fn check_statement(ctx: &mut TypeContext, stmt: &mut HirStatement, expected: Option<&Type>) -> Type {
     match stmt {
         HirStatement::Let(l) => {
-            let value_ty = check_expression(ctx, &mut l.value, None);
-            if matches!(&l.value, HirExpression::Name(_, n) if n == "None") {
-                ctx.error(
-                "ambiguous 'None' without Option context; use it where an Option? is expected"
-                        .to_string(),
-                    l.value.span(),
-                );
+            let expected_ty = l.ty.as_ref().map(|t| ctx.resolve_hir_type(t));
+            let value_ty = check_expression(ctx, &mut l.value, expected_ty.as_ref());
+            
+            if let Some(expected) = expected_ty {
+                if value_ty != Type::Error && !types_compatible(&expected, &value_ty) {
+                    ctx.error(
+                        format!("Type mismatch in let: expected {}, found {}", expected, value_ty),
+                        l.value.span(),
+                    );
+                }
+                ctx.scopes.insert(l.name.clone(), expected);
+            } else {
+                if matches!(&l.value, HirExpression::Name(_, n) if n == "None") {
+                    ctx.error(
+                    "ambiguous 'None' without Option context; use it where an Option? is expected"
+                            .to_string(),
+                        l.value.span(),
+                    );
+                }
+                ctx.scopes.insert(l.name.clone(), value_ty);
             }
-            ctx.scopes.insert(l.name.clone(), value_ty);
             Type::Unit
         }
         HirStatement::Var(v) => {
-            let value_ty = check_expression(ctx, &mut v.value, None);
-            if matches!(&v.value, HirExpression::Name(_, n) if n == "None") {
-                ctx.error(
-                "ambiguous 'None' without Option context; use it where an Option? is expected"
-                        .to_string(),
-                    v.value.span(),
-                );
+            let expected_ty = v.ty.as_ref().map(|t| ctx.resolve_hir_type(t));
+            let value_ty = check_expression(ctx, &mut v.value, expected_ty.as_ref());
+            
+            if let Some(expected) = expected_ty {
+                if value_ty != Type::Error && !types_compatible(&expected, &value_ty) {
+                    ctx.error(
+                        format!("Type mismatch in var: expected {}, found {}", expected, value_ty),
+                        v.value.span(),
+                    );
+                }
+                ctx.scopes.insert(v.name.clone(), expected);
+            } else {
+                if matches!(&v.value, HirExpression::Name(_, n) if n == "None") {
+                    ctx.error(
+                    "ambiguous 'None' without Option context; use it where an Option? is expected"
+                            .to_string(),
+                        v.value.span(),
+                    );
+                }
+                ctx.scopes.insert(v.name.clone(), value_ty);
             }
-            ctx.scopes.insert(v.name.clone(), value_ty);
             Type::Unit
         }
         HirStatement::Return(value) => {

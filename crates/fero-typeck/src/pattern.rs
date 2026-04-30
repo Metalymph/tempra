@@ -85,21 +85,21 @@ pub fn validate_pattern_against_type(
 ) -> Option<Type> {
     match pattern {
         HirPattern::Wildcard(_) | HirPattern::Identifier(_, _) => None,
-        HirPattern::EnumCase(span, name, args) => {
+        HirPattern::EnumCase(span, name, pat_args) => {
             let span_val = *span;
             let name_val = name.clone();
             
             // 1. Centralized Resolution: Check if the name refers to a Type (Built-in, Struct, or Enum)
             let resolved_ty = ctx.resolve_type_name(&name_val);
             if resolved_ty != Type::Unknown {
-                 if args.is_empty() {
+                 if pat_args.is_empty() {
                     if !crate::types::types_compatible(&resolved_ty, val_ty) && *val_ty != Type::Error {
                          // No error for 'is' tests usually, but Fero's pattern matching can be strict.
                     }
                      
                      // If it resolved to an Enum, we still need to check if the user meant 
                      // a unit variant of THAT enum vs the enum type itself.
-                     if let Type::Enum(enum_name) = &resolved_ty {
+                      if let Type::Enum(enum_name, _) = &resolved_ty {
                          if let Some(info) = ctx.enums.get(enum_name) {
                              if info.variants.contains_key(&name_val) {
                                  // Ambiguity: Name is both the Enum type and a Variant name.
@@ -113,7 +113,7 @@ pub fn validate_pattern_against_type(
                      // But we should probably rewrite it to a specific TypeTest pattern 
                      // or keep it as is if the evaluator understands it.
                      // Actually, if enum_name == name_val, it's explicitly allowed.
-                     if let Type::Enum(enum_name) = val_ty {
+                     if let Type::Enum(enum_name, _) = val_ty {
                          if enum_name == &name_val {
                              return Some(resolved_ty);
                          }
@@ -127,7 +127,7 @@ pub fn validate_pattern_against_type(
                      // we still treat it as a Type Test (which might evaluate to false).
                      // However, to keep it simple, only return Some if it's likely a type test.
                      // Part 2.1 requires 'is Int' to work.
-                     if matches!(resolved_ty, Type::Int | Type::String | Type::Bool | Type::Struct(_) | Type::Enum(_) | Type::Never) {
+                     if matches!(resolved_ty, Type::Int | Type::String | Type::Bool | Type::Struct(_, _) | Type::Enum(_, _) | Type::Never) {
                          return Some(resolved_ty);
                      }
                  }
@@ -137,31 +137,42 @@ pub fn validate_pattern_against_type(
             }
 
             // 2. Resolve against user-defined Enum context
-            if let Type::Enum(enum_name) = val_ty {
+            if let Type::Enum(enum_name, args) = val_ty {
                 // Extension: Allow 'val is EnumName' as a type test even if parsed as a pattern
-                if args.is_empty() && enum_name == name {
-                    return Some(Type::Enum(enum_name.clone()));
+                if pat_args.is_empty() && enum_name == name {
+                    return Some(Type::Enum(enum_name.clone(), vec![]));
                 }
                 
-                let payloads = ctx.enums.get(enum_name).and_then(|info| info.variants.get(name).cloned());
-                if let Some(payload_tys) = payloads {
+                let info = ctx.enums.get(enum_name).cloned();
+                if let Some(info) = info {
+                    if let Some(payload_tys) = info.variants.get(name) {
+                        let mut sub_map = std::collections::HashMap::new();
+                        if info.generic_params.len() == args.len() {
+                            for (param, type_arg) in info.generic_params.iter().zip(args.iter()) {
+                                sub_map.insert(param.id, type_arg.clone());
+                            }
+                        }
+                        
+                        let substituted_payloads: Vec<Type> = payload_tys.iter()
+                            .map(|t| crate::check_expr::substitute_generics(t, &sub_map))
+                            .collect();
                     // Validate arity
-                    if args.len() != payload_tys.len() {
+                    if pat_args.len() != payload_tys.len() {
                         ctx.error(
                             format!(
                                 "variant '{}' of enum '{}' expects {} arguments, found {}",
                                 name_val,
                                 enum_name,
                                 payload_tys.len(),
-                                args.len()
+                                pat_args.len()
                             ),
                             span_val,
                         );
                         return None;
                     }
                     // Validate sub-patterns
-                    for (i, arg_pat) in args.iter_mut().enumerate() {
-                        validate_pattern_against_type(ctx, &payload_tys[i], arg_pat);
+                    for (i, arg_pat) in pat_args.iter_mut().enumerate() {
+                        validate_pattern_against_type(ctx, &substituted_payloads[i], arg_pat);
                     }
 
                     // REWRITE: Transform EnumCase -> EnumConstructor
@@ -194,13 +205,14 @@ pub fn validate_pattern_against_type(
                 );
                 return None;
             }
+        }
 
-            // 2. Generic Built-ins
-            match name_val.as_str() {
+        // 2. Generic Built-ins
+        match name_val.as_str() {
                 "Some" => {
                     if let Type::Option(inner) = val_ty {
-                        if args.len() == 1 {
-                            validate_pattern_against_type(ctx, inner, &mut args[0]);
+                        if pat_args.len() == 1 {
+                            validate_pattern_against_type(ctx, inner, &mut pat_args[0]);
                             
                             // Optional: Could rewrite built-ins too, but spec focusing on user-defined enums.
                             // For v1, resolving user-defined enums is the priority.
@@ -221,14 +233,14 @@ pub fn validate_pattern_against_type(
                             span_val,
                         );
                     }
-                    if !args.is_empty() {
+                    if !pat_args.is_empty() {
                         ctx.error("none pattern expects 0 arguments", span_val);
                     }
                 }
                 "Ok" => {
                     if let Type::Result(ok_ty, _) = val_ty {
-                        if args.len() == 1 {
-                            validate_pattern_against_type(ctx, ok_ty, &mut args[0]);
+                        if pat_args.len() == 1 {
+                            validate_pattern_against_type(ctx, ok_ty, &mut pat_args[0]);
                         } else {
                             ctx.error("ok pattern expects 1 argument", span_val);
                         }
@@ -241,8 +253,8 @@ pub fn validate_pattern_against_type(
                 }
                 "Err" => {
                     if let Type::Result(_, err_ty) = val_ty {
-                        if args.len() == 1 {
-                            validate_pattern_against_type(ctx, err_ty, &mut args[0]);
+                        if pat_args.len() == 1 {
+                            validate_pattern_against_type(ctx, err_ty, &mut pat_args[0]);
                         } else {
                             ctx.error("err pattern expects 1 argument", span_val);
                         }
@@ -295,11 +307,13 @@ pub fn validate_pattern_against_type(
             return None;
         }
         HirPattern::Struct(span, name, fields) => {
-            if let Some(def) = ctx.structs.get(name).cloned() {
-                let struct_ty = Type::Struct(name.clone());
-                if *val_ty != struct_ty && *val_ty != Type::Error {
-                    ctx.error(format!("cannot match {} with struct pattern for {}", val_ty, name), *span);
-                }
+            if let Type::Struct(struct_name, args) = val_ty {
+                if struct_name == name {
+                    let def = ctx.structs.get(name).cloned().unwrap();
+                    let mut sub_map = std::collections::HashMap::new();
+                    for (param, arg) in def.generic_params.iter().zip(args.iter()) {
+                        sub_map.insert(param.id, arg.clone());
+                    }
                 
                 let mut seen_fields = std::collections::HashSet::new();
                 for (field_name, field_pat) in fields.iter_mut() {
@@ -308,15 +322,19 @@ pub fn validate_pattern_against_type(
                     }
                     if let Some(field_def) = def.fields.get(field_name) {
                         if let Some(pat) = field_pat {
-                            validate_pattern_against_type(ctx, &field_def.ty, pat);
+                            let expected = crate::check_expr::substitute_generics(&field_def.ty, &sub_map);
+                            validate_pattern_against_type(ctx, &expected, pat);
                         }
                     } else {
                         ctx.error(format!("struct '{}' does not have a field named '{}'", name, field_name), *span);
                     }
                 }
             } else {
-                ctx.error(format!("unknown struct '{}'", name), *span);
+                ctx.error(format!("cannot match {} with struct pattern for {}", val_ty, name), *span);
             }
+        } else {
+            ctx.error(format!("cannot match {} with struct pattern for {}", val_ty, name), *span);
+        }
             return None;
         }
         HirPattern::Tuple(span, items) => {
@@ -391,12 +409,19 @@ pub fn extract_pattern_bindings(ctx: &TypeContext, val_ty: &Type, pattern: &mut 
             out.push((name.clone(), val_ty.clone()));
         }
         HirPattern::EnumConstructor(e) => {
-            if let Type::Enum(enum_name) = val_ty {
+            if let Type::Enum(enum_name, args) = val_ty {
                 if enum_name == &e.enum_name {
                     if let Some(info) = ctx.enums.get(enum_name) {
                         if let Some(payload_tys) = info.variants.get(&e.variant_name) {
+                            let mut sub_map = std::collections::HashMap::new();
+                            if info.generic_params.len() == args.len() {
+                                for (param, arg) in info.generic_params.iter().zip(args.iter()) {
+                                    sub_map.insert(param.id, arg.clone());
+                                }
+                            }
                             for (arg_pat, arg_ty) in e.payloads.iter_mut().zip(payload_tys.iter()) {
-                                extract_pattern_bindings(ctx, arg_ty, arg_pat, out);
+                                let substituted = crate::check_expr::substitute_generics(arg_ty, &sub_map);
+                                extract_pattern_bindings(ctx, &substituted, arg_pat, out);
                             }
                         }
                     }
@@ -431,14 +456,22 @@ pub fn extract_pattern_bindings(ctx: &TypeContext, val_ty: &Type, pattern: &mut 
             }
         }
         HirPattern::Struct(_, name, fields) => {
-            if let Some(def) = ctx.structs.get(name).cloned() {
-                for (field_name, field_pat) in fields.iter_mut() {
-                    if let Some(field_info) = def.fields.get(field_name) {
-                        if let Some(pat) = field_pat {
-                            extract_pattern_bindings(ctx, &field_info.ty, pat, out);
-                        } else {
-                            // Shorthand binding
-                            out.push((field_name.clone(), field_info.ty.clone()));
+            if let Type::Struct(struct_name, args) = val_ty {
+                if struct_name == name {
+                    let def = ctx.structs.get(name).cloned().unwrap();
+                    let mut sub_map = std::collections::HashMap::new();
+                    for (param, arg) in def.generic_params.iter().zip(args.iter()) {
+                        sub_map.insert(param.id, arg.clone());
+                    }
+                    for (field_name, field_pat) in fields.iter_mut() {
+                        if let Some(field_info) = def.fields.get(field_name) {
+                            let substituted = crate::check_expr::substitute_generics(&field_info.ty, &sub_map);
+                            if let Some(pat) = field_pat {
+                                extract_pattern_bindings(ctx, &substituted, pat, out);
+                            } else {
+                                // Shorthand binding
+                                out.push((field_name.clone(), substituted));
+                            }
                         }
                     }
                 }
@@ -642,9 +675,9 @@ pub fn domain_of_type(ty: &Type) -> Domain {
         Type::Bool => Domain::Bool,
         Type::Option(_) => Domain::Enum("Option".to_string()),
         Type::Result(_, _) => Domain::Enum("Result".to_string()),
-        Type::Enum(name) => Domain::Enum(name.clone()),
+        Type::Enum(name, _) => Domain::Enum(name.clone()),
         Type::Tuple(ts) => Domain::Tuple(ts.len()),
-        Type::Struct(name) => Domain::Struct(name.clone()),
+        Type::Struct(name, _) => Domain::Struct(name.clone()),
         _ => Domain::Unknown,
     }
 }

@@ -32,8 +32,8 @@ pub enum Type {
     Slice(Box<Type>),
     Tuple(Vec<Type>),
 
-    Struct(std::string::String),
-    Enum(std::string::String),
+    Struct(std::string::String, Vec<Type>),
+    Enum(std::string::String, Vec<Type>),
 
     Command,
     CommandResult,
@@ -115,8 +115,8 @@ impl Type {
                 | Type::CommandResult
                 | Type::BuiltinError
                 | Type::Result(_, _)
-                | Type::Struct(_)
-                | Type::Enum(_)
+                | Type::Struct(_, _)
+                | Type::Enum(_, _)
                 | Type::Regex
                 | Type::Option(_)
         )
@@ -152,17 +152,43 @@ impl fmt::Display for Type {
                 }
                 write!(f, ")")
             }
-            Type::Struct(name) => write!(f, "{}", name),
-            Type::Enum(name) => write!(f, "{}", name),
+            Type::Struct(name, args) => {
+                if args.is_empty() {
+                    write!(f, "{}", name)
+                } else {
+                    write!(f, "{}(", name)?;
+                    for (i, t) in args.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "{}", t)?;
+                    }
+                    write!(f, ")")
+                }
+            }
+            Type::Enum(name, args) => {
+                if args.is_empty() {
+                    write!(f, "{}", name)
+                } else {
+                    write!(f, "{}(", name)?;
+                    for (i, t) in args.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "{}", t)?;
+                    }
+                    write!(f, ")")
+                }
+            }
             Type::Command => write!(f, "Command"),
             Type::CommandResult => write!(f, "CommandResult"),
             Type::Regex => write!(f, "Regex"),
-            Type::Option(inner) => write!(f, "Option[{}]", inner),
+            Type::Option(inner) => write!(f, "Option({})", inner),
             Type::Never => write!(f, "Never"),
             Type::Unknown => write!(f, "?"),
             Type::Error => write!(f, "<error>"),
             Type::BuiltinError => write!(f, "Error"),
-            Type::Result(t, e) => write!(f, "Result[{}, {}]", t, e),
+            Type::Result(t, e) => write!(f, "Result({}, {})", t, e),
             Type::Namespace(n) => write!(f, "Namespace({})", n),
             Type::GenericParam { name, .. } => write!(f, "{}", name),
         }

@@ -74,10 +74,10 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
         match item {
             HirItem::Function(f) => {
                 let mut generic_params = Vec::new();
-                for name in &f.generic_parameters {
+                for p in &f.generic_parameters {
                     let id = crate::types::GenericParamId(ctx.next_generic_param_id);
                     ctx.next_generic_param_id += 1;
-                    generic_params.push(crate::context::GenericParam { id, name: name.clone() });
+                    generic_params.push(crate::context::GenericParam { id, name: p.name.clone() });
                 }
                 ctx.current_generic_params = generic_params.clone();
                 let params: Vec<(String, Type)> = f
@@ -106,6 +106,14 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
                 ctx.current_generic_params.clear();
             }
             HirItem::Struct(s) => {
+                let mut generic_params = Vec::new();
+                for p in &s.generic_params {
+                    let id = crate::types::GenericParamId(ctx.next_generic_param_id);
+                    ctx.next_generic_param_id += 1;
+                    generic_params.push(crate::context::GenericParam { id, name: p.name.clone() });
+                }
+                ctx.current_generic_params = generic_params.clone();
+
                 let mut fields = HashMap::new();
                 let mut field_order = Vec::new();
                 for field in &s.fields {
@@ -124,17 +132,28 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
                     s.name.clone(),
                     StructInfo {
                         visibility: s.visibility,
+                        generic_params,
                         fields,
                         field_order,
                     },
                 );
+                ctx.current_generic_params.clear();
             }
             HirItem::Enum(e) => {
-                // Pre-insert the enum to allow self-referential variants (e.g. enum Node { Next(Node) })
+                let mut generic_params = Vec::new();
+                for p in &e.generic_params {
+                    let id = crate::types::GenericParamId(ctx.next_generic_param_id);
+                    ctx.next_generic_param_id += 1;
+                    generic_params.push(crate::context::GenericParam { id, name: p.name.clone() });
+                }
+                ctx.current_generic_params = generic_params.clone();
+
+                // Pre-insert the enum to allow self-referential variants
                 ctx.enums.insert(
                     e.name.clone(),
                     EnumInfo {
                         visibility: e.visibility,
+                        generic_params: generic_params.clone(),
                         variants: HashMap::new(),
                     },
                 );
@@ -144,18 +163,19 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
                     let payload: Vec<Type> =
                         v.payload.iter().map(|t| ctx.resolve_hir_type(t)).collect();
                     resolved_variants.insert(v.name.clone(), payload);
-                    
+
                     // Track which enums have this variant for ambiguity detection
                     ctx.variant_to_enums
                         .entry(v.name.clone())
                         .or_default()
                         .push(e.name.clone());
                 }
-                
-                // Update with resolved variants
+
+                // Update the enum with the resolved variants
                 if let Some(info) = ctx.enums.get_mut(&e.name) {
                     info.variants = resolved_variants;
                 }
+                ctx.current_generic_params.clear();
             }
             HirItem::Import(_) | HirItem::Extend(_) => {}
         }

@@ -11,3 +11,4 @@ anyhow.workspace = true
 
 [dev-dependencies]
 fero-parser.workspace = true
+fero-lexer.workspace = true

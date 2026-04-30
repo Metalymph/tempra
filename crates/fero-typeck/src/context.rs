@@ -26,6 +26,7 @@ pub struct FunctionSignature {
 #[derive(Debug, Clone)]
 pub struct StructInfo {
     pub visibility: Visibility,
+    pub generic_params: Vec<GenericParam>,
     pub fields: HashMap<String, StructFieldInfo>,
     pub field_order: Vec<String>,
 }
@@ -42,6 +43,7 @@ pub struct StructFieldInfo {
 #[derive(Debug, Clone)]
 pub struct EnumInfo {
     pub visibility: Visibility,
+    pub generic_params: Vec<GenericParam>,
     pub variants: HashMap<String, Vec<Type>>,
 }
 
@@ -90,10 +92,10 @@ impl TypeContext {
             return Type::GenericParam { id: param.id, name: name.to_string() };
         }
         if self.structs.contains_key(name) {
-            return Type::Struct(name.to_string());
+            return Type::Struct(name.to_string(), vec![]);
         }
         if self.enums.contains_key(name) {
-            return Type::Enum(name.to_string());
+            return Type::Enum(name.to_string(), vec![]);
         }
         Type::Unknown
     }
@@ -106,32 +108,28 @@ impl TypeContext {
             HirType::Tuple(_, elems) => {
                 Type::Tuple(elems.iter().map(|e| self.resolve_hir_type(e)).collect())
             }
-            HirType::Generic(_, name, args) => {
-                if name == "Result" {
-                    if args.len() != 2 {
-                        // Should ideally be an error, but let's stick to Type::Error for now
-                        return Type::Error;
+            HirType::Apply(_, callee, args) => {
+                let base = self.resolve_hir_type(callee);
+                let arg_types = args.iter().map(|a| self.resolve_hir_type(a)).collect::<Vec<_>>();
+                
+                match base {
+                    Type::Struct(name, _) => Type::Struct(name, arg_types),
+                    Type::Enum(name, _) => Type::Enum(name, arg_types),
+                    Type::Option(_) => {
+                        if arg_types.len() != 1 { return Type::Error; }
+                        Type::Option(Box::new(arg_types[0].clone()))
                     }
-                    let ok = self.resolve_hir_type(&args[0]);
-                    let err = self.resolve_hir_type(&args[1]);
-                    return Type::Result(Box::new(ok), Box::new(err));
-                }
-                if name == "Option" {
-                    if args.len() != 1 {
-                        return Type::Error;
+                    Type::Result(_, _) => {
+                        if arg_types.len() != 2 { return Type::Error; }
+                        Type::Result(Box::new(arg_types[0].clone()), Box::new(arg_types[1].clone()))
                     }
-                    let inner = self.resolve_hir_type(&args[0]);
-                    return Type::Option(Box::new(inner));
+                    _ => Type::Error,
                 }
-                Type::Unknown
             }
-            HirType::Option(_, inner) => Type::Option(Box::new(self.resolve_hir_type(inner))),
+            HirType::Optional(_, inner) => Type::Option(Box::new(self.resolve_hir_type(inner))),
             HirType::Result(_, ok, err) => {
                 let ok_ty = self.resolve_hir_type(ok);
-                let err_ty = err
-                    .as_ref()
-                    .map(|e| self.resolve_hir_type(e))
-                    .unwrap_or(Type::BuiltinError);
+                let err_ty = self.resolve_hir_type(err);
                 Type::Result(Box::new(ok_ty), Box::new(err_ty))
             }
         }
@@ -151,7 +149,7 @@ impl TypeContext {
             None => return Err(format!("Unknown constructor '{}': no enum defines this variant", variant)),
         };
 
-        if let Some(Type::Enum(expected_name)) = expected {
+        if let Some(Type::Enum(expected_name, _)) = expected {
             if candidates.contains(expected_name) {
                 return Ok(expected_name.clone());
             }

@@ -122,6 +122,7 @@ pub struct StructItem {
     pub span: Span,
     pub visibility: Visibility,
     pub name: Token,
+    pub generic_parameters: Vec<GenericParameter>,
     pub fields: Vec<StructField>,
 }
 
@@ -144,6 +145,7 @@ pub struct EnumItem {
     pub span: Span,
     pub visibility: Visibility,
     pub name: Token,
+    pub generic_parameters: Vec<GenericParameter>,
     pub variants: Vec<EnumVariant>,
 }
 
@@ -174,7 +176,7 @@ pub enum TypeExpr {
     Named(NamedTypeExpr),
     Array(ArrayTypeExpr),
     Tuple(TupleTypeExpr),
-    Generic(GenericTypeExpr),
+    Apply(TypeApplyExpr),
     Optional(OptionalTypeExpr),
     Result(ResultTypeExpr),
 }
@@ -185,7 +187,7 @@ impl TypeExpr {
             TypeExpr::Named(expr) => expr.span,
             TypeExpr::Array(expr) => expr.span,
             TypeExpr::Tuple(expr) => expr.span,
-            TypeExpr::Generic(expr) => expr.span,
+            TypeExpr::Apply(expr) => expr.span,
             TypeExpr::Optional(expr) => expr.span,
             TypeExpr::Result(expr) => expr.span,
         }
@@ -212,9 +214,9 @@ pub struct TupleTypeExpr {
 }
 
 #[derive(Debug, Clone)]
-pub struct GenericTypeExpr {
+pub struct TypeApplyExpr {
     pub span: Span,
-    pub base: NamedTypeExpr,
+    pub callee: Box<TypeExpr>,
     pub arguments: Vec<TypeExpr>,
 }
 
@@ -270,6 +272,7 @@ impl Statement {
 pub struct LetStatement {
     pub span: Span,
     pub name: Token,
+    pub ty: Option<TypeExpr>,
     pub initializer: Expression,
 }
 
@@ -277,6 +280,7 @@ pub struct LetStatement {
 pub struct VarStatement {
     pub span: Span,
     pub name: Token,
+    pub ty: Option<TypeExpr>,
     pub initializer: Expression,
 }
 
@@ -593,13 +597,13 @@ pub struct ArrayExpr {
 #[derive(Debug, Clone)]
 pub struct StructLiteralExpr {
     pub span: Span,
-    pub name: Token,
-    pub fields: Vec<StructFieldValue>,
-    pub update_from: Option<Token>,
+    pub ty: TypeExpr,
+    pub fields: Vec<StructLiteralField>,
+    pub update_from: Option<Box<Expression>>,
 }
 
 #[derive(Debug, Clone)]
-pub struct StructFieldValue {
+pub struct StructLiteralField {
     pub span: Span,
     pub name: Token,
     pub value: Expression,

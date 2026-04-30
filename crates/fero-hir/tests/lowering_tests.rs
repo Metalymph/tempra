@@ -47,7 +47,9 @@ fn test_struct_literal_lowering() {
     
     if let HirItem::Function(f) = &hir.items[0] {
         if let HirStatement::Expr(HirExpression::StructLiteral(sl)) = &f.body.statements[0] {
-            assert_eq!(sl.name, "User");
+            if let HirType::Named(_, name) = &sl.ty {
+                assert_eq!(name, "User");
+            } else { panic!("Expected Named type, found {:?}", sl.ty); }
             assert_eq!(sl.fields.len(), 1);
             assert_eq!(sl.fields[0].0, "name");
         } else { panic!("Expected StructLiteral, found {:?}", f.body.statements[0]); }

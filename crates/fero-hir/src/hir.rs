@@ -28,11 +28,17 @@ pub struct HirImport {
 }
 
 #[derive(Debug, Clone)]
+pub struct HirGenericParam {
+    pub span: Span,
+    pub name: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct HirFunction {
     pub span: Span,
     pub visibility: Visibility,
     pub name: String,
-    pub generic_parameters: Vec<String>,
+    pub generic_parameters: Vec<HirGenericParam>,
     pub parameters: Vec<HirParameter>,
     pub return_type: Option<HirType>,
     pub is_fallible: bool,
@@ -52,6 +58,7 @@ pub struct HirStruct {
     pub span: Span,
     pub visibility: Visibility,
     pub name: String,
+    pub generic_params: Vec<HirGenericParam>,
     pub fields: Vec<HirStructField>,
 }
 
@@ -70,6 +77,7 @@ pub struct HirEnum {
     pub span: Span,
     pub visibility: Visibility,
     pub name: String,
+    pub generic_params: Vec<HirGenericParam>,
     pub variants: Vec<HirEnumVariant>,
 }
 
@@ -118,6 +126,7 @@ pub enum HirStatement {
 pub struct HirLet {
     pub span: Span,
     pub name: String,
+    pub ty: Option<HirType>,
     pub value: HirExpression,
 }
 
@@ -125,6 +134,7 @@ pub struct HirLet {
 pub struct HirVar {
     pub span: Span,
     pub name: String,
+    pub ty: Option<HirType>,
     pub value: HirExpression,
 }
 
@@ -358,18 +368,19 @@ pub struct HirForExpr {
 #[derive(Debug, Clone)]
 pub struct HirStructLiteral {
     pub span: Span,
-    pub name: String,
+    pub ty: HirType,
     pub fields: Vec<(String, HirExpression)>,
 }
+
 
 #[derive(Debug, Clone)]
 pub enum HirType {
     Named(Span, String),
     Array(Span, Box<HirType>),
     Tuple(Span, Vec<HirType>),
-    Generic(Span, String, Vec<HirType>),
-    Option(Span, Box<HirType>),
-    Result(Span, Box<HirType>, Option<Box<HirType>>),
+    Apply(Span, Box<HirType>, Vec<HirType>),
+    Optional(Span, Box<HirType>),
+    Result(Span, Box<HirType>, Box<HirType>),
 }
 
 impl HirType {
@@ -378,8 +389,8 @@ impl HirType {
             HirType::Named(span, _) => *span,
             HirType::Array(span, _) => *span,
             HirType::Tuple(span, _) => *span,
-            HirType::Generic(span, _, _) => *span,
-            HirType::Option(span, _) => *span,
+            HirType::Apply(span, _, _) => *span,
+            HirType::Optional(span, _) => *span,
             HirType::Result(span, _, _) => *span,
         }
     }

@@ -229,9 +229,75 @@ impl<'src> Parser<'src> {
         })
     }
 
+    fn looks_like_struct_literal_start(&mut self) -> bool {
+        if !self.at(TokenKind::LeftBrace) {
+            return false;
+        }
+        let next = self.tokens.get(self.position + 1).map(|t| t.kind);
+        let next2 = self.tokens.get(self.position + 2).map(|t| t.kind);
+        if next == Some(TokenKind::RightBrace) {
+            return true;
+        }
+        if next == Some(TokenKind::Identifier) && next2 == Some(TokenKind::Colon) {
+            return true;
+        }
+        false
+    }
+
+    fn parse_struct_literal_after_type(&mut self, ty: TypeExpr) -> Result<Expression, ParseError> {
+        let start_span = ty.span();
+        self.expect(TokenKind::LeftBrace)?;
+        let mut fields = Vec::new();
+        while !self.at(TokenKind::RightBrace) && !self.at(TokenKind::EndOfFile) {
+            let f_name = self.expect_identifier()?;
+            self.expect(TokenKind::Colon)?;
+            let f_val = self.parse_expression()?;
+            fields.push(StructLiteralField {
+                span: Span::new(f_name.span.start, f_val.span().end),
+                name: f_name,
+                value: f_val,
+            });
+            if !self.eat(TokenKind::Comma) {
+                break;
+            }
+        }
+        let end = self.expect(TokenKind::RightBrace)?;
+        Ok(Expression::StructLiteral(StructLiteralExpr {
+            span: Span::new(start_span.start, end.span.end),
+            ty,
+            fields,
+            update_from: None,
+        }))
+    }
+
+    fn try_parse_generic_parameters(&mut self) -> Result<Vec<GenericParameter>, ParseError> {
+        let mut generic_parameters = Vec::new();
+        if self.at(TokenKind::LeftParen) {
+            let next = self.tokens.get(self.position + 1).map(|t| t.kind);
+            if next == Some(TokenKind::Type) {
+                self.advance(); // eat '('
+                while !self.at(TokenKind::RightParen) && !self.at(TokenKind::EndOfFile) {
+                    let p_start = self.current().span.start;
+                    self.expect(TokenKind::Type)?;
+                    let g_name = self.expect_identifier()?;
+                    generic_parameters.push(GenericParameter {
+                        span: Span::new(p_start, g_name.span.end),
+                        name: g_name,
+                    });
+                    if !self.eat(TokenKind::Comma) {
+                        break;
+                    }
+                }
+                self.expect(TokenKind::RightParen)?;
+            }
+        }
+        Ok(generic_parameters)
+    }
+
     fn parse_struct(&mut self, visibility: Visibility) -> Result<StructItem, ParseError> {
         let token = self.expect(TokenKind::Struct)?;
         let name = self.expect_identifier()?;
+        let generic_parameters = self.try_parse_generic_parameters()?;
         self.expect(TokenKind::LeftBrace)?;
 
         let mut fields = Vec::new();
@@ -271,6 +337,7 @@ impl<'src> Parser<'src> {
             span: Span::new(token.span.start, end_token.span.end),
             visibility,
             name,
+            generic_parameters,
             fields,
         })
     }
@@ -278,6 +345,7 @@ impl<'src> Parser<'src> {
     fn parse_enum(&mut self, visibility: Visibility) -> Result<EnumItem, ParseError> {
         let token = self.expect(TokenKind::Enum)?;
         let name = self.expect_identifier()?;
+        let generic_parameters = self.try_parse_generic_parameters()?;
         self.expect(TokenKind::LeftBrace)?;
 
         let mut variants = Vec::new();
@@ -310,6 +378,7 @@ impl<'src> Parser<'src> {
             span: Span::new(token.span.start, end_token.span.end),
             visibility,
             name,
+            generic_parameters,
             variants,
         })
     }
@@ -419,23 +488,21 @@ impl<'src> Parser<'src> {
                 span: name.span,
                 name: name.clone(),
             });
-            if self.at(TokenKind::LeftBracket) {
+            if self.at(TokenKind::LeftParen) {
                 let _start = self.advance();
                 let mut arguments = Vec::new();
-                while !self.at(TokenKind::RightBracket) && !self.at(TokenKind::EndOfFile) {
+                while !self.at(TokenKind::RightParen) && !self.at(TokenKind::EndOfFile) {
                     arguments.push(self.parse_type()?);
                     if !self.eat(TokenKind::Comma) {
                         break;
                     }
                 }
-                let end = self.expect(TokenKind::RightBracket)?;
-                if let TypeExpr::Named(base) = ty {
-                    ty = TypeExpr::Generic(GenericTypeExpr {
-                        span: Span::new(base.span.start, end.span.end),
-                        base,
-                        arguments,
-                    });
-                }
+                let end = self.expect(TokenKind::RightParen)?;
+                ty = TypeExpr::Apply(TypeApplyExpr {
+                    span: Span::new(name.span.start, end.span.end),
+                    callee: Box::new(ty),
+                    arguments,
+                });
             }
             Ok(ty)
         }
@@ -461,6 +528,11 @@ impl<'src> Parser<'src> {
         if self.at(TokenKind::Let) {
             let start_token = self.advance();
             let name = self.expect_identifier()?;
+            let ty = if self.eat(TokenKind::Colon) {
+                Some(self.parse_type()?)
+            } else {
+                None
+            };
             self.expect(TokenKind::Equal)?;
             let initializer = self.parse_expression()?;
             let end_token = self.current();
@@ -468,11 +540,17 @@ impl<'src> Parser<'src> {
             Ok(Statement::Let(LetStatement {
                 span: Span::new(start_token.span.start, end_token.span.end),
                 name,
+                ty,
                 initializer,
             }))
         } else if self.at(TokenKind::Var) {
             let start_token = self.advance();
             let name = self.expect_identifier()?;
+            let ty = if self.eat(TokenKind::Colon) {
+                Some(self.parse_type()?)
+            } else {
+                None
+            };
             self.expect(TokenKind::Equal)?;
             let initializer = self.parse_expression()?;
             let end_token = self.current();
@@ -480,6 +558,7 @@ impl<'src> Parser<'src> {
             Ok(Statement::Var(VarStatement {
                 span: Span::new(start_token.span.start, end_token.span.end),
                 name,
+                ty,
                 initializer,
             }))
         } else if self.at(TokenKind::Return) {
@@ -800,44 +879,37 @@ impl<'src> Parser<'src> {
 
         match token.kind {
             TokenKind::Identifier => {
+                let pos_before = self.position;
                 let ident = self.advance();
 
-                let mut is_struct_literal = false;
+                // Check for simple struct literal: Ident {
+                let mut is_simple_struct = false;
                 if self.at(TokenKind::LeftBrace) {
-                    let next = self.tokens.get(self.position + 1).map(|t| t.kind);
-                    let next2 = self.tokens.get(self.position + 2).map(|t| t.kind);
-                    if next == Some(TokenKind::RightBrace) {
-                        is_struct_literal = true;
-                    } else if next == Some(TokenKind::Identifier) && next2 == Some(TokenKind::Colon)
-                    {
-                        is_struct_literal = true;
+                    if self.looks_like_struct_literal_start() {
+                        is_simple_struct = true;
                     }
                 }
 
-                if is_struct_literal {
-                    let _start = self.advance();
-                    let mut fields = Vec::new();
-                    while !self.at(TokenKind::RightBrace) && !self.at(TokenKind::EndOfFile) {
-                        let f_name = self.expect_identifier()?;
-                        self.expect(TokenKind::Colon)?;
-                        let f_val = self.parse_expression()?;
-                        fields.push(StructFieldValue {
-                            span: Span::new(f_name.span.start, f_val.span().end),
-                            name: f_name,
-                            value: f_val,
-                        });
-                        if !self.eat(TokenKind::Comma) {
-                            break;
-                        }
-                    }
-                    let end = self.expect(TokenKind::RightBrace)?;
-                    return Ok(Expression::StructLiteral(StructLiteralExpr {
-                        span: Span::new(ident.span.start, end.span.end),
+                if is_simple_struct {
+                    return self.parse_struct_literal_after_type(TypeExpr::Named(NamedTypeExpr {
+                        span: ident.span,
                         name: ident,
-                        fields,
-                        update_from: None,
                     }));
                 }
+
+                // Check for generic struct literal: Ident(Types) {
+                if self.at(TokenKind::LeftParen) {
+                    self.position = pos_before;
+                    if let Ok(ty) = self.parse_type_atom() {
+                        if self.at(TokenKind::LeftBrace) && self.looks_like_struct_literal_start() {
+                            return self.parse_struct_literal_after_type(ty);
+                        }
+                    }
+                    // Reset if it didn't look like a struct literal
+                    self.position = pos_before;
+                    self.advance(); // re-consume ident
+                }
+
                 Ok(Expression::Identifier(IdentifierExpr {
                     span: ident.span,
                     name: ident,

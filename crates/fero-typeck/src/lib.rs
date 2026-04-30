@@ -21,3 +21,4 @@ pub mod check_file;
 pub use check_file::check_file;
 pub use error::TypeError;
 pub use types::Type;
+pub use env::VariableInfo;

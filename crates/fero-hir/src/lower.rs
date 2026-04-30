@@ -182,6 +182,11 @@ impl<'src> Lowerer<'src> {
                     None => HirType::Named(t.span, "Error".to_string()),
                 }),
             ),
+            ast::TypeExpr::Function(t) => HirType::Function(
+                t.span,
+                t.parameters.iter().map(|p| self.lower_type(p)).collect(),
+                Box::new(self.lower_type(&t.return_type)),
+            ),
         }
     }
 
@@ -365,6 +370,24 @@ impl<'src> Lowerer<'src> {
                     .map(|f| (self.text(f.name.span), self.lower_expression(&f.value)))
                     .collect(),
             }),
+            ast::Expression::Closure(c) => HirExpression::Closure(HirClosure {
+                span: c.span,
+                captures: c
+                    .captures
+                    .iter()
+                    .map(|cap| match cap {
+                        ast::Capture::Named(named) => HirCapture::Named(HirCaptureNamed {
+                            span: named.span,
+                            mode: self.lower_capture_mode(named.mode),
+                            name: self.text(named.name.span).to_string(),
+                        }),
+                        ast::Capture::RecursiveSelf(span) => HirCapture::RecursiveSelf(span.clone()),
+                    })
+                    .collect(),
+                parameters: c.parameters.iter().map(|p| self.lower_parameter(p)).collect(),
+                return_type: c.return_type.as_ref().map(|ty| self.lower_type(ty)),
+                body: self.lower_block(&c.body),
+            }),
             ast::Expression::Command(e) => {
                 // Placeholder for command expressions
                 HirExpression::Name(e.span, "COMMAND_NOT_IMPLEMENTED".to_string())
@@ -436,6 +459,14 @@ impl<'src> Lowerer<'src> {
             TokenKind::ShiftRight => HirBinaryOp::ShiftRight,
             TokenKind::Equal => HirBinaryOp::Assign,
             _ => unreachable!("Unexpected binary token: {:?}", token.kind),
+        }
+    }
+
+    fn lower_capture_mode(&self, mode: ast::CaptureMode) -> HirCaptureMode {
+        match mode {
+            ast::CaptureMode::Ref => HirCaptureMode::Ref,
+            ast::CaptureMode::Inout => HirCaptureMode::Inout,
+            ast::CaptureMode::Consume => HirCaptureMode::Consume,
         }
     }
 }

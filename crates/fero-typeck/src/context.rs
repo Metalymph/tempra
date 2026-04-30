@@ -134,6 +134,11 @@ impl TypeContext {
                 let err_ty = self.resolve_hir_type(err);
                 Type::Result(Box::new(ok_ty), Box::new(err_ty))
             }
+            HirType::Function(_, params, ret) => {
+                let p_types = params.iter().map(|p| self.resolve_hir_type(p)).collect();
+                let r_type = self.resolve_hir_type(ret);
+                Type::Function(p_types, Box::new(r_type))
+            }
         }
     }
     /// Returns the list of enums that own a given variant name (for diagnostic use).
@@ -175,5 +180,11 @@ impl TypeContext {
                 variant, list
             ))
         }
+    }
+
+    pub fn lookup_field(&self, struct_name: &str, field_name: &str) -> Option<Type> {
+        self.structs.get(struct_name)
+            .and_then(|info| info.fields.get(field_name))
+            .map(|f| f.ty.clone())
     }
 }

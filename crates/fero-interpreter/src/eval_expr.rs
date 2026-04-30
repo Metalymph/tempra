@@ -96,6 +96,10 @@ fn format_hir_type(ty: &HirType) -> String {
         HirType::Result(_, ok, err) => {
             format!("Result({}, {})", format_hir_type(ok), format_hir_type(err))
         }
+        HirType::Function(_, params, ret) => {
+            let p = params.iter().map(|p| format_hir_type(p)).collect::<Vec<_>>().join(", ");
+            format!("fn({}) -> {}", p, format_hir_type(ret))
+        }
     }
 }
 
@@ -177,6 +181,7 @@ impl Interpreter {
                 },
                 _ => false,
             },
+            HirType::Function(_, _, _) => matches!(value, Value::Closure(_)),
         }
     }
 
@@ -675,7 +680,7 @@ impl Interpreter {
                         ControlFlow::Value(v) => v,
                         cf => return Ok(cf),
                     };
-                    match obj {
+                    return match obj {
                         Value::String(s) => {
                             let mut args = Vec::new();
                             let mut named_args = HashMap::new();
@@ -749,7 +754,30 @@ impl Interpreter {
                             return Self::eval_regex_method(&re, &member.field, &args)
                                 .map(ControlFlow::Value);
                         }
-                        _ => return Err(format!("Method call on unsupported type: {:?}", obj)),
+                        Value::Struct(s) => {
+                            if let Some(Value::Closure(c)) = s.fields.get(&member.field) {
+                                let mut args = Vec::new();
+                                for arg in &call.args {
+                                    match arg {
+                                        HirCallArgument::Positional(arg_expr) => {
+                                            match self.eval_expression(arg_expr, env)? {
+                                                ControlFlow::Value(v) => args.push(v),
+                                                cf => return Ok(cf),
+                                            }
+                                        }
+                                        HirCallArgument::Named(_) => {
+                                            return Err(
+                                                "Closure fields only support positional arguments"
+                                                    .into(),
+                                            );
+                                        }
+                                    }
+                                }
+                                return self.call_closure(c, args);
+                            }
+                            return Err(format!("Field '{}' is not a closure", member.field));
+                        }
+                        _ => Err(format!("Type {} has no method '{}'", obj.type_name(), member.field)),
                     }
                 }
 
@@ -953,6 +981,11 @@ impl Interpreter {
                         }
                         _ => {}
                     }
+                    // Check env for local closure
+                    if let Some(Value::Closure(c)) = env.get(name) {
+                        return self.call_closure(&c, positional_values);
+                    }
+
                     // User function
                     let func = self.functions.get(name).cloned().ok_or_else(|| format!("Function {} not found", name))?;
 
@@ -993,7 +1026,15 @@ impl Interpreter {
 
                     return self.call_function(&func, args);
                 } else {
-                    Err("Only named functions are supported".into())
+                    // Try evaluating callee as a complex expression (e.g. (fn(x){x})(1))
+                    let callee_val = match self.eval_expression(&call.callee, env)? {
+                        ControlFlow::Value(v) => v,
+                        cf => return Ok(cf),
+                    };
+                    if let Value::Closure(c) = callee_val {
+                        return self.call_closure(&c, positional_values);
+                    }
+                    Err(format!("Value of type {} is not callable", callee_val.type_name()))
                 }
             }
             HirExpression::Member(member) => {
@@ -1332,6 +1373,39 @@ impl Interpreter {
                     value.to_repr()
                 )))
             }
+            HirExpression::Closure(c) => {
+                let mut captures = HashMap::new();
+                let mut self_cell = None;
+                for cap in &c.captures {
+                    match cap {
+                        HirCapture::Named(named) => {
+                            let val = match named.mode {
+                                HirCaptureMode::Inout => env.get_raw(&named.name),
+                                _ => env.get(&named.name),
+                            }.ok_or_else(|| {
+                                format!("Capture variable '{}' not found in environment", named.name)
+                            })?;
+                            captures.insert(named.name.clone(), val);
+                        }
+                        HirCapture::RecursiveSelf(_) => {
+                            let cell = Value::Cell(std::rc::Rc::new(std::cell::RefCell::new(Value::Unit)));
+                            captures.insert("self".into(), cell.clone());
+                            self_cell = Some(cell);
+                        }
+                    }
+                }
+                let closure = std::rc::Rc::new(crate::value::ClosureValue {
+                    params: c.parameters.clone(),
+                    body: c.body.clone(),
+                    captures,
+                    is_recursive: self_cell.is_some(),
+                });
+                let val = Value::Closure(closure.clone());
+                if let Some(Value::Cell(inner)) = self_cell {
+                    *inner.borrow_mut() = val.clone();
+                }
+                Ok(ControlFlow::Value(val))
+            }
         }
     }
 
@@ -1463,28 +1537,12 @@ impl Interpreter {
                 }
                 false
             }
-        HirPattern::Tuple(_, items) => {
-            if let Value::Tuple(elements) = value {
-                if elements.len() == items.len() {
-                    let mut temp_bindings = Vec::new();
-                    for (item_pat, item_val) in items.iter().zip(elements.iter()) {
-                        if !Self::value_matches_pattern(item_val, item_pat, &mut temp_bindings) {
-                            return false;
-                        }
-                    }
-                    bindings.extend(temp_bindings);
-                    return true;
-                }
-            }
-            false
-        }
-        HirPattern::EnumConstructor(cons) => {
-            if let Value::Enum(e) = value {
-                if e.enum_name == cons.enum_name && e.variant_name == cons.variant_name {
-                    if cons.payloads.len() == e.payloads.len() {
+            HirPattern::Tuple(_, items) => {
+                if let Value::Tuple(elements) = value {
+                    if elements.len() == items.len() {
                         let mut temp_bindings = Vec::new();
-                        for (p_pat, p_val) in cons.payloads.iter().zip(e.payloads.iter()) {
-                            if !Self::value_matches_pattern(p_val, p_pat, &mut temp_bindings) {
+                        for (item_pat, item_val) in items.iter().zip(elements.iter()) {
+                            if !Self::value_matches_pattern(item_val, item_pat, &mut temp_bindings) {
                                 return false;
                             }
                         }
@@ -1492,21 +1550,37 @@ impl Interpreter {
                         return true;
                     }
                 }
+                false
             }
-            false
-        }
-        HirPattern::Or(_, alternatives) => {
-            for alt in alternatives {
-                let mut temp_bindings = Vec::new();
-                if Self::value_matches_pattern(value, alt, &mut temp_bindings) {
-                    bindings.extend(temp_bindings);
-                    return true;
+            HirPattern::EnumConstructor(cons) => {
+                if let Value::Enum(e) = value {
+                    if e.enum_name == cons.enum_name && e.variant_name == cons.variant_name {
+                        if cons.payloads.len() == e.payloads.len() {
+                            let mut temp_bindings = Vec::new();
+                            for (p_pat, p_val) in cons.payloads.iter().zip(e.payloads.iter()) {
+                                if !Self::value_matches_pattern(p_val, p_pat, &mut temp_bindings) {
+                                    return false;
+                                }
+                            }
+                            bindings.extend(temp_bindings);
+                            return true;
+                        }
+                    }
                 }
+                false
             }
-            false
+            HirPattern::Or(_, alternatives) => {
+                for alt in alternatives {
+                    let mut temp_bindings = Vec::new();
+                    if Self::value_matches_pattern(value, alt, &mut temp_bindings) {
+                        bindings.extend(temp_bindings);
+                        return true;
+                    }
+                }
+                false
+            }
         }
     }
-}
 
 
     fn eval_block(

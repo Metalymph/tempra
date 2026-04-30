@@ -146,7 +146,7 @@ fn test_enum_nested_mismatch_behavior() {
 
     fn main() {
         let x = Nested(Empty);
-        let matched = false;
+        var matched = false;
         let res = match x {
             Nested(Data(v)) => { 
                 matched = true;

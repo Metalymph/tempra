@@ -455,7 +455,27 @@ impl<'src> Parser<'src> {
     }
 
     fn parse_type_atom(&mut self) -> Result<TypeExpr, ParseError> {
-        if self.at(TokenKind::LeftBracket) {
+        if self.at(TokenKind::Fn) {
+            let start = self.advance();
+            self.expect(TokenKind::LeftParen)?;
+            let mut parameters = Vec::new();
+            while !self.at(TokenKind::RightParen) && !self.at(TokenKind::EndOfFile) {
+                parameters.push(self.parse_type()?);
+                if !self.eat(TokenKind::Comma) {
+                    break;
+                }
+            }
+            self.expect(TokenKind::RightParen)?;
+            self.expect(TokenKind::Arrow)?;
+            let return_type = Box::new(self.parse_type()?);
+            let span = Span::new(start.span.start, return_type.span().end);
+            Ok(TypeExpr::Function(FunctionTypeExpr {
+                span,
+                parameters,
+                return_type,
+                is_fallible: false,
+            }))
+        } else if self.at(TokenKind::LeftBracket) {
             let start = self.advance();
             let element_type = Box::new(self.parse_type()?);
             let mut size = None;
@@ -999,6 +1019,9 @@ impl<'src> Parser<'src> {
                     Ok(exprs.into_iter().next().unwrap())
                 }
             }
+            TokenKind::Fn => {
+                self.parse_closure_expression()
+            }
             TokenKind::If => {
                 let start_token = self.advance();
                 let condition = Box::new(self.parse_expression()?);
@@ -1081,6 +1104,94 @@ impl<'src> Parser<'src> {
                 span: token.span,
             }),
         }
+    }
+
+    fn parse_closure_expression(&mut self) -> Result<Expression, ParseError> {
+        let start_token = self.expect(TokenKind::Fn)?;
+        let mut captures = Vec::new();
+
+        if self.at(TokenKind::LeftBracket) {
+            let lb = self.advance();
+            if self.at(TokenKind::RightBracket) {
+                return Err(ParseError {
+                    message: "empty capture list is not allowed; use `fn()` for no captures".into(),
+                    span: Span::new(lb.span.start, self.current().span.end),
+                });
+            }
+
+            while !self.at(TokenKind::RightBracket) && !self.at(TokenKind::EndOfFile) {
+                let c_start = self.current().span.start;
+                
+                if self.at(TokenKind::Identifier) && self.text(self.current().span) == "self" {
+                    let token = self.advance();
+                    captures.push(Capture::RecursiveSelf(token.span));
+                } else {
+                    let mode = if self.eat(TokenKind::Ref) {
+                        CaptureMode::Ref
+                    } else if self.eat(TokenKind::Inout) {
+                        CaptureMode::Inout
+                    } else if self.eat(TokenKind::Consume) {
+                        CaptureMode::Consume
+                    } else {
+                        return Err(ParseError {
+                            message: "invalid capture mode; expected 'ref', 'inout', or 'consume'".into(),
+                            span: self.current().span,
+                        });
+                    };
+
+                    let name = self.expect_identifier()?;
+                    captures.push(Capture::Named(CaptureNamed {
+                        span: Span::new(c_start, name.span.end),
+                        mode,
+                        name,
+                    }));
+                }
+
+                if !self.eat(TokenKind::Comma) {
+                    break;
+                }
+            }
+            self.expect(TokenKind::RightBracket)?;
+        }
+
+        self.expect(TokenKind::LeftParen)?;
+        let mut parameters = Vec::new();
+        while !self.at(TokenKind::RightParen) && !self.at(TokenKind::EndOfFile) {
+            let p_start = self.current().span.start;
+            let is_inout = self.eat(TokenKind::Inout);
+            let p_name = self.expect_identifier()?;
+            self.expect(TokenKind::Colon)?;
+            let p_ty = self.parse_type()?;
+            let p_end = p_ty.span().end;
+
+            parameters.push(Parameter {
+                span: Span::new(p_start, p_end),
+                name: p_name,
+                ty: p_ty,
+                is_inout,
+            });
+
+            if !self.eat(TokenKind::Comma) {
+                break;
+            }
+        }
+        self.expect(TokenKind::RightParen)?;
+
+        let return_type = if self.eat(TokenKind::Arrow) {
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
+
+        let body = self.parse_block()?;
+
+        Ok(Expression::Closure(ClosureExpr {
+            span: Span::new(start_token.span.start, body.span.end),
+            captures,
+            parameters,
+            return_type,
+            body,
+        }))
     }
 
     fn parse_pattern(&mut self) -> Result<Pattern, ParseError> {

@@ -548,7 +548,7 @@ fn test_diag_nested_mismatch_no_accidental_binding() {
     enum Outer { Nested(Inner), Other }
     fn main() {
         let x = Nested(Empty);
-        let bound = false;
+        var bound = false;
         let res = match x {
             Nested(Data(v)) => { bound = true; v },
             _ => { bound = false; -1 },

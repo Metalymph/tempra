@@ -23,17 +23,21 @@ pub fn check_statement(ctx: &mut TypeContext, stmt: &mut HirStatement, expected:
             let expected_ty = l.ty.as_ref().map(|t| ctx.resolve_hir_type(t));
             let value_ty = check_expression(ctx, &mut l.value, expected_ty.as_ref());
             
-            if let Some(expected) = expected_ty {
-                if value_ty != Type::Error && !types_compatible(&expected, &value_ty) {
+            if let Some(expected) = &expected_ty {
+                if value_ty != Type::Error && !types_compatible(expected, &value_ty) {
                     ctx.error(
                         format!("Type mismatch in let: expected {}, found {}", expected, value_ty),
                         l.value.span(),
                     );
                 }
-                ctx.scopes.insert(l.name.clone(), expected);
-            } else {
-                ctx.scopes.insert(l.name.clone(), value_ty.clone());
             }
+            let ty = expected_ty.unwrap_or(value_ty.clone());
+            if let Some(info) = ctx.scopes.lookup_anywhere(&l.name) {
+                if info.is_capture {
+                    ctx.error(format!("cannot shadow captured value '{}'", l.name), l.span);
+                }
+            }
+            ctx.scopes.insert_info(l.name.clone(), ty, false, false);
 
             // Leakage check
             for param_id in value_ty.get_generic_params() {
@@ -51,17 +55,21 @@ pub fn check_statement(ctx: &mut TypeContext, stmt: &mut HirStatement, expected:
             let expected_ty = v.ty.as_ref().map(|t| ctx.resolve_hir_type(t));
             let value_ty = check_expression(ctx, &mut v.value, expected_ty.as_ref());
             
-            if let Some(expected) = expected_ty {
-                if value_ty != Type::Error && !types_compatible(&expected, &value_ty) {
+            if let Some(expected) = &expected_ty {
+                if value_ty != Type::Error && !types_compatible(expected, &value_ty) {
                     ctx.error(
                         format!("Type mismatch in var: expected {}, found {}", expected, value_ty),
                         v.value.span(),
                     );
                 }
-                ctx.scopes.insert(v.name.clone(), expected);
-            } else {
-                ctx.scopes.insert(v.name.clone(), value_ty.clone());
             }
+            let ty = expected_ty.unwrap_or(value_ty.clone());
+            if let Some(info) = ctx.scopes.lookup_anywhere(&v.name) {
+                if info.is_capture {
+                    ctx.error(format!("cannot shadow captured value '{}'", v.name), v.span);
+                }
+            }
+            ctx.scopes.insert_info(v.name.clone(), ty, true, false);
 
             // Leakage check
             for param_id in value_ty.get_generic_params() {

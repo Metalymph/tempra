@@ -83,6 +83,35 @@ pub enum ImportPathKind {
     Package,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaptureMode {
+    Ref,
+    Inout,
+    Consume,
+}
+
+#[derive(Debug, Clone)]
+pub enum Capture {
+    Named(CaptureNamed),
+    RecursiveSelf(Span),
+}
+
+#[derive(Debug, Clone)]
+pub struct CaptureNamed {
+    pub span: Span,
+    pub mode: CaptureMode,
+    pub name: Token,
+}
+
+impl Capture {
+    pub fn span(&self) -> Span {
+        match self {
+            Capture::Named(n) => n.span,
+            Capture::RecursiveSelf(s) => *s,
+        }
+    }
+}
+
 // ----------------------------------------------------------------------------
 // Functions
 // ----------------------------------------------------------------------------
@@ -179,6 +208,7 @@ pub enum TypeExpr {
     Apply(TypeApplyExpr),
     Optional(OptionalTypeExpr),
     Result(ResultTypeExpr),
+    Function(FunctionTypeExpr),
 }
 
 impl TypeExpr {
@@ -190,6 +220,7 @@ impl TypeExpr {
             TypeExpr::Apply(expr) => expr.span,
             TypeExpr::Optional(expr) => expr.span,
             TypeExpr::Result(expr) => expr.span,
+            TypeExpr::Function(expr) => expr.span,
         }
     }
 }
@@ -231,6 +262,14 @@ pub struct ResultTypeExpr {
     pub span: Span,
     pub ok: Box<TypeExpr>,
     pub err: Option<Box<TypeExpr>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FunctionTypeExpr {
+    pub span: Span,
+    pub parameters: Vec<TypeExpr>,
+    pub return_type: Box<TypeExpr>,
+    pub is_fallible: bool,
 }
 
 // ----------------------------------------------------------------------------
@@ -350,6 +389,7 @@ pub enum Expression {
     Tuple(TupleExpr),
     Array(ArrayExpr),
     StructLiteral(StructLiteralExpr),
+    Closure(ClosureExpr),
     Command(CommandExpr),
 }
 
@@ -385,6 +425,7 @@ impl Expression {
             Expression::Tuple(expr) => expr.span,
             Expression::Array(expr) => expr.span,
             Expression::StructLiteral(expr) => expr.span,
+            Expression::Closure(expr) => expr.span,
             Expression::Command(expr) => expr.span,
         }
     }
@@ -432,6 +473,15 @@ pub struct BoolExpr {
 pub struct BlockExpr {
     pub span: Span,
     pub block: Block,
+}
+
+#[derive(Debug, Clone)]
+pub struct ClosureExpr {
+    pub span: Span,
+    pub captures: Vec<Capture>,
+    pub parameters: Vec<Parameter>,
+    pub return_type: Option<TypeExpr>,
+    pub body: Block,
 }
 
 #[derive(Debug, Clone)]

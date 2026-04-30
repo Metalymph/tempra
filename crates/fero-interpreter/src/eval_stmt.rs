@@ -23,7 +23,7 @@ impl Interpreter {
             HirStatement::Var(var_stmt) => {
                 match self.eval_expression(&var_stmt.value, env)? {
                     ControlFlow::Value(val) => {
-                        env.insert(var_stmt.name.clone(), val);
+                        env.insert_var(var_stmt.name.clone(), val);
                         Ok(ControlFlow::Value(Value::Unit))
                     }
                     cf => Ok(cf),

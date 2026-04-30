@@ -107,4 +107,41 @@ impl Interpreter {
             Ok(ControlFlow::Value(result_val))
         }
     }
+
+    pub fn call_closure(
+        &mut self,
+        closure: &std::rc::Rc<crate::value::ClosureValue>,
+        args: Vec<Value>,
+    ) -> Result<ControlFlow, String> {
+        let mut env = RuntimeEnv::new();
+
+        // Bind captures
+        for (name, val) in &closure.captures {
+            env.insert(name.clone(), val.clone());
+        }
+
+        // Bind parameters
+        if closure.params.len() != args.len() {
+            return Err("Arg count mismatch for closure".to_string());
+        }
+        for (param, arg) in closure.params.iter().zip(args.into_iter()) {
+            env.insert(param.name.clone(), arg);
+        }
+
+        let mut result_val = Value::Unit;
+        for stmt in &closure.body.statements {
+            let flow = self.eval_statement(stmt, &mut env)?;
+            match flow {
+                ControlFlow::Value(v) => result_val = v,
+                ControlFlow::Return(v) => return Ok(ControlFlow::Return(v)),
+                ControlFlow::Exit(code) => return Ok(ControlFlow::Exit(code)),
+                ControlFlow::Crash(msg) => return Ok(ControlFlow::Crash(msg)),
+                ControlFlow::Break | ControlFlow::Continue => {
+                    return Err("Break/Continue outside of loop".into());
+                }
+            }
+        }
+
+        Ok(ControlFlow::Value(result_val))
+    }
 }

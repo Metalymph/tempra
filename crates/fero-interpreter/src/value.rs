@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::cell::RefCell;
+use fero_hir::*;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum Value {
     Unit,
     Bool(bool),
@@ -24,6 +26,8 @@ pub enum Value {
     Error(String),
     Regex(RegexValue),
     Enum(Box<EnumValue>),
+    Closure(Rc<ClosureValue>),
+    Cell(Rc<RefCell<Value>>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -307,6 +311,20 @@ pub struct StructInstance {
     pub fields: HashMap<String, Value>,
 }
 
+#[derive(Debug, Clone)]
+pub struct ClosureValue {
+    pub params: Vec<HirParameter>,
+    pub body: HirBlock,
+    pub captures: HashMap<String, Value>,
+    pub is_recursive: bool,
+}
+
+impl PartialEq for ClosureValue {
+    fn eq(&self, _other: &Self) -> bool {
+        false // Closures are not comparable
+    }
+}
+
 impl Value {
     /// Returns a human-readable type name for use in runtime error messages.
     pub fn type_name(&self) -> &'static str {
@@ -328,6 +346,8 @@ impl Value {
             Value::Error(_)    => "Error",
             Value::Regex(_)    => "Regex",
             Value::Enum(_)     => "Enum",
+            Value::Closure(_)  => "Function",
+            Value::Cell(c)     => c.borrow().type_name(),
         }
     }
 
@@ -366,6 +386,7 @@ impl Value {
                     format!("{}({})", e.variant_name, elems.join(", "))
                 }
             }
+            Value::Closure(_) => "fn(...)".to_string(),
             _ => self.to_string(),
         }
     }
@@ -461,6 +482,35 @@ impl std::fmt::Display for Value {
                     write!(f, ")")
                 }
             }
+            Value::Closure(_) => write!(f, "fn(...)"),
+            Value::Cell(c) => write!(f, "Ref({})", c.borrow().to_repr()),
+        }
+    }
+}
+
+impl PartialEq for Value {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Value::Unit, Value::Unit) => true,
+            (Value::Bool(a), Value::Bool(b)) => a == b,
+            (Value::Int64(a), Value::Int64(b)) => a == b,
+            (Value::UInt8(a), Value::UInt8(b)) => a == b,
+            (Value::Float64(a), Value::Float64(b)) => a == b,
+            (Value::String(a), Value::String(b)) => a == b,
+            (Value::Array(a), Value::Array(b)) => a == b,
+            (Value::Slice(a), Value::Slice(b)) => a == b,
+            (Value::Tuple(a), Value::Tuple(b)) => a == b,
+            (Value::Struct(a), Value::Struct(b)) => a == b,
+            (Value::Command(a), Value::Command(b)) => a == b,
+            (Value::CommandResult(a), Value::CommandResult(b)) => a == b,
+            (Value::Result(a), Value::Result(b)) => a == b,
+            (Value::Option(a), Value::Option(b)) => a == b,
+            (Value::Error(a), Value::Error(b)) => a == b,
+            (Value::Regex(a), Value::Regex(b)) => a == b,
+            (Value::Enum(a), Value::Enum(b)) => a == b,
+            (Value::Closure(a), Value::Closure(b)) => Rc::ptr_eq(a, b),
+            (Value::Cell(a), Value::Cell(b)) => Rc::ptr_eq(a, b) || *a.borrow() == *b.borrow(),
+            _ => false,
         }
     }
 }

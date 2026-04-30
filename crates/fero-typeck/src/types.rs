@@ -51,6 +51,7 @@ pub enum Type {
     Result(Box<Type>, Box<Type>),
     /// Magic type for builtin namespaces like fs, os, env, Regex constructors.
     Namespace(std::string::String),
+    Function(Vec<Type>, Box<Type>),
     /// A generic parameter placeholder (e.g. T)
     GenericParam { id: GenericParamId, name: std::string::String },
 }
@@ -98,6 +99,7 @@ impl Type {
             Type::Tuple(elems) => elems.iter().any(|e| e.contains_generic_param()),
             Type::Struct(_, args) | Type::Enum(_, args) => args.iter().any(|a| a.contains_generic_param()),
             Type::Result(ok, err) => ok.contains_generic_param() || err.contains_generic_param(),
+            Type::Function(params, ret) => params.iter().any(|p| p.contains_generic_param()) || ret.contains_generic_param(),
             Type::GenericParam { .. } => true,
             _ => false,
         }
@@ -120,6 +122,12 @@ impl Type {
             Type::Result(ok, err) => {
                 params.extend(ok.get_generic_params());
                 params.extend(err.get_generic_params());
+            }
+            Type::Function(p_types, ret) => {
+                for p in p_types {
+                    params.extend(p.get_generic_params());
+                }
+                params.extend(ret.get_generic_params());
             }
             Type::GenericParam { id, .. } => params.push(*id),
             _ => {}
@@ -154,6 +162,7 @@ impl Type {
                 | Type::Enum(_, _)
                 | Type::Regex
                 | Type::Option(_)
+                | Type::Function(_, _)
         )
     }
 }
@@ -225,6 +234,16 @@ impl fmt::Display for Type {
             Type::BuiltinError => write!(f, "Error"),
             Type::Result(t, e) => write!(f, "Result({}, {})", t, e),
             Type::Namespace(n) => write!(f, "Namespace({})", n),
+            Type::Function(params, ret) => {
+                write!(f, "fn(")?;
+                for (i, p) in params.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", p)?;
+                }
+                write!(f, ") -> {}", ret)
+            }
             Type::GenericParam { name, .. } => write!(f, "{}", name),
         }
     }

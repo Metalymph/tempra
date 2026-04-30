@@ -64,6 +64,19 @@ Param
 
 ReturnType
   = "->" Type
+
+Closure
+  = "fn" ("[" CaptureList "]")? "(" ParamList? ")" ReturnType? Block
+
+CaptureList
+  = CaptureItem ("," CaptureItem)*
+
+CaptureItem
+  = "self"
+  | CaptureMode Identifier
+
+CaptureMode
+  = "ref" | "inout" | "consume"
 ```
 
 Example:
@@ -338,6 +351,7 @@ Primary
   | MatchExpr
   | ForExpr
   | StructLiteral
+  | Closure
 ```
 
 ---
@@ -462,7 +476,11 @@ Type
   = Identifier ("(" TypeList? ")")?  // Named or Type Constructor
   | ArrayType
   | TupleType
+  | FunctionType
   | "Never"
+
+FunctionType
+  = "fn" "(" TypeList? ")" ReturnType?
 ```
 
 ```text

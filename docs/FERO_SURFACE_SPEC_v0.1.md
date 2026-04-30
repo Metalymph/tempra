@@ -205,6 +205,7 @@ struct User {
     name: String
     var bank_value: UInt64
 }
+```
 
 ### Generic Structs
 
@@ -222,7 +223,6 @@ Rules:
 - Generic types are instantiated using function-call syntax: `Box(Int)`.
 - Instantiation is strict; `Box` without arguments is invalid if `Box` is generic.
 - Type arguments are part of the type identity.
-```
 
 ### Default values
 
@@ -266,6 +266,7 @@ enum Result {
     Ok(String)
     Err(String)
 }
+```
 
 ### Generic Enums
 
@@ -283,7 +284,6 @@ Rules:
 - Generic enum constructors (`Some`, `Ok`, etc.) require an **expected type context** to resolve.
 - Ambiguous generic constructors without expected type are errors.
 - Fero v1 does not infer the full generic enum type from the constructor alone (no `let x = Some(1)`).
-```
 
 Usage:
 
@@ -460,56 +460,9 @@ Rules:
 - OR-patterns and wildcards are **not** supported in `is`.
 - Naked bindings (e.g., `if x is y`) are forbidden.
 
-### Regex (v0)
-
-`Regex` is a first-class value type built using composable constructors, not a text mini-language as primary API.
-
-Supported constructors:
-
-- `Regex.text(String)`
-- `Regex.any()`
-- `Regex.seq(Regex, Regex, ...)`
-- `Regex.alt(Regex, Regex, ...)`
-- `Regex.optional(Regex)`
-- `Regex.zero_or_more(Regex)`
-- `Regex.one_or_more(Regex)`
-- `Regex.start()`
-- `Regex.end()`
-- `Regex.digit()`
-- `Regex.space()`
-- `Regex.word()`
-
-Supported methods:
-
-- `re.is_match(text: String) -> Bool`
-- `re.replace(text: String, with: String) -> String` (global replacement, no captures)
-
-Runtime semantics (v0):
-
-- matching and scanning are over Unicode scalar values (not raw bytes)
-- `is_match` is true if any match exists somewhere in input, unless constrained by anchors
-- `replace` is global, literal replacement only, and scans left-to-right
-- after a non-empty match, scanning continues from match end
-- after a zero-width match during scanning/replacement, engine advances by at least 1 Unicode scalar value
-- zero-width at end-of-text is handled once and terminates (no infinite loops)
-- `Regex.start()` matches only at absolute start of full input
-- `Regex.end()` matches only at absolute end of full input
-- no multiline anchor semantics in v0
-
-Explicitly not part of v0:
-
-- capture groups and named groups
-- backreferences
-- lookaround
-- flags system
-
-Rationale:
-
-- constructor-based regex values are structured data and are ready for future compile-time and AOT optimizations.
-
 ---
 
-## 14. Numeric Types
+## 15. Numeric Types
 
 Supported numeric types:
 
@@ -532,7 +485,7 @@ Rules:
 
 ---
 
-## 15. Inout
+## 16. Inout
 
 ```fero
 fn increment(inout value: UInt64) {
@@ -548,7 +501,7 @@ Rules:
 
 ---
 
-## 16. Methods and Extend
+## 17. Methods and Extend
 
 ### Methods inside a type
 
@@ -575,7 +528,7 @@ extend User {
 
 ---
 
-## 17. Errors
+## 18. Errors
 
 Fero has no exceptions.
 
@@ -593,7 +546,7 @@ Errors are explicit values.
 
 ---
 
-## 18. Conversion and Casting
+## 19. Conversion and Casting
 
 ### Simple explicit conversion
 
@@ -622,36 +575,9 @@ Rules:
 - `Type.parse(text)` is for parsing text into values
 - `Type.try(value)` is for fallible conversions such as narrowing
 
-### v0.1 conversion rules
-
-#### Allowed with `Type(value)`
-
-- safe integer widening
-- safe float widening
-- total well-defined conversion to `String`
-
-#### Allowed with `Type.parse(text)`
-
-- `String -> UInt64`
-- `String -> Int64`
-- `String -> Float64`
-
-#### Allowed with `Type.try(value)`
-
-- narrowing integer conversions
-- float-to-integer conversions
-- conversions that may overflow or lose information
-
-### Not part of v0.1
-
-- `as`
-- reinterpret casts
-- pointer casts
-- unsafe user-facing casts
-
 ---
 
-## 19. Operator Overloading
+## 20. Operator Overloading
 
 Fero allows limited operator overloading.
 
@@ -662,11 +588,6 @@ Fero allows limited operator overloading.
 - `*`
 - `/`
 
-Potential later additions:
-
-- unary `-`
-- `==`
-
 Rules:
 
 - no custom operators
@@ -675,7 +596,7 @@ Rules:
 
 ---
 
-## 20. Boolean Operators
+## 21. Boolean Operators
 
 Fero uses:
 
@@ -689,17 +610,93 @@ Fero does not use:
 - `or`
 - `not`
 
-Example:
+---
+
+## 22. Closures
+
+Fero supports explicit-capture closures as first-class callable values.
+
+### Syntax
 
 ```fero
-if ok && ready {
-    run()
+let add = fn(x: Int) -> Int {
+    x + 1
+}
+
+let base = 10
+let add_base = fn[ref base](x: Int) -> Int {
+    base + x
 }
 ```
 
+### Function Item vs Closure Value
+
+Fero distinguishes between **Function Items** and **Closure Values**:
+
+- **Function Item** (`fn name(...) { ... }`):
+  - Named and static.
+  - No lexical environment (no captures).
+  - Can be recursive.
+- **Closure Value** (`let name = fn[...]() { ... }`):
+  - First-class callable value.
+  - Can have an explicit lexical environment via captures.
+  - **Recursion**: Supported via explicit `self` capture: `fn[self](...) { ... self(...) ... }`.
+
+### Syntax Grammar
+
+```
+CaptureList
+  = Capture ("," Capture)*
+  | "self" ("," Capture)*
+
+Capture
+  = CaptureMode Identifier
+```
+
+### Rules and Semantics
+
+- **Explicit Captures**: No implicit capture of outer variables. Every captured value must be explicitly listed in `[...]`.
+- **Recursive closures**: Explicitly captured via `[self]`.
+  - `fn[self]` provides a stable recursive self-reference within the closure body.
+  - Recursive identity is preserved across calls and through value passing.
+  - `self` behaves as an immutable local binding of the closure's function type.
+  - `self` is only available if explicitly listed in the capture list as `self` (without modifiers).
+  - `self` is reserved inside the closure body and cannot be shadowed by parameters or local bindings.
+- **Nested Closure Isolation**: Recursive `self` does not automatically propagate to nested closures. To use recursion in a nested closure, it must be explicitly captured (e.g., `fn[ref self](...)`).
+- **Implicit recursion rejected**: `let fact = fn(n: Int) -> Int { fact(n - 1) }` is invalid (missing explicit capture).
+- **Capture Modes**:
+  - `ref`: Read-only capture. Body cannot assign to it.
+  - `inout`: Mutable capture (requires source to be `var`). Mutation persists across calls.
+  - `consume`: Transfers ownership into the closure. The variable is no longer usable in the outer scope after closure creation.
+- **Empty Environment**: `fn()` (without brackets) is sugar for a closure with a guaranteed empty environment.
+- **No `fn[]`**: Empty capture lists `fn[]` are forbidden. Use `fn()` instead.
+- **Shadowing**: Captured names (including `self`) cannot be shadowed by parameters or local variables inside the closure body.
+- **Equality**: Closures are not comparable.
+
+### Storage and Escaping
+
+- **Storage**: The closure storage strategy and runtime representation are implementation-defined. The language does not guarantee specific memory layouts or allocation strategies (e.g., heap vs stack).
+- **Escaping**: Closures may be stored and passed as values. Lifetime and escape restrictions are implementation-defined in v1 and will be hardened in future versions with ownership/borrow analysis.
+
+> [!NOTE]
+> The runtime representation of recursive closures is implementation-defined and must not be relied upon by user code.
+
+> [!NOTE]
+> **Tail-Call Optimization (TCO)**: may be implemented in the future but is not currently guaranteed.
+
+### Closure Types
+
+```fero
+let f: fn(Int) -> Int = ...
+```
+
+Rules:
+- Closure types are written as `fn(params...) -> Return`.
+- Function items (defined with `fn name(...)`) are not automatically closure values, but can be converted or used where a closure is expected if they match the signature and have no environment.
+
 ---
 
-## 21. Commands
+## 23. Commands
 
 Commands are ordinary values of type `Command`.
 
@@ -707,41 +704,15 @@ Commands are ordinary values of type `Command`.
 let c = cmd("git", ["status"])
 ```
 
-Fero does not define a separate shell grammar.
-
 ### Supported command operators
 
 - `|`
 - `&&`
 - `||`
 
-Examples:
-
-```fero
-cmd("cat", ["file.txt"]) | cmd("grep", ["error"])
-cmd("build") && cmd("test")
-cmd("fetch") || cmd("fallback")
-```
-
-### Redirection
-
-Redirection is not operator-based in v0.1.
-
-Use methods or APIs instead:
-
-```fero
-cmd("echo", ["done"]).append_to("build.log")
-```
-
-Rules:
-
-- operators are used for simple chaining
-- methods are used for detailed command configuration
-- no shell DSL inside Fero
-
 ---
 
-## 22. Imports
+## 24. Imports
 
 Supported import forms:
 
@@ -757,181 +728,3 @@ Rules:
 - `std/...` for standard library modules
 - `./...` for relative imports
 - `pkg/...` for package imports
-
-Not part of v0.1 implementation:
-
-- URL imports
-- Wasm component imports in regular source syntax
-
----
-
-## 23. Script Mode vs App Mode
-
-### Script mode
-
-- no required `main`
-- top-level code is allowed
-
-### App/package mode
-
-- an entrypoint is required
-- `main` is the default entrypoint
-
----
-
-## 24. Lexer Requirements for v0.1
-
-The lexer must support:
-
-### Keywords
-
-- `let`
-- `var`
-- `fn`
-- `if`
-- `else`
-- `match`
-- `for`
-- `in`
-- `struct`
-- `enum`
-- `extend`
-- `import`
-- `return`
-- `break`
-- `continue`
-- `inout`
-
-### Literals
-
-- integer literals
-- float literals
-- string literals
-- boolean literals
-
-### Symbols
-
-- `(`
-- `)`
-- `{`
-- `}`
-- `[`
-- `]`
-- `,`
-- `.`
-- `:`
-- `=`
-- `->`
-- `=>`
-- `..`
-- `+`
-- `-`
-- `*`
-- `/`
-- `&&`
-- `||`
-- `!`
-- `<`
-- `>`
-- `|`
-- `>>`
-- `_`
-
----
-
-## 25. Parser Requirements for v0.1
-
-The parser must support:
-
-### Items
-
-- `import`
-- `fn`
-- `struct`
-- `enum`
-- `extend`
-
-### Statements
-
-- `let`
-- `var`
-- expression statements
-- `return`
-- `break`
-- `continue`
-- `for`
-
-### Expressions
-
-- literals
-- identifiers
-- function calls
-- member access
-- blocks
-- `if`
-- `match`
-- struct literals
-- tuple literals
-- array literals
-- `for` expressions
-- unary operators
-- binary operators
-
----
-
-## 26. Closures (Future Design)
-
-Closures are currently **not implemented** in Fero v0.1.
-
-Planned design:
-- Explicit capture lists (inspired by Swift/C++).
-- Lightweight syntax: `|x, y| x + y`.
-- Captures by value by default, `inout` for mutable reference captures.
-- Integrated with the structural interface system for high-performance function passing.
-
----
-
-## 27. Frozen Decisions
-
-The following decisions are considered frozen for implementation start:
-
-- `let` and `var`
-- only one loop construct: `for`
-- `if` and `match` are expressions
-- `inout` for mutable passing
-- struct fields immutable by default
-- `var` for mutable struct fields
-- one public `String` type
-- explicit numeric types
-- enum constructors inferred from context
-- `Command` as a normal type
-- command chaining through `|`, `&&`, `||`
-- conversions via:
-  - `Type(value)`
-  - `Type.parse(text)`
-  - `Type.try(value)`
-
----
-
-## 27. Implementation Priority
-
-Implementation should begin with:
-
-1. lexer
-2. parser
-3. AST
-4. HIR
-5. type checking
-6. MIR
-7. Fero IR
-8. interpreter
-
-Not part of the first implementation pass:
-
-- structural interfaces
-- comptime
-- effects system
-- concurrency model
-- URL imports
-- Wasm component imports
-- advanced operator overloading

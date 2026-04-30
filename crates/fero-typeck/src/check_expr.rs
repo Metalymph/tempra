@@ -4,6 +4,8 @@ use crate::context::TypeContext;
 use crate::types::{types_compatible, Type};
 use fero_hir::*;
 use fero_span::Span;
+use std::collections::HashMap;
+use crate::env::VariableInfo;
 
 fn get_call_arg_mut<'a>(args: &'a mut [HirCallArgument], idx: usize, arg_name: &str) -> Option<&'a mut HirExpression> {
     let mut found_idx = None;
@@ -78,6 +80,7 @@ pub fn check_expression(ctx: &mut TypeContext, expr: &mut HirExpression, expecte
             }
             Type::Enum(e.enum_name.clone(), vec![])
         }
+        HirExpression::Closure(c) => check_closure(ctx, c, expected),
     }
 }
 
@@ -236,7 +239,7 @@ fn check_try(ctx: &mut TypeContext, e: &mut HirTryExpr, _expected: Option<&Type>
 
 /// Semantic category of a resolved name.
 enum ResolvedName {
-    LocalVariable(Type),
+    LocalVariable(VariableInfo),
     Namespace(String),
     BuiltinConstant(Type),
     BuiltinFunction(String),
@@ -247,8 +250,16 @@ enum ResolvedName {
 
 /// Helper: Resolves a name to its fundamental semantic category.
 fn resolve_name(ctx: &TypeContext, name: &str, expected: Option<&Type>) -> Result<ResolvedName, String> {
-    if let Some(ty) = ctx.scopes.lookup(name) {
-        return Ok(ResolvedName::LocalVariable(ty.clone()));
+    if let Some(info) = ctx.scopes.lookup(name) {
+        if info.is_consumed {
+            return Err(format!("use of consumed value '{}'", name));
+        }
+        return Ok(ResolvedName::LocalVariable(info.clone()));
+    }
+
+    // Check if it exists outside isolation boundary for closures
+    if let Some(_) = ctx.scopes.lookup_anywhere(name) {
+        return Err(format!("use of external value '{}' requires explicit capture", name));
     }
 
     if matches!(name, "fs" | "os" | "env" | "Regex") {
@@ -309,7 +320,7 @@ fn check_name(
     expected: Option<&Type>,
 ) -> Type {
     match resolve_name(ctx, name, expected) {
-        Ok(ResolvedName::LocalVariable(ty)) => ty,
+        Ok(ResolvedName::LocalVariable(info)) => info.ty,
         Ok(ResolvedName::Namespace(ns)) => Type::Namespace(ns),
         Ok(ResolvedName::BuiltinConstant(ty)) => ty,
         Ok(ResolvedName::EnumConstructor(enum_name, variant_name)) => {
@@ -377,6 +388,7 @@ enum ResolvedCallee {
     Method(Type, String),             // receiver_type, method_name
     Namespace(String, String),       // namespace_name, method_name
     BuiltinFunction(String),
+    Closure(Vec<Type>, Type),
     Unknown,
 }
 
@@ -387,17 +399,39 @@ fn resolve_callee(ctx: &mut TypeContext, callee: &mut HirExpression, expected: O
                 Ok(ResolvedName::Function(f)) => ResolvedCallee::Function(f),
                 Ok(ResolvedName::BuiltinFunction(f)) => ResolvedCallee::BuiltinFunction(f),
                 Ok(ResolvedName::EnumConstructor(e, v)) => ResolvedCallee::EnumConstructor(e, v),
+                Ok(ResolvedName::LocalVariable(info)) => {
+                    if let Type::Function(params, ret) = info.ty {
+                        ResolvedCallee::Closure(params, *ret)
+                    } else {
+                        ResolvedCallee::Unknown
+                    }
+                }
                 _ => ResolvedCallee::Unknown,
             }
         }
         HirExpression::Member(m) => {
             let obj_ty = check_expression(ctx, &mut m.object, None);
-            match obj_ty {
-                Type::Namespace(ns) => ResolvedCallee::Namespace(ns, m.field.clone()),
-                _ => ResolvedCallee::Method(obj_ty, m.field.clone()),
+            match &obj_ty {
+                Type::Namespace(ns) => ResolvedCallee::Namespace(ns.clone(), m.field.clone()),
+                Type::Struct(name, _) => {
+                    if let Some(field_ty) = ctx.lookup_field(name, &m.field) {
+                        if let Type::Function(params, ret) = field_ty {
+                            return ResolvedCallee::Closure(params, *ret);
+                        }
+                    }
+                    ResolvedCallee::Method(obj_ty.clone(), m.field.clone())
+                }
+                _ => ResolvedCallee::Method(obj_ty.clone(), m.field.clone()),
             }
         }
-        _ => ResolvedCallee::Unknown,
+        _ => {
+            let ty = check_expression(ctx, callee, None);
+            if let Type::Function(params, ret) = ty {
+                ResolvedCallee::Closure(params, *ret)
+            } else {
+                ResolvedCallee::Unknown
+            }
+        }
     }
 }
 
@@ -462,6 +496,9 @@ fn check_binary(ctx: &mut TypeContext, b: &mut HirBinary, _expected: Option<&Typ
             left
         }
         HirBinaryOp::Eq | HirBinaryOp::NotEq => {
+            if let Type::Function(_, _) = left {
+                ctx.error("closures are not comparable".to_string(), b.span);
+            }
             if left != right {
                 let both_int = (left == Type::Int || left == Type::Int64)
                     && (right == Type::Int || right == Type::Int64);
@@ -535,7 +572,17 @@ fn check_binary(ctx: &mut TypeContext, b: &mut HirBinary, _expected: Option<&Typ
                         }
                     }
                 }
-            } else if !matches!(&*b.left, HirExpression::Name(_, _)) {
+            } else if let HirExpression::Name(span, name) = &*b.left {
+                if let Some(info) = ctx.scopes.lookup(name) {
+                    if !info.is_mutable {
+                        if info.is_capture {
+                            ctx.error(format!("cannot assign to ref capture '{}'", name), *span);
+                        } else {
+                            ctx.error(format!("cannot assign to immutable value '{}'", name), *span);
+                        }
+                    }
+                }
+            } else {
                 // For now only Name and Member are assignable
                 ctx.error("invalid assignment target".to_string(), b.span);
             }
@@ -1399,6 +1446,30 @@ fn check_call(ctx: &mut TypeContext, expr: &mut HirExpression, expected: Option<
                  });
             }
             return result_ty;
+        }
+        ResolvedCallee::Closure(params, ret) => {
+            if let HirExpression::Call(ref mut c) = expr {
+                if c.args.len() != params.len() {
+                    ctx.error(
+                        format!("expected {} arguments, found {}", params.len(), c.args.len()),
+                        c.span,
+                    );
+                }
+                for (i, arg) in c.args.iter_mut().enumerate() {
+                    let arg_expr = get_call_arg_mut_legacy(arg, ctx);
+                    let target_ty = params.get(i);
+                    let arg_ty = check_expression(ctx, arg_expr, target_ty);
+                    if let Some(target_ty) = target_ty {
+                        if arg_ty != Type::Error && !types_compatible(target_ty, &arg_ty) {
+                            ctx.error(
+                                format!("argument type mismatch: expected {}, found {}", target_ty, arg_ty),
+                                arg_expr.span(),
+                            );
+                        }
+                    }
+                }
+                return ret;
+            }
         }
         ResolvedCallee::Namespace(ns, method) => {
             if let HirExpression::Call(ref mut c) = expr {
@@ -2349,4 +2420,138 @@ fn check_struct_literal(ctx: &mut TypeContext, s: &mut HirStructLiteral) -> Type
     }
 
     ty
+}
+
+fn check_closure(ctx: &mut TypeContext, c: &mut HirClosure, expected: Option<&Type>) -> Type {
+    let mut expected_ret = None;
+    let mut expected_params = Vec::new();
+
+    if let Some(Type::Function(params, ret)) = expected {
+        expected_ret = Some((**ret).clone());
+        expected_params = params.clone();
+    }
+
+    // Resolve parameters
+    let mut param_types = Vec::new();
+    for (i, p) in c.parameters.iter().enumerate() {
+        let ty = ctx.resolve_hir_type(&p.ty);
+        if let Some(exp_p) = expected_params.get(i) {
+            if !types_compatible(exp_p, &ty) {
+                ctx.error(
+                    format!("parameter type mismatch: expected {}, found {}", exp_p, ty),
+                    p.span,
+                );
+            }
+        }
+        param_types.push(ty);
+    }
+
+    let return_type = if let Some(ret_ty_expr) = &c.return_type {
+        ctx.resolve_hir_type(ret_ty_expr)
+    } else {
+        expected_ret.unwrap_or(Type::Unit)
+    };
+
+    let mut seen_captures = HashMap::new();
+    let mut capture_info = Vec::new();
+    let mut has_recursive_self = false;
+
+    for cap in &c.captures {
+        match cap {
+            HirCapture::Named(named) => {
+                if let Some(_prev_span) = seen_captures.insert(named.name.clone(), named.span) {
+                    ctx.error(format!("duplicate capture: '{}'", named.name), named.span);
+                }
+
+                if let Some(info) = ctx.scopes.lookup_anywhere(&named.name).cloned() {
+                    if info.is_consumed {
+                        ctx.error(format!("use of consumed value '{}'", named.name), named.span);
+                    }
+                    
+                    if named.mode == HirCaptureMode::Consume {
+                        ctx.scopes.mark_consumed(&named.name);
+                    }
+
+                    let is_mutable = match named.mode {
+                        HirCaptureMode::Ref => false,
+                        HirCaptureMode::Inout => {
+                            if !info.is_mutable {
+                                ctx.error(
+                                    format!("cannot capture immutable value '{}' as inout", named.name),
+                                    named.span,
+                                );
+                            }
+                            true
+                        }
+                        HirCaptureMode::Consume => false,
+                    };
+                    capture_info.push((named.name.clone(), info.ty.clone(), is_mutable));
+                } else {
+                    ctx.error(
+                        format!("cannot capture unknown value '{}'", named.name),
+                        named.span,
+                    );
+                }
+            }
+            HirCapture::RecursiveSelf(span) => {
+                if let Some(_prev_span) = seen_captures.insert("self".into(), span.clone()) {
+                    ctx.error("duplicate capture: 'self'", span.clone());
+                }
+                has_recursive_self = true;
+            }
+        }
+    }
+
+    let closure_type = Type::Function(param_types.clone(), Box::new(return_type.clone()));
+
+    // Push isolated scope
+    ctx.scopes.push_isolated_scope();
+
+    // Inject recursive self if present
+    if has_recursive_self {
+        ctx.scopes.insert_info("self".into(), closure_type.clone(), false, true);
+    }
+
+    // Insert other captures into isolated scope
+    for (name, ty, is_mutable) in capture_info {
+        ctx.scopes.insert_info(name, ty, is_mutable, true);
+    }
+
+
+
+    // Insert parameters into scope
+    for (p, ty) in c.parameters.iter().zip(param_types.iter()) {
+        if let Some(info) = ctx.scopes.lookup(&p.name) {
+            if info.is_capture {
+                ctx.error(format!("cannot shadow captured value '{}'", p.name), p.span);
+            }
+        }
+        ctx.scopes.insert_info(p.name.clone(), ty.clone(), false, false);
+    }
+
+    // Check body
+    let prev_ret = ctx.current_return_type.take();
+    let prev_fallible = ctx.current_is_fallible;
+
+    ctx.current_return_type = Some(return_type.clone());
+    ctx.current_is_fallible = false;
+
+    let body_ty = crate::check_stmt::check_block(ctx, &mut c.body, Some(&return_type));
+
+    if return_type != Type::Unit && !types_compatible(&return_type, &body_ty) {
+        ctx.error(
+            format!(
+                "closure return type mismatch: expected {}, found {}",
+                return_type, body_ty
+            ),
+            c.body.span,
+        );
+    }
+
+    ctx.current_return_type = prev_ret;
+    ctx.current_is_fallible = prev_fallible;
+
+    ctx.scopes.pop_isolated_scope();
+
+    Type::Function(param_types, Box::new(return_type))
 }

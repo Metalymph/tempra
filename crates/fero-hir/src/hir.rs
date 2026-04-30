@@ -178,6 +178,7 @@ pub enum HirExpression {
     Array(Span, Vec<HirExpression>),
     StructLiteral(HirStructLiteral),
     EnumConstructor(HirEnumConstructor),
+    Closure(HirClosure),
 }
 
 impl HirExpression {
@@ -208,6 +209,7 @@ impl HirExpression {
             HirExpression::StructLiteral(e) => e.span,
             HirExpression::Unwrap(e) => e.span,
             HirExpression::EnumConstructor(e) => e.span,
+            HirExpression::Closure(e) => e.span,
         }
     }
 }
@@ -372,6 +374,44 @@ pub struct HirStructLiteral {
     pub fields: Vec<(String, HirExpression)>,
 }
 
+#[derive(Debug, Clone)]
+pub struct HirClosure {
+    pub span: Span,
+    pub captures: Vec<HirCapture>,
+    pub parameters: Vec<HirParameter>,
+    pub return_type: Option<HirType>,
+    pub body: HirBlock,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HirCaptureMode {
+    Ref,
+    Inout,
+    Consume,
+}
+
+#[derive(Debug, Clone)]
+pub enum HirCapture {
+    Named(HirCaptureNamed),
+    RecursiveSelf(Span),
+}
+
+#[derive(Debug, Clone)]
+pub struct HirCaptureNamed {
+    pub span: Span,
+    pub mode: HirCaptureMode,
+    pub name: String,
+}
+
+impl HirCapture {
+    pub fn span(&self) -> Span {
+        match self {
+            HirCapture::Named(n) => n.span,
+            HirCapture::RecursiveSelf(s) => *s,
+        }
+    }
+}
+
 
 #[derive(Debug, Clone)]
 pub enum HirType {
@@ -381,6 +421,7 @@ pub enum HirType {
     Apply(Span, Box<HirType>, Vec<HirType>),
     Optional(Span, Box<HirType>),
     Result(Span, Box<HirType>, Box<HirType>),
+    Function(Span, Vec<HirType>, Box<HirType>),
 }
 
 impl HirType {
@@ -392,6 +433,7 @@ impl HirType {
             HirType::Apply(span, _, _) => *span,
             HirType::Optional(span, _) => *span,
             HirType::Result(span, _, _) => *span,
+            HirType::Function(span, _, _) => *span,
         }
     }
 }

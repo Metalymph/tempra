@@ -5,10 +5,12 @@
 Fero v0.1 focuses on:
 
 - minimal and readable syntax
+- no implicit coercions
 - explicit semantics
 - strong scripting ergonomics
 - no unnecessary symbols or keywords
-- no `let mut`, no `<T>` generics syntax in v0
+- Zig-style generics with specialization-oriented design
+- explicit type instantiation for generic constructors
 - no exception system
 - clear path from script to native binary
 
@@ -73,6 +75,26 @@ fn add(a: UInt64, b: UInt64) -> UInt64 {
 
 The last expression of a block is returned if `return` is not used.
 
+### Generic Functions
+
+Fero supports specialization-oriented generics using `type` parameters.
+
+```fero
+fn identity(type T, value: T) -> T {
+    value
+}
+
+let a = identity(1)            // inferred: T = Int
+let b = identity[Int](1)       // explicit specialization
+```
+
+Rules:
+- Generic parameters use the `type T` syntax in the parameter list.
+- Explicit specialization uses `foo[Int](...)` syntax.
+- Inference is strict; no implicit coercions across generic boundaries.
+- Substitution is structural and recursive.
+- No constraints, const generics, or comptime branching in v1.
+
 ---
 
 ## 5. Blocks
@@ -110,27 +132,33 @@ let text = match result {
 }
 ```
 
-v0.1 supports:
+### Supported Patterns
 
 - **Wildcard:** `_` matches anything without binding.
 - **Binding:** Lowercase identifiers bind the full matched value (e.g., `x => ...`).
 - **Literal:** Match by value equality (e.g., `0`, `"ok"`, `true`).
-- **Tuple Pattern:** `(a, b)` destructures any tuple. Must have arity >= 2. Nested patterns are not supported (shorthand bindings only).
-- **Struct Pattern:** `User { name }` destructures a struct. Shorthand bindings only (no renaming, no nesting).
-- **Constructor:** Recognized by shape or casing fallback:
-  - **Shape-based:** Any identifier followed by arguments `Name(...)` is always a constructor pattern.
-  - **Casing fallback:** For nullary (zero-arg) constructors, an uppercase identifier is treated as a constructor candidate.
-- **Nested Constructors:** Enum constructor patterns can be nested (e.g., `Nested(Data(v))`, `Some(Ok(x))`).
+- **Tuple Pattern:** `(a, b)` destructures any tuple. Must have arity >= 2.
+- **Struct Pattern:** `User { name }`, `User { name: n }`, `User { field: pattern }`.
+- **Constructor:** `Some(v)`, `None`, `Ok(v)`, `Err(e)`. Fully recursive.
+- **OR-Patterns:** `Pattern1 | Pattern2`. Supported in `match` only. Alternatives must bind same names with same types. Binding/Wildcard alternatives are forbidden in OR-patterns.
 
-Rules:
-- `match` is an expression.
-- Arm bodies may be single expressions or blocks.
-- First matching arm wins.
-- Bindings are scoped to the arm body.
-- Non-exhaustive matches crash at runtime in v0.1 (static checks for Bool/Option/Result).
-- Struct and Tuple patterns are supported ONLY in `match` arms, not after the `is` operator.
-- Constructors are strictly validated against the scrutinee type.
-- Nested pattern support in v1 is officially guaranteed ONLY for enum constructors.
+### Guards
+
+Match arms support boolean guards:
+
+```fero
+match x {
+    Some(v) if v > 10 => 1
+    _ => 0
+}
+```
+
+### Exhaustiveness
+
+Fero performs exhaustive checking for `Bool` and `enum` types (including `Option`/`Result`).
+- Guarded arms do **not** contribute to coverage.
+- Struct and Tuple patterns are recognized but require a wildcard `_` for exhaustiveness in v1.
+- `match` on `Never` requires no arms.
 
 ---
 
@@ -177,6 +205,23 @@ struct User {
     name: String
     var bank_value: UInt64
 }
+
+### Generic Structs
+
+Generic structs use Zig-style type constructors:
+
+```fero
+struct Box(type T) {
+    value: T
+}
+
+let b: Box(Int) = Box(Int) { value: 1 }
+```
+
+Rules:
+- Generic types are instantiated using function-call syntax: `Box(Int)`.
+- Instantiation is strict; `Box` without arguments is invalid if `Box` is generic.
+- Type arguments are part of the type identity.
 ```
 
 ### Default values
@@ -221,6 +266,23 @@ enum Result {
     Ok(String)
     Err(String)
 }
+
+### Generic Enums
+
+```fero
+enum Maybe(type T) {
+    None
+    Some(T)
+}
+
+let x: Maybe(Int) = Some(1)
+```
+
+Rules:
+- Generic enums use type-constructor syntax: `Maybe(Int)`.
+- Generic enum constructors (`Some`, `Ok`, etc.) require an **expected type context** to resolve.
+- Ambiguous generic constructors without expected type are errors.
+- Fero v1 does not infer the full generic enum type from the constructor alone (no `let x = Some(1)`).
 ```
 
 Usage:
@@ -369,34 +431,34 @@ Meaning family (disambiguated by position):
 - `expr?` in expression position: Result propagation
 - `expr!` in expression position: unwrap/crash behavior
 
-### `is` Operator (v0)
+## 13. Never Type
 
-Fero supports runtime type checks as boolean expressions:
+`Never` is the bottom type in Fero. It represents computations that never produce a value (e.g., those that crash or exit).
+
+Rules:
+- No runtime values of type `Never`.
+- `crash(...)` and `exit(...)` return `Never`.
+- `Never` is compatible with any expected type.
+- Branch unification: `T + Never => T`.
+- A `match` where all arms return `Never` is itself type `Never`.
+
+## 14. is Operator and Narrowing
+
+Fero does not have `if let`. Instead, the `is` operator is used for type/pattern tests and branch-local narrowing.
 
 ```fero
-value is Type
+if value is Some(v) {
+    // v is bound here
+}
 ```
 
 Rules:
-
 - Result type is always `Bool`.
-- Supports two forms:
-  1. **Type form:** `value is Type`. Returns true if `value` conforms to `Type`.
-  2. **Pattern form:** `value is Pattern`. Returns true if `value` matches the pattern.
-- **Shape-based Recognition:** In `is`, RHS starting with `Identifier(` is always treated as a pattern.
-- **Ambiguity Rule:** For a bare identifier RHS (e.g., `x is String`):
-  - Prioritized as a **Type form** test if it resolves to a type name.
-  - Treated as a zero-arg **Constructor pattern** if it is uppercase and not followed by type modifiers.
-- **Contextual Restriction:** Bare lowercase identifiers (naked bindings like `if x is y`) are strictly forbidden; they are parsed as types and will fail if no such type exists.
-- Works with primitive, struct, `Option`, and `Result` checks.
-
-Examples:
-
-```fero
-"abc" is String
-Some(1) is Int?
-Ok("x") is String!
-```
+- **Narrowing:** If the tested expression is a simple variable, it is rebound/narrowed in the true branch.
+- **Bindings:** Pattern bindings do not leak outside the branch.
+- **Negative Narrowing:** Not implemented in v1.
+- OR-patterns and wildcards are **not** supported in `is`.
+- Naked bindings (e.g., `if x is y`) are forbidden.
 
 ### Regex (v0)
 
@@ -817,7 +879,19 @@ The parser must support:
 
 ---
 
-## 26. Frozen Decisions
+## 26. Closures (Future Design)
+
+Closures are currently **not implemented** in Fero v0.1.
+
+Planned design:
+- Explicit capture lists (inspired by Swift/C++).
+- Lightweight syntax: `|x, y| x + y`.
+- Captures by value by default, `inout` for mutable reference captures.
+- Integrated with the structural interface system for high-performance function passing.
+
+---
+
+## 27. Frozen Decisions
 
 The following decisions are considered frozen for implementation start:
 

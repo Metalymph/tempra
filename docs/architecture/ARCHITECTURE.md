@@ -121,6 +121,23 @@ Fero is a script-first programming language designed to transition seamlessly fr
 - `src/check.rs`: Main type checking loop.
 - `src/inference.rs`: Type unification and inference engine.
 - `src/interface.rs`: Structural interface matching logic.
+- `src/refinement.rs`: Branch-local fact tracking and variable narrowing.
+- `src/patterns/`: Pattern semantic analysis and exhaustiveness (Domain/Space model).
+
+#### Refinement Architecture
+
+The `Refinement` system manages branch-local semantic facts derived from `is` tests and `match` arms.
+- **Refinement facts**: Contains pattern bindings and the identity of the narrowed variable.
+- **Context injection**: facts are injected into the scope of the "true" branch.
+- **Isolation**: No hidden scope mutation occurs outside the direct refinement path.
+
+#### Pattern & Exhaustiveness
+
+Pattern matching follows a centralized semantic model:
+- **Domain**: Represents the set of all possible values for a type (e.g., variants for Enums, True/False for Bool).
+- **Space**: Represents the coverage provided by specific patterns.
+- **Analysis**: Exhaustiveness is determined by subtracting Space from Domain.
+- **Topology**: Generic exhaustiveness is topological; it ignores type parameters and focuses on variant structure.
 
 ### Intermediate Stages
 

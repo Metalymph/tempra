@@ -53,7 +53,11 @@ Function
   = "fn" Identifier "(" ParamList? ")" ReturnType? Block
 
 ParamList
-  = Param ("," Param)*
+  = GenericParam ("," GenericParam)* ("," Param)*
+  | Param ("," Param)*
+
+GenericParam
+  = "type" Identifier
 
 Param
   = ("inout")? Identifier ":" Type
@@ -76,7 +80,10 @@ fn add(a: UInt64, b: UInt64) -> UInt64 {
 
 ```text
 Struct
-  = "struct" Identifier "{" StructField* "}"
+  = "struct" Identifier ("(" GenericParamList? ")")? "{" StructField* "}"
+
+GenericParamList
+  = GenericParam ("," GenericParam)*
 
 StructField
   = ("var")? Identifier ":" Type ("=" Expression)?
@@ -97,7 +104,7 @@ struct User {
 
 ```text
 Enum
-  = "enum" Identifier "{" EnumVariant* "}"
+  = "enum" Identifier ("(" GenericParamList? ")")? "{" EnumVariant* "}"
 
 EnumVariant
   = Identifier ("(" TypeList? ")")?
@@ -250,10 +257,10 @@ LogicAnd
 
 ```text
 Equality
-  = Comparison (("==" | "!=") Comparison)*
+  = Comparison (("==" | "!=" | "is") Comparison)*
 
 Comparison
-  = Bitwise (("<" | ">") Bitwise)*
+  = Bitwise (("<" | ">" | "as?") Bitwise)*
 ```
 
 ---
@@ -305,6 +312,7 @@ Call
 
 CallSuffix
   = "(" ArgList? ")"
+  | "[" TypeList "]" "(" ArgList? ")"  // Explicit Specialization
   | "." Identifier
   | "[" Expression "]"
   | "[" Expression ".." Expression "]"
@@ -411,11 +419,22 @@ MatchArm
 ## 25. Patterns (v0.1 minimal)
 
 ```text
+Patterns
+  = Pattern ("|" Pattern)*
+
 Pattern
   = "_"
   | Identifier
   | Literal
   | Identifier "(" PatternList? ")"
+  | Identifier "{" StructPatternField* "}"
+  | TuplePattern
+
+StructPatternField
+  = Identifier (":" Pattern)?
+
+TuplePattern
+  = "(" Pattern "," Pattern ("," Pattern)* ")"
 ```
 
 ```text
@@ -440,9 +459,10 @@ Same syntax as statement, but used as expression.
 
 ```text
 Type
-  = Identifier
+  = Identifier ("(" TypeList? ")")?  // Named or Type Constructor
   | ArrayType
   | TupleType
+  | "Never"
 ```
 
 ```text

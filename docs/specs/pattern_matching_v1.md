@@ -100,13 +100,19 @@ Constraints:
 - n ≥ 2
 - single-element tuple patterns are not allowed
 - empty tuple patterns are not supported
+- parentheses do not mean grouping in pattern position
 
-The rejection of `(a)` / `(a,)` / `()` must happen in pattern parsing, not later in typechecking.
+### 2.7 OR-Patterns
+```fero
+Pattern1 | Pattern2 => expr
+```
+- Supported in `match` arms only.
+- All alternatives must bind the same set of names with identical types.
+- Binding and Wildcard alternatives are forbidden in OR-patterns (v1).
 
-> [!NOTE]
-> Tuple and Struct domains are recognized internally but are not yet part of exhaustiveness checking. A match on a Tuple or Struct must include an unguarded catch-all (`_`) to be considered exhaustive.
+---
 
-Examples:
+## 3. Match Guards
 
     (a, b)
     (_, value)
@@ -165,15 +171,16 @@ Fero performs lightweight exhaustiveness analysis for:
 ### 5.1 Rules
 
 - **Unknown Space Rule**: Guarded arms (e.g., `Some(x) if x > 0`) produce **Unknown** space and do NOT satisfy exhaustiveness for their variant.
+- **OR-Pattern Coverage**: Unguarded OR-patterns contribute to coverage for all their alternatives. Guarded OR-patterns do not.
 - **Divergent Match Rule**: Exhaustiveness is determined by case coverage, not successful value production. A match expression is exhaustive if all top-level cases are covered, even if every branch diverges (evaluates to `Never`).
+- **Match on Never**: A `match` on a value of type `Never` is exhaustive with zero arms.
 - **Tuple/Struct Domains**: Tuples and Structs are recognized as distinct domains but are not yet analyzed for partial exhaustiveness. They must include an unguarded catch-all (`_`) to be considered exhaustive.
 - **Top-level Coverage**: Coverage is checked at the **top-level variant** only. Payload subpatterns do not currently affect variant coverage.
 
 ---
 
-## 6. Unsupported (v1.6)
+## 6. Unsupported (v1.8)
 
-- OR-patterns: `A | B => ...`
 - Rest patterns: `User { name, .. }`
 - Grouped patterns
 - `is` struct patterns

@@ -7,7 +7,8 @@ This document outlines the implementation strategy and developmental phases for 
 ### Phase 1: Core Foundation (v0.1) - Current Focus
 
 - **Compiler Frontend:** Implementation of the lexer, recursive descent parser, and Abstract Tree (AST).
-- **Semantics:** Initial symbol resolution, type checking for core compound types (`struct`, `enum`), and static structural interface resolution.
+- **Semantics:** Initial symbol resolution, type checking for core compound types (`struct`, `enum`), and Zig-style generic stabilization.
+- **Pattern Matching:** Centralized pattern semantics with OR-patterns, nesting, and exhaustiveness checking for finite domains.
 - **Bytecode VM:** A lightweight stack-based interpreter for rapid cold-starts and low memory overhead in script mode.
 - **Minimal Stdlib:** Foundation for `io`, `env`, and basic string/collection manipulation.
 - **Script Mode:** Support for running `.fero` files directly without a `main` entrypoint.

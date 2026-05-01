@@ -391,6 +391,7 @@ pub enum Expression {
     StructLiteral(StructLiteralExpr),
     Closure(ClosureExpr),
     Command(CommandExpr),
+    Comptime(ComptimeExpr),
 }
 
 impl Expression {
@@ -427,6 +428,7 @@ impl Expression {
             Expression::StructLiteral(expr) => expr.span,
             Expression::Closure(expr) => expr.span,
             Expression::Command(expr) => expr.span,
+            Expression::Comptime(expr) => expr.span,
         }
     }
 }
@@ -476,6 +478,12 @@ pub struct BlockExpr {
 }
 
 #[derive(Debug, Clone)]
+pub struct ComptimeExpr {
+    pub span: Span,
+    pub expression: Box<Expression>,
+}
+
+#[derive(Debug, Clone)]
 pub struct ClosureExpr {
     pub span: Span,
     pub captures: Vec<Capture>,
@@ -490,6 +498,7 @@ pub struct IfExpr {
     pub condition: Box<Expression>,
     pub then_block: Block,
     pub else_branch: Option<Box<Expression>>, // either another If or a Block expression
+    pub is_comptime: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -497,6 +506,7 @@ pub struct MatchExpr {
     pub span: Span,
     pub value: Box<Expression>,
     pub arms: Vec<MatchArm>,
+    pub is_comptime: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -669,7 +679,6 @@ pub struct CommandExpr {
     pub callee: Token, // usually the `cmd` identifier in v0
     pub arguments: Vec<Expression>,
 }
-
 
 // ----------------------------------------------------------------------------
 // Patterns

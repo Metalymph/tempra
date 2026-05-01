@@ -1,7 +1,7 @@
+use fero_hir::*;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::cell::RefCell;
-use fero_hir::*;
 
 #[derive(Debug, Clone)]
 pub enum Value {
@@ -28,6 +28,7 @@ pub enum Value {
     Enum(Box<EnumValue>),
     Closure(Rc<ClosureValue>),
     Cell(Rc<RefCell<Value>>),
+    Namespace(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -329,25 +330,26 @@ impl Value {
     /// Returns a human-readable type name for use in runtime error messages.
     pub fn type_name(&self) -> &'static str {
         match self {
-            Value::Unit        => "Unit",
-            Value::Bool(_)     => "Bool",
-            Value::Int64(_)    => "Int",
-            Value::UInt8(_)    => "UInt8",
-            Value::Float64(_)  => "Float",
-            Value::String(_)   => "String",
-            Value::Array(_)    => "Array",
-            Value::Slice(_)    => "Slice",
-            Value::Tuple(_)    => "Tuple",
-            Value::Struct(_)   => "Struct",
-            Value::Command(_)  => "Command",
+            Value::Unit => "Unit",
+            Value::Bool(_) => "Bool",
+            Value::Int64(_) => "Int",
+            Value::UInt8(_) => "UInt8",
+            Value::Float64(_) => "Float",
+            Value::String(_) => "String",
+            Value::Array(_) => "Array",
+            Value::Slice(_) => "Slice",
+            Value::Tuple(_) => "Tuple",
+            Value::Struct(_) => "Struct",
+            Value::Command(_) => "Command",
             Value::CommandResult(_) => "CommandResult",
-            Value::Result(_)   => "Result",
-            Value::Option(_)   => "Option",
-            Value::Error(_)    => "Error",
-            Value::Regex(_)    => "Regex",
-            Value::Enum(_)     => "Enum",
-            Value::Closure(_)  => "Function",
-            Value::Cell(c)     => c.borrow().type_name(),
+            Value::Result(_) => "Result",
+            Value::Option(_) => "Option",
+            Value::Error(_) => "Error",
+            Value::Regex(_) => "Regex",
+            Value::Enum(_) => "Enum",
+            Value::Closure(_) => "Function",
+            Value::Cell(c) => c.borrow().type_name(),
+            Value::Namespace(_) => "Namespace",
         }
     }
 
@@ -387,6 +389,7 @@ impl Value {
                 }
             }
             Value::Closure(_) => "fn(...)".to_string(),
+            Value::Namespace(n) => n.clone(),
             _ => self.to_string(),
         }
     }
@@ -484,6 +487,7 @@ impl std::fmt::Display for Value {
             }
             Value::Closure(_) => write!(f, "fn(...)"),
             Value::Cell(c) => write!(f, "Ref({})", c.borrow().to_repr()),
+            Value::Namespace(n) => write!(f, "{}", n),
         }
     }
 }
@@ -510,6 +514,7 @@ impl PartialEq for Value {
             (Value::Enum(a), Value::Enum(b)) => a == b,
             (Value::Closure(a), Value::Closure(b)) => Rc::ptr_eq(a, b),
             (Value::Cell(a), Value::Cell(b)) => Rc::ptr_eq(a, b) || *a.borrow() == *b.borrow(),
+            (Value::Namespace(a), Value::Namespace(b)) => a == b,
             _ => false,
         }
     }

@@ -93,7 +93,30 @@ Rules:
 - Explicit specialization uses `foo[Int](...)` syntax.
 - Inference is strict; no implicit coercions across generic boundaries.
 - Substitution is structural and recursive.
-- No constraints, const generics, or comptime branching in v1.
+
+---
+
+## 5. Comptime
+
+Fero supports explicit Phase 1 compile-time evaluation via `comptime`. This allows deterministic expressions to be evaluated during type checking and materialized as primitive constants.
+
+See [COMPTIME_SPEC.md](./COMPTIME_SPEC.md) for the full specification.
+
+### Comptime Expression
+```fero
+let x = comptime fib(10)
+```
+
+### Comptime Block
+```fero
+let table = comptime {
+    let a = 1
+    let b = 2
+    a + b
+}
+```
+
+Phase 1 does not include `if comptime`, `comptime match`, comptime parameters, type values, type equality, or specialization keys with comptime arguments.
 
 ---
 

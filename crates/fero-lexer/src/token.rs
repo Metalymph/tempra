@@ -38,6 +38,7 @@ pub enum TokenKind {
     Type,
     Ref,
     Consume,
+    Comptime,
 
     // Delimiters
     LeftParen,    // (
@@ -109,6 +110,7 @@ pub fn keyword_kind(text: &str) -> Option<TokenKind> {
         "type" => Some(TokenKind::Type),
         "ref" => Some(TokenKind::Ref),
         "consume" => Some(TokenKind::Consume),
+        "comptime" => Some(TokenKind::Comptime),
         _ => None,
     }
 }
@@ -146,6 +148,7 @@ impl std::fmt::Display for TokenKind {
             TokenKind::Type => "'type'",
             TokenKind::Ref => "'ref'",
             TokenKind::Consume => "'consume'",
+            TokenKind::Comptime => "'comptime'",
             TokenKind::LeftParen => "'('",
             TokenKind::RightParen => "')'",
             TokenKind::LeftBrace => "'{'",

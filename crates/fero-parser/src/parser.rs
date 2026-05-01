@@ -162,7 +162,7 @@ impl<'src> Parser<'src> {
 
         while !self.at(TokenKind::RightParen) && !self.at(TokenKind::EndOfFile) {
             let p_start = self.current().span.start;
-            
+
             if self.eat(TokenKind::Type) {
                 if seen_runtime_param {
                     return Err(ParseError {
@@ -673,14 +673,19 @@ impl<'src> Parser<'src> {
                                 .chars()
                                 .next()
                                 .unwrap_or('\0');
-                            
-                             if first_char.is_uppercase() {
-                                 // Bare identifier starting with uppercase.
-                                 // Heuristic: If followed by '?', '!', or '[', it's definitely a complex type (Option, Result, Array).
-                                 // Otherwise, we treat it as a potential pattern (Enum Constructor or Type Test).
-                                 // The typechecker will disambiguate based on semantic registration.
-                                 !matches!(next2.kind, TokenKind::QuestionMark | TokenKind::Bang | TokenKind::LeftBracket)
-                             } else {
+
+                            if first_char.is_uppercase() {
+                                // Bare identifier starting with uppercase.
+                                // Heuristic: If followed by '?', '!', or '[', it's definitely a complex type (Option, Result, Array).
+                                // Otherwise, we treat it as a potential pattern (Enum Constructor or Type Test).
+                                // The typechecker will disambiguate based on semantic registration.
+                                !matches!(
+                                    next2.kind,
+                                    TokenKind::QuestionMark
+                                        | TokenKind::Bang
+                                        | TokenKind::LeftBracket
+                                )
+                            } else {
                                 // Lowercase bare identifier is intentionally forbidden as a binding pattern in 'is'.
                                 // It will be parsed as a Type and likely produce a "Type not found" error during typecheck.
                                 false
@@ -766,6 +771,15 @@ impl<'src> Parser<'src> {
     }
 
     fn parse_unary_expression(&mut self) -> Result<Expression, ParseError> {
+        if self.at(TokenKind::Comptime) {
+            let start = self.advance();
+            let expr = self.parse_expression()?;
+            return Ok(Expression::Comptime(ComptimeExpr {
+                span: Span::new(start.span.start, expr.span().end),
+                expression: Box::new(expr),
+            }));
+        }
+
         if self.at(TokenKind::Bang) || self.at(TokenKind::Minus) {
             let operator = self.advance();
             let operand = Box::new(self.parse_unary_expression()?);
@@ -809,8 +823,7 @@ impl<'src> Parser<'src> {
                 // Positional argument
                 if seen_named {
                     return Err(ParseError {
-                        message: "positional argument cannot follow named arguments"
-                            .to_string(),
+                        message: "positional argument cannot follow named arguments".to_string(),
                         span: self.current().span,
                     });
                 }
@@ -1019,9 +1032,7 @@ impl<'src> Parser<'src> {
                     Ok(exprs.into_iter().next().unwrap())
                 }
             }
-            TokenKind::Fn => {
-                self.parse_closure_expression()
-            }
+            TokenKind::Fn => self.parse_closure_expression(),
             TokenKind::If => {
                 let start_token = self.advance();
                 let condition = Box::new(self.parse_expression()?);
@@ -1049,6 +1060,7 @@ impl<'src> Parser<'src> {
                     condition,
                     then_block,
                     else_branch,
+                    is_comptime: false,
                 }))
             }
             TokenKind::Match => {
@@ -1078,6 +1090,7 @@ impl<'src> Parser<'src> {
                     span: Span::new(start_token.span.start, end_token.span.end),
                     value,
                     arms,
+                    is_comptime: false,
                 }))
             }
             TokenKind::For => {
@@ -1121,7 +1134,7 @@ impl<'src> Parser<'src> {
 
             while !self.at(TokenKind::RightBracket) && !self.at(TokenKind::EndOfFile) {
                 let c_start = self.current().span.start;
-                
+
                 if self.at(TokenKind::Identifier) && self.text(self.current().span) == "self" {
                     let token = self.advance();
                     captures.push(Capture::RecursiveSelf(token.span));
@@ -1134,7 +1147,8 @@ impl<'src> Parser<'src> {
                         CaptureMode::Consume
                     } else {
                         return Err(ParseError {
-                            message: "invalid capture mode; expected 'ref', 'inout', or 'consume'".into(),
+                            message: "invalid capture mode; expected 'ref', 'inout', or 'consume'"
+                                .into(),
                             span: self.current().span,
                         });
                     };
@@ -1199,7 +1213,11 @@ impl<'src> Parser<'src> {
         self.parse_pattern_ext(true, true)
     }
 
-    fn parse_pattern_ext(&mut self, allow_struct: bool, allow_tuple: bool) -> Result<Pattern, ParseError> {
+    fn parse_pattern_ext(
+        &mut self,
+        allow_struct: bool,
+        allow_tuple: bool,
+    ) -> Result<Pattern, ParseError> {
         let mut node = self.parse_pattern_atom(allow_struct, allow_tuple)?;
 
         if self.at(TokenKind::Pipe) {
@@ -1224,7 +1242,11 @@ impl<'src> Parser<'src> {
         Ok(node)
     }
 
-    fn parse_pattern_atom(&mut self, allow_struct: bool, allow_tuple: bool) -> Result<Pattern, ParseError> {
+    fn parse_pattern_atom(
+        &mut self,
+        allow_struct: bool,
+        allow_tuple: bool,
+    ) -> Result<Pattern, ParseError> {
         let token = self.current();
         if self.eat(TokenKind::Underscore) {
             Ok(Pattern::Wildcard(WildcardPattern {
@@ -1243,14 +1265,15 @@ impl<'src> Parser<'src> {
             }
             let end = self.expect(TokenKind::RightParen)?;
             if items.is_empty() {
-                 return Err(ParseError {
+                return Err(ParseError {
                     message: "empty tuple patterns are not supported".to_string(),
                     span: Span::new(start.span.start, end.span.end),
                 });
             }
             if items.len() < 2 {
                 return Err(ParseError {
-                    message: "single-element tuple patterns are not allowed; use `a` instead".to_string(),
+                    message: "single-element tuple patterns are not allowed; use `a` instead"
+                        .to_string(),
                     span: Span::new(start.span.start, end.span.end),
                 });
             }
@@ -1407,7 +1430,12 @@ impl<'src> Parser<'src> {
                     // Disambiguate: if it's a lowercase named type, it's likely an expression (variable)
                     if let TypeExpr::Named(NamedTypeExpr { name, .. }) = &ty {
                         let text = self.text(name.span);
-                        if text.chars().next().map(|c| c.is_lowercase()).unwrap_or(false) {
+                        if text
+                            .chars()
+                            .next()
+                            .map(|c| c.is_lowercase())
+                            .unwrap_or(false)
+                        {
                             is_specialization = false;
                             break;
                         }

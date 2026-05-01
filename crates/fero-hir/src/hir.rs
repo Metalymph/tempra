@@ -179,6 +179,7 @@ pub enum HirExpression {
     StructLiteral(HirStructLiteral),
     EnumConstructor(HirEnumConstructor),
     Closure(HirClosure),
+    Comptime(HirComptimeExpr),
 }
 
 impl HirExpression {
@@ -210,6 +211,7 @@ impl HirExpression {
             HirExpression::Unwrap(e) => e.span,
             HirExpression::EnumConstructor(e) => e.span,
             HirExpression::Closure(e) => e.span,
+            HirExpression::Comptime(e) => e.span,
         }
     }
 }
@@ -241,7 +243,6 @@ pub struct HirIsTypeExpr {
     pub value: Box<HirExpression>,
     pub ty: HirType,
 }
-
 
 #[derive(Debug, Clone)]
 pub struct HirIsPatternExpr {
@@ -341,6 +342,7 @@ pub struct HirIf {
     pub condition: Box<HirExpression>,
     pub then_block: HirBlock,
     pub else_branch: Option<Box<HirExpression>>,
+    pub is_comptime: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -348,6 +350,13 @@ pub struct HirMatch {
     pub span: Span,
     pub value: Box<HirExpression>,
     pub arms: Vec<HirMatchArm>,
+    pub is_comptime: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct HirComptimeExpr {
+    pub span: Span,
+    pub expression: Box<HirExpression>,
 }
 
 #[derive(Debug, Clone)]
@@ -411,7 +420,6 @@ impl HirCapture {
         }
     }
 }
-
 
 #[derive(Debug, Clone)]
 pub enum HirType {

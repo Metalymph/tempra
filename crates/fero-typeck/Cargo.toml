@@ -7,6 +7,7 @@ edition.workspace = true
 fero-span.workspace = true
 fero-hir.workspace = true
 fero-ast.workspace = true
+fero-interpreter.workspace = true
 anyhow.workspace = true
 
 [dev-dependencies]

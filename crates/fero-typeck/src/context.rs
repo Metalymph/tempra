@@ -1,6 +1,6 @@
 use crate::env::ScopeStack;
 use crate::error::TypeError;
-use crate::types::{resolve_named_type, Type, GenericParamId};
+use crate::types::{resolve_named_type, GenericParamId, Type};
 use fero_ast::Visibility;
 use fero_hir::*;
 use fero_span::Span;
@@ -61,6 +61,8 @@ pub struct TypeContext {
     pub current_generic_params: Vec<GenericParamId>,
     pub current_generic_params_info: Vec<GenericParam>,
     pub next_generic_param_id: u32,
+    pub is_comptime: bool,
+    pub interpreter: Option<fero_interpreter::interpreter::Interpreter>,
 }
 
 impl TypeContext {
@@ -77,6 +79,8 @@ impl TypeContext {
             current_generic_params: Vec::new(),
             current_generic_params_info: Vec::new(),
             next_generic_param_id: 0,
+            is_comptime: false,
+            interpreter: None,
         }
     }
 
@@ -90,8 +94,15 @@ impl TypeContext {
         if base != Type::Unknown {
             return base;
         }
-        if let Some(param) = self.current_generic_params_info.iter().find(|p| p.name == name) {
-            return Type::GenericParam { id: param.id, name: name.to_string() };
+        if let Some(param) = self
+            .current_generic_params_info
+            .iter()
+            .find(|p| p.name == name)
+        {
+            return Type::GenericParam {
+                id: param.id,
+                name: name.to_string(),
+            };
         }
         if self.structs.contains_key(name) {
             return Type::Struct(name.to_string(), vec![]);
@@ -112,18 +123,28 @@ impl TypeContext {
             }
             HirType::Apply(_, callee, args) => {
                 let base = self.resolve_hir_type(callee);
-                let arg_types = args.iter().map(|a| self.resolve_hir_type(a)).collect::<Vec<_>>();
-                
+                let arg_types = args
+                    .iter()
+                    .map(|a| self.resolve_hir_type(a))
+                    .collect::<Vec<_>>();
+
                 match base {
                     Type::Struct(name, _) => Type::Struct(name, arg_types),
                     Type::Enum(name, _) => Type::Enum(name, arg_types),
                     Type::Option(_) => {
-                        if arg_types.len() != 1 { return Type::Error; }
+                        if arg_types.len() != 1 {
+                            return Type::Error;
+                        }
                         Type::Option(Box::new(arg_types[0].clone()))
                     }
                     Type::Result(_, _) => {
-                        if arg_types.len() != 2 { return Type::Error; }
-                        Type::Result(Box::new(arg_types[0].clone()), Box::new(arg_types[1].clone()))
+                        if arg_types.len() != 2 {
+                            return Type::Error;
+                        }
+                        Type::Result(
+                            Box::new(arg_types[0].clone()),
+                            Box::new(arg_types[1].clone()),
+                        )
                     }
                     _ => Type::Error,
                 }
@@ -150,17 +171,29 @@ impl TypeContext {
     }
 
     /// Finds which enum owns a variant, using the expected type as a hint to resolve ambiguity.
-    pub fn find_enum_for_variant(&self, variant: &str, expected: Option<&Type>) -> Result<String, String> {
+    pub fn find_enum_for_variant(
+        &self,
+        variant: &str,
+        expected: Option<&Type>,
+    ) -> Result<String, String> {
         let candidates = match self.variant_to_enums.get(variant) {
             Some(c) => c,
-            None => return Err(format!("Unknown constructor '{}': no enum defines this variant", variant)),
+            None => {
+                return Err(format!(
+                    "Unknown constructor '{}': no enum defines this variant",
+                    variant
+                ))
+            }
         };
 
         if let Some(Type::Enum(expected_name, _)) = expected {
             if candidates.contains(expected_name) {
                 return Ok(expected_name.clone());
             } else {
-                return Err(format!("constructor '{}' does not belong to enum '{}'", variant, expected_name));
+                return Err(format!(
+                    "constructor '{}' does not belong to enum '{}'",
+                    variant, expected_name
+                ));
             }
         }
 
@@ -168,7 +201,10 @@ impl TypeContext {
             let enum_name = candidates[0].clone();
             let info = &self.enums[&enum_name];
             if !info.generic_params.is_empty() && expected.is_none() {
-                return Err(format!("cannot infer generic enum type for constructor '{}'; add a type annotation", variant));
+                return Err(format!(
+                    "cannot infer generic enum type for constructor '{}'; add a type annotation",
+                    variant
+                ));
             }
             Ok(enum_name)
         } else {
@@ -183,7 +219,8 @@ impl TypeContext {
     }
 
     pub fn lookup_field(&self, struct_name: &str, field_name: &str) -> Option<Type> {
-        self.structs.get(struct_name)
+        self.structs
+            .get(struct_name)
             .and_then(|info| info.fields.get(field_name))
             .map(|f| f.ty.clone())
     }

@@ -1,13 +1,17 @@
 //! Expression-level type checking logic.
 
 use crate::context::TypeContext;
+use crate::env::VariableInfo;
 use crate::types::{types_compatible, Type};
 use fero_hir::*;
 use fero_span::Span;
 use std::collections::HashMap;
-use crate::env::VariableInfo;
 
-fn get_call_arg_mut<'a>(args: &'a mut [HirCallArgument], idx: usize, arg_name: &str) -> Option<&'a mut HirExpression> {
+fn get_call_arg_mut<'a>(
+    args: &'a mut [HirCallArgument],
+    idx: usize,
+    arg_name: &str,
+) -> Option<&'a mut HirExpression> {
     let mut found_idx = None;
     if idx < args.len() && matches!(&args[idx], HirCallArgument::Positional(_)) {
         found_idx = Some(idx);
@@ -21,7 +25,7 @@ fn get_call_arg_mut<'a>(args: &'a mut [HirCallArgument], idx: usize, arg_name: &
             }
         }
     }
-    
+
     if let Some(i) = found_idx {
         match &mut args[i] {
             HirCallArgument::Positional(e) => Some(e),
@@ -33,7 +37,11 @@ fn get_call_arg_mut<'a>(args: &'a mut [HirCallArgument], idx: usize, arg_name: &
 }
 
 /// Check an expression and return its inferred type.
-pub fn check_expression(ctx: &mut TypeContext, expr: &mut HirExpression, expected: Option<&Type>) -> Type {
+pub fn check_expression(
+    ctx: &mut TypeContext,
+    expr: &mut HirExpression,
+    expected: Option<&Type>,
+) -> Type {
     let name_info = if let HirExpression::Name(span, name) = expr {
         Some((*span, name.clone()))
     } else {
@@ -81,6 +89,7 @@ pub fn check_expression(ctx: &mut TypeContext, expr: &mut HirExpression, expecte
             Type::Enum(e.enum_name.clone(), vec![])
         }
         HirExpression::Closure(c) => check_closure(ctx, c, expected),
+        HirExpression::Comptime(_) => check_comptime_expr(ctx, expr, expected),
     }
 }
 
@@ -98,17 +107,20 @@ fn is_valid_type(ty: &Type) -> bool {
 
 fn check_is_type(ctx: &mut TypeContext, i: &mut HirIsTypeExpr) -> Type {
     let _ = check_expression(ctx, &mut i.value, None);
-    
+
     if let HirType::Named(span, name) = &i.ty {
         if name.starts_with(|c: char| c.is_lowercase()) {
             ctx.error("naked binding patterns are not allowed after 'is'", *span);
             return Type::Error;
         }
     }
-    
+
     let ty = ctx.resolve_hir_type(&i.ty);
     if !is_valid_type(&ty) {
-        ctx.error(format!("invalid or unknown type in 'is' check: {}", ty), i.ty.span());
+        ctx.error(
+            format!("invalid or unknown type in 'is' check: {}", ty),
+            i.ty.span(),
+        );
     }
     Type::Bool
 }
@@ -129,14 +141,16 @@ fn check_is_pattern(ctx: &mut TypeContext, i: &mut HirExpression) -> Type {
     }
 
     // If crate::pattern::validate_pattern_against_type determines this is a Type Test, it returns Some(Type).
-    if let Some(target_ty) = crate::pattern::validate_pattern_against_type(ctx, &val_ty, &mut is_pattern.pattern) {
+    if let Some(target_ty) =
+        crate::pattern::validate_pattern_against_type(ctx, &val_ty, &mut is_pattern.pattern)
+    {
         // REWRITE: Transform IsPattern -> IsType
         // This ensures the interpreter uses its unified value_is_type logic.
         let inner = match std::mem::replace(i, HirExpression::Bool(Span::new(0, 0), false)) {
             HirExpression::IsPattern(p) => p,
             _ => unreachable!(),
         };
-        
+
         *i = HirExpression::IsType(HirIsTypeExpr {
             span: inner.span,
             value: inner.value,
@@ -144,7 +158,7 @@ fn check_is_pattern(ctx: &mut TypeContext, i: &mut HirExpression) -> Type {
             // Note: We use a dummy span because the original pattern span is already handled.
             ty: HirType::Named(inner.pattern.span(), target_ty.to_string()),
         });
-        
+
         // Re-check as a normal 'IsType' expression to ensure full validation.
         if let HirExpression::IsType(ref mut res_is) = i {
             return check_is_type(ctx, res_is);
@@ -153,29 +167,33 @@ fn check_is_pattern(ctx: &mut TypeContext, i: &mut HirExpression) -> Type {
         // If it didn't resolve to a Type Test, it must be a pattern match.
         // For EnumCase patterns with no payload that aren't variants or types, report "unknown type".
         if let HirPattern::EnumCase(span, name, args) = &is_pattern.pattern {
-             if args.is_empty() {
-                  let is_variant = if let Type::Enum(enum_name, _) = &val_ty {
-                     ctx.enums.get(enum_name).map(|info| info.variants.contains_key(name)).unwrap_or(false)
-                 } else {
-                     false
-                 };
-                 
-                 let is_builtin = matches!(name.as_str(), "Some" | "None" | "Ok" | "Err");
-                 
-                 // Only report our error if it's not a variant of val_ty and not a built-in.
-                 // Note: crate::pattern::validate_pattern_against_type might have already errored if val_ty was an Enum.
-                 // But if val_ty is not an Enum (e.g. Int), crate::pattern::validate_pattern_against_type returns None silently for EnumCase.
-                  if !is_variant && !is_builtin && !matches!(val_ty, Type::Enum(_, _)) {
-                     ctx.error(format!("invalid or unknown type in 'is' check: {}", name), *span);
-                 }
-             }
+            if args.is_empty() {
+                let is_variant = if let Type::Enum(enum_name, _) = &val_ty {
+                    ctx.enums
+                        .get(enum_name)
+                        .map(|info| info.variants.contains_key(name))
+                        .unwrap_or(false)
+                } else {
+                    false
+                };
+
+                let is_builtin = matches!(name.as_str(), "Some" | "None" | "Ok" | "Err");
+
+                // Only report our error if it's not a variant of val_ty and not a built-in.
+                // Note: crate::pattern::validate_pattern_against_type might have already errored if val_ty was an Enum.
+                // But if val_ty is not an Enum (e.g. Int), crate::pattern::validate_pattern_against_type returns None silently for EnumCase.
+                if !is_variant && !is_builtin && !matches!(val_ty, Type::Enum(_, _)) {
+                    ctx.error(
+                        format!("invalid or unknown type in 'is' check: {}", name),
+                        *span,
+                    );
+                }
+            }
         }
     }
 
     Type::Bool
 }
-
-
 
 fn check_as_optional(ctx: &mut TypeContext, a: &mut HirAsOptionalExpr) -> Type {
     let target_ty = ctx.resolve_hir_type(&a.ty);
@@ -249,7 +267,11 @@ enum ResolvedName {
 }
 
 /// Helper: Resolves a name to its fundamental semantic category.
-fn resolve_name(ctx: &TypeContext, name: &str, expected: Option<&Type>) -> Result<ResolvedName, String> {
+fn resolve_name(
+    ctx: &TypeContext,
+    name: &str,
+    expected: Option<&Type>,
+) -> Result<ResolvedName, String> {
     if let Some(info) = ctx.scopes.lookup(name) {
         if info.is_consumed {
             return Err(format!("use of consumed value '{}'", name));
@@ -259,7 +281,10 @@ fn resolve_name(ctx: &TypeContext, name: &str, expected: Option<&Type>) -> Resul
 
     // Check if it exists outside isolation boundary for closures
     if let Some(_) = ctx.scopes.lookup_anywhere(name) {
-        return Err(format!("use of external value '{}' requires explicit capture", name));
+        return Err(format!(
+            "use of external value '{}' requires explicit capture",
+            name
+        ));
     }
 
     if matches!(name, "fs" | "os" | "env" | "Regex") {
@@ -273,12 +298,26 @@ fn resolve_name(ctx: &TypeContext, name: &str, expected: Option<&Type>) -> Resul
 
     // If it's a built-in name, try that before reporting ambiguity/unknown for user enums
     // UNLESS it's truly ambiguous between user enums.
-    let is_builtin = matches!(name, "print" | "fmt" | "dbg" | "crash" | "expect" | "exit" | "cmd" | "read_line" | "Some" | "None" | "Ok" | "Err");
-    
+    let is_builtin = matches!(
+        name,
+        "print"
+            | "fmt"
+            | "dbg"
+            | "crash"
+            | "expect"
+            | "exit"
+            | "cmd"
+            | "read_line"
+            | "Some"
+            | "None"
+            | "Ok"
+            | "Err"
+    );
+
     if is_builtin {
         let is_generic_builtin = matches!(name, "Some" | "None" | "Ok" | "Err");
         let has_user_candidates = ctx.variant_to_enums.contains_key(name);
-        
+
         let expects_builtin = match expected {
             Some(Type::Option(_)) => matches!(name, "Some" | "None"),
             Some(Type::Result(_, _)) => matches!(name, "Ok" | "Err"),
@@ -289,11 +328,13 @@ fn resolve_name(ctx: &TypeContext, name: &str, expected: Option<&Type>) -> Resul
             // Fall through to error reporting if there are user candidates,
             // or report missing expected type error if it's purely built-in but generic.
             if !has_user_candidates {
-                 return Err(format!("cannot infer generic enum type for built-in constructor '{}'; add a type annotation", name));
+                return Err(format!("cannot infer generic enum type for built-in constructor '{}'; add a type annotation", name));
             }
         } else if !has_user_candidates || expects_builtin {
             if name == "None" {
-                return Ok(ResolvedName::BuiltinConstant(Type::Option(Box::new(Type::Unknown))));
+                return Ok(ResolvedName::BuiltinConstant(Type::Option(Box::new(
+                    Type::Unknown,
+                ))));
             }
             return Ok(ResolvedName::BuiltinFunction(name.to_string()));
         }
@@ -361,7 +402,10 @@ fn check_name(
             result_ty
         }
         Ok(ResolvedName::BuiltinFunction(f)) => {
-            ctx.error(format!("built-in function '{}' cannot be used as a value", f), span);
+            ctx.error(
+                format!("built-in function '{}' cannot be used as a value", f),
+                span,
+            );
             Type::Error
         }
         Ok(ResolvedName::Function(_)) => Type::Unknown,
@@ -385,30 +429,32 @@ fn check_name(
 enum ResolvedCallee {
     Function(String),
     EnumConstructor(String, String), // enum_name, variant_name
-    Method(Type, String),             // receiver_type, method_name
+    Method(Type, String),            // receiver_type, method_name
     Namespace(String, String),       // namespace_name, method_name
     BuiltinFunction(String),
     Closure(Vec<Type>, Type),
     Unknown,
 }
 
-fn resolve_callee(ctx: &mut TypeContext, callee: &mut HirExpression, expected: Option<&Type>) -> ResolvedCallee {
+fn resolve_callee(
+    ctx: &mut TypeContext,
+    callee: &mut HirExpression,
+    expected: Option<&Type>,
+) -> ResolvedCallee {
     match callee {
-        HirExpression::Name(_, name) => {
-            match resolve_name(ctx, name, expected) {
-                Ok(ResolvedName::Function(f)) => ResolvedCallee::Function(f),
-                Ok(ResolvedName::BuiltinFunction(f)) => ResolvedCallee::BuiltinFunction(f),
-                Ok(ResolvedName::EnumConstructor(e, v)) => ResolvedCallee::EnumConstructor(e, v),
-                Ok(ResolvedName::LocalVariable(info)) => {
-                    if let Type::Function(params, ret) = info.ty {
-                        ResolvedCallee::Closure(params, *ret)
-                    } else {
-                        ResolvedCallee::Unknown
-                    }
+        HirExpression::Name(_, name) => match resolve_name(ctx, name, expected) {
+            Ok(ResolvedName::Function(f)) => ResolvedCallee::Function(f),
+            Ok(ResolvedName::BuiltinFunction(f)) => ResolvedCallee::BuiltinFunction(f),
+            Ok(ResolvedName::EnumConstructor(e, v)) => ResolvedCallee::EnumConstructor(e, v),
+            Ok(ResolvedName::LocalVariable(info)) => {
+                if let Type::Function(params, ret) = info.ty {
+                    ResolvedCallee::Closure(params, *ret)
+                } else {
+                    ResolvedCallee::Unknown
                 }
-                _ => ResolvedCallee::Unknown,
             }
-        }
+            _ => ResolvedCallee::Unknown,
+        },
         HirExpression::Member(m) => {
             let obj_ty = check_expression(ctx, &mut m.object, None);
             match &obj_ty {
@@ -578,7 +624,10 @@ fn check_binary(ctx: &mut TypeContext, b: &mut HirBinary, _expected: Option<&Typ
                         if info.is_capture {
                             ctx.error(format!("cannot assign to ref capture '{}'", name), *span);
                         } else {
-                            ctx.error(format!("cannot assign to immutable value '{}'", name), *span);
+                            ctx.error(
+                                format!("cannot assign to immutable value '{}'", name),
+                                *span,
+                            );
                         }
                     }
                 }
@@ -856,10 +905,7 @@ fn check_builtin(
         "Some" => {
             if args.len() != 1 {
                 ctx.error(
-                    format!(
-                        "function 'Some' expects 1 argument, found {}",
-                        args.len()
-                    ),
+                    format!("function 'Some' expects 1 argument, found {}", args.len()),
                     span,
                 );
                 Some(Type::Error)
@@ -1108,10 +1154,7 @@ fn check_fs_builtin(
             Type::Result(Box::new(Type::Unit), Box::new(Type::BuiltinError))
         }
         _ => {
-            ctx.error(
-                format!("namespace 'fs' has no member '{}'", name),
-                span,
-            );
+            ctx.error(format!("namespace 'fs' has no member '{}'", name), span);
             Type::Error
         }
     }
@@ -1144,10 +1187,7 @@ fn check_env_builtin(
             Type::Result(Box::new(Type::String), Box::new(Type::BuiltinError))
         }
         _ => {
-            ctx.error(
-                format!("namespace 'env' has no member '{}'", name),
-                span,
-            );
+            ctx.error(format!("namespace 'env' has no member '{}'", name), span);
             Type::Error
         }
     }
@@ -1198,10 +1238,7 @@ fn check_os_builtin(
             Type::Result(Box::new(Type::Unit), Box::new(Type::BuiltinError))
         }
         _ => {
-            ctx.error(
-                format!("namespace 'os' has no member '{}'", name),
-                span,
-            );
+            ctx.error(format!("namespace 'os' has no member '{}'", name), span);
             Type::Error
         }
     }
@@ -1237,14 +1274,23 @@ fn check_string_method(
                 ctx.error(format!("'{}' method expects 1 argument", name), span);
             } else {
                 let mut arg_opt = get_call_arg_mut(args, 0, "pattern");
-                if arg_opt.is_none() { arg_opt = get_call_arg_mut(args, 0, "substr"); }
-                if arg_opt.is_none() { arg_opt = get_call_arg_mut(args, 0, "prefix"); }
-                if arg_opt.is_none() { arg_opt = get_call_arg_mut(args, 0, "suffix"); }
+                if arg_opt.is_none() {
+                    arg_opt = get_call_arg_mut(args, 0, "substr");
+                }
+                if arg_opt.is_none() {
+                    arg_opt = get_call_arg_mut(args, 0, "prefix");
+                }
+                if arg_opt.is_none() {
+                    arg_opt = get_call_arg_mut(args, 0, "suffix");
+                }
 
                 if let Some(arg) = arg_opt {
                     let ty = check_expression(ctx, arg, None);
                     if ty != Type::String && ty != Type::Error {
-                        ctx.error(format!("'{}' expects String, found {}", name, ty), arg.span());
+                        ctx.error(
+                            format!("'{}' expects String, found {}", name, ty),
+                            arg.span(),
+                        );
                     }
                 }
             }
@@ -1287,10 +1333,7 @@ fn check_string_method(
             Type::String
         }
         _ => {
-            ctx.error(
-                format!("String has no method '{}'", name),
-                span,
-            );
+            ctx.error(format!("String has no method '{}'", name), span);
             Type::Error
         }
     }
@@ -1310,10 +1353,7 @@ fn check_array_method(
             Type::Int
         }
         _ => {
-            ctx.error(
-                format!("Array/Slice has no method '{}'", name),
-                span,
-            );
+            ctx.error(format!("Array/Slice has no method '{}'", name), span);
             Type::Error
         }
     }
@@ -1333,16 +1373,44 @@ fn check_command_method(
             Type::Result(Box::new(Type::CommandResult), Box::new(Type::BuiltinError))
         }
         _ => {
-            ctx.error(
-                format!("Command has no method '{}'", name),
-                span,
-            );
+            ctx.error(format!("Command has no method '{}'", name), span);
             Type::Error
         }
     }
 }
 
 fn check_call(ctx: &mut TypeContext, expr: &mut HirExpression, expected: Option<&Type>) -> Type {
+    let call = if let HirExpression::Call(c) = expr {
+        c
+    } else {
+        unreachable!()
+    };
+
+    if let HirExpression::Name(span, ref name) = *call.callee {
+        if name == "compile_error" {
+            if !ctx.is_comptime {
+                ctx.error("compile_error is only allowed in comptime context", span);
+                return Type::Error;
+            }
+            for arg in &mut call.args {
+                let ty = match arg {
+                    HirCallArgument::Positional(e) => check_expression(ctx, e, Some(&Type::String)),
+                    HirCallArgument::Named(n) => {
+                        check_expression(ctx, &mut n.value, Some(&Type::String))
+                    }
+                };
+                if ty != Type::String && ty != Type::Error {
+                    let span = match arg {
+                        HirCallArgument::Positional(e) => e.span(),
+                        HirCallArgument::Named(n) => n.value.span(),
+                    };
+                    ctx.error(format!("compile_error expects String, found {}", ty), span);
+                }
+            }
+
+            return Type::Never;
+        }
+    }
     let callee_copy = if let HirExpression::Call(c) = expr {
         Some((&mut *c.callee, c.span))
     } else {
@@ -1359,9 +1427,10 @@ fn check_call(ctx: &mut TypeContext, expr: &mut HirExpression, expected: Option<
     match resolved {
         ResolvedCallee::Function(name) | ResolvedCallee::BuiltinFunction(name) => {
             if let HirExpression::Call(ref mut c) = expr {
-                let type_args = c.type_args.as_ref().map(|args| {
-                    args.iter().map(|a| ctx.resolve_hir_type(a)).collect()
-                });
+                let type_args = c
+                    .type_args
+                    .as_ref()
+                    .map(|args| args.iter().map(|a| ctx.resolve_hir_type(a)).collect());
                 return check_function_call(ctx, c, &name, type_args, expected);
             }
         }
@@ -1374,15 +1443,19 @@ fn check_call(ctx: &mut TypeContext, expr: &mut HirExpression, expected: Option<
                 }
             }
 
-            let info = ctx.enums.get(&enum_name).cloned().expect("Enum info missing");
-            
+            let info = ctx
+                .enums
+                .get(&enum_name)
+                .cloned()
+                .expect("Enum info missing");
+
             // If enum is generic but no type arguments provided by expected, we can't fully resolve payloads yet.
             // In v1, we strictly require expected type or we error on generic mismatches.
             let mut sub_map = std::collections::HashMap::new();
             if info.generic_params.len() != type_args.len() {
                 if !info.generic_params.is_empty() {
-                     // For now, we don't implement full inference from payload to enum type args in this pass.
-                     // But we should at least not crash.
+                    // For now, we don't implement full inference from payload to enum type args in this pass.
+                    // But we should at least not crash.
                 }
             } else {
                 for (param, arg) in info.generic_params.iter().zip(type_args.iter()) {
@@ -1402,25 +1475,31 @@ fn check_call(ctx: &mut TypeContext, expr: &mut HirExpression, expected: Option<
                     ctx.error(
                         format!(
                             "constructor '{}' of enum '{}' expects {} arguments, found {}",
-                            variant_name, enum_name, payload_tys.len(), c.args.len()
+                            variant_name,
+                            enum_name,
+                            payload_tys.len(),
+                            c.args.len()
                         ),
                         c.span,
                     );
                     error_occurred = true;
                 }
-                
+
                 // Arg Types
                 for (i, arg) in c.args.iter_mut().enumerate() {
                     let arg_expr = get_call_arg_mut_legacy(arg, ctx);
                     let target_ty = payload_tys.get(i);
                     let arg_ty = check_expression(ctx, arg_expr, target_ty);
-                    
+
                     if let Some(target_ty) = target_ty {
                         if arg_ty != Type::Error && !types_compatible(target_ty, &arg_ty) {
                             ctx.error(
                                 format!(
                                     "Constructor '{}' argument {}: expected {}, found {}",
-                                    variant_name, i + 1, target_ty, arg_ty
+                                    variant_name,
+                                    i + 1,
+                                    target_ty,
+                                    arg_ty
                                 ),
                                 arg_expr.span(),
                             );
@@ -1432,18 +1511,30 @@ fn check_call(ctx: &mut TypeContext, expr: &mut HirExpression, expected: Option<
             if error_occurred {
                 return Type::Error;
             }
-            
+
             let result_ty = Type::Enum(enum_name.clone(), type_args);
 
             // REWRITE
-            if let HirExpression::Call(c) = std::mem::replace(expr, HirExpression::Integer(call_span, "0".to_string())) {
-                 let payloads = c.args.into_iter().filter_map(|a| if let HirCallArgument::Positional(e) = a { Some(e) } else { None }).collect();
-                 *expr = HirExpression::EnumConstructor(HirEnumConstructor {
-                     span: call_span,
-                     enum_name: enum_name.clone(),
-                     variant_name,
-                     payloads,
-                 });
+            if let HirExpression::Call(c) =
+                std::mem::replace(expr, HirExpression::Integer(call_span, "0".to_string()))
+            {
+                let payloads = c
+                    .args
+                    .into_iter()
+                    .filter_map(|a| {
+                        if let HirCallArgument::Positional(e) = a {
+                            Some(e)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                *expr = HirExpression::EnumConstructor(HirEnumConstructor {
+                    span: call_span,
+                    enum_name: enum_name.clone(),
+                    variant_name,
+                    payloads,
+                });
             }
             return result_ty;
         }
@@ -1451,7 +1542,11 @@ fn check_call(ctx: &mut TypeContext, expr: &mut HirExpression, expected: Option<
             if let HirExpression::Call(ref mut c) = expr {
                 if c.args.len() != params.len() {
                     ctx.error(
-                        format!("expected {} arguments, found {}", params.len(), c.args.len()),
+                        format!(
+                            "expected {} arguments, found {}",
+                            params.len(),
+                            c.args.len()
+                        ),
                         c.span,
                     );
                 }
@@ -1462,7 +1557,10 @@ fn check_call(ctx: &mut TypeContext, expr: &mut HirExpression, expected: Option<
                     if let Some(target_ty) = target_ty {
                         if arg_ty != Type::Error && !types_compatible(target_ty, &arg_ty) {
                             ctx.error(
-                                format!("argument type mismatch: expected {}, found {}", target_ty, arg_ty),
+                                format!(
+                                    "argument type mismatch: expected {}, found {}",
+                                    target_ty, arg_ty
+                                ),
                                 arg_expr.span(),
                             );
                         }
@@ -1489,15 +1587,22 @@ fn check_call(ctx: &mut TypeContext, expr: &mut HirExpression, expected: Option<
             if let HirExpression::Call(ref mut c) = expr {
                 match &receiver_ty {
                     Type::String => return check_string_method(ctx, &method, &mut c.args, c.span),
-                    Type::Array(_) | Type::Slice(_) => return check_array_method(ctx, &method, &mut c.args, c.span),
+                    Type::Array(_) | Type::Slice(_) => {
+                        return check_array_method(ctx, &method, &mut c.args, c.span)
+                    }
                     Type::Regex => return check_regex_method(ctx, &method, &mut c.args, c.span),
-                    Type::Command => return check_command_method(ctx, &method, &mut c.args, c.span),
+                    Type::Command => {
+                        return check_command_method(ctx, &method, &mut c.args, c.span)
+                    }
                     _ => {
                         // Regular member call on struct literal or something similar?
                         // Fero doesn't have methods on structs yet, but we check field access.
                         // If it's a field of type function, we'd call it.
                         // For now, return error as "Method not found"
-                        ctx.error(format!("type {} has no method '{}'", receiver_ty, method), c.span);
+                        ctx.error(
+                            format!("type {} has no method '{}'", receiver_ty, method),
+                            c.span,
+                        );
                         return Type::Error;
                     }
                 }
@@ -1560,16 +1665,22 @@ fn match_generic_types(
     }
 }
 
-pub(crate) fn substitute_generics(ty: &Type, map: &std::collections::HashMap<crate::types::GenericParamId, Type>) -> Type {
+pub(crate) fn substitute_generics(
+    ty: &Type,
+    map: &std::collections::HashMap<crate::types::GenericParamId, Type>,
+) -> Type {
     match ty {
-        Type::GenericParam { id, .. } => {
-            map.get(id).cloned().unwrap_or_else(|| ty.clone())
-        }
+        Type::GenericParam { id, .. } => map.get(id).cloned().unwrap_or_else(|| ty.clone()),
         Type::Array(inner) => Type::Array(Box::new(substitute_generics(inner, map))),
         Type::Slice(inner) => Type::Slice(Box::new(substitute_generics(inner, map))),
         Type::Option(inner) => Type::Option(Box::new(substitute_generics(inner, map))),
-        Type::Result(ok, err) => Type::Result(Box::new(substitute_generics(ok, map)), Box::new(substitute_generics(err, map))),
-        Type::Tuple(elems) => Type::Tuple(elems.iter().map(|e| substitute_generics(e, map)).collect()),
+        Type::Result(ok, err) => Type::Result(
+            Box::new(substitute_generics(ok, map)),
+            Box::new(substitute_generics(err, map)),
+        ),
+        Type::Tuple(elems) => {
+            Type::Tuple(elems.iter().map(|e| substitute_generics(e, map)).collect())
+        }
         Type::Struct(name, args) => Type::Struct(
             name.clone(),
             args.iter().map(|a| substitute_generics(a, map)).collect(),
@@ -1582,11 +1693,14 @@ pub(crate) fn substitute_generics(ty: &Type, map: &std::collections::HashMap<cra
     }
 }
 
-fn get_call_arg_mut_legacy<'a>(arg: &'a mut HirCallArgument, ctx: &mut TypeContext) -> &'a mut HirExpression {
+fn get_call_arg_mut_legacy<'a>(
+    arg: &'a mut HirCallArgument,
+    ctx: &mut TypeContext,
+) -> &'a mut HirExpression {
     match arg {
         HirCallArgument::Positional(ref mut e) => e,
         HirCallArgument::Named(n) => {
-                ctx.error("named arguments not supported here", n.value.span());
+            ctx.error("named arguments not supported here", n.value.span());
             &mut n.value
         }
     }
@@ -1612,7 +1726,8 @@ fn check_function_call(
     };
 
     // Generic Named Argument Matching for user functions
-    let mut resolved_args: Vec<Option<&mut HirExpression>> = (0..sig.params.len()).map(|_| None).collect();
+    let mut resolved_args: Vec<Option<&mut HirExpression>> =
+        (0..sig.params.len()).map(|_| None).collect();
     let mut named_keys = std::collections::HashSet::new();
 
     for (i, arg) in c.args.iter_mut().enumerate() {
@@ -1692,7 +1807,15 @@ fn check_function_call(
     let mut inferred = std::collections::HashMap::new();
     if let Some(t_args) = explicit_type_args {
         if t_args.len() != sig.generic_params.len() {
-            ctx.error(format!("function '{}' expects {} type arguments, found {}", func_name, sig.generic_params.len(), t_args.len()), c.span);
+            ctx.error(
+                format!(
+                    "function '{}' expects {} type arguments, found {}",
+                    func_name,
+                    sig.generic_params.len(),
+                    t_args.len()
+                ),
+                c.span,
+            );
             return Type::Error;
         }
         for (param, ty) in sig.generic_params.iter().zip(t_args.into_iter()) {
@@ -1704,14 +1827,23 @@ fn check_function_call(
                 if let Some(arg_ty) = arg_types.get(i) {
                     if *arg_ty != Type::Error {
                         if match_generic_types(param_ty, arg_ty, &mut inferred).is_err() {
-                            ctx.error(format!("type mismatch during generic inference for '{}'", func_name), c.span);
+                            ctx.error(
+                                format!(
+                                    "type mismatch during generic inference for '{}'",
+                                    func_name
+                                ),
+                                c.span,
+                            );
                         }
                     }
                 }
             }
             for param in &sig.generic_params {
                 if !inferred.contains_key(&param.id) {
-                    ctx.error(format!("cannot infer type for generic parameter '{}'", param.name), c.span);
+                    ctx.error(
+                        format!("cannot infer type for generic parameter '{}'", param.name),
+                        c.span,
+                    );
                     return Type::Error;
                 }
             }
@@ -1725,7 +1857,9 @@ fn check_function_call(
         let arg_ty = &arg_types[i];
 
         if resolved.is_some() {
-            if *arg_ty != Type::Error && !crate::types::types_compatible(&substituted_param_ty, arg_ty) {
+            if *arg_ty != Type::Error
+                && !crate::types::types_compatible(&substituted_param_ty, arg_ty)
+            {
                 ctx.error(
                     format!(
                         "argument for '{}' in '{}': expected {}, found {}",
@@ -1773,10 +1907,7 @@ fn check_member(ctx: &mut TypeContext, m: &mut HirMember, _expected: Option<&Typ
             "stdout" | "stderr" => return Type::String,
             "success" => return Type::Bool,
             _ => {
-                ctx.error(
-                    format!("CommandResult has no field '{}'", m.field),
-                    m.span,
-                );
+                ctx.error(format!("CommandResult has no field '{}'", m.field), m.span);
                 return Type::Error;
             }
         }
@@ -1907,8 +2038,6 @@ fn check_if(ctx: &mut TypeContext, i: &mut HirIf, expected: Option<&Type>) -> Ty
     }
 }
 
-
-
 fn check_match(ctx: &mut TypeContext, m: &mut HirMatch, expected: Option<&Type>) -> Type {
     let val_ty = check_expression(ctx, &mut m.value, None);
     let mut result_ty: Option<Type> = None;
@@ -1971,10 +2100,12 @@ fn check_match(ctx: &mut TypeContext, m: &mut HirMatch, expected: Option<&Type>)
                             "false" => Some(crate::pattern::MatchCoverageKey::Bool(false)),
                             _ => None,
                         },
-                        crate::pattern::Domain::Enum(enum_name) => Some(crate::pattern::MatchCoverageKey::Variant {
-                            enum_name: enum_name.clone(),
-                            variant: name.clone(),
-                        }),
+                        crate::pattern::Domain::Enum(enum_name) => {
+                            Some(crate::pattern::MatchCoverageKey::Variant {
+                                enum_name: enum_name.clone(),
+                                variant: name.clone(),
+                            })
+                        }
                         _ => None,
                     } {
                         covered_constructors.insert(key);
@@ -2077,12 +2208,14 @@ fn check_match(ctx: &mut TypeContext, m: &mut HirMatch, expected: Option<&Type>)
     result_ty.unwrap_or(Type::Unit)
 }
 
-
 fn check_for_expr(ctx: &mut TypeContext, f: &mut HirForExpr) -> Type {
     let iter_ty = check_expression(ctx, &mut f.iterable, None);
     let elem_ty = match &iter_ty {
         Type::Struct(_, _) | Type::Enum(_, _) => {
-            ctx.error(format!("structs and enums are not iterable, found {}", iter_ty), f.span);
+            ctx.error(
+                format!("structs and enums are not iterable, found {}", iter_ty),
+                f.span,
+            );
             Type::Error
         }
         Type::Array(inner) => *inner.clone(),
@@ -2122,11 +2255,19 @@ fn check_for_expr(ctx: &mut TypeContext, f: &mut HirForExpr) -> Type {
 }
 
 fn check_tuple(ctx: &mut TypeContext, elems: &mut [HirExpression], _span: Span) -> Type {
-    let types: Vec<Type> = elems.iter_mut().map(|e| check_expression(ctx, e, None)).collect();
+    let types: Vec<Type> = elems
+        .iter_mut()
+        .map(|e| check_expression(ctx, e, None))
+        .collect();
     Type::Tuple(types)
 }
 
-fn check_array(ctx: &mut TypeContext, elems: &mut [HirExpression], span: Span, expected: Option<&Type>) -> Type {
+fn check_array(
+    ctx: &mut TypeContext,
+    elems: &mut [HirExpression],
+    span: Span,
+    expected: Option<&Type>,
+) -> Type {
     if elems.is_empty() {
         return Type::Array(Box::new(Type::Unknown));
     }
@@ -2168,13 +2309,13 @@ fn check_regex_constructor(
                     }
                 }
                 HirCallArgument::Named(n) => {
-                        ctx.error(
-                            format!(
-                                "Regex constructors do not support named argument '{}'",
-                                n.name
-                            ),
-                            n.value.span(),
-                        );
+                    ctx.error(
+                        format!(
+                            "Regex constructors do not support named argument '{}'",
+                            n.name
+                        ),
+                        n.value.span(),
+                    );
                 }
             }
         }
@@ -2315,10 +2456,7 @@ fn check_regex_method(
             Type::String
         }
         _ => {
-            ctx.error(
-                format!("Regex has no method '{}'", name),
-                span,
-            );
+            ctx.error(format!("Regex has no method '{}'", name), span);
             Type::Error
         }
     }
@@ -2351,7 +2489,11 @@ fn check_struct_literal(ctx: &mut TypeContext, s: &mut HirStructLiteral) -> Type
                 "generic struct '{}' requires {} type argument{}",
                 name,
                 info.generic_params.len(),
-                if info.generic_params.len() == 1 { "" } else { "s" }
+                if info.generic_params.len() == 1 {
+                    ""
+                } else {
+                    "s"
+                }
             ),
             s.span,
         );
@@ -2465,9 +2607,12 @@ fn check_closure(ctx: &mut TypeContext, c: &mut HirClosure, expected: Option<&Ty
 
                 if let Some(info) = ctx.scopes.lookup_anywhere(&named.name).cloned() {
                     if info.is_consumed {
-                        ctx.error(format!("use of consumed value '{}'", named.name), named.span);
+                        ctx.error(
+                            format!("use of consumed value '{}'", named.name),
+                            named.span,
+                        );
                     }
-                    
+
                     if named.mode == HirCaptureMode::Consume {
                         ctx.scopes.mark_consumed(&named.name);
                     }
@@ -2477,7 +2622,10 @@ fn check_closure(ctx: &mut TypeContext, c: &mut HirClosure, expected: Option<&Ty
                         HirCaptureMode::Inout => {
                             if !info.is_mutable {
                                 ctx.error(
-                                    format!("cannot capture immutable value '{}' as inout", named.name),
+                                    format!(
+                                        "cannot capture immutable value '{}' as inout",
+                                        named.name
+                                    ),
                                     named.span,
                                 );
                             }
@@ -2509,15 +2657,14 @@ fn check_closure(ctx: &mut TypeContext, c: &mut HirClosure, expected: Option<&Ty
 
     // Inject recursive self if present
     if has_recursive_self {
-        ctx.scopes.insert_info("self".into(), closure_type.clone(), false, true);
+        ctx.scopes
+            .insert_info("self".into(), closure_type.clone(), false, true);
     }
 
     // Insert other captures into isolated scope
     for (name, ty, is_mutable) in capture_info {
         ctx.scopes.insert_info(name, ty, is_mutable, true);
     }
-
-
 
     // Insert parameters into scope
     for (p, ty) in c.parameters.iter().zip(param_types.iter()) {
@@ -2526,7 +2673,8 @@ fn check_closure(ctx: &mut TypeContext, c: &mut HirClosure, expected: Option<&Ty
                 ctx.error(format!("cannot shadow captured value '{}'", p.name), p.span);
             }
         }
-        ctx.scopes.insert_info(p.name.clone(), ty.clone(), false, false);
+        ctx.scopes
+            .insert_info(p.name.clone(), ty.clone(), false, false);
     }
 
     // Check body
@@ -2554,4 +2702,230 @@ fn check_closure(ctx: &mut TypeContext, c: &mut HirClosure, expected: Option<&Ty
     ctx.scopes.pop_isolated_scope();
 
     Type::Function(param_types, Box::new(return_type))
+}
+
+fn check_comptime_expr(
+    ctx: &mut TypeContext,
+    expr: &mut HirExpression,
+    expected: Option<&Type>,
+) -> Type {
+    let mut comptime_node = if let HirExpression::Comptime(c) = expr {
+        c.clone()
+    } else {
+        unreachable!()
+    };
+
+    let old_is_comptime = ctx.is_comptime;
+    ctx.is_comptime = true;
+    let ty = check_expression(ctx, &mut comptime_node.expression, expected);
+    ctx.is_comptime = old_is_comptime;
+
+    if ty == Type::Error {
+        return Type::Error;
+    }
+
+    // Semantic check: ensure no runtime variables are used.
+    if let Err((msg, span)) = semantic_check_comptime_expr(&comptime_node.expression, ctx) {
+        ctx.error(msg, span);
+        return Type::Error;
+    }
+
+    if let Some(interpreter) = &mut ctx.interpreter {
+        let mut env = fero_interpreter::env::RuntimeEnv::new();
+        let old_mode = interpreter.mode;
+        let old_fuel = interpreter.fuel;
+        interpreter.mode = fero_interpreter::interpreter::EvalMode::Comptime;
+        interpreter.fuel = Some(1000000); // 1M steps
+
+        match interpreter.eval_expression(&comptime_node.expression, &mut env) {
+            Ok(fero_interpreter::control_flow::ControlFlow::Value(v)) => {
+                interpreter.mode = old_mode;
+                interpreter.fuel = old_fuel;
+                if let Some(lit) = materialize_primitive(&v, comptime_node.span) {
+                    *expr = lit;
+                    return ty;
+                } else {
+                    ctx.error(
+                        format!(
+                            "value of type {} cannot be materialized from comptime in v1",
+                            v.type_name()
+                        ),
+                        comptime_node.span,
+                    );
+                    return Type::Error;
+                }
+            }
+            Ok(cf) => {
+                interpreter.mode = old_mode;
+                interpreter.fuel = old_fuel;
+                ctx.error(
+                    format!(
+                        "comptime evaluation resulted in unexpected control flow: {:?}",
+                        cf
+                    ),
+                    comptime_node.span,
+                );
+                return Type::Error;
+            }
+            Err(e) => {
+                interpreter.mode = old_mode;
+                interpreter.fuel = old_fuel;
+                ctx.error(
+                    format!("comptime evaluation error: {}", e),
+                    comptime_node.span,
+                );
+                return Type::Error;
+            }
+        }
+    } else {
+        ctx.error(
+            "interpreter not available for comptime evaluation",
+            comptime_node.span,
+        );
+        return Type::Error;
+    }
+}
+
+fn materialize_primitive(
+    val: &fero_interpreter::value::Value,
+    span: Span,
+) -> Option<HirExpression> {
+    use fero_interpreter::value::Value;
+    match val {
+        Value::Int64(i) => Some(HirExpression::Integer(span, i.to_string())),
+        Value::Float64(f) => Some(HirExpression::Float(span, f.to_string())),
+        Value::Bool(b) => Some(HirExpression::Bool(span, *b)),
+        Value::String(s) => Some(HirExpression::String(span, s.clone())),
+        Value::Unit => Some(HirExpression::Tuple(span, vec![])),
+        _ => None,
+    }
+}
+
+fn semantic_check_comptime_expr(
+    expr: &HirExpression,
+    ctx: &TypeContext,
+) -> Result<(), (String, Span)> {
+    match expr {
+        HirExpression::Name(span, name) => {
+            if let Some(_) = ctx.scopes.lookup(name) {
+                return Err((
+                    format!(
+                        "runtime variable '{}' cannot be used in comptime context",
+                        name
+                    ),
+                    *span,
+                ));
+            }
+            Ok(())
+        }
+        HirExpression::Integer(_, _)
+        | HirExpression::Float(_, _)
+        | HirExpression::String(_, _)
+        | HirExpression::Bool(_, _) => Ok(()),
+        HirExpression::Unary(u) => semantic_check_comptime_expr(&u.expr, ctx),
+        HirExpression::Binary(b) => {
+            semantic_check_comptime_expr(&b.left, ctx)?;
+            semantic_check_comptime_expr(&b.right, ctx)
+        }
+        HirExpression::Call(c) => {
+            if let HirExpression::Member(member) = &*c.callee {
+                if let HirExpression::Name(_, namespace) = &*member.object {
+                    if matches!(namespace.as_str(), "fs" | "os" | "env") {
+                        return Err((
+                            format!(
+                                "operation '{}.{}' is not allowed during comptime evaluation",
+                                namespace, member.field
+                            ),
+                            member.span,
+                        ));
+                    }
+                }
+            }
+            if let HirExpression::Name(span, name) = &*c.callee {
+                if matches!(name.as_str(), "print" | "read_line" | "cmd" | "exit") {
+                    return Err((
+                        format!(
+                            "operation '{}' is not allowed during comptime evaluation",
+                            name
+                        ),
+                        *span,
+                    ));
+                }
+            }
+            semantic_check_comptime_expr(&c.callee, ctx)?;
+            for arg in &c.args {
+                match arg {
+                    HirCallArgument::Positional(e) => semantic_check_comptime_expr(e, ctx)?,
+                    HirCallArgument::Named(n) => semantic_check_comptime_expr(&n.value, ctx)?,
+                }
+            }
+            Ok(())
+        }
+        HirExpression::Member(m) => semantic_check_comptime_expr(&m.object, ctx),
+        HirExpression::Index(i) => {
+            semantic_check_comptime_expr(&i.object, ctx)?;
+            semantic_check_comptime_expr(&i.index, ctx)
+        }
+        HirExpression::Slice(s) => {
+            semantic_check_comptime_expr(&s.object, ctx)?;
+            semantic_check_comptime_expr(&s.start, ctx)?;
+            semantic_check_comptime_expr(&s.end, ctx)
+        }
+        HirExpression::Block(b) => semantic_check_block(b, ctx),
+        HirExpression::If(i) => {
+            semantic_check_comptime_expr(&i.condition, ctx)?;
+            semantic_check_block(&i.then_block, ctx)?;
+            if let Some(eb) = &i.else_branch {
+                semantic_check_comptime_expr(eb, ctx)?;
+            }
+            Ok(())
+        }
+        HirExpression::Match(m) => {
+            semantic_check_comptime_expr(&m.value, ctx)?;
+            for arm in &m.arms {
+                if let Some(g) = &arm.guard {
+                    semantic_check_comptime_expr(g, ctx)?;
+                }
+                semantic_check_comptime_expr(&arm.value, ctx)?;
+            }
+            Ok(())
+        }
+        HirExpression::Tuple(_, elems) => {
+            for e in elems {
+                semantic_check_comptime_expr(e, ctx)?;
+            }
+            Ok(())
+        }
+        HirExpression::Array(_, elems) => {
+            for e in elems {
+                semantic_check_comptime_expr(e, ctx)?;
+            }
+            Ok(())
+        }
+        HirExpression::StructLiteral(s) => {
+            for (_, e) in &s.fields {
+                semantic_check_comptime_expr(e, ctx)?;
+            }
+            Ok(())
+        }
+        HirExpression::Comptime(c) => semantic_check_comptime_expr(&c.expression, ctx),
+        _ => Ok(()),
+    }
+}
+
+fn semantic_check_block(block: &HirBlock, ctx: &TypeContext) -> Result<(), (String, Span)> {
+    for stmt in &block.statements {
+        match stmt {
+            HirStatement::Let(l) => semantic_check_comptime_expr(&l.value, ctx)?,
+            HirStatement::Var(v) => semantic_check_comptime_expr(&v.value, ctx)?,
+            HirStatement::Expr(e) => semantic_check_comptime_expr(e, ctx)?,
+            HirStatement::Return(opt_e) => {
+                if let Some(e) = opt_e {
+                    semantic_check_comptime_expr(e, ctx)?;
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }

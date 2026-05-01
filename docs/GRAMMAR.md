@@ -311,7 +311,8 @@ Multiplicative
 
 ```text
 Unary
-  = ("!" | "-") Unary
+  = "comptime" Expression
+  | ("!" | "-") Unary
   | Call
 ```
 
@@ -413,7 +414,7 @@ User {
 
 ```text
 IfExpr
-  = "if" Expression Block ("else" Block)?
+  = "if" Expression Block ("else" (Block | IfExpr))?
 ```
 
 ---

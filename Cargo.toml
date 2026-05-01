@@ -64,3 +64,17 @@ fero-repl = { path = "crates/fero-repl" }
 fero-lsp = { path = "crates/fero-lsp" }
 fero-testing = { path = "crates/fero-testing" }
 fero-driver = { path = "crates/fero-driver" }
+
+
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+opt-level = "z"
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.test]
+debug = "line-tables-only"

@@ -165,15 +165,18 @@ impl<'src> Lowerer<'src> {
             ast::TypeExpr::Array(t) => {
                 HirType::Array(t.span, Box::new(self.lower_type(&t.element_type)))
             }
-            ast::TypeExpr::Tuple(t) => {
-                HirType::Tuple(t.span, t.elements.iter().map(|e| self.lower_type(e)).collect())
-            }
+            ast::TypeExpr::Tuple(t) => HirType::Tuple(
+                t.span,
+                t.elements.iter().map(|e| self.lower_type(e)).collect(),
+            ),
             ast::TypeExpr::Apply(g) => HirType::Apply(
                 g.span,
                 Box::new(self.lower_type(&g.callee)),
                 g.arguments.iter().map(|a| self.lower_type(a)).collect(),
             ),
-            ast::TypeExpr::Optional(o) => HirType::Optional(o.span, Box::new(self.lower_type(&o.inner))),
+            ast::TypeExpr::Optional(o) => {
+                HirType::Optional(o.span, Box::new(self.lower_type(&o.inner)))
+            }
             ast::TypeExpr::Result(t) => HirType::Result(
                 t.span,
                 Box::new(self.lower_type(&t.ok)),
@@ -331,11 +334,13 @@ impl<'src> Lowerer<'src> {
                     .else_branch
                     .as_ref()
                     .map(|e| Box::new(self.lower_expression(e))),
+                is_comptime: e.is_comptime,
             }),
             ast::Expression::Match(e) => HirExpression::Match(HirMatch {
                 span: e.span,
                 value: Box::new(self.lower_expression(&e.value)),
                 arms: e.arms.iter().map(|a| self.lower_match_arm(a)).collect(),
+                is_comptime: e.is_comptime,
             }),
             ast::Expression::For(e) => HirExpression::For(HirForExpr {
                 span: e.span,
@@ -381,10 +386,16 @@ impl<'src> Lowerer<'src> {
                             mode: self.lower_capture_mode(named.mode),
                             name: self.text(named.name.span).to_string(),
                         }),
-                        ast::Capture::RecursiveSelf(span) => HirCapture::RecursiveSelf(span.clone()),
+                        ast::Capture::RecursiveSelf(span) => {
+                            HirCapture::RecursiveSelf(span.clone())
+                        }
                     })
                     .collect(),
-                parameters: c.parameters.iter().map(|p| self.lower_parameter(p)).collect(),
+                parameters: c
+                    .parameters
+                    .iter()
+                    .map(|p| self.lower_parameter(p))
+                    .collect(),
                 return_type: c.return_type.as_ref().map(|ty| self.lower_type(ty)),
                 body: self.lower_block(&c.body),
             }),
@@ -392,6 +403,10 @@ impl<'src> Lowerer<'src> {
                 // Placeholder for command expressions
                 HirExpression::Name(e.span, "COMMAND_NOT_IMPLEMENTED".to_string())
             }
+            ast::Expression::Comptime(e) => HirExpression::Comptime(HirComptimeExpr {
+                span: e.span,
+                expression: Box::new(self.lower_expression(&e.expression)),
+            }),
         }
     }
 
@@ -419,7 +434,15 @@ impl<'src> Lowerer<'src> {
             ast::Pattern::Struct(p) => HirPattern::Struct(
                 p.span,
                 self.text(p.name.span),
-                p.fields.iter().map(|(f_tok, pat)| (self.text(f_tok.span), pat.as_ref().map(|p| self.lower_pattern(p)))).collect(),
+                p.fields
+                    .iter()
+                    .map(|(f_tok, pat)| {
+                        (
+                            self.text(f_tok.span),
+                            pat.as_ref().map(|p| self.lower_pattern(p)),
+                        )
+                    })
+                    .collect(),
             ),
             ast::Pattern::Tuple(p) => HirPattern::Tuple(
                 p.span,
@@ -427,7 +450,10 @@ impl<'src> Lowerer<'src> {
             ),
             ast::Pattern::Or(p) => HirPattern::Or(
                 p.span,
-                p.alternatives.iter().map(|a| self.lower_pattern(a)).collect(),
+                p.alternatives
+                    .iter()
+                    .map(|a| self.lower_pattern(a))
+                    .collect(),
             ),
         }
     }

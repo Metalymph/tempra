@@ -84,12 +84,20 @@ fn format_hir_type(ty: &HirType) -> String {
         HirType::Named(_, n) => n.clone(),
         HirType::Array(_, inner) => format!("[{}]", format_hir_type(inner)),
         HirType::Tuple(_, elems) => {
-            let inner = elems.iter().map(|e| format_hir_type(e)).collect::<Vec<_>>().join(", ");
+            let inner = elems
+                .iter()
+                .map(|e| format_hir_type(e))
+                .collect::<Vec<_>>()
+                .join(", ");
             format!("({})", inner)
         }
         HirType::Apply(_, callee, args) => {
             let base = format_hir_type(callee);
-            let inner = args.iter().map(|a| format_hir_type(a)).collect::<Vec<_>>().join(", ");
+            let inner = args
+                .iter()
+                .map(|a| format_hir_type(a))
+                .collect::<Vec<_>>()
+                .join(", ");
             format!("{}({})", base, inner)
         }
         HirType::Optional(_, inner) => format!("{}?", format_hir_type(inner)),
@@ -97,7 +105,11 @@ fn format_hir_type(ty: &HirType) -> String {
             format!("Result({}, {})", format_hir_type(ok), format_hir_type(err))
         }
         HirType::Function(_, params, ret) => {
-            let p = params.iter().map(|p| format_hir_type(p)).collect::<Vec<_>>().join(", ");
+            let p = params
+                .iter()
+                .map(|p| format_hir_type(p))
+                .collect::<Vec<_>>()
+                .join(", ");
             format!("fn({}) -> {}", p, format_hir_type(ret))
         }
     }
@@ -190,6 +202,14 @@ impl Interpreter {
         expr: &HirExpression,
         env: &mut RuntimeEnv,
     ) -> Result<ControlFlow, String> {
+        if self.mode == crate::interpreter::EvalMode::Comptime {
+            if let Some(fuel) = &mut self.fuel {
+                if *fuel == 0 {
+                    return Err("comptime evaluation exceeded step limit".to_string());
+                }
+                *fuel -= 1;
+            }
+        }
         match expr {
             HirExpression::Integer(_, s) => {
                 let v = s.parse::<i64>().map_err(|_| "Invalid Int64".to_string())?;
@@ -562,7 +582,9 @@ impl Interpreter {
                     cf => return Ok(cf),
                 };
                 if Self::value_is_type(&value, &expr.ty) {
-                    Ok(ControlFlow::Value(Value::Option(OptionValue::Some(Box::new(value)))))
+                    Ok(ControlFlow::Value(Value::Option(OptionValue::Some(
+                        Box::new(value),
+                    ))))
                 } else {
                     Ok(ControlFlow::Value(Value::Option(OptionValue::None)))
                 }
@@ -586,6 +608,12 @@ impl Interpreter {
                 if let HirExpression::Member(member) = &*call.callee {
                     if let HirExpression::Name(_, ref obj_name) = *member.object {
                         if obj_name == "fs" {
+                            if self.mode == crate::interpreter::EvalMode::Comptime {
+                                return Err(format!(
+                                    "operation 'fs.{}' is not allowed during comptime evaluation",
+                                    member.field
+                                ));
+                            }
                             let mut args = Vec::new();
                             let mut named_args = HashMap::new();
                             for arg in &call.args {
@@ -609,6 +637,12 @@ impl Interpreter {
                             return self.eval_fs_builtin(&member.field, &args, &named_args);
                         }
                         if obj_name == "env" {
+                            if self.mode == crate::interpreter::EvalMode::Comptime {
+                                return Err(format!(
+                                    "operation 'env.{}' is not allowed during comptime evaluation",
+                                    member.field
+                                ));
+                            }
                             let mut args = Vec::new();
                             let mut named_args = HashMap::new();
                             for arg in &call.args {
@@ -632,6 +666,12 @@ impl Interpreter {
                             return self.eval_env_builtin(&member.field, &args, &named_args);
                         }
                         if obj_name == "os" {
+                            if self.mode == crate::interpreter::EvalMode::Comptime {
+                                return Err(format!(
+                                    "operation 'os.{}' is not allowed during comptime evaluation",
+                                    member.field
+                                ));
+                            }
                             let mut args = Vec::new();
                             let mut named_args = HashMap::new();
                             for arg in &call.args {
@@ -725,13 +765,19 @@ impl Interpreter {
                             return Err(format!("Unknown method '{}' on Slice", member.field));
                         }
                         Value::Command(cmd) => {
-                            if member.field == "run" {
-                                if !call.args.is_empty() {
-                                    return Err("Method 'run' expects 0 arguments".into());
-                                }
-                                return run_command(&cmd).map(ControlFlow::Value);
+                            if member.field != "run" {
+                                return Err(format!(
+                                    "Unknown method '{}' on Command",
+                                    member.field
+                                ));
                             }
-                            return Err(format!("Unknown method '{}' on Command", member.field));
+                            if self.mode == crate::interpreter::EvalMode::Comptime {
+                                return Err(
+                                    "command execution is not allowed during comptime evaluation"
+                                        .into(),
+                                );
+                            }
+                            return run_command(&cmd).map(ControlFlow::Value);
                         }
                         Value::Regex(re) => {
                             let mut args = Vec::new();
@@ -777,8 +823,12 @@ impl Interpreter {
                             }
                             return Err(format!("Field '{}' is not a closure", member.field));
                         }
-                        _ => Err(format!("Type {} has no method '{}'", obj.type_name(), member.field)),
-                    }
+                        _ => Err(format!(
+                            "Type {} has no method '{}'",
+                            obj.type_name(),
+                            member.field
+                        )),
+                    };
                 }
 
                 let mut positional_values = Vec::new();
@@ -801,7 +851,25 @@ impl Interpreter {
                 if let HirExpression::Name(_, name) = &*call.callee {
                     // Builtins
                     match name.as_str() {
+                        "compile_error" => {
+                            if self.mode != crate::interpreter::EvalMode::Comptime {
+                                return Err(
+                                    "compile_error is only allowed in comptime context".into()
+                                );
+                            }
+                            let val = positional_values
+                                .get(0)
+                                .or_else(|| named_values.get("message"))
+                                .ok_or("Missing argument 'message' for compile_error")?;
+                            if let Value::String(message) = val {
+                                return Err(message.clone());
+                            }
+                            return Err("compile_error requires a String argument".into());
+                        }
                         "exit" => {
+                            if self.mode == crate::interpreter::EvalMode::Comptime {
+                                return Err("exit is not allowed during comptime evaluation".into());
+                            }
                             let val = positional_values
                                 .get(0)
                                 .or_else(|| named_values.get("code"))
@@ -813,6 +881,12 @@ impl Interpreter {
                             }
                         }
                         "print" => {
+                            if self.mode == crate::interpreter::EvalMode::Comptime {
+                                return Err(
+                                    "operation 'print' is not allowed during comptime evaluation"
+                                        .into(),
+                                );
+                            }
                             let mut s = String::new();
                             let mut newline = true;
                             for val in positional_values.iter() {
@@ -852,6 +926,9 @@ impl Interpreter {
                             return Ok(ControlFlow::Value(Value::String(s)));
                         }
                         "read_line" => {
+                            if self.mode == crate::interpreter::EvalMode::Comptime {
+                                return Err("operation 'read_line' is not allowed during comptime evaluation".into());
+                            }
                             let mut trim_newline = true;
                             if let Some(Value::Bool(b)) = named_values.get("trim_newline") {
                                 trim_newline = *b;
@@ -881,6 +958,9 @@ impl Interpreter {
                             };
                         }
                         "cmd" => {
+                            if self.mode == crate::interpreter::EvalMode::Comptime {
+                                return Err("command construction is not allowed during comptime evaluation".into());
+                            }
                             let program = match positional_values
                                 .get(0)
                                 .or_else(|| named_values.get("program"))
@@ -987,7 +1067,11 @@ impl Interpreter {
                     }
 
                     // User function
-                    let func = self.functions.get(name).cloned().ok_or_else(|| format!("Function {} not found", name))?;
+                    let func = self
+                        .functions
+                        .get(name)
+                        .cloned()
+                        .ok_or_else(|| format!("Function {} not found", name))?;
 
                     let mut final_args = vec![None; func.parameters.len()];
                     for (i, v) in positional_values.into_iter().enumerate() {
@@ -1034,7 +1118,10 @@ impl Interpreter {
                     if let Value::Closure(c) = callee_val {
                         return self.call_closure(&c, positional_values);
                     }
-                    Err(format!("Value of type {} is not callable", callee_val.type_name()))
+                    Err(format!(
+                        "Value of type {} is not callable",
+                        callee_val.type_name()
+                    ))
                 }
             }
             HirExpression::Member(member) => {
@@ -1133,7 +1220,7 @@ impl Interpreter {
                 let condition_res;
                 let mut bindings = Vec::new();
                 let mut is_pattern_match = false;
-                
+
                 if let HirExpression::IsPattern(is_pat) = &*if_expr.condition {
                     is_pattern_match = true;
                     let val = match self.eval_expression(&is_pat.value, env)? {
@@ -1344,12 +1431,14 @@ impl Interpreter {
                         for (name, val) in bindings {
                             env.insert(name, val);
                         }
-                        
+
                         let mut guard_passed = true;
                         if let Some(guard) = &arm.guard {
                             let guard_result = match self.eval_expression(guard, env)? {
                                 ControlFlow::Value(Value::Bool(b)) => b,
-                                ControlFlow::Value(_) => unreachable!("typechecker ensures guard is Bool"),
+                                ControlFlow::Value(_) => {
+                                    unreachable!("typechecker ensures guard is Bool")
+                                }
                                 cf => {
                                     env.pop_scope();
                                     return Ok(cf);
@@ -1382,13 +1471,18 @@ impl Interpreter {
                             let val = match named.mode {
                                 HirCaptureMode::Inout => env.get_raw(&named.name),
                                 _ => env.get(&named.name),
-                            }.ok_or_else(|| {
-                                format!("Capture variable '{}' not found in environment", named.name)
+                            }
+                            .ok_or_else(|| {
+                                format!(
+                                    "Capture variable '{}' not found in environment",
+                                    named.name
+                                )
                             })?;
                             captures.insert(named.name.clone(), val);
                         }
                         HirCapture::RecursiveSelf(_) => {
-                            let cell = Value::Cell(std::rc::Rc::new(std::cell::RefCell::new(Value::Unit)));
+                            let cell =
+                                Value::Cell(std::rc::Rc::new(std::cell::RefCell::new(Value::Unit)));
                             captures.insert("self".into(), cell.clone());
                             self_cell = Some(cell);
                         }
@@ -1406,10 +1500,21 @@ impl Interpreter {
                 }
                 Ok(ControlFlow::Value(val))
             }
+            HirExpression::Comptime(e) => {
+                let old_mode = self.mode;
+                self.mode = crate::interpreter::EvalMode::Comptime;
+                let res = self.eval_expression(&e.expression, env);
+                self.mode = old_mode;
+                res
+            }
         }
     }
 
-    fn value_matches_pattern(value: &Value, pattern: &HirPattern, bindings: &mut Vec<(String, Value)>) -> bool {
+    fn value_matches_pattern(
+        value: &Value,
+        pattern: &HirPattern,
+        bindings: &mut Vec<(String, Value)>,
+    ) -> bool {
         match pattern {
             HirPattern::Wildcard(_) => true,
             HirPattern::Identifier(_, name) => {
@@ -1423,7 +1528,11 @@ impl Interpreter {
                         if args.len() == e.payloads.len() {
                             let mut temp_bindings = Vec::new();
                             for (arg_pat, arg_val) in args.iter().zip(e.payloads.iter()) {
-                                if !Self::value_matches_pattern(arg_val, arg_pat, &mut temp_bindings) {
+                                if !Self::value_matches_pattern(
+                                    arg_val,
+                                    arg_pat,
+                                    &mut temp_bindings,
+                                ) {
                                     return false;
                                 }
                             }
@@ -1446,7 +1555,8 @@ impl Interpreter {
                         false
                     }
                     "None" => {
-                        args.is_empty() && matches!(value, Value::Option(crate::value::OptionValue::None))
+                        args.is_empty()
+                            && matches!(value, Value::Option(crate::value::OptionValue::None))
                     }
                     "Ok" => {
                         if let Value::Result(res) = value {
@@ -1511,7 +1621,11 @@ impl Interpreter {
                     HirExpression::Bool(_, b) => {
                         matches!(value, Value::Bool(v) if *v == *b)
                     }
-                    other => Self::value_matches_pattern(value, &HirPattern::Wildcard(other.span()), &mut _dummy_bindings),
+                    other => Self::value_matches_pattern(
+                        value,
+                        &HirPattern::Wildcard(other.span()),
+                        &mut _dummy_bindings,
+                    ),
                 }
             }
             HirPattern::Struct(_, name, fields) => {
@@ -1521,7 +1635,11 @@ impl Interpreter {
                         for (field_name, field_pat) in fields {
                             if let Some(field_value) = struct_val.fields.get(field_name) {
                                 if let Some(pat) = field_pat {
-                                    if !Self::value_matches_pattern(field_value, pat, &mut temp_bindings) {
+                                    if !Self::value_matches_pattern(
+                                        field_value,
+                                        pat,
+                                        &mut temp_bindings,
+                                    ) {
                                         return false;
                                     }
                                 } else {
@@ -1542,7 +1660,8 @@ impl Interpreter {
                     if elements.len() == items.len() {
                         let mut temp_bindings = Vec::new();
                         for (item_pat, item_val) in items.iter().zip(elements.iter()) {
-                            if !Self::value_matches_pattern(item_val, item_pat, &mut temp_bindings) {
+                            if !Self::value_matches_pattern(item_val, item_pat, &mut temp_bindings)
+                            {
                                 return false;
                             }
                         }
@@ -1581,7 +1700,6 @@ impl Interpreter {
             }
         }
     }
-
 
     fn eval_block(
         &mut self,

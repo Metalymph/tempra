@@ -9,12 +9,20 @@ pub enum RuntimeSignal {
     Exit(i32),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EvalMode {
+    Runtime,
+    Comptime,
+}
+
 pub struct Interpreter {
     pub functions: HashMap<String, HirFunction>,
     pub structs: HashMap<String, HirStruct>,
     pub enums: BTreeMap<String, HirEnum>,
     pub top_level_statements: Vec<HirStatement>,
     pub args: Vec<String>,
+    pub mode: EvalMode,
+    pub fuel: Option<u64>,
 }
 
 impl Interpreter {
@@ -25,55 +33,71 @@ impl Interpreter {
         for item in &file.items {
             crate::eval_item::register_item(&mut functions, &mut structs, &mut enums, item);
         }
-        Self { 
+        Self {
             functions,
             structs,
             enums,
             top_level_statements: file.top_level_statements.clone(),
             args: Vec::new(),
+            mode: EvalMode::Runtime,
+            fuel: None,
         }
     }
 
     pub fn run_main(&mut self) -> Result<Value, crate::RuntimeError> {
-        let main_func = self
-            .functions
-            .get("main")
-            .cloned()
-            .ok_or_else(|| crate::RuntimeError::Message("Could not find main function".to_string()))?;
-        let flow = self.call_function(&main_func, vec![])
+        let main_func = self.functions.get("main").cloned().ok_or_else(|| {
+            crate::RuntimeError::Message("Could not find main function".to_string())
+        })?;
+        let flow = self
+            .call_function(&main_func, vec![])
             .map_err(crate::RuntimeError::Message)?;
         match flow {
             ControlFlow::Value(v) | ControlFlow::Return(v) => Ok(v),
             ControlFlow::Exit(code) => Err(crate::RuntimeError::Exit(code)),
             ControlFlow::Crash(msg) => Err(crate::RuntimeError::Crash(msg)),
-            ControlFlow::Break | ControlFlow::Continue => Err(crate::RuntimeError::Message("Break/Continue outside of loop".into())),
+            ControlFlow::Break | ControlFlow::Continue => Err(crate::RuntimeError::Message(
+                "Break/Continue outside of loop".into(),
+            )),
         }
     }
 
     pub fn run_script(&mut self) -> Result<Value, crate::RuntimeError> {
         let mut env = RuntimeEnv::new();
         let mut _result_val = Value::Unit;
-        
+
         let statements = self.top_level_statements.clone();
         for stmt in &statements {
-            let flow = self.eval_statement(stmt, &mut env)
+            let flow = self
+                .eval_statement(stmt, &mut env)
                 .map_err(crate::RuntimeError::Message)?;
             match flow {
                 ControlFlow::Value(v) => _result_val = v,
-                ControlFlow::Return(_) => return Err(crate::RuntimeError::Message("Top-level return not allowed".into())),
+                ControlFlow::Return(_) => {
+                    return Err(crate::RuntimeError::Message(
+                        "Top-level return not allowed".into(),
+                    ))
+                }
                 ControlFlow::Exit(code) => return Err(crate::RuntimeError::Exit(code)),
                 ControlFlow::Crash(msg) => return Err(crate::RuntimeError::Crash(msg)),
                 ControlFlow::Break | ControlFlow::Continue => {
-                    return Err(crate::RuntimeError::Message("Break/Continue outside of loop".into()));
+                    return Err(crate::RuntimeError::Message(
+                        "Break/Continue outside of loop".into(),
+                    ));
                 }
             }
         }
-        
+
         // Script mode implied fallible Unit
-        Ok(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::Unit))))
+        Ok(Value::Result(Box::new(crate::value::ValueResult::Ok(
+            Value::Unit,
+        ))))
     }
 
-    pub fn call_function(&mut self, func: &HirFunction, args: Vec<Value>) -> Result<ControlFlow, String> {
+    pub fn call_function(
+        &mut self,
+        func: &HirFunction,
+        args: Vec<Value>,
+    ) -> Result<ControlFlow, String> {
         let mut env = RuntimeEnv::new();
 
         // Bind parameters
@@ -97,12 +121,14 @@ impl Interpreter {
                 }
             }
         }
-        
+
         if func.is_fallible {
             // Implicit Ok(()) for fallible functions returning Unit
             // We assume success here if it's Unit success type as per prompt
             // v0 check: if success type is Unit, wrap in Ok
-            Ok(ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(Value::Unit)))))
+            Ok(ControlFlow::Value(Value::Result(Box::new(
+                crate::value::ValueResult::Ok(Value::Unit),
+            ))))
         } else {
             Ok(ControlFlow::Value(result_val))
         }

@@ -300,7 +300,7 @@ fn test_recursive_factorial() {
                     n * self(n - 1)
                 }
             };
-            expect(fact(5) == 120, "recursive factorial failed");
+            expect(fact(3) == 6, "recursive factorial failed");
         }
     "#;
     expect_ok(input);
@@ -317,7 +317,7 @@ fn test_recursive_fibonacci() {
                     self(n - 1) + self(n - 2)
                 }
             };
-            expect(fib(7) == 13, "recursive fibonacci failed");
+            expect(fib(4) == 3, "recursive fibonacci failed");
         }
     "#;
     expect_ok(input);

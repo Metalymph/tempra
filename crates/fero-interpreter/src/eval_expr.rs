@@ -250,11 +250,18 @@ impl Interpreter {
                 if name == "None" {
                     Ok(ControlFlow::Value(Value::Option(OptionValue::None)))
                 } else if let Some(val) = env.get(name) {
+                    // Local variable takes priority over everything (allows shadowing of namespaces)
                     Ok(ControlFlow::Value(val))
+                } else if matches!(name.as_str(), "fs" | "os" | "env" | "Regex") {
+                    Ok(ControlFlow::Value(Value::Namespace(name.clone())))
                 } else {
-                    env.get(name)
-                        .map(ControlFlow::Value)
-                        .ok_or_else(|| format!("Variable {} not found", name))
+                    // Try primitive type
+                    let ty = fero_hir::types::resolve_named_type(name);
+                    if ty != fero_hir::types::Type::Unknown {
+                        Ok(ControlFlow::Value(Value::Type(ty)))
+                    } else {
+                        Err(format!("Variable {} not found", name))
+                    }
                 }
             }
             HirExpression::Unary(unary) => {
@@ -476,47 +483,11 @@ impl Interpreter {
                         }
                         _ => Err("/ operator mismatch".into()),
                     },
-                    HirBinaryOp::Eq => match (left, right) {
-                        (Value::Int64(a), Value::Int64(b)) => {
-                            Ok(ControlFlow::Value(Value::Bool(a == b)))
-                        }
-                        (Value::UInt8(a), Value::UInt8(b)) => {
-                            Ok(ControlFlow::Value(Value::Bool(a == b)))
-                        }
-                        (Value::Float64(a), Value::Float64(b)) => {
-                            Ok(ControlFlow::Value(Value::Bool(a == b)))
-                        }
-                        (Value::Bool(a), Value::Bool(b)) => {
-                            Ok(ControlFlow::Value(Value::Bool(a == b)))
-                        }
-                        (Value::String(a), Value::String(b)) => {
-                            Ok(ControlFlow::Value(Value::Bool(a == b)))
-                        }
-                        (Value::Option(a), Value::Option(b)) => {
-                            Ok(ControlFlow::Value(Value::Bool(a == b)))
-                        }
-                        _ => Ok(ControlFlow::Value(Value::Bool(false))),
+                    HirBinaryOp::Eq => {
+                        Ok(ControlFlow::Value(Value::Bool(left == right)))
                     },
-                    HirBinaryOp::NotEq => match (left, right) {
-                        (Value::Int64(a), Value::Int64(b)) => {
-                            Ok(ControlFlow::Value(Value::Bool(a != b)))
-                        }
-                        (Value::UInt8(a), Value::UInt8(b)) => {
-                            Ok(ControlFlow::Value(Value::Bool(a != b)))
-                        }
-                        (Value::Float64(a), Value::Float64(b)) => {
-                            Ok(ControlFlow::Value(Value::Bool(a != b)))
-                        }
-                        (Value::Bool(a), Value::Bool(b)) => {
-                            Ok(ControlFlow::Value(Value::Bool(a != b)))
-                        }
-                        (Value::String(a), Value::String(b)) => {
-                            Ok(ControlFlow::Value(Value::Bool(a != b)))
-                        }
-                        (Value::Option(a), Value::Option(b)) => {
-                            Ok(ControlFlow::Value(Value::Bool(a != b)))
-                        }
-                        _ => Ok(ControlFlow::Value(Value::Bool(true))),
+                    HirBinaryOp::NotEq => {
+                        Ok(ControlFlow::Value(Value::Bool(left != right)))
                     },
                     HirBinaryOp::Less => match (left, right) {
                         (Value::Int64(a), Value::Int64(b)) => {
@@ -1108,7 +1079,11 @@ impl Interpreter {
                         }
                     }
 
-                    return self.call_function(&func, args);
+                    let type_args = call.type_args.as_ref().map(|targs| {
+                        targs.iter().map(|t| self.resolve_hir_type(t)).map(Value::Type).collect()
+                    });
+
+                    return self.call_function(&func, type_args, args);
                 } else {
                     // Try evaluating callee as a complex expression (e.g. (fn(x){x})(1))
                     let callee_val = match self.eval_expression(&call.callee, env)? {

@@ -7,6 +7,33 @@ use fero_hir::*;
 use fero_span::Span;
 use std::collections::HashMap;
 
+impl TypeContext {
+    pub fn eval_comptime_expr(
+        &mut self,
+        expr: &HirExpression,
+    ) -> Result<fero_interpreter::value::Value, String> {
+        if let Some(interpreter) = &mut self.interpreter {
+            let mut env = fero_interpreter::env::RuntimeEnv::new();
+            let old_mode = interpreter.mode;
+            let old_fuel = interpreter.fuel;
+            interpreter.mode = fero_interpreter::interpreter::EvalMode::Comptime;
+            interpreter.fuel = Some(1000000); // 1M steps
+
+            let res = match interpreter.eval_expression(expr, &mut env) {
+                Ok(fero_interpreter::control_flow::ControlFlow::Value(v)) => Ok(v),
+                Ok(cf) => Err(format!("comptime evaluation produced non-value control flow: {:?}", cf)),
+                Err(e) => Err(e),
+            };
+
+            interpreter.mode = old_mode;
+            interpreter.fuel = old_fuel;
+            res
+        } else {
+            Err("interpreter not available for comptime evaluation".into())
+        }
+    }
+}
+
 fn get_call_arg_mut<'a>(
     args: &'a mut [HirCallArgument],
     idx: usize,
@@ -263,6 +290,7 @@ enum ResolvedName {
     BuiltinFunction(String),
     EnumConstructor(String, String), // enum_name, variant_name
     Function(String),
+    Type(Type),
     Unknown,
 }
 
@@ -291,6 +319,22 @@ fn resolve_name(
         return Ok(ResolvedName::Namespace(name.to_string()));
     }
 
+    let ty = fero_hir::types::resolve_named_type(name);
+    if ty != Type::Unknown {
+        return Ok(ResolvedName::Type(ty));
+    }
+
+    if let Some(param) = ctx
+        .current_generic_params_info
+        .iter()
+        .find(|p| p.name == name)
+    {
+        return Ok(ResolvedName::Type(Type::GenericParam {
+            id: param.id,
+            name: name.to_string(),
+        }));
+    }
+
     let enum_res = ctx.find_enum_for_variant(name, expected);
     if let Ok(enum_name) = enum_res {
         return Ok(ResolvedName::EnumConstructor(enum_name, name.to_string()));
@@ -312,6 +356,7 @@ fn resolve_name(
             | "None"
             | "Ok"
             | "Err"
+            | "compile_error"
     );
 
     if is_builtin {
@@ -363,6 +408,7 @@ fn check_name(
     match resolve_name(ctx, name, expected) {
         Ok(ResolvedName::LocalVariable(info)) => info.ty,
         Ok(ResolvedName::Namespace(ns)) => Type::Namespace(ns),
+        Ok(ResolvedName::Type(_ty)) => Type::Unknown, // No metatype yet; type values resolved by interpreter
         Ok(ResolvedName::BuiltinConstant(ty)) => ty,
         Ok(ResolvedName::EnumConstructor(enum_name, variant_name)) => {
             // Type Validation
@@ -1751,7 +1797,7 @@ fn check_function_call(
                     continue;
                 }
 
-                let param_idx = sig.params.iter().position(|(name, _)| name == &n.name);
+                let param_idx = sig.params.iter().position(|p| p.name == n.name);
                 match param_idx {
                     Some(idx) => {
                         if resolved_args[idx].is_some() {
@@ -1793,7 +1839,7 @@ fn check_function_call(
         match resolved {
             Some(arg_expr) => {
                 let expected_arg_ty = if !pre_inferred.is_empty() && i < sig.params.len() {
-                    Some(substitute_generics(&sig.params[i].1, &pre_inferred))
+                    Some(substitute_generics(&sig.params[i].ty, &pre_inferred))
                 } else {
                     None
                 };
@@ -1823,10 +1869,10 @@ fn check_function_call(
         }
     } else {
         if !sig.generic_params.is_empty() {
-            for (i, (_, param_ty)) in sig.params.iter().enumerate() {
+            for (i, param) in sig.params.iter().enumerate() {
                 if let Some(arg_ty) = arg_types.get(i) {
                     if *arg_ty != Type::Error {
-                        if match_generic_types(param_ty, arg_ty, &mut inferred).is_err() {
+                        if match_generic_types(&param.ty, arg_ty, &mut inferred).is_err() {
                             ctx.error(
                                 format!(
                                     "type mismatch during generic inference for '{}'",
@@ -1851,35 +1897,85 @@ fn check_function_call(
     }
 
     // Check types and missing arguments
+    let mut comptime_args = Vec::new();
     for (i, resolved) in resolved_args.iter_mut().enumerate() {
-        let (param_name, param_ty) = &sig.params[i];
-        let substituted_param_ty = substitute_generics(param_ty, &inferred);
+        let param = &sig.params[i];
+        let substituted_param_ty = substitute_generics(&param.ty, &inferred);
         let arg_ty = &arg_types[i];
 
-        if resolved.is_some() {
+        if let Some(arg_expr) = resolved {
             if *arg_ty != Type::Error
                 && !crate::types::types_compatible(&substituted_param_ty, arg_ty)
             {
                 ctx.error(
                     format!(
                         "argument for '{}' in '{}': expected {}, found {}",
-                        param_name, func_name, substituted_param_ty, arg_ty
+                        param.name, func_name, substituted_param_ty, arg_ty
                     ),
-                    resolved.as_ref().unwrap().span(),
+                    arg_expr.span(),
                 );
+            }
+
+            if param.kind == fero_ast::ParameterKind::Comptime {
+                match evaluate_comptime_arg(ctx, *arg_expr, &substituted_param_ty) {
+                    Ok(val) => comptime_args.push(val),
+                    Err((msg, span)) => {
+                        ctx.error(msg, span);
+                        comptime_args.push(crate::types::ComptimeValue::Unit);
+                    }
+                }
             }
         } else {
             ctx.error(
                 format!(
                     "missing required argument '{}' for function '{}'",
-                    param_name, func_name
+                    param.name, func_name
                 ),
                 c.span,
             );
         }
     }
 
+    // Bookkeep specialization identity
+    let mut type_args_list = Vec::new();
+    for param in &sig.generic_params {
+        if let Some(ty) = inferred.get(&param.id) {
+            type_args_list.push(ty.clone());
+        }
+    }
+
+    let spec_key = crate::context::SpecializationKey {
+        function_name: func_name.to_string(),
+        type_args: type_args_list,
+        comptime_args,
+    };
+    ctx.specialization_log.insert(spec_key);
+
     substitute_generics(&sig.return_type, &inferred)
+}
+
+fn evaluate_comptime_arg(
+    ctx: &mut crate::context::TypeContext,
+    expr: &mut HirExpression,
+    _expected: &Type,
+) -> Result<crate::types::ComptimeValue, (String, fero_span::Span)> {
+    // 1. Semantic check: must not use runtime variables
+    semantic_check_comptime_expr(expr, ctx)?;
+
+    // 2. Evaluate using restricted interpreter
+    let val = ctx.eval_comptime_expr(expr).map_err(|e| (e, expr.span()))?;
+
+    // 3. Convert Value to ComptimeValue
+    match val {
+        fero_interpreter::value::Value::Unit => Ok(crate::types::ComptimeValue::Unit),
+        fero_interpreter::value::Value::Bool(b) => Ok(crate::types::ComptimeValue::Bool(b)),
+        fero_interpreter::value::Value::Int64(i) => Ok(crate::types::ComptimeValue::Int(i)),
+        fero_interpreter::value::Value::String(s) => Ok(crate::types::ComptimeValue::String(s)),
+        _ => Err((
+            format!("unsupported comptime value type: {}", val),
+            expr.span(),
+        )),
+    }
 }
 
 fn check_member(ctx: &mut TypeContext, m: &mut HirMember, _expected: Option<&Type>) -> Type {
@@ -2658,12 +2754,12 @@ fn check_closure(ctx: &mut TypeContext, c: &mut HirClosure, expected: Option<&Ty
     // Inject recursive self if present
     if has_recursive_self {
         ctx.scopes
-            .insert_info("self".into(), closure_type.clone(), false, true);
+            .insert_info("self".into(), closure_type.clone(), false, true, false);
     }
 
     // Insert other captures into isolated scope
     for (name, ty, is_mutable) in capture_info {
-        ctx.scopes.insert_info(name, ty, is_mutable, true);
+        ctx.scopes.insert_info(name, ty, is_mutable, true, false);
     }
 
     // Insert parameters into scope
@@ -2674,7 +2770,7 @@ fn check_closure(ctx: &mut TypeContext, c: &mut HirClosure, expected: Option<&Ty
             }
         }
         ctx.scopes
-            .insert_info(p.name.clone(), ty.clone(), false, false);
+            .insert_info(p.name.clone(), ty.clone(), false, false, false);
     }
 
     // Check body
@@ -2807,14 +2903,16 @@ fn semantic_check_comptime_expr(
 ) -> Result<(), (String, Span)> {
     match expr {
         HirExpression::Name(span, name) => {
-            if let Some(_) = ctx.scopes.lookup(name) {
-                return Err((
-                    format!(
-                        "runtime variable '{}' cannot be used in comptime context",
-                        name
-                    ),
-                    *span,
-                ));
+            if let Some(info) = ctx.scopes.lookup(name) {
+                if !info.is_comptime {
+                    return Err((
+                        format!(
+                            "runtime variable '{}' cannot be used in comptime context",
+                            name
+                        ),
+                        *span,
+                    ));
+                }
             }
             Ok(())
         }

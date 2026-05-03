@@ -177,7 +177,16 @@ impl<'src> Parser<'src> {
                     name: g_name,
                 });
             } else {
-                seen_runtime_param = true;
+                let is_comptime = self.eat(TokenKind::Comptime);
+                if !is_comptime {
+                    seen_runtime_param = true;
+                } else if seen_runtime_param {
+                    return Err(ParseError {
+                        message: "comptime parameters must appear before runtime parameters".into(),
+                        span: self.tokens[self.position - 1].span,
+                    });
+                }
+
                 let is_inout = self.eat(TokenKind::Inout);
                 let p_name = self.expect_identifier()?;
                 let p_ty = if self.eat(TokenKind::Colon) {
@@ -195,6 +204,11 @@ impl<'src> Parser<'src> {
                     name: p_name,
                     ty: p_ty,
                     is_inout,
+                    kind: if is_comptime {
+                        ParameterKind::Comptime
+                    } else {
+                        ParameterKind::Runtime
+                    },
                 });
             }
             if !self.eat(TokenKind::Comma) {
@@ -1172,6 +1186,14 @@ impl<'src> Parser<'src> {
         let mut parameters = Vec::new();
         while !self.at(TokenKind::RightParen) && !self.at(TokenKind::EndOfFile) {
             let p_start = self.current().span.start;
+            
+            if self.at(TokenKind::Comptime) {
+                return Err(ParseError {
+                    message: "comptime parameters are only supported on named functions in this phase".into(),
+                    span: self.current().span,
+                });
+            }
+
             let is_inout = self.eat(TokenKind::Inout);
             let p_name = self.expect_identifier()?;
             self.expect(TokenKind::Colon)?;
@@ -1183,6 +1205,7 @@ impl<'src> Parser<'src> {
                 name: p_name,
                 ty: p_ty,
                 is_inout,
+                kind: ParameterKind::Runtime,
             });
 
             if !self.eat(TokenKind::Comma) {

@@ -1,7 +1,7 @@
 use crate::check_stmt::check_block;
 use crate::context::{EnumInfo, FunctionSignature, StructFieldInfo, StructInfo, TypeContext};
 use crate::types::{types_compatible, Type};
-use fero_hir::*;
+use fero_hir::{HirFunction, HirItem, HirType, ParameterKind};
 use std::collections::HashMap;
 
 /// Check a single item (function body, struct, enum, etc.)
@@ -36,7 +36,18 @@ fn check_function(ctx: &mut TypeContext, f: &mut HirFunction) {
     // Bind parameters
     for p in &f.parameters {
         let ty = ctx.resolve_hir_type(&p.ty);
-        ctx.scopes.insert(p.name.clone(), ty);
+        let is_mutable = if p.kind == ParameterKind::Comptime {
+            false
+        } else {
+            p.is_inout
+        };
+        ctx.scopes.insert_info(
+            p.name.clone(),
+            ty,
+            is_mutable,
+            false,
+            p.kind == ParameterKind::Comptime,
+        );
     }
 
     let expected_ret = ctx.current_return_type.clone();
@@ -82,10 +93,14 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
                 }
                 ctx.current_generic_params = generic_params.iter().map(|p| p.id).collect();
                 ctx.current_generic_params_info = generic_params.clone();
-                let params: Vec<(String, Type)> = f
+                let params: Vec<crate::context::FunctionParam> = f
                     .parameters
                     .iter()
-                    .map(|p| (p.name.clone(), ctx.resolve_hir_type(&p.ty)))
+                    .map(|p| crate::context::FunctionParam {
+                        name: p.name.clone(),
+                        ty: ctx.resolve_hir_type(&p.ty),
+                        kind: p.kind,
+                    })
                     .collect();
                 let mut return_type = f
                     .return_type

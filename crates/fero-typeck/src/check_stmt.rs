@@ -37,7 +37,7 @@ pub fn check_statement(ctx: &mut TypeContext, stmt: &mut HirStatement, expected:
                     ctx.error(format!("cannot shadow captured value '{}'", l.name), l.span);
                 }
             }
-            ctx.scopes.insert_info(l.name.clone(), ty, false, false);
+            ctx.scopes.insert_info(l.name.clone(), ty, false, false, false);
 
             // Leakage check
             for param_id in value_ty.get_generic_params() {
@@ -69,7 +69,7 @@ pub fn check_statement(ctx: &mut TypeContext, stmt: &mut HirStatement, expected:
                     ctx.error(format!("cannot shadow captured value '{}'", v.name), v.span);
                 }
             }
-            ctx.scopes.insert_info(v.name.clone(), ty, true, false);
+            ctx.scopes.insert_info(v.name.clone(), ty, true, false, false);
 
             // Leakage check
             for param_id in value_ty.get_generic_params() {

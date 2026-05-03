@@ -1,10 +1,10 @@
 use crate::env::ScopeStack;
 use crate::error::TypeError;
-use crate::types::{resolve_named_type, GenericParamId, Type};
+use std::collections::{HashMap, HashSet};
+use crate::types::{resolve_named_type, GenericParamId, Type, ComptimeValue};
 use fero_ast::Visibility;
 use fero_hir::*;
 use fero_span::Span;
-use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GenericParam {
@@ -12,12 +12,28 @@ pub struct GenericParam {
     pub name: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SpecializationKey {
+    /// Temporary: use function name for Phase 2 bookkeeping. 
+    /// Phase 3 must transition to a stable FunctionId.
+    pub function_name: String,
+    pub type_args: Vec<Type>,
+    pub comptime_args: Vec<ComptimeValue>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FunctionParam {
+    pub name: String,
+    pub ty: Type,
+    pub kind: fero_ast::ParameterKind,
+}
+
 /// Metadata about a function signature used during type checking.
 #[derive(Debug, Clone)]
 pub struct FunctionSignature {
     pub visibility: Visibility,
     pub generic_params: Vec<GenericParam>,
-    pub params: Vec<(String, Type)>,
+    pub params: Vec<FunctionParam>,
     pub return_type: Type,
     pub is_fallible: bool,
 }
@@ -63,6 +79,8 @@ pub struct TypeContext {
     pub next_generic_param_id: u32,
     pub is_comptime: bool,
     pub interpreter: Option<fero_interpreter::interpreter::Interpreter>,
+    /// Bookkeeping for specializations requested during typechecking.
+    pub specialization_log: HashSet<SpecializationKey>,
 }
 
 impl TypeContext {
@@ -81,6 +99,7 @@ impl TypeContext {
             next_generic_param_id: 0,
             is_comptime: false,
             interpreter: None,
+            specialization_log: HashSet::new(),
         }
     }
 

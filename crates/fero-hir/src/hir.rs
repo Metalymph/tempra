@@ -4,7 +4,7 @@
 //! stripped of syntax-only details and tokens, making it easier
 //! to perform type checking and lowering to MIR.
 
-use fero_ast::Visibility;
+pub use fero_ast::{Visibility, ParameterKind};
 use fero_span::Span;
 
 pub struct HirFile {
@@ -45,12 +45,14 @@ pub struct HirFunction {
     pub body: HirBlock,
 }
 
+
 #[derive(Debug, Clone)]
 pub struct HirParameter {
     pub span: Span,
     pub name: String,
     pub ty: HirType,
     pub is_inout: bool,
+    pub kind: ParameterKind,
 }
 
 #[derive(Debug, Clone)]

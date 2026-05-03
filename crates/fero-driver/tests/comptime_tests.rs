@@ -133,3 +133,124 @@ fn test_comptime_non_primitive_materialization_rejection() {
     let err = format!("{:?}", res.err().unwrap());
     assert!(err.contains("cannot be materialized from comptime in v1"));
 }
+#[test]
+fn test_comptime_param_basic() {
+    let source = r#"
+    fn add_n(comptime n: Int, x: Int) -> Int {
+        x + n
+    }
+
+    fn main() {
+        let x = add_n(3, 4);
+        expect(x == 7)
+    }
+    "#;
+    assert!(test_source(source).is_ok());
+}
+
+#[test]
+fn test_comptime_param_rejection_runtime_arg() {
+    let source = r#"
+    fn add_n(comptime n: Int, x: Int) -> Int {
+        x + n
+    }
+
+    fn main() {
+        let n = 3;
+        let x = add_n(n, 4);
+    }
+    "#;
+    let res = test_source(source);
+    assert!(res.is_err());
+    let err = format!("{:?}", res.err().unwrap());
+    assert!(err.contains("runtime variable 'n' cannot be used in comptime context"));
+}
+
+#[test]
+fn test_comptime_expr_as_comptime_arg() {
+    let source = r#"
+    fn add_n(comptime n: Int, x: Int) -> Int {
+        x + n
+    }
+
+    fn main() {
+        let x = add_n(comptime 1 + 2, 4);
+        expect(x == 7)
+    }
+    "#;
+    assert!(test_source(source).is_ok());
+}
+
+#[test]
+fn test_multiple_specializations() {
+    let source = r#"
+    fn multiply_n(comptime n: Int, x: Int) -> Int {
+        x * n
+    }
+
+    fn main() {
+        let a = multiply_n(2, 5);
+        let b = multiply_n(3, 5);
+        expect(a == 10)
+        expect(b == 15)
+    }
+    "#;
+    assert!(test_source(source).is_ok());
+}
+
+#[test]
+fn test_comptime_param_generic() {
+    let source = r#"
+    fn f(type T, comptime n: Int, x: T) -> T {
+        x
+    }
+
+    fn main() {
+        let x = f[Int](10, 42);
+        expect(x == 42)
+    }
+    "#;
+    assert!(test_source(source).is_ok());
+}
+
+#[test]
+fn test_comptime_param_immutable() {
+    let source = r#"
+    fn f(comptime n: Int) {
+        n = 10;
+    }
+    fn main() { f(5) }
+    "#;
+    let res = test_source(source);
+    assert!(res.is_err());
+    let err = format!("{:?}", res.err().unwrap());
+    assert!(err.contains("cannot assign to immutable value 'n'"));
+}
+
+#[test]
+fn test_comptime_param_in_closure_rejected() {
+    let source = r#"
+    fn main() {
+        let f = fn(comptime n: Int) -> Int { n };
+    }
+    "#;
+    let res = test_source(source);
+    assert!(res.is_err());
+    let err = format!("{:?}", res.err().unwrap());
+    assert!(err.contains("comptime parameters are only supported on named functions in this phase"));
+}
+
+#[test]
+fn test_comptime_type_equality() {
+    let source = r#"
+    fn is_int(type T) -> Bool {
+        T == Int
+    }
+
+    fn main() {
+        expect(is_int[Int]())
+        expect(!is_int[String]())
+    }
+    "#;
+    assert!(test_source(source).is_ok());
+}

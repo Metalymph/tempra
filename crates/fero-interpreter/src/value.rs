@@ -29,6 +29,7 @@ pub enum Value {
     Closure(Rc<ClosureValue>),
     Cell(Rc<RefCell<Value>>),
     Namespace(String),
+    Type(Type),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -350,6 +351,7 @@ impl Value {
             Value::Closure(_) => "Function",
             Value::Cell(c) => c.borrow().type_name(),
             Value::Namespace(_) => "Namespace",
+            Value::Type(_) => "Type",
         }
     }
 
@@ -488,6 +490,7 @@ impl std::fmt::Display for Value {
             Value::Closure(_) => write!(f, "fn(...)"),
             Value::Cell(c) => write!(f, "Ref({})", c.borrow().to_repr()),
             Value::Namespace(n) => write!(f, "{}", n),
+            Value::Type(t) => write!(f, "{}", t),
         }
     }
 }
@@ -515,6 +518,7 @@ impl PartialEq for Value {
             (Value::Closure(a), Value::Closure(b)) => Rc::ptr_eq(a, b),
             (Value::Cell(a), Value::Cell(b)) => Rc::ptr_eq(a, b) || *a.borrow() == *b.borrow(),
             (Value::Namespace(a), Value::Namespace(b)) => a == b,
+            (Value::Type(a), Value::Type(b)) => a == b,
             _ => false,
         }
     }

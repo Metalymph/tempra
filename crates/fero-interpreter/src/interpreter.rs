@@ -49,7 +49,7 @@ impl Interpreter {
             crate::RuntimeError::Message("Could not find main function".to_string())
         })?;
         let flow = self
-            .call_function(&main_func, vec![])
+            .call_function(&main_func, None, vec![])
             .map_err(crate::RuntimeError::Message)?;
         match flow {
             ControlFlow::Value(v) | ControlFlow::Return(v) => Ok(v),
@@ -96,9 +96,17 @@ impl Interpreter {
     pub fn call_function(
         &mut self,
         func: &HirFunction,
+        type_args: Option<Vec<Value>>,
         args: Vec<Value>,
     ) -> Result<ControlFlow, String> {
         let mut env = RuntimeEnv::new();
+
+        // Bind generic parameters
+        if let Some(t_args) = type_args {
+            for (param, arg) in func.generic_parameters.iter().zip(t_args.into_iter()) {
+                env.insert(param.name.clone(), arg);
+            }
+        }
 
         // Bind parameters
         if func.parameters.len() != args.len() {
@@ -169,5 +177,64 @@ impl Interpreter {
         }
 
         Ok(ControlFlow::Value(result_val))
+    }
+
+    pub fn resolve_hir_type(&self, hir_type: &HirType) -> fero_hir::types::Type {
+        match hir_type {
+            HirType::Named(_, name) => {
+                let ty = fero_hir::types::resolve_named_type(name);
+                if ty == fero_hir::types::Type::Unknown {
+                    if self.structs.contains_key(name) {
+                        return fero_hir::types::Type::Struct(name.clone(), vec![]);
+                    }
+                    if self.enums.contains_key(name) {
+                        return fero_hir::types::Type::Enum(name.clone(), vec![]);
+                    }
+                }
+                ty
+            }
+            HirType::Array(_, inner) => fero_hir::types::Type::Array(Box::new(self.resolve_hir_type(inner))),
+            HirType::Tuple(_, elems) => {
+                fero_hir::types::Type::Tuple(elems.iter().map(|e| self.resolve_hir_type(e)).collect())
+            }
+            HirType::Apply(_, callee, args) => {
+                let base = self.resolve_hir_type(callee);
+                let arg_types = args
+                    .iter()
+                    .map(|a| self.resolve_hir_type(a))
+                    .collect::<Vec<_>>();
+                match base {
+                    fero_hir::types::Type::Struct(name, _) => fero_hir::types::Type::Struct(name, arg_types),
+                    fero_hir::types::Type::Enum(name, _) => fero_hir::types::Type::Enum(name, arg_types),
+                    fero_hir::types::Type::Option(_) => {
+                        if arg_types.len() == 1 {
+                            fero_hir::types::Type::Option(Box::new(arg_types[0].clone()))
+                        } else {
+                            fero_hir::types::Type::Error
+                        }
+                    }
+                    fero_hir::types::Type::Result(_, _) => {
+                        if arg_types.len() == 2 {
+                            fero_hir::types::Type::Result(
+                                Box::new(arg_types[0].clone()),
+                                Box::new(arg_types[1].clone()),
+                            )
+                        } else {
+                            fero_hir::types::Type::Error
+                        }
+                    }
+                    _ => fero_hir::types::Type::Error,
+                }
+            }
+            HirType::Optional(_, inner) => fero_hir::types::Type::Option(Box::new(self.resolve_hir_type(inner))),
+            HirType::Result(_, ok, err) => fero_hir::types::Type::Result(
+                Box::new(self.resolve_hir_type(ok)),
+                Box::new(self.resolve_hir_type(err)),
+            ),
+            HirType::Function(_, params, ret) => fero_hir::types::Type::Function(
+                params.iter().map(|p| self.resolve_hir_type(p)).collect(),
+                Box::new(self.resolve_hir_type(ret)),
+            ),
+        }
     }
 }

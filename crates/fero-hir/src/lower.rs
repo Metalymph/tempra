@@ -82,6 +82,7 @@ impl<'src> Lowerer<'src> {
             name: self.text(p.name.span),
             ty: self.lower_type(&p.ty),
             is_inout: p.is_inout,
+            kind: p.kind,
         }
     }
 

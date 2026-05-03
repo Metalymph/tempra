@@ -128,12 +128,19 @@ pub struct FunctionItem {
     pub body: Block,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParameterKind {
+    Runtime,
+    Comptime,
+}
+
 #[derive(Debug, Clone)]
 pub struct Parameter {
     pub span: Span,
     pub name: Token,
     pub ty: TypeExpr,
     pub is_inout: bool,
+    pub kind: ParameterKind,
 }
 
 #[derive(Debug, Clone)]

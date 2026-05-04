@@ -424,7 +424,7 @@ IfExpr
 
 ```text
 MatchExpr
-  = "match" Expression "{" MatchArm* "}"
+  = ("comptime")? "match" Expression "{" MatchArm* "}"
 
 MatchArm
   = Pattern "=>" Expression

@@ -18,10 +18,10 @@ impl Refinement {
 
     pub fn apply(&self, ctx: &mut TypeContext) {
         for (name, ty) in &self.bindings {
-            ctx.scopes.insert(name.clone(), ty.clone());
+            ctx.scopes.insert(name.clone(), ty.clone(), ctx.is_comptime);
         }
         if let Some((name, ty)) = &self.narrowed_value {
-            ctx.scopes.insert(name.clone(), ty.clone());
+            ctx.scopes.insert(name.clone(), ty.clone(), ctx.is_comptime);
         }
     }
 }

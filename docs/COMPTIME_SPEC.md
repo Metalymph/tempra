@@ -194,9 +194,43 @@ Rules:
 
 ---
 
+## Phase 5 — Implemented
+
+- `comptime match` — pattern match at compile time
+- Branch selection based on compile-time known scrutinee
+- Support for literals and type names in patterns
+- Mandatory arm pruning in HIR: unselected arms are erased
+- Exhaustiveness checking via compile-time evaluation
+
+### Syntax
+
+```tempra
+fn default_value(type T) -> T {
+    comptime match T {
+        Int => 0
+        Bool => false
+        String => ""
+        else => compile_error("unsupported type")
+    }
+}
+```
+
+### Semantics
+
+A `comptime match` works like compile-time branch selection:
+
+1. **Scrutinee Evaluation**: The scrutinee is evaluated at compile time.
+2. **Generic Deferral**: If the scrutinee depends on a generic `type` parameter or a `comptime` parameter, checking is deferred until specialization.
+3. **Arm Selection**: Patterns are checked in order. Currently supported: literal patterns and type identifier patterns.
+4. **Arm Pruning**: ONLY the selected arm is typechecked. Unselected arms are erased from the HIR.
+5. **Exhaustiveness**: At specialization time, at least one arm MUST match (or an `else` arm must be provided).
+
+---
+
 ## Not Yet Implemented
 
-- `comptime match` — pattern match at compile time (unselected arms not evaluated)
 - Non-primitive `comptime` materialization
 - Full HIR specialization: cloning function bodies, substituting `comptime` constants, removing `comptime` params from runtime signatures
 - General constant IR / `FunctionId`-based specialization identity
+- Complex patterns in `comptime match` (constructor patterns, tuple patterns, etc.)
+- `comptime` IO/resources/config

@@ -45,7 +45,7 @@ pub fn check_statement(
                 }
             }
             ctx.scopes
-                .insert_info(l.name.clone(), ty, false, false, false, false);
+                .insert_info(l.name.clone(), ty, false, false, ctx.is_comptime, false);
 
             // Leakage check
             for param_id in value_ty.get_generic_params() {
@@ -84,7 +84,7 @@ pub fn check_statement(
                 }
             }
             ctx.scopes
-                .insert_info(v.name.clone(), ty, true, false, false, false);
+                .insert_info(v.name.clone(), ty, true, false, ctx.is_comptime, false);
 
             // Leakage check
             for param_id in value_ty.get_generic_params() {
@@ -152,7 +152,7 @@ pub fn check_statement(
             };
 
             ctx.scopes.push_scope();
-            ctx.scopes.insert(f.binding.clone(), elem_ty);
+            ctx.scopes.insert(f.binding.clone(), elem_ty, ctx.is_comptime);
 
             if let Some(ref mut filter) = f.filter {
                 let filter_ty = check_expression(ctx, filter, Some(&Type::Bool));

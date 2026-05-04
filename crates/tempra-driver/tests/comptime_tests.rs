@@ -719,3 +719,125 @@ fn test_comptime_match_unsupported_pattern_rejected() {
     let err = format!("{:?}", res.err().unwrap());
     assert!(err.contains("unsupported pattern in comptime match"));
 }
+
+#[test]
+fn test_comptime_if_unselected_branch_invalid_code_ignored() {
+    let source = r#"
+    fn main() {
+        if comptime true {
+            let x = 1;
+        } else {
+            let x = 1 + "string"; // Type error
+            non_existent_function(); // Name error
+        }
+    }
+    "#;
+    assert!(test_source(source).is_ok());
+}
+
+#[test]
+fn test_comptime_match_unselected_arm_invalid_code_ignored() {
+    let source = r#"
+    fn main() {
+        comptime match 1 {
+            1 => { let x = 1; }
+            2 => { let x = 1 + "string"; } // Type error
+            else => { non_existent_function(); } // Name error
+        }
+    }
+    "#;
+    assert!(test_source(source).is_ok());
+}
+
+#[test]
+fn test_comptime_if_type_equality_generic() {
+    let source = r#"
+    fn f(type T) -> T {
+        if comptime T == Int {
+            0
+        } else {
+            compile_error("unsupported")
+        }
+    }
+    fn main() {
+        let x: Int = f[Int]();
+        expect(x == 0)
+    }
+    "#;
+    assert!(test_source(source).is_ok());
+}
+
+#[test]
+fn test_comptime_match_type_generic_fallback() {
+    let source = r#"
+    fn f(type T) -> T {
+        comptime match T {
+            Int => 0
+            else => compile_error("unsupported")
+        }
+    }
+    fn main() {
+        let x: Int = f[Int]();
+        expect(x == 0)
+    }
+    "#;
+    assert!(test_source(source).is_ok());
+}
+
+#[test]
+fn test_comptime_local_variable_usage() {
+    let source = r#"
+    fn main() {
+        comptime {
+            let x = 1;
+            if x == 1 { // inside comptime block, this is already comptime-evaluated
+                let y = x + 1;
+                expect(y == 2)
+            }
+        }
+    }
+    "#;
+    assert!(test_source(source).is_ok());
+}
+
+#[test]
+fn test_comptime_match_unsupported_pattern_rejected_more() {
+    let source = r#"
+    fn main() {
+        comptime match 1 {
+            (1, 2) => 1
+            else => 2
+        }
+    }
+    "#;
+    let res = test_source(source);
+    assert!(res.is_err());
+    assert!(format!("{:?}", res.err().unwrap()).contains("unsupported pattern in comptime match"));
+
+    let source = r#"
+    fn main() {
+        comptime match 1 {
+            [1, 2] => 1
+            else => 2
+        }
+    }
+    "#;
+    let res = test_source(source);
+    assert!(res.is_err());
+    // Note: slice patterns might be rejected by parser or typechecker depending on implementation
+}
+
+#[test]
+fn test_comptime_match_binding_pattern_rejected() {
+    let source = r#"
+    fn main() {
+        comptime match 1 {
+            x => 1
+            else => 2
+        }
+    }
+    "#;
+    let res = test_source(source);
+    assert!(res.is_err());
+    assert!(format!("{:?}", res.err().unwrap()).contains("unsupported pattern in comptime match"));
+}

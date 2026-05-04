@@ -63,8 +63,8 @@ impl ScopeStack {
         }
     }
 
-    pub fn insert(&mut self, name: String, ty: Type) {
-        self.insert_info(name, ty, false, false, false, false);
+    pub fn insert(&mut self, name: String, ty: Type, is_comptime: bool) {
+        self.insert_info(name, ty, false, false, is_comptime, false);
     }
 
     pub fn insert_info(

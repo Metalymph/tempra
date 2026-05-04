@@ -17,7 +17,11 @@ pub struct SpecializationKey {
     /// Temporary: use function name for Phase 2 bookkeeping.
     /// Phase 3 must transition to a stable FunctionId.
     pub function_name: String,
+    /// Ordered list of type arguments (T, U, etc.).
     pub type_args: Vec<Type>,
+    /// Ordered list of compile-time values for 'comptime' parameters.
+    /// NOTE: Runtime parameters MUST NOT enter the specialization key.
+    /// NOTE: Float comptime values remain unsupported due to Hash/Eq requirements.
     pub comptime_args: Vec<ComptimeValue>,
 }
 

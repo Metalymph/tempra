@@ -2199,13 +2199,26 @@ fn check_if(ctx: &mut TypeContext, i: &mut HirIf, expected: Option<&Type>) -> Ty
                 refinement.apply(ctx);
                 let then_ty = crate::check_stmt::check_block(ctx, &mut i.then_block, expected);
                 ctx.scopes.pop_scope();
+
+                // Prune the else branch if the then branch is selected
+                i.else_branch = None;
+                // Rewrite condition to literal true
+                i.condition = Box::new(HirExpression::Bool(i.condition.span(), true));
+
                 then_ty
             } else {
-                if let Some(ref mut else_branch) = i.else_branch {
+                let else_ty = if let Some(ref mut else_branch) = i.else_branch {
                     check_expression(ctx, else_branch, expected)
                 } else {
                     Type::Unit
-                }
+                };
+
+                // Prune the then branch if the else branch is selected
+                i.then_block.statements.clear();
+                // Rewrite condition to literal false
+                i.condition = Box::new(HirExpression::Bool(i.condition.span(), false));
+
+                else_ty
             };
 
             return result;
@@ -2459,7 +2472,7 @@ fn check_match(ctx: &mut TypeContext, m: &mut HirMatch, expected: Option<&Type>)
             let mut bindings = Vec::new();
             crate::pattern::extract_pattern_bindings(ctx, &val_ty, &mut arm.pattern, &mut bindings);
             for (name, ty) in bindings {
-                ctx.scopes.insert(name, ty);
+                ctx.scopes.insert(name, ty, ctx.is_comptime);
             }
         }
         if let Some(ref mut guard) = arm.guard {
@@ -2574,7 +2587,7 @@ fn check_for_expr(ctx: &mut TypeContext, f: &mut HirForExpr) -> Type {
     };
 
     ctx.scopes.push_scope();
-    ctx.scopes.insert(f.binding.clone(), elem_ty);
+    ctx.scopes.insert(f.binding.clone(), elem_ty, ctx.is_comptime);
 
     if let Some(ref mut filter) = f.filter {
         let filter_ty = check_expression(ctx, filter, Some(&Type::Bool));

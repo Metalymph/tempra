@@ -148,7 +148,7 @@ fn main() {
 }
 ```
 
-### Compile-time Branching (Phase 4)
+### Compile-time Branching (Phase 4 — Implemented)
 
 `if comptime` allows branch selection during type checking / specialization. Only the selected branch is semantically checked.
 
@@ -169,11 +169,33 @@ Rules:
 - Unselected branches must be syntactically valid but are not semantically checked.
 - `compile_error` is allowed within an `if comptime` branch.
 
+### Compile-time Pattern Matching (Phase 5 — Implemented)
+
+`comptime match` allows pattern-based branch selection during type checking.
+
+```tempra
+fn default_value(type T) -> T {
+    comptime match T {
+        Int => 0
+        Bool => false
+        String => ""
+        else => compile_error("unsupported type")
+    }
+}
+```
+
+Rules:
+- Scrutinee must be evaluable at compile time.
+- Generic deferral: checking is deferred if scrutinee depends on generic parameters.
+- Arm pruning: unselected arms are erased from the HIR and not semantically checked.
+- Exhaustiveness is checked during specialization.
+
 ### Not Yet Implemented
 
-- `comptime match` (compile-time pattern matching)
 - Generated HIR specialization / runtime erasure of comptime parameters
 - Comptime IO, resources, or build configuration
+- Complex patterns in `comptime match` (constructors, tuples, structs)
+- Static duck interfaces / constraints (Phase 6)
 
 ---
 

@@ -254,3 +254,93 @@ fn test_comptime_type_equality() {
     "#;
     assert!(test_source(source).is_ok());
 }
+
+// ── Phase 2+3 Hardening regression tests ──
+
+#[test]
+fn test_namespace_shadowing_comptime() {
+    // Lexical scope must win over builtin namespace names
+    let source = r#"
+    fn main() {
+        let fs = 123
+        expect(fs == 123)
+    }
+    "#;
+    assert!(test_source(source).is_ok());
+}
+
+#[test]
+fn test_type_equality_false() {
+    let source = r#"
+    fn is_string(type T) -> Bool {
+        T == String
+    }
+    fn main() {
+        expect(is_string[Int]() == false)
+        expect(is_string[String]() == true)
+    }
+    "#;
+    assert!(test_source(source).is_ok());
+}
+
+#[test]
+fn test_type_equality_two_generic_params() {
+    let source = r#"
+    fn same(type A, type B) -> Bool {
+        A == B
+    }
+    fn main() {
+        expect(same[Int, Int]())
+        expect(!same[Int, String]())
+        expect(same[Bool, Bool]())
+    }
+    "#;
+    assert!(test_source(source).is_ok());
+}
+
+#[test]
+fn test_type_not_equal() {
+    let source = r#"
+    fn different(type A, type B) -> Bool {
+        A != B
+    }
+    fn main() {
+        expect(different[Int, String]())
+        expect(!different[Int, Int]())
+    }
+    "#;
+    assert!(test_source(source).is_ok());
+}
+
+#[test]
+fn test_normal_values_not_confused_with_types() {
+    // Normal values should still compare normally; no coercion with type values
+    let source = r#"
+    fn main() {
+        let a = 42
+        let b = 42
+        expect(a == b)
+        expect(a != 99)
+        let s = "hello"
+        expect(s == "hello")
+        expect(s != "world")
+    }
+    "#;
+    assert!(test_source(source).is_ok());
+}
+
+#[test]
+fn test_comptime_param_literal_let_still_rejected() {
+    // Even if n is initialized from a literal, it's still a runtime local
+    let source = r#"
+    fn f(comptime n: Int) -> Int { n }
+    fn main() {
+        let n = 42
+        let x = f(n)
+    }
+    "#;
+    let res = test_source(source);
+    assert!(res.is_err());
+    let err = format!("{:?}", res.err().unwrap());
+    assert!(err.contains("runtime variable 'n' cannot be used in comptime context"));
+}

@@ -98,7 +98,7 @@ Rules:
 
 ## 5. Comptime
 
-Fero supports explicit Phase 1 compile-time evaluation via `comptime`. This allows deterministic expressions to be evaluated during type checking and materialized as primitive constants.
+Fero supports explicit compile-time evaluation via `comptime`. This allows deterministic expressions to be evaluated during type checking and materialized as primitive constants.
 
 See [COMPTIME_SPEC.md](./COMPTIME_SPEC.md) for the full specification.
 
@@ -116,7 +116,44 @@ let table = comptime {
 }
 ```
 
-Phase 1 does not include `if comptime`, `comptime match`, comptime parameters, type values, type equality, or specialization keys with comptime arguments.
+### Comptime Parameters (Phase 2)
+
+Named functions can declare `comptime` parameters. These must be compile-time-known at the call site and participate in specialization identity.
+
+```fero
+fn add_n(comptime n: Int, x: Int) -> Int {
+    x + n
+}
+
+fn main() {
+    let result = add_n(3, 4)   // ok: literal is comptime-known
+    expect(result == 7)
+}
+```
+
+`comptime` parameters are immutable and rejected on closures. Runtime locals cannot be passed as `comptime` arguments regardless of how they were initialized.
+
+### Type Values and Type Equality (Phase 3)
+
+Generic type parameters are available as values. Type equality uses `==` / `!=`.
+
+```fero
+fn is_int(type T) -> Bool {
+    T == Int
+}
+
+fn main() {
+    expect(is_int[Int]())       // true
+    expect(!is_int[String]())   // true
+}
+```
+
+### Not Yet Implemented
+
+- `if comptime` (compile-time branch selection)
+- `comptime match` (compile-time pattern matching)
+- Generated HIR specialization / runtime erasure of comptime parameters
+- Comptime IO, resources, or build configuration
 
 ---
 

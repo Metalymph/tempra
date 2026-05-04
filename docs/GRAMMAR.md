@@ -60,7 +60,8 @@ GenericParam
   = "type" Identifier
 
 Param
-  = ("inout")? Identifier ":" Type
+  = "comptime" Identifier ":" Type
+  | ("inout")? Identifier ":" Type
 
 ReturnType
   = "->" Type

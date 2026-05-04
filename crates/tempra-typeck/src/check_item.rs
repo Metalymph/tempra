@@ -22,6 +22,7 @@ fn check_function(ctx: &mut TypeContext, f: &mut HirFunction) {
         .expect("Function signature missing");
     ctx.current_generic_params = sig.generic_params.iter().map(|p| p.id).collect();
     ctx.current_generic_params_info = sig.generic_params.clone();
+    
     let mut return_type = f
         .return_type
         .as_ref()
@@ -50,7 +51,8 @@ fn check_function(ctx: &mut TypeContext, f: &mut HirFunction) {
             ty,
             is_mutable,
             false,
-            p.kind == ParameterKind::Comptime,
+            p.kind == ParameterKind::Comptime || p.kind == ParameterKind::Type,
+            true,
         );
     }
 

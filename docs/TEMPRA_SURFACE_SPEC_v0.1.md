@@ -148,9 +148,29 @@ fn main() {
 }
 ```
 
+### Compile-time Branching (Phase 4)
+
+`if comptime` allows branch selection during type checking / specialization. Only the selected branch is semantically checked.
+
+```tempra
+fn default_value(type T) -> T {
+    if comptime T == Int {
+        0
+    } else if comptime T == Bool {
+        false
+    } else {
+        compile_error("unsupported type")
+    }
+}
+```
+
+Rules:
+- The condition must be evaluable by the restricted comptime interpreter.
+- Unselected branches must be syntactically valid but are not semantically checked.
+- `compile_error` is allowed within an `if comptime` branch.
+
 ### Not Yet Implemented
 
-- `if comptime` (compile-time branch selection)
 - `comptime match` (compile-time pattern matching)
 - Generated HIR specialization / runtime erasure of comptime parameters
 - Comptime IO, resources, or build configuration

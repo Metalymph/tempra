@@ -250,12 +250,10 @@ impl Interpreter {
                 if name == "None" {
                     Ok(ControlFlow::Value(Value::Option(OptionValue::None)))
                 } else if let Some(val) = env.get(name) {
-                    // Local variable takes priority over everything (allows shadowing of namespaces)
                     Ok(ControlFlow::Value(val))
                 } else if matches!(name.as_str(), "fs" | "os" | "env" | "Regex") {
                     Ok(ControlFlow::Value(Value::Namespace(name.clone())))
                 } else {
-                    // Try primitive type
                     let ty = tempra_hir::types::resolve_named_type(name);
                     if ty != tempra_hir::types::Type::Unknown {
                         Ok(ControlFlow::Value(Value::Type(ty)))
@@ -819,11 +817,6 @@ impl Interpreter {
                     // Builtins
                     match name.as_str() {
                         "compile_error" => {
-                            if self.mode != crate::interpreter::EvalMode::Comptime {
-                                return Err(
-                                    "compile_error is only allowed in comptime context".into()
-                                );
-                            }
                             let val = positional_values
                                 .get(0)
                                 .or_else(|| named_values.get("message"))
@@ -1517,6 +1510,15 @@ impl Interpreter {
                     }
                     if args.is_empty() && &e.enum_name == name {
                         return true;
+                    }
+                }
+
+                if let Value::Type(ty) = value {
+                    if args.is_empty() {
+                        let pat_ty = tempra_hir::types::resolve_named_type(name);
+                        if pat_ty == *ty {
+                            return true;
+                        }
                     }
                 }
 

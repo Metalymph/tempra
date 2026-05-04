@@ -366,6 +366,7 @@ pub struct HirMatchArm {
     pub pattern: HirPattern,
     pub guard: Option<HirExpression>,
     pub value: HirExpression,
+    pub is_else: bool,
 }
 
 #[derive(Debug, Clone)]

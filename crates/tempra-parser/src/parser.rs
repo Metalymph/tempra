@@ -787,7 +787,12 @@ impl<'src> Parser<'src> {
     fn parse_unary_expression(&mut self) -> Result<Expression, ParseError> {
         if self.at(TokenKind::Comptime) {
             let start = self.advance();
-            let expr = self.parse_expression()?;
+            let mut expr = self.parse_expression()?;
+            if let Expression::Match(ref mut m) = expr {
+                m.is_comptime = true;
+                m.span = Span::new(start.span.start, m.span.end);
+                return Ok(expr);
+            }
             return Ok(Expression::Comptime(ComptimeExpr {
                 span: Span::new(start.span.start, expr.span().end),
                 expression: Box::new(expr),
@@ -1049,6 +1054,7 @@ impl<'src> Parser<'src> {
             TokenKind::Fn => self.parse_closure_expression(),
             TokenKind::If => {
                 let start_token = self.advance();
+                let is_comptime = self.eat(TokenKind::Comptime);
                 let condition = Box::new(self.parse_expression()?);
                 let then_block = self.parse_block()?;
                 let mut else_branch = None;
@@ -1074,7 +1080,7 @@ impl<'src> Parser<'src> {
                     condition,
                     then_block,
                     else_branch,
-                    is_comptime: false,
+                    is_comptime,
                 }))
             }
             TokenKind::Match => {
@@ -1083,7 +1089,18 @@ impl<'src> Parser<'src> {
                 self.expect(TokenKind::LeftBrace)?;
                 let mut arms = Vec::new();
                 while !self.at(TokenKind::RightBrace) && !self.at(TokenKind::EndOfFile) {
-                    let pat = self.parse_pattern()?;
+                    let mut is_else = false;
+                    let pat = if self.at(TokenKind::Else) {
+                        let token = self.advance();
+                        is_else = true;
+                        Pattern::Wildcard(WildcardPattern {
+                            span: token.span,
+                            token,
+                        })
+                    } else {
+                        self.parse_pattern()?
+                    };
+
                     let guard = if self.eat(TokenKind::If) {
                         Some(self.parse_expression()?)
                     } else {
@@ -1096,6 +1113,7 @@ impl<'src> Parser<'src> {
                         pattern: pat,
                         guard,
                         value: body,
+                        is_else,
                     });
                     self.eat(TokenKind::Comma);
                 }

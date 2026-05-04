@@ -18,7 +18,6 @@ impl TypeContext {
             let old_fuel = interpreter.fuel;
             interpreter.mode = tempra_interpreter::interpreter::EvalMode::Comptime;
             interpreter.fuel = Some(1000000); // 1M steps
-
             let res = match interpreter.eval_expression(expr, &mut env) {
                 Ok(tempra_interpreter::control_flow::ControlFlow::Value(v)) => Ok(v),
                 Ok(cf) => Err(format!(
@@ -1437,10 +1436,6 @@ fn check_call(ctx: &mut TypeContext, expr: &mut HirExpression, expected: Option<
 
     if let HirExpression::Name(span, ref name) = *call.callee {
         if name == "compile_error" {
-            if !ctx.is_comptime {
-                ctx.error("compile_error is only allowed in comptime context", span);
-                return Type::Error;
-            }
             for arg in &mut call.args {
                 let ty = match arg {
                     HirCallArgument::Positional(e) => check_expression(ctx, e, Some(&Type::String)),
@@ -1454,6 +1449,22 @@ fn check_call(ctx: &mut TypeContext, expr: &mut HirExpression, expected: Option<
                         HirCallArgument::Named(n) => n.value.span(),
                     };
                     ctx.error(format!("compile_error expects String, found {}", ty), span);
+                }
+            }
+
+            if let Some(arg) = call.args.first_mut() {
+                let expr = match arg {
+                    HirCallArgument::Positional(e) => e,
+                    HirCallArgument::Named(n) => &mut n.value,
+                };
+                
+                match ctx.eval_comptime_expr(expr) {
+                    Ok(tempra_interpreter::value::Value::String(s)) => {
+                        ctx.error(s, span);
+                    }
+                    _ => {
+                        ctx.error("compile_error", span);
+                    }
                 }
             }
 
@@ -1536,7 +1547,10 @@ fn check_call(ctx: &mut TypeContext, expr: &mut HirExpression, expected: Option<
 
                 // Arg Types
                 for (i, arg) in c.args.iter_mut().enumerate() {
-                    let arg_expr = get_call_arg_mut_legacy(arg, ctx);
+                    let arg_expr = match arg {
+                        HirCallArgument::Positional(e) => e,
+                        HirCallArgument::Named(n) => &mut n.value,
+                    };
                     let target_ty = payload_tys.get(i);
                     let arg_ty = check_expression(ctx, arg_expr, target_ty);
 
@@ -2089,6 +2103,52 @@ fn build_refinement_from_condition(
     }
 }
 
+fn depends_on_generic_param(expr: &HirExpression, ctx: &TypeContext) -> bool {
+    match expr {
+        HirExpression::Name(_, name) => {
+            if ctx.current_generic_params_info.iter().any(|p| &p.name == name) {
+                return true;
+            }
+            if let Some(info) = ctx.scopes.lookup(name) {
+                if info.is_parameter {
+                    return true;
+                }
+            }
+            false
+        }
+        HirExpression::Unary(u) => depends_on_generic_param(&u.expr, ctx),
+        HirExpression::Binary(b) => {
+            depends_on_generic_param(&b.left, ctx) || depends_on_generic_param(&b.right, ctx)
+        }
+        HirExpression::Call(c) => {
+            depends_on_generic_param(&c.callee, ctx)
+                || c.args.iter().any(|a| match a {
+                    HirCallArgument::Positional(e) => depends_on_generic_param(e, ctx),
+                    HirCallArgument::Named(n) => depends_on_generic_param(&n.value, ctx),
+                })
+                || c.type_args.as_ref().map_or(false, |targs| {
+                    targs.iter().any(|t| match t {
+                        HirType::Named(_, n) => ctx.current_generic_params_info.iter().any(|p| &p.name == n),
+                        _ => false,
+                    })
+                })
+        }
+        HirExpression::Member(m) => depends_on_generic_param(&m.object, ctx),
+        HirExpression::Index(i) => {
+            depends_on_generic_param(&i.object, ctx) || depends_on_generic_param(&i.index, ctx)
+        }
+        HirExpression::Slice(s) => {
+            depends_on_generic_param(&s.object, ctx)
+                || depends_on_generic_param(&s.start, ctx)
+                || depends_on_generic_param(&s.end, ctx)
+        }
+        HirExpression::Array(_, elements) | HirExpression::Tuple(_, elements) => {
+            elements.iter().any(|e| depends_on_generic_param(e, ctx))
+        }
+        _ => false,
+    }
+}
+
 fn unify_branch_types(t1: Type, t2: Type) -> Type {
     if t1 == Type::Error || t2 == Type::Error {
         return Type::Error;
@@ -2106,6 +2166,57 @@ fn unify_branch_types(t1: Type, t2: Type) -> Type {
 }
 
 fn check_if(ctx: &mut TypeContext, i: &mut HirIf, expected: Option<&Type>) -> Type {
+    if i.is_comptime {
+        let cond_ty = check_expression(ctx, &mut i.condition, Some(&Type::Bool));
+        if cond_ty != Type::Bool && cond_ty != Type::Error {
+            ctx.error("comptime if condition must be Bool".to_string(), i.span);
+        }
+
+        if let Err((msg, span)) = semantic_check_comptime_expr(&mut i.condition, ctx) {
+            ctx.error(msg, span);
+            return Type::Error;
+        }
+
+        if depends_on_generic_param(&i.condition, ctx) {
+            return expected.cloned().unwrap_or(Type::Unknown);
+        }
+
+        let val = match ctx.eval_comptime_expr(&mut i.condition) {
+            Ok(v) => v,
+            Err(e) => {
+                ctx.error(
+                    format!("if comptime condition must be known at compile time: {}", e),
+                    i.condition.span(),
+                );
+                return Type::Error;
+            }
+        };
+
+        if let tempra_interpreter::value::Value::Bool(b) = val {
+            let result = if b {
+                ctx.scopes.push_scope();
+                let refinement = build_refinement_from_condition(ctx, &mut i.condition);
+                refinement.apply(ctx);
+                let then_ty = crate::check_stmt::check_block(ctx, &mut i.then_block, expected);
+                ctx.scopes.pop_scope();
+                then_ty
+            } else {
+                if let Some(ref mut else_branch) = i.else_branch {
+                    check_expression(ctx, else_branch, expected)
+                } else {
+                    Type::Unit
+                }
+            };
+
+            return result;
+        } else {
+            if cond_ty != Type::Error {
+                ctx.error("if comptime condition must be Bool".to_string(), i.span);
+            }
+            return Type::Error;
+        }
+    }
+
     let cond = check_expression(ctx, &mut i.condition, Some(&Type::Bool));
     if cond != Type::Bool && cond != Type::Error {
         ctx.error(format!("If condition must be Bool, found {}", cond), i.span);
@@ -2138,6 +2249,134 @@ fn check_if(ctx: &mut TypeContext, i: &mut HirIf, expected: Option<&Type>) -> Ty
 }
 
 fn check_match(ctx: &mut TypeContext, m: &mut HirMatch, expected: Option<&Type>) -> Type {
+    if m.is_comptime {
+        let val_ty = check_expression(ctx, &mut m.value, None);
+        if val_ty == Type::Error {
+            return Type::Error;
+        }
+
+        if let Err((msg, span)) = semantic_check_comptime_expr(&mut m.value, ctx) {
+            ctx.error(msg, span);
+            return Type::Error;
+        }
+
+        if depends_on_generic_param(&m.value, ctx) {
+            return expected.cloned().unwrap_or(Type::Unknown);
+        }
+
+        let val = match ctx.eval_comptime_expr(&mut m.value) {
+            Ok(v) => v,
+            Err(e) => {
+                ctx.error(
+                    format!(
+                        "comptime match scrutinee must be known at compile time: {}",
+                        e
+                    ),
+                    m.value.span(),
+                );
+                return Type::Error;
+            }
+        };
+
+        let mut selected_idx = None;
+        for (i, arm) in m.arms.iter_mut().enumerate() {
+            if arm.is_else {
+                selected_idx = Some(i);
+                break;
+            }
+            if arm.guard.is_some() {
+                ctx.error(
+                    "unsupported pattern in comptime match (guards not allowed)".to_string(),
+                    arm.span,
+                );
+                continue;
+            }
+
+            let matches = match &mut arm.pattern {
+                HirPattern::Literal(_, expr) => match ctx.eval_comptime_expr(expr) {
+                    Ok(pat_val) => pat_val == val,
+                    Err(e) => {
+                        ctx.error(
+                            format!("comptime match pattern must be known at compile time: {}", e),
+                            arm.pattern.span(),
+                        );
+                        false
+                    }
+                },
+                HirPattern::Identifier(span, name) => {
+                    let ty = ctx.resolve_type_name(name);
+                    if ty != Type::Unknown {
+                        if let tempra_interpreter::value::Value::Type(scrutinee_ty) = &val {
+                            scrutinee_ty == &ty
+                        } else {
+                            false
+                        }
+                    } else {
+                        ctx.error("unsupported pattern in comptime match".to_string(), *span);
+                        false
+                    }
+                }
+                HirPattern::EnumCase(span, name, args) => {
+                    let ty = ctx.resolve_type_name(name);
+                    if ty != Type::Unknown {
+                        if !args.is_empty() {
+                             ctx.error("unsupported pattern in comptime match (complex enum patterns not allowed)".to_string(), *span);
+                             false
+                        } else if let tempra_interpreter::value::Value::Type(scrutinee_ty) = &val {
+                            scrutinee_ty == &ty
+                        } else {
+                            false
+                        }
+                    } else {
+                        if !args.is_empty() {
+                            ctx.error("unsupported pattern in comptime match (complex enum patterns not allowed)".to_string(), *span);
+                        } else {
+                            ctx.error("unsupported pattern in comptime match".to_string(), *span);
+                        }
+                        false
+                    }
+                }
+                _ => {
+                    ctx.error(
+                        "unsupported pattern in comptime match".to_string(),
+                        arm.pattern.span(),
+                    );
+                    false
+                }
+            };
+
+            if matches {
+                selected_idx = Some(i);
+                break;
+            }
+        }
+
+        if let Some(idx) = selected_idx {
+            // Keep ONLY the selected arm
+            let mut arm = m.arms.remove(idx);
+            let arm_ty = check_expression(ctx, &mut arm.value, expected);
+            m.arms = vec![arm];
+
+            if let Some(expected_ty) = expected {
+                if !types_compatible(expected_ty, &arm_ty) {
+                    ctx.error(
+                        format!(
+                            "comptime match arm has incompatible type: expected {}, found {}",
+                            expected_ty,
+                            arm_ty
+                        ),
+                        m.arms[0].value.span(),
+                    );
+                    return Type::Error;
+                }
+            }
+            return arm_ty;
+        }
+
+        ctx.error("no matching arm in comptime match".to_string(), m.span);
+        return Type::Error;
+    }
+
     let val_ty = check_expression(ctx, &mut m.value, None);
     let mut result_ty: Option<Type> = None;
 
@@ -2757,12 +2996,12 @@ fn check_closure(ctx: &mut TypeContext, c: &mut HirClosure, expected: Option<&Ty
     // Inject recursive self if present
     if has_recursive_self {
         ctx.scopes
-            .insert_info("self".into(), closure_type.clone(), false, true, false);
+            .insert_info("self".into(), closure_type.clone(), false, true, false, true);
     }
 
     // Insert other captures into isolated scope
     for (name, ty, is_mutable) in capture_info {
-        ctx.scopes.insert_info(name, ty, is_mutable, true, false);
+        ctx.scopes.insert_info(name, ty, is_mutable, true, false, false);
     }
 
     // Insert parameters into scope
@@ -2773,7 +3012,7 @@ fn check_closure(ctx: &mut TypeContext, c: &mut HirClosure, expected: Option<&Ty
             }
         }
         ctx.scopes
-            .insert_info(p.name.clone(), ty.clone(), false, false, false);
+            .insert_info(p.name.clone(), ty.clone(), false, false, false, true);
     }
 
     // Check body
@@ -2869,6 +3108,9 @@ fn check_comptime_expr(
             Err(e) => {
                 interpreter.mode = old_mode;
                 interpreter.fuel = old_fuel;
+                if depends_on_generic_param(&comptime_node.expression, ctx) {
+                    return ty;
+                }
                 ctx.error(
                     format!("comptime evaluation error: {}", e),
                     comptime_node.span,

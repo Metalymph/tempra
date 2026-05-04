@@ -132,6 +132,7 @@ pub struct FunctionItem {
 pub enum ParameterKind {
     Runtime,
     Comptime,
+    Type,
 }
 
 #[derive(Debug, Clone)]
@@ -522,6 +523,7 @@ pub struct MatchArm {
     pub pattern: Pattern,
     pub guard: Option<Expression>,
     pub value: Expression,
+    pub is_else: bool,
 }
 
 #[derive(Debug, Clone)]

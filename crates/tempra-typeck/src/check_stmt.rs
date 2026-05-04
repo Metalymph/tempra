@@ -45,7 +45,7 @@ pub fn check_statement(
                 }
             }
             ctx.scopes
-                .insert_info(l.name.clone(), ty, false, false, false);
+                .insert_info(l.name.clone(), ty, false, false, false, false);
 
             // Leakage check
             for param_id in value_ty.get_generic_params() {
@@ -84,7 +84,7 @@ pub fn check_statement(
                 }
             }
             ctx.scopes
-                .insert_info(v.name.clone(), ty, true, false, false);
+                .insert_info(v.name.clone(), ty, true, false, false, false);
 
             // Leakage check
             for param_id in value_ty.get_generic_params() {

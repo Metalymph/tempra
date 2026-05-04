@@ -158,11 +158,45 @@ fn main() {
 
 ---
 
-## Not Yet Implemented
+## Phase 4 — Implemented
 
 - `if comptime` — branch selection at compile time
+- Type-directed branching: using type equality to select implementation branches
+- `compile_error` support within selected `if comptime` branches
+- Deferred typechecking: unselected branches are parsed/lowered but not semantically checked
+
+### Syntax
+
+```tempra
+fn default_value(type T) -> T {
+    if comptime T == Int {
+        0
+    } else if comptime T == Bool {
+        false
+    } else {
+        compile_error("unsupported type")
+    }
+}
+```
+
+### Compile-Time Branch Selection
+
+`if comptime condition { then } else { else }`
+
+Rules:
+- The `condition` MUST be evaluated at compile-time. If it contains runtime variables, it is a compile error: "if comptime condition must be known at compile time".
+- The `condition` MUST evaluate to a `Bool`.
+- **Deferred Typechecking**: During the definition of a generic function, evaluation of the condition is deferred ONLY if it depends on a generic `type T` parameter. During specialization, the condition MUST resolve and select exactly one branch.
+- **Strict Branching**: ONLY the selected branch is typechecked. The resulting type of the `if comptime` expression is strictly the type of the selected branch.
+- **Unselected Branches**: The non-selected branch MUST NOT be typechecked at all. It must only be syntactically valid. It can contain type errors or `compile_error` calls without failing the build.
+- **`compile_error` behavior**: `compile_error("...")` behaves as a compiler abort. It will fail compilation ONLY if the branch containing it is selected and typechecked.
+- **No Internal Leakage**: The behavior is purely derived from whether the value is known and whether it is a generic type. It explicitly forbids relying on internal flags or implementation details.
+
+---
+
+## Not Yet Implemented
+
 - `comptime match` — pattern match at compile time (unselected arms not evaluated)
-- Type equality in `comptime` blocks (deferred; requires late-binding evaluation or specialization cloning)
 - Non-primitive `comptime` materialization
 - Full HIR specialization: cloning function bodies, substituting `comptime` constants, removing `comptime` params from runtime signatures
 - General constant IR / `FunctionId`-based specialization identity

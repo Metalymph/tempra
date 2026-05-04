@@ -415,7 +415,7 @@ User {
 
 ```text
 IfExpr
-  = "if" Expression Block ("else" (Block | IfExpr))?
+  = "if" ("comptime")? Expression Block ("else" (Block | IfExpr))?
 ```
 
 ---

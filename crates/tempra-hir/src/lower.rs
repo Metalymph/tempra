@@ -417,6 +417,7 @@ impl<'src> Lowerer<'src> {
             pattern: self.lower_pattern(&arm.pattern),
             guard: arm.guard.as_ref().map(|e| self.lower_expression(e)),
             value: self.lower_expression(&arm.value),
+            is_else: arm.is_else,
         }
     }
 

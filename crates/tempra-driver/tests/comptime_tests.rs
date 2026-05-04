@@ -99,7 +99,7 @@ fn test_runtime_compile_error_rejection() {
     let res = test_source(source);
     assert!(res.is_err());
     let err = format!("{:?}", res.err().unwrap());
-    assert!(err.contains("compile_error is only allowed in comptime context"));
+    assert!(err.contains("bad"));
 }
 
 #[test]
@@ -343,4 +343,379 @@ fn test_comptime_param_literal_let_still_rejected() {
     assert!(res.is_err());
     let err = format!("{:?}", res.err().unwrap());
     assert!(err.contains("runtime variable 'n' cannot be used in comptime context"));
+}
+
+#[test]
+fn test_comptime_if_true_branch() {
+    let source = r#"
+    fn main() {
+        let x = if comptime 1 + 1 == 2 {
+            10
+        } else {
+            compile_error("wrong branch")
+        }
+        expect(x == 10)
+    }
+    "#;
+    assert!(test_source(source).is_ok());
+}
+
+#[test]
+fn test_comptime_if_false_branch() {
+    let source = r#"
+    fn main() {
+        let x = if comptime 1 + 1 == 3 {
+            compile_error("wrong branch")
+        } else {
+            20
+        }
+        expect(x == 20)
+    }
+    "#;
+    assert!(test_source(source).is_ok());
+}
+
+#[test]
+fn test_comptime_if_selected_branch_typechecked() {
+    let source = r#"
+    fn main() {
+        let x = if comptime true {
+            1
+        } else {
+            "not an int"
+        }
+        expect(x == 1)
+    }
+    "#;
+    assert!(test_source(source).is_ok());
+}
+
+#[test]
+fn test_comptime_if_unselected_branch_compile_error() {
+    let source = r#"
+    fn main() {
+        let x = if comptime true {
+            1
+        } else {
+            compile_error("must not run")
+        }
+        expect(x == 1)
+    }
+    "#;
+    assert!(test_source(source).is_ok());
+}
+
+#[test]
+fn test_comptime_if_selected_branch_compile_error_fails() {
+    let source = r#"
+    fn main() {
+        let x = if comptime false {
+            1
+        } else {
+            compile_error("selected failure")
+        }
+    }
+    "#;
+    let res = test_source(source);
+    let err = format!("{:?}", res.err().unwrap());
+    println!("THE ERROR WAS: {}", err);
+    assert!(err.contains("selected failure"));
+}
+
+#[test]
+fn test_comptime_if_type_directed_default() {
+    let source = r#"
+    fn default_value(type T) -> T {
+        if comptime T == Int {
+            0
+        } else if comptime T == Bool {
+            false
+        } else {
+            compile_error("unsupported type")
+        }
+    }
+    fn main() {
+        expect(default_value[Int]() == 0)
+        expect(default_value[Bool]() == false)
+    }
+    "#;
+    assert!(test_source(source).is_ok());
+}
+
+#[test]
+fn test_comptime_if_unsupported_type_fails() {
+    let source = r#"
+    fn default_value(type T) -> T {
+        if comptime T == Int {
+            0
+        } else {
+            compile_error("unsupported type")
+        }
+    }
+    fn main() {
+        let unused = default_value[String]();
+    }
+    "#;
+    let res = test_source(source);
+    assert!(res.is_err());
+    let err = format!("{:?}", res.err().unwrap());
+    assert!(err.contains("unsupported type"));
+}
+
+#[test]
+fn test_comptime_if_runtime_value_rejected() {
+    let source = r#"
+    fn f(x: Int) -> Int {
+        if comptime x == 1 {
+            1
+        } else {
+            2
+        }
+    }
+    "#;
+    let res = test_source(source);
+    assert!(res.is_err());
+    let err = format!("{:?}", res.err().unwrap());
+    assert!(err.contains("cannot be used in comptime"));
+}
+
+#[test]
+fn test_comptime_if_non_bool_condition_rejected() {
+    let source = r#"
+    fn main() {
+        let x = if comptime 1 {
+            1
+        } else {
+            2
+        }
+    }
+    "#;
+    let res = test_source(source);
+    assert!(res.is_err());
+    let err = format!("{:?}", res.err().unwrap());
+    assert!(err.contains("comptime if condition must be Bool"));
+}
+
+#[test]
+fn test_comptime_match_type_int() {
+    let source = r#"
+    fn default_value(type T) -> T {
+        comptime match T {
+            Int => 0
+            Bool => false
+            String => ""
+            else => compile_error("unsupported type")
+        }
+    }
+    fn main() {
+        expect(default_value[Int]() == 0)
+    }
+    "#;
+    assert!(test_source(source).is_ok());
+}
+
+#[test]
+fn test_comptime_match_type_bool() {
+    let source = r#"
+    fn default_value(type T) -> T {
+        comptime match T {
+            Int => 0
+            Bool => false
+            String => ""
+            else => compile_error("unsupported type")
+        }
+    }
+    fn main() {
+        expect(default_value[Bool]() == false)
+    }
+    "#;
+    assert!(test_source(source).is_ok());
+}
+
+#[test]
+fn test_comptime_match_type_string() {
+    let source = r#"
+    fn default_value(type T) -> T {
+        comptime match T {
+            Int => 0
+            Bool => false
+            String => ""
+            else => compile_error("unsupported type")
+        }
+    }
+    fn main() {
+        expect(default_value[String]() == "")
+    }
+    "#;
+    assert!(test_source(source).is_ok());
+}
+
+#[test]
+fn test_comptime_match_unsupported_type_fails() {
+    let source = r#"
+    fn default_value(type T) -> T {
+        comptime match T {
+            Int => 0
+            else => compile_error("unsupported type")
+        }
+    }
+    fn main() {
+        let unused = default_value[String]();
+    }
+    "#;
+    let res = test_source(source);
+    assert!(res.is_err());
+    let err = format!("{:?}", res.err().unwrap());
+    assert!(err.contains("unsupported type"));
+}
+
+#[test]
+fn test_comptime_match_non_selected_not_typechecked() {
+    let source = r#"
+    fn main() {
+        let x = comptime match 1 {
+            1 => 10
+            2 => "wrong type but not selected"
+            else => compile_error("not selected")
+        }
+        expect(x == 10)
+    }
+    "#;
+    assert!(test_source(source).is_ok());
+}
+
+#[test]
+fn test_comptime_match_non_selected_compile_error_ignored() {
+    let source = r#"
+    fn main() {
+        let x = comptime match 1 {
+            1 => 10
+            else => compile_error("must not run")
+        }
+        expect(x == 10)
+    }
+    "#;
+    assert!(test_source(source).is_ok());
+}
+
+#[test]
+fn test_comptime_match_selected_compile_error_fails() {
+    let source = r#"
+    fn main() {
+        let x = comptime match 2 {
+            1 => 10
+            else => compile_error("selected failure")
+        }
+    }
+    "#;
+    let res = test_source(source);
+    assert!(res.is_err());
+    let err = format!("{:?}", res.err().unwrap());
+    assert!(err.contains("selected failure"));
+}
+
+#[test]
+fn test_comptime_match_literal_int() {
+    let source = r#"
+    fn pick(comptime n: Int) -> String {
+        comptime match n {
+            0 => "zero"
+            1 => "one"
+            else => "many"
+        }
+    }
+    fn main() {
+        expect(pick(0) == "zero")
+        expect(pick(1) == "one")
+        expect(pick(2) == "many")
+    }
+    "#;
+    let res = test_source(source);
+    if let Err(e) = &res {
+        println!("ERROR: {:?}", e);
+    }
+    assert!(res.is_ok());
+}
+
+#[test]
+fn test_comptime_match_literal_bool() {
+    let source = r#"
+    fn pick(comptime b: Bool) -> Int {
+        comptime match b {
+            true => 1
+            false => 0
+        }
+    }
+    fn main() {
+        expect(pick(true) == 1)
+        expect(pick(false) == 0)
+    }
+    "#;
+    assert!(test_source(source).is_ok());
+}
+
+#[test]
+fn test_comptime_match_literal_string() {
+    let source = r#"
+    fn mode(comptime name: String) -> Int {
+        comptime match name {
+            "debug" => 1
+            "release" => 2
+            else => 0
+        }
+    }
+    fn main() {
+        expect(mode("debug") == 1)
+        expect(mode("release") == 2)
+        expect(mode("other") == 0)
+    }
+    "#;
+    assert!(test_source(source).is_ok());
+}
+
+#[test]
+fn test_comptime_match_runtime_scrutinee_rejected() {
+    let source = r#"
+    fn f(x: Int) -> Int {
+        comptime match x {
+            1 => 1
+            else => 0
+        }
+    }
+    "#;
+    let res = test_source(source);
+    assert!(res.is_err());
+    let err = format!("{:?}", res.err().unwrap());
+    assert!(err.contains("cannot be used in comptime"));
+}
+
+#[test]
+fn test_comptime_match_non_exhaustive() {
+    let source = r#"
+    fn main() {
+        let x = comptime match 2 {
+            1 => 10
+        }
+    }
+    "#;
+    let res = test_source(source);
+    assert!(res.is_err());
+    let err = format!("{:?}", res.err().unwrap());
+    assert!(err.contains("no matching arm in comptime match"));
+}
+
+#[test]
+fn test_comptime_match_unsupported_pattern_rejected() {
+    let source = r#"
+    fn main() {
+        let x = comptime match 1 {
+            Some(v) => 1
+            else => 0
+        }
+    }
+    "#;
+    let res = test_source(source);
+    assert!(res.is_err());
+    let err = format!("{:?}", res.err().unwrap());
+    assert!(err.contains("unsupported pattern in comptime match"));
 }

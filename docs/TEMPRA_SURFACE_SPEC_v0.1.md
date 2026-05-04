@@ -195,7 +195,29 @@ Rules:
 - Generated HIR specialization / runtime erasure of comptime parameters
 - Comptime IO, resources, or build configuration
 - Complex patterns in `comptime match` (constructors, tuples, structs)
-- Static duck interfaces / constraints (Phase 6)
+
+### Static Duck Interfaces (Phase 6 — Implemented)
+
+Tempra supports static structural interfaces to constrain generic types during specialization.
+
+```tempra
+interface Display {
+    fn display(self) -> String
+}
+
+fn show(type T: Display, value: T) -> String {
+    value.display()
+}
+```
+
+Rules:
+- Interfaces are strictly static constraints used for generics `type T: Interface`.
+- They cannot be used as runtime variable types (no vtables).
+- Interface satisfaction is structural: a type satisfies an interface if it has all the methods with matching signatures.
+- Methods can be on structs/enums or in `extend` blocks.
+- `Self` inside an interface represents the implementing type.
+- Constraints on `struct` or `enum` generic parameters are not supported in v1.
+
 
 ---
 

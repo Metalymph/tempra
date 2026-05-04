@@ -418,8 +418,7 @@ fn test_comptime_if_selected_branch_compile_error_fails() {
     "#;
     let res = test_source(source);
     let err = format!("{:?}", res.err().unwrap());
-    println!("THE ERROR WAS: {}", err);
-    assert!(err.contains("selected failure"));
+    assert!(err.contains("selected failure"), "Actual error was: {}", err);
 }
 
 #[test]
@@ -439,6 +438,8 @@ fn test_comptime_if_type_directed_default() {
         expect(default_value[Bool]() == false)
     }
     "#;
+    let _res = test_source(source);
+    assert!(test_source(source).is_ok());
     assert!(test_source(source).is_ok());
 }
 
@@ -631,9 +632,6 @@ fn test_comptime_match_literal_int() {
     }
     "#;
     let res = test_source(source);
-    if let Err(e) = &res {
-        println!("ERROR: {:?}", e);
-    }
     assert!(res.is_ok());
 }
 

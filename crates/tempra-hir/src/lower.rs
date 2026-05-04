@@ -40,6 +40,37 @@ impl<'src> Lowerer<'src> {
             ast::Item::Struct(item) => HirItem::Struct(self.lower_struct(item)),
             ast::Item::Enum(item) => HirItem::Enum(self.lower_enum(item)),
             ast::Item::Extend(item) => HirItem::Extend(self.lower_extend(item)),
+            ast::Item::Interface(item) => HirItem::Interface(self.lower_interface(item)),
+        }
+    }
+
+    fn lower_interface(&self, item: &ast::InterfaceItem) -> HirInterface {
+        HirInterface {
+            span: item.span,
+            visibility: item.visibility,
+            name: self.text(item.name.span),
+            methods: item
+                .methods
+                .iter()
+                .map(|m| self.lower_interface_method(m))
+                .collect(),
+        }
+    }
+
+    fn lower_interface_method(&self, m: &ast::InterfaceMethodRequirement) -> HirInterfaceMethod {
+        HirInterfaceMethod {
+            span: m.span,
+            name: self.text(m.name.span),
+            parameters: m
+                .parameters
+                .iter()
+                .map(|p| self.lower_parameter(p))
+                .collect(),
+            return_type: m
+                .return_type
+                .as_ref()
+                .map(|t| self.lower_type(t))
+                .unwrap_or(HirType::Named(m.span, "Unit".to_string())),
         }
     }
 
@@ -157,6 +188,7 @@ impl<'src> Lowerer<'src> {
         HirGenericParam {
             span: p.span,
             name: self.text(p.name.span),
+            constraint: p.constraint.as_ref().map(|t| self.text(t.span)),
         }
     }
 
@@ -191,6 +223,7 @@ impl<'src> Lowerer<'src> {
                 t.parameters.iter().map(|p| self.lower_type(p)).collect(),
                 Box::new(self.lower_type(&t.return_type)),
             ),
+            ast::TypeExpr::SelfType(span) => HirType::SelfType(*span),
         }
     }
 

@@ -24,7 +24,12 @@ pub fn check_statement(
 ) -> Type {
     match stmt {
         HirStatement::Let(l) => {
-            let expected_ty = l.ty.as_ref().map(|t| ctx.resolve_hir_type(t));
+            let expected_ty = l.ty.as_ref().map(|t| {
+                let ty = ctx.resolve_hir_type(t);
+                ctx.verify_not_interface(&ty, t.span());
+                ctx.verify_no_self(&ty, t.span());
+                ty
+            });
             let value_ty = check_expression(ctx, &mut l.value, expected_ty.as_ref());
 
             if let Some(expected) = &expected_ty {
@@ -63,7 +68,12 @@ pub fn check_statement(
             Type::Unit
         }
         HirStatement::Var(v) => {
-            let expected_ty = v.ty.as_ref().map(|t| ctx.resolve_hir_type(t));
+            let expected_ty = v.ty.as_ref().map(|t| {
+                let ty = ctx.resolve_hir_type(t);
+                ctx.verify_not_interface(&ty, t.span());
+                ctx.verify_no_self(&ty, t.span());
+                ty
+            });
             let value_ty = check_expression(ctx, &mut v.value, expected_ty.as_ref());
 
             if let Some(expected) = &expected_ty {
@@ -152,7 +162,8 @@ pub fn check_statement(
             };
 
             ctx.scopes.push_scope();
-            ctx.scopes.insert(f.binding.clone(), elem_ty, ctx.is_comptime);
+            ctx.scopes
+                .insert(f.binding.clone(), elem_ty, ctx.is_comptime);
 
             if let Some(ref mut filter) = f.filter {
                 let filter_ty = check_expression(ctx, filter, Some(&Type::Bool));

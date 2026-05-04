@@ -19,6 +19,7 @@ pub struct Interpreter {
     pub functions: HashMap<String, HirFunction>,
     pub structs: HashMap<String, HirStruct>,
     pub enums: BTreeMap<String, HirEnum>,
+    pub interfaces: HashMap<String, HirInterface>,
     pub top_level_statements: Vec<HirStatement>,
     pub args: Vec<String>,
     pub mode: EvalMode,
@@ -30,13 +31,21 @@ impl Interpreter {
         let mut functions = HashMap::new();
         let mut structs = HashMap::new();
         let mut enums = BTreeMap::new();
+        let mut interfaces = HashMap::new();
         for item in &file.items {
-            crate::eval_item::register_item(&mut functions, &mut structs, &mut enums, item);
+            crate::eval_item::register_item(
+                &mut functions,
+                &mut structs,
+                &mut enums,
+                &mut interfaces,
+                item,
+            );
         }
         Self {
             functions,
             structs,
             enums,
+            interfaces,
             top_level_statements: file.top_level_statements.clone(),
             args: Vec::new(),
             mode: EvalMode::Runtime,
@@ -243,6 +252,7 @@ impl Interpreter {
                 params.iter().map(|p| self.resolve_hir_type(p)).collect(),
                 Box::new(self.resolve_hir_type(ret)),
             ),
+            HirType::SelfType(_) => tempra_hir::types::Type::SelfType,
         }
     }
 }

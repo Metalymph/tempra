@@ -9,6 +9,7 @@ pub enum ComptimeValue {
     Bool(bool),
     Int(i64),
     String(String),
+    Type(Type),
 }
 
 impl fmt::Display for ComptimeValue {
@@ -18,6 +19,7 @@ impl fmt::Display for ComptimeValue {
             ComptimeValue::Bool(b) => write!(f, "{}", b),
             ComptimeValue::Int(i) => write!(f, "{}", i),
             ComptimeValue::String(s) => write!(f, "\"{}\"", s),
+            ComptimeValue::Type(t) => write!(f, "{}", t),
         }
     }
 }
@@ -75,7 +77,11 @@ pub enum Type {
     GenericParam {
         id: GenericParamId,
         name: std::string::String,
+        constraint: Option<std::string::String>,
     },
+    /// The type of a type value (metatype)
+    Meta(Box<Type>),
+    SelfType,
 }
 
 impl Type {
@@ -193,6 +199,7 @@ impl Type {
                 | Type::Regex
                 | Type::Option(_)
                 | Type::Function(_, _)
+                | Type::SelfType
         )
     }
 }
@@ -254,6 +261,7 @@ impl fmt::Display for Type {
                     write!(f, ")")
                 }
             }
+            Type::Meta(ty) => write!(f, "Type<{}>", ty),
             Type::Command => write!(f, "Command"),
             Type::CommandResult => write!(f, "CommandResult"),
             Type::Regex => write!(f, "Regex"),
@@ -275,6 +283,7 @@ impl fmt::Display for Type {
                 write!(f, ") -> {}", ret)
             }
             Type::GenericParam { name, .. } => write!(f, "{}", name),
+            Type::SelfType => write!(f, "Self"),
         }
     }
 }
@@ -348,6 +357,61 @@ pub fn types_compatible(expected: &Type, actual: &Type) -> bool {
             };
             ok_ok && err_ok
         }
+        (Type::Meta(e), Type::Meta(a)) => types_compatible(e, a),
         _ => false,
+    }
+}
+
+impl Type {
+    pub fn contains_self(&self) -> bool {
+        match self {
+            Type::SelfType => true,
+            Type::Array(inner) | Type::Slice(inner) | Type::Option(inner) => inner.contains_self(),
+            Type::Tuple(elems) => elems.iter().any(|e| e.contains_self()),
+            Type::Struct(_, args) | Type::Enum(_, args) => args.iter().any(|a| a.contains_self()),
+            Type::Result(ok, err) => ok.contains_self() || err.contains_self(),
+            Type::Function(params, ret) => {
+                params.iter().any(|p| p.contains_self()) || ret.contains_self()
+            }
+            _ => false,
+        }
+    }
+
+    pub fn get_name(&self) -> String {
+        match self {
+            Type::Struct(name, _) => name.clone(),
+            Type::Enum(name, _) => name.clone(),
+            _ => "Unknown".to_string(),
+        }
+    }
+}
+
+pub fn substitute_self(ty: &Type, self_ty: &Type) -> Type {
+    match ty {
+        Type::SelfType => self_ty.clone(),
+        Type::Array(inner) => Type::Array(Box::new(substitute_self(inner, self_ty))),
+        Type::Slice(inner) => Type::Slice(Box::new(substitute_self(inner, self_ty))),
+        Type::Option(inner) => Type::Option(Box::new(substitute_self(inner, self_ty))),
+        Type::Result(ok, err) => Type::Result(
+            Box::new(substitute_self(ok, self_ty)),
+            Box::new(substitute_self(err, self_ty)),
+        ),
+        Type::Tuple(elems) => {
+            Type::Tuple(elems.iter().map(|e| substitute_self(e, self_ty)).collect())
+        }
+        Type::Struct(name, args) => Type::Struct(
+            name.clone(),
+            args.iter().map(|a| substitute_self(a, self_ty)).collect(),
+        ),
+        Type::Enum(name, args) => Type::Enum(
+            name.clone(),
+            args.iter().map(|a| substitute_self(a, self_ty)).collect(),
+        ),
+        Type::Function(params, ret) => Type::Function(
+            params.iter().map(|p| substitute_self(p, self_ty)).collect(),
+            Box::new(substitute_self(ret, self_ty)),
+        ),
+        Type::Meta(inner) => Type::Meta(Box::new(substitute_self(inner, self_ty))),
+        _ => ty.clone(),
     }
 }

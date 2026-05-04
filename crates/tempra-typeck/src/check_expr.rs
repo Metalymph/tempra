@@ -326,6 +326,17 @@ fn resolve_name(
         return Ok(ResolvedName::Type(ty));
     }
 
+    if let Some(_) = ctx.structs.get(name) {
+        return Ok(ResolvedName::Type(Type::Struct(name.to_string(), vec![])));
+    }
+    if let Some(_) = ctx.enums.get(name) {
+        return Ok(ResolvedName::Type(Type::Enum(name.to_string(), vec![])));
+    }
+    if let Some(_) = ctx.interfaces.get(name) {
+        // Interface names can be used as type values (e.g. for constraints)
+        return Ok(ResolvedName::Type(Type::Struct(name.to_string(), vec![])));
+    }
+
     if let Some(param) = ctx
         .current_generic_params_info
         .iter()
@@ -334,6 +345,7 @@ fn resolve_name(
         return Ok(ResolvedName::Type(Type::GenericParam {
             id: param.id,
             name: name.to_string(),
+            constraint: param.constraint.clone(),
         }));
     }
 
@@ -410,7 +422,7 @@ fn check_name(
     match resolve_name(ctx, name, expected) {
         Ok(ResolvedName::LocalVariable(info)) => info.ty,
         Ok(ResolvedName::Namespace(ns)) => Type::Namespace(ns),
-        Ok(ResolvedName::Type(_ty)) => Type::Unknown, // No metatype yet; type values resolved by interpreter
+        Ok(ResolvedName::Type(ty)) => Type::Meta(Box::new(ty)),
         Ok(ResolvedName::BuiltinConstant(ty)) => ty,
         Ok(ResolvedName::EnumConstructor(enum_name, variant_name)) => {
             // Type Validation
@@ -596,7 +608,8 @@ fn check_binary(ctx: &mut TypeContext, b: &mut HirBinary, _expected: Option<&Typ
             if left != right {
                 let both_int = (left == Type::Int || left == Type::Int64)
                     && (right == Type::Int || right == Type::Int64);
-                if !both_int {
+                let both_meta = matches!(left, Type::Meta(_)) && matches!(right, Type::Meta(_));
+                if !both_int && !both_meta {
                     ctx.error(
                         format!(
                             "Equality operands must have the same type: {} vs {}",
@@ -1457,7 +1470,7 @@ fn check_call(ctx: &mut TypeContext, expr: &mut HirExpression, expected: Option<
                     HirCallArgument::Positional(e) => e,
                     HirCallArgument::Named(n) => &mut n.value,
                 };
-                
+
                 match ctx.eval_comptime_expr(expr) {
                     Ok(tempra_interpreter::value::Value::String(s)) => {
                         ctx.error(s, span);
@@ -1648,6 +1661,40 @@ fn check_call(ctx: &mut TypeContext, expr: &mut HirExpression, expected: Option<
         }
         ResolvedCallee::Method(receiver_ty, method) => {
             if let HirExpression::Call(ref mut c) = expr {
+                if let Some(sig) = ctx.lookup_method_signature(&receiver_ty, &method) {
+                    // Check parameter count (excluding self)
+                    if c.args.len() != sig.params.len() - 1 {
+                        ctx.error(
+                            format!(
+                                "method '{}' expects {} arguments, found {}",
+                                method,
+                                sig.params.len() - 1,
+                                c.args.len()
+                            ),
+                            c.span,
+                        );
+                    }
+
+                    // Check arguments
+                    for (i, arg) in c.args.iter_mut().enumerate() {
+                        let arg_expr = get_call_arg_mut_legacy(arg, ctx);
+                        let target_ty = &sig.params[i + 1].ty; // Skip self
+                        let arg_ty = check_expression(ctx, arg_expr, Some(target_ty));
+                        if arg_ty != Type::Error && !types_compatible(target_ty, &arg_ty) {
+                            ctx.error(
+                                format!(
+                                    "argument type mismatch for method '{}': expected {}, found {}",
+                                    method, target_ty, arg_ty
+                                ),
+                                arg_expr.span(),
+                            );
+                        }
+                    }
+
+                    return sig.return_type;
+                }
+
+                // Fallback to builtins
                 match &receiver_ty {
                     Type::String => return check_string_method(ctx, &method, &mut c.args, c.span),
                     Type::Array(_) | Type::Slice(_) => {
@@ -1658,10 +1705,6 @@ fn check_call(ctx: &mut TypeContext, expr: &mut HirExpression, expected: Option<
                         return check_command_method(ctx, &method, &mut c.args, c.span)
                     }
                     _ => {
-                        // Regular member call on struct literal or something similar?
-                        // Tempra doesn't have methods on structs yet, but we check field access.
-                        // If it's a field of type function, we'd call it.
-                        // For now, return error as "Method not found"
                         ctx.error(
                             format!("type {} has no method '{}'", receiver_ty, method),
                             c.span,
@@ -1706,6 +1749,7 @@ fn match_generic_types(
             Ok(())
         }
         (Type::Array(p), Type::Array(a)) => match_generic_types(p, a, inferred),
+        (Type::Meta(p), Type::Meta(a)) => match_generic_types(p, a, inferred),
         (Type::Slice(p), Type::Slice(a)) => match_generic_types(p, a, inferred),
         (Type::Option(p), Type::Option(a)) => match_generic_types(p, a, inferred),
         (Type::Result(p_ok, p_err), Type::Result(a_ok, a_err)) => {
@@ -1752,6 +1796,7 @@ pub(crate) fn substitute_generics(
             name.clone(),
             args.iter().map(|a| substitute_generics(a, map)).collect(),
         ),
+        Type::Meta(inner) => Type::Meta(Box::new(substitute_generics(inner, map))),
         _ => ty.clone(),
     }
 }
@@ -1901,15 +1946,25 @@ fn check_function_call(
                     }
                 }
             }
-            for param in &sig.generic_params {
-                if !inferred.contains_key(&param.id) {
+        }
+    }
+
+    for param in &sig.generic_params {
+        if let Some(ty) = inferred.get(&param.id) {
+            if let Some(constraint) = &param.constraint {
+                if !satisfies_interface(ctx, ty, constraint) {
                     ctx.error(
-                        format!("cannot infer type for generic parameter '{}'", param.name),
+                        format!("type '{}' does not satisfy {}", ty, constraint),
                         c.span,
                     );
-                    return Type::Error;
                 }
             }
+        } else {
+            ctx.error(
+                format!("cannot infer type for generic parameter '{}'", param.name),
+                c.span,
+            );
+            return Type::Error;
         }
     }
 
@@ -1924,13 +1979,27 @@ fn check_function_call(
             if *arg_ty != Type::Error
                 && !crate::types::types_compatible(&substituted_param_ty, arg_ty)
             {
-                ctx.error(
-                    format!(
-                        "argument for '{}' in '{}': expected {}, found {}",
-                        param.name, func_name, substituted_param_ty, arg_ty
-                    ),
-                    arg_expr.span(),
-                );
+                // Structural satisfaction check for Meta(Interface) vs Meta(Struct)
+                let mut satisfied = false;
+                if let (Type::Meta(exp_inner), Type::Meta(act_inner)) =
+                    (&substituted_param_ty, arg_ty)
+                {
+                    if let Type::Struct(interface_name, _) = &**exp_inner {
+                        if satisfies_interface(ctx, act_inner, interface_name) {
+                            satisfied = true;
+                        }
+                    }
+                }
+
+                if !satisfied {
+                    ctx.error(
+                        format!(
+                            "argument for '{}' in '{}': expected {}, found {}",
+                            param.name, func_name, substituted_param_ty, arg_ty
+                        ),
+                        arg_expr.span(),
+                    );
+                }
             }
 
             if param.kind == tempra_ast::ParameterKind::Comptime {
@@ -2106,7 +2175,11 @@ fn build_refinement_from_condition(
 fn depends_on_generic_param(expr: &HirExpression, ctx: &TypeContext) -> bool {
     match expr {
         HirExpression::Name(_, name) => {
-            if ctx.current_generic_params_info.iter().any(|p| &p.name == name) {
+            if ctx
+                .current_generic_params_info
+                .iter()
+                .any(|p| &p.name == name)
+            {
                 return true;
             }
             if let Some(info) = ctx.scopes.lookup(name) {
@@ -2128,7 +2201,9 @@ fn depends_on_generic_param(expr: &HirExpression, ctx: &TypeContext) -> bool {
                 })
                 || c.type_args.as_ref().map_or(false, |targs| {
                     targs.iter().any(|t| match t {
-                        HirType::Named(_, n) => ctx.current_generic_params_info.iter().any(|p| &p.name == n),
+                        HirType::Named(_, n) => {
+                            ctx.current_generic_params_info.iter().any(|p| &p.name == n)
+                        }
                         _ => false,
                     })
                 })
@@ -2310,7 +2385,10 @@ fn check_match(ctx: &mut TypeContext, m: &mut HirMatch, expected: Option<&Type>)
                     Ok(pat_val) => pat_val == val,
                     Err(e) => {
                         ctx.error(
-                            format!("comptime match pattern must be known at compile time: {}", e),
+                            format!(
+                                "comptime match pattern must be known at compile time: {}",
+                                e
+                            ),
                             arm.pattern.span(),
                         );
                         false
@@ -2333,8 +2411,8 @@ fn check_match(ctx: &mut TypeContext, m: &mut HirMatch, expected: Option<&Type>)
                     let ty = ctx.resolve_type_name(name);
                     if ty != Type::Unknown {
                         if !args.is_empty() {
-                             ctx.error("unsupported pattern in comptime match (complex enum patterns not allowed)".to_string(), *span);
-                             false
+                            ctx.error("unsupported pattern in comptime match (complex enum patterns not allowed)".to_string(), *span);
+                            false
                         } else if let tempra_interpreter::value::Value::Type(scrutinee_ty) = &val {
                             scrutinee_ty == &ty
                         } else {
@@ -2375,8 +2453,7 @@ fn check_match(ctx: &mut TypeContext, m: &mut HirMatch, expected: Option<&Type>)
                     ctx.error(
                         format!(
                             "comptime match arm has incompatible type: expected {}, found {}",
-                            expected_ty,
-                            arm_ty
+                            expected_ty, arm_ty
                         ),
                         m.arms[0].value.span(),
                     );
@@ -2587,7 +2664,8 @@ fn check_for_expr(ctx: &mut TypeContext, f: &mut HirForExpr) -> Type {
     };
 
     ctx.scopes.push_scope();
-    ctx.scopes.insert(f.binding.clone(), elem_ty, ctx.is_comptime);
+    ctx.scopes
+        .insert(f.binding.clone(), elem_ty, ctx.is_comptime);
 
     if let Some(ref mut filter) = f.filter {
         let filter_ty = check_expression(ctx, filter, Some(&Type::Bool));
@@ -3008,13 +3086,20 @@ fn check_closure(ctx: &mut TypeContext, c: &mut HirClosure, expected: Option<&Ty
 
     // Inject recursive self if present
     if has_recursive_self {
-        ctx.scopes
-            .insert_info("self".into(), closure_type.clone(), false, true, false, true);
+        ctx.scopes.insert_info(
+            "self".into(),
+            closure_type.clone(),
+            false,
+            true,
+            false,
+            true,
+        );
     }
 
     // Insert other captures into isolated scope
     for (name, ty, is_mutable) in capture_info {
-        ctx.scopes.insert_info(name, ty, is_mutable, true, false, false);
+        ctx.scopes
+            .insert_info(name, ty, is_mutable, true, false, false);
     }
 
     // Insert parameters into scope
@@ -3284,4 +3369,65 @@ fn semantic_check_block(block: &HirBlock, ctx: &TypeContext) -> Result<(), (Stri
         }
     }
     Ok(())
+}
+
+fn satisfies_interface(ctx: &mut TypeContext, ty: &Type, interface_name: &str) -> bool {
+    let interface = match ctx.interfaces.get(interface_name) {
+        Some(i) => i.clone(),
+        None => {
+            ctx.error(
+                format!("undefined interface '{}'", interface_name),
+                tempra_span::Span::new(0, 0),
+            );
+            return false;
+        }
+    };
+
+    use crate::types::substitute_self;
+
+    let mut satisfied = true;
+    for (method_name, req) in &interface.methods {
+        let provided_sig = ctx.lookup_method_signature(ty, method_name);
+        match provided_sig {
+            Some(sig) => {
+                // Substitute Self in requirement with the concrete type
+                let req_params: Vec<Type> =
+                    req.params.iter().map(|p| substitute_self(p, ty)).collect();
+                let req_ret = substitute_self(&req.return_type, ty);
+
+                let mut method_match = true;
+                if sig.params.len() != req_params.len() {
+                    method_match = false;
+                } else {
+                    for (p_prov, p_req) in sig.params.iter().zip(req_params.iter()) {
+                        if !crate::types::types_compatible(p_req, &p_prov.ty) {
+                            method_match = false;
+                            break;
+                        }
+                    }
+                }
+
+                if method_match && !crate::types::types_compatible(&req_ret, &sig.return_type) {
+                    method_match = false;
+                }
+
+                if !method_match {
+                    ctx.error(
+                        format!("mismatched requirement for method '{}'", method_name),
+                        tempra_span::Span::new(0, 0),
+                    );
+                    satisfied = false;
+                }
+            }
+            None => {
+                ctx.error(
+                    format!("missing requirement '{}'", method_name),
+                    tempra_span::Span::new(0, 0),
+                );
+                satisfied = false;
+            }
+        }
+    }
+
+    satisfied
 }

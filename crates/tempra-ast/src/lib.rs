@@ -45,6 +45,7 @@ pub enum Item {
     Struct(StructItem),
     Enum(EnumItem),
     Extend(ExtendItem),
+    Interface(InterfaceItem),
 }
 
 impl Item {
@@ -55,6 +56,7 @@ impl Item {
             Item::Struct(item) => item.span,
             Item::Enum(item) => item.span,
             Item::Extend(item) => item.span,
+            Item::Interface(item) => item.span,
         }
     }
 }
@@ -148,6 +150,27 @@ pub struct Parameter {
 pub struct GenericParameter {
     pub span: Span,
     pub name: Token,
+    pub constraint: Option<Token>,
+}
+
+// ----------------------------------------------------------------------------
+// Interfaces
+// ----------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+pub struct InterfaceItem {
+    pub span: Span,
+    pub visibility: Visibility,
+    pub name: Token,
+    pub methods: Vec<InterfaceMethodRequirement>,
+}
+
+#[derive(Debug, Clone)]
+pub struct InterfaceMethodRequirement {
+    pub span: Span,
+    pub name: Token,
+    pub parameters: Vec<Parameter>,
+    pub return_type: Option<TypeExpr>,
 }
 
 // ----------------------------------------------------------------------------
@@ -217,6 +240,7 @@ pub enum TypeExpr {
     Optional(OptionalTypeExpr),
     Result(ResultTypeExpr),
     Function(FunctionTypeExpr),
+    SelfType(Span),
 }
 
 impl TypeExpr {
@@ -229,6 +253,7 @@ impl TypeExpr {
             TypeExpr::Optional(expr) => expr.span,
             TypeExpr::Result(expr) => expr.span,
             TypeExpr::Function(expr) => expr.span,
+            TypeExpr::SelfType(span) => *span,
         }
     }
 }

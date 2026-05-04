@@ -3,13 +3,15 @@ use crate::error::TypeError;
 use crate::types::{resolve_named_type, ComptimeValue, GenericParamId, Type};
 use std::collections::{HashMap, HashSet};
 use tempra_ast::Visibility;
+use tempra_hir::types::substitute_self;
 use tempra_hir::*;
 use tempra_span::Span;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GenericParam {
-    pub id: GenericParamId,
+    pub id: crate::types::GenericParamId,
     pub name: String,
+    pub constraint: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -67,17 +69,35 @@ pub struct EnumInfo {
     pub variants: HashMap<String, Vec<Type>>,
 }
 
+#[derive(Debug, Clone)]
+pub struct InterfaceInfo {
+    pub visibility: Visibility,
+    pub methods: HashMap<String, InterfaceMethodRequirementInfo>,
+}
+
+#[derive(Debug, Clone)]
+pub struct InterfaceMethodRequirementInfo {
+    pub name: String,
+    pub params: Vec<Type>,
+    pub return_type: Type,
+}
+
 /// Global type-checking context that is built in a registration pass and
 /// then queried during the checking pass.
 pub struct TypeContext {
     pub functions: HashMap<String, FunctionSignature>,
     pub structs: HashMap<String, StructInfo>,
     pub enums: HashMap<String, EnumInfo>,
+    pub interfaces: HashMap<String, InterfaceInfo>,
     pub variant_to_enums: HashMap<String, Vec<String>>,
+    /// Methods defined in 'extend' blocks, keyed by the target type.
+    pub extends: HashMap<Type, Vec<String>>,
     pub scopes: ScopeStack,
     pub errors: Vec<TypeError>,
     pub current_return_type: Option<Type>,
     pub current_is_fallible: bool,
+    /// The name of the interface currently being checked, if any.
+    pub current_interface: Option<String>,
     pub current_generic_params: Vec<GenericParamId>,
     pub current_generic_params_info: Vec<GenericParam>,
     pub next_generic_param_id: u32,
@@ -93,11 +113,14 @@ impl TypeContext {
             functions: HashMap::new(),
             structs: HashMap::new(),
             enums: HashMap::new(),
+            interfaces: HashMap::new(),
             variant_to_enums: HashMap::new(),
+            extends: HashMap::new(),
             scopes: ScopeStack::new(),
             errors: Vec::new(),
             current_return_type: None,
             current_is_fallible: false,
+            current_interface: None,
             current_generic_params: Vec::new(),
             current_generic_params_info: Vec::new(),
             next_generic_param_id: 0,
@@ -125,6 +148,7 @@ impl TypeContext {
             return Type::GenericParam {
                 id: param.id,
                 name: name.to_string(),
+                constraint: param.constraint.clone(),
             };
         }
         if self.structs.contains_key(name) {
@@ -132,6 +156,9 @@ impl TypeContext {
         }
         if self.enums.contains_key(name) {
             return Type::Enum(name.to_string(), vec![]);
+        }
+        if self.interfaces.contains_key(name) {
+            return Type::Struct(name.to_string(), vec![]);
         }
         Type::Unknown
     }
@@ -182,6 +209,15 @@ impl TypeContext {
                 let p_types = params.iter().map(|p| self.resolve_hir_type(p)).collect();
                 let r_type = self.resolve_hir_type(ret);
                 Type::Function(p_types, Box::new(r_type))
+            }
+            HirType::SelfType(_span) => {
+                if self.current_interface.is_none() {
+                    // We don't have a direct way to emit error from here without mut?
+                    // Actually, TypeContext has a way to record errors if it's mut.
+                    // resolve_hir_type is &self.
+                    // I'll have to use a placeholder or handle it in check_item.
+                }
+                Type::SelfType
             }
         }
     }
@@ -246,5 +282,150 @@ impl TypeContext {
             .get(struct_name)
             .and_then(|info| info.fields.get(field_name))
             .map(|f| f.ty.clone())
+    }
+
+    /// Centralized method lookup for Phase 6.
+    /// Returns the signature of a method if found on the type or in an 'extend' block.
+    pub fn lookup_method_signature(
+        &self,
+        receiver_ty: &Type,
+        method_name: &str,
+    ) -> Option<FunctionSignature> {
+        // 1. Check if it's a struct and the method is defined as a function with name "StructName.methodName"
+        // In Tempra, methods are currently just functions named "Type.method" or similar?
+        // Wait, check_expr.rs check_function_call uses ctx.functions.get(func_name).
+
+        // Actually, Tempra v0.1 usually models methods as "TypeName.methodName" in the global function map
+        // for functions defined inside the type or in extend blocks.
+
+        let type_name = match receiver_ty {
+            Type::Struct(name, _) => Some(name.clone()),
+            Type::Enum(name, _) => Some(name.clone()),
+            Type::GenericParam { id, .. } => {
+                // Find the constraint for this generic parameter
+                let constraint = self
+                    .current_generic_params_info
+                    .iter()
+                    .find(|p| p.id == *id)
+                    .and_then(|p| p.constraint.clone());
+
+                if let Some(interface_name) = constraint {
+                    if let Some(interface) = self.interfaces.get(&interface_name) {
+                        if let Some(req) = interface.methods.get(method_name) {
+                            return Some(FunctionSignature {
+                                visibility: tempra_ast::Visibility::Public,
+                                generic_params: Vec::new(),
+                                params: req
+                                    .params
+                                    .iter()
+                                    .map(|p| crate::context::FunctionParam {
+                                        name: "self".to_string(), // approximation
+                                        ty: substitute_self(p, receiver_ty),
+                                        kind: tempra_ast::ParameterKind::Runtime,
+                                    })
+                                    .collect(),
+                                return_type: substitute_self(&req.return_type, receiver_ty),
+                                is_fallible: false,
+                            });
+                        }
+                    }
+                }
+                None
+            }
+            _ => None,
+        };
+        if let Some(name) = &type_name {
+            // Check if it's a function "Type.method"
+            let mangled = format!("{}.{}", name, method_name);
+            if let Some(sig) = self.functions.get(&mangled) {
+                let mut sig = sig.clone();
+                for p in &mut sig.params {
+                    p.ty = substitute_self(&p.ty, receiver_ty);
+                }
+                sig.return_type = substitute_self(&sig.return_type, receiver_ty);
+                return Some(sig);
+            }
+
+            // Check if it's an interface method (rare but possible if a type is named after an interface)
+            if let Some(interface) = self.interfaces.get(name) {
+                if let Some(req) = interface.methods.get(method_name) {
+                    return Some(FunctionSignature {
+                        visibility: interface.visibility,
+                        generic_params: Vec::new(),
+                        params: req
+                            .params
+                            .iter()
+                            .enumerate()
+                            .map(|(i, p_ty)| crate::context::FunctionParam {
+                                name: if i == 0 {
+                                    "self".to_string()
+                                } else {
+                                    format!("p{}", i)
+                                },
+                                ty: substitute_self(p_ty, receiver_ty),
+                                kind: tempra_ast::ParameterKind::Runtime,
+                            })
+                            .collect(),
+                        return_type: substitute_self(&req.return_type, receiver_ty),
+                        is_fallible: false,
+                    });
+                }
+            }
+        }
+
+        // 2. Check explicitly registered 'extends' (if we use a different mangling or storage)
+        if let Some(methods) = self.extends.get(receiver_ty) {
+            for m_name in methods {
+                if let Some(idx) = m_name.rfind('.') {
+                    let actual_name = &m_name[idx + 1..];
+                    if actual_name == method_name {
+                        if let Some(sig) = self.functions.get(m_name) {
+                            // Phase 6: Substitute Self with the actual receiver type
+                            let mut sig = sig.clone();
+                            for p in &mut sig.params {
+                                p.ty = substitute_self(&p.ty, receiver_ty);
+                            }
+                            sig.return_type = substitute_self(&sig.return_type, receiver_ty);
+                            return Some(sig);
+                        }
+                    }
+                }
+            }
+        }
+
+        None
+    }
+}
+
+impl TypeContext {
+    pub fn verify_not_interface(&mut self, ty: &Type, span: tempra_span::Span) {
+        if let Type::Struct(name, _) = ty {
+            if self.interfaces.contains_key(name) {
+                self.error(
+                    format!(
+                        "interfaces are static constraints and cannot be used as runtime types"
+                    ),
+                    span,
+                );
+            }
+        } else if let Type::Enum(name, _) = ty {
+            if self.interfaces.contains_key(name) {
+                self.error(
+                    format!(
+                        "interfaces are static constraints and cannot be used as runtime types"
+                    ),
+                    span,
+                );
+            }
+        }
+    }
+
+    pub fn verify_no_self(&mut self, ty: &Type, span: tempra_span::Span) {
+        if ty.contains_self() {
+            self.error(
+                format!("'Self' is only allowed within interface requirements"),
+                span,
+            );
+        }
     }
 }

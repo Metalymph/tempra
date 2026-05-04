@@ -19,6 +19,7 @@ pub enum HirItem {
     Struct(HirStruct),
     Enum(HirEnum),
     Extend(HirExtend),
+    Interface(HirInterface),
 }
 
 #[derive(Debug, Clone)]
@@ -31,6 +32,7 @@ pub struct HirImport {
 pub struct HirGenericParam {
     pub span: Span,
     pub name: String,
+    pub constraint: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -432,6 +434,7 @@ pub enum HirType {
     Optional(Span, Box<HirType>),
     Result(Span, Box<HirType>, Box<HirType>),
     Function(Span, Vec<HirType>, Box<HirType>),
+    SelfType(Span),
 }
 
 impl HirType {
@@ -444,6 +447,7 @@ impl HirType {
             HirType::Optional(span, _) => *span,
             HirType::Result(span, _, _) => *span,
             HirType::Function(span, _, _) => *span,
+            HirType::SelfType(span) => *span,
         }
     }
 }
@@ -479,4 +483,20 @@ impl HirPattern {
             HirPattern::Or(span, _) => *span,
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct HirInterface {
+    pub span: Span,
+    pub visibility: Visibility,
+    pub name: String,
+    pub methods: Vec<HirInterfaceMethod>,
+}
+
+#[derive(Debug, Clone)]
+pub struct HirInterfaceMethod {
+    pub span: Span,
+    pub name: String,
+    pub parameters: Vec<HirParameter>,
+    pub return_type: HirType,
 }

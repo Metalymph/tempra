@@ -112,6 +112,7 @@ fn format_hir_type(ty: &HirType) -> String {
                 .join(", ");
             format!("fn({}) -> {}", p, format_hir_type(ret))
         }
+        HirType::SelfType(_) => "Self".to_string(),
     }
 }
 
@@ -194,6 +195,7 @@ impl Interpreter {
                 _ => false,
             },
             HirType::Function(_, _, _) => matches!(value, Value::Closure(_)),
+            HirType::SelfType(_) => false, // Should not happen at runtime
         }
     }
 
@@ -253,6 +255,21 @@ impl Interpreter {
                     Ok(ControlFlow::Value(val))
                 } else if matches!(name.as_str(), "fs" | "os" | "env" | "Regex") {
                     Ok(ControlFlow::Value(Value::Namespace(name.clone())))
+                } else if self.structs.contains_key(name) {
+                    Ok(ControlFlow::Value(Value::Type(Type::Struct(
+                        name.clone(),
+                        Vec::new(),
+                    ))))
+                } else if self.enums.contains_key(name) {
+                    Ok(ControlFlow::Value(Value::Type(Type::Enum(
+                        name.clone(),
+                        Vec::new(),
+                    ))))
+                } else if self.interfaces.contains_key(name) {
+                    Ok(ControlFlow::Value(Value::Type(Type::Struct(
+                        name.clone(),
+                        Vec::new(),
+                    )))) // Interfaces as Struct for now or Type::Interface?
                 } else {
                     let ty = tempra_hir::types::resolve_named_type(name);
                     if ty != tempra_hir::types::Type::Unknown {
@@ -786,7 +803,35 @@ impl Interpreter {
                                 }
                                 return self.call_closure(c, args);
                             }
-                            return Err(format!("Field '{}' is not a closure", member.field));
+
+                            // Phase 6: Check for methods (e.g. TypeName.methodName)
+                            let method_name = format!("{}.{}", s.name, member.field);
+                            if let Some(func) = self.functions.get(&method_name).cloned() {
+                                let mut args = Vec::new();
+                                args.push(Value::Struct(s.clone())); // Pass self
+                                for arg in &call.args {
+                                    match arg {
+                                        HirCallArgument::Positional(arg_expr) => {
+                                            match self.eval_expression(arg_expr, env)? {
+                                                ControlFlow::Value(v) => args.push(v),
+                                                cf => return Ok(cf),
+                                            }
+                                        }
+                                        HirCallArgument::Named(n) => {
+                                            return Err(format!(
+                                                "Named argument '{}' not supported for methods yet",
+                                                n.name
+                                            ));
+                                        }
+                                    }
+                                }
+                                return self.call_function(&func, None, args);
+                            }
+
+                            return Err(format!(
+                                "Field '{}' is not a closure and no method '{}' found",
+                                member.field, method_name
+                            ));
                         }
                         _ => Err(format!(
                             "Type {} has no method '{}'",

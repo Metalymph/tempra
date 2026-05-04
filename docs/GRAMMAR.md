@@ -20,6 +20,7 @@ Item
   | Struct
   | Enum
   | Extend
+  | Interface
 ```
 
 ---
@@ -140,7 +141,27 @@ enum Result {
 
 ---
 
-## 6. Extend
+## 6. Interface
+
+```text
+Interface
+  = "interface" Identifier "{" InterfaceMethod* "}"
+
+InterfaceMethod
+  = "fn" Identifier "(" ParamList? ")" ReturnType?
+```
+
+Example:
+
+```tempra
+interface Display {
+    fn display(self) -> String
+}
+```
+
+---
+
+## 7. Extend
 
 ```text
 Extend
@@ -159,7 +180,7 @@ extend User {
 
 ---
 
-## 7. Block
+## 8. Block
 
 ```text
 Block
@@ -168,7 +189,7 @@ Block
 
 ---
 
-## 8. Statements
+## 9. Statements
 
 ```text
 Statement
@@ -217,7 +238,7 @@ ExpressionStmt
 
 ---
 
-## 9. For
+## 10. For
 
 ```text
 ForStmt
@@ -237,7 +258,7 @@ for x in items if x > 0 {
 
 ---
 
-## 10. Expressions Overview
+## 11. Expressions Overview
 
 ```text
 Expression
@@ -246,7 +267,7 @@ Expression
 
 ---
 
-## 11. Assignment
+## 12. Assignment
 
 ```text
 Assignment
@@ -255,7 +276,7 @@ Assignment
 
 ---
 
-## 12. Logical Operators
+## 13. Logical Operators
 
 ```text
 LogicOr
@@ -267,7 +288,7 @@ LogicAnd
 
 ---
 
-## 13. Equality & Comparison
+## 14. Equality & Comparison
 
 ```text
 Equality
@@ -279,7 +300,7 @@ Comparison
 
 ---
 
-## 14. Bitwise / Shift
+## 15. Bitwise / Shift
 
 ```text
 Bitwise
@@ -296,7 +317,7 @@ NOTE:
 
 ---
 
-## 15. Arithmetic
+## 16. Arithmetic
 
 ```text
 Additive
@@ -308,7 +329,7 @@ Multiplicative
 
 ---
 
-## 16. Unary
+## 17. Unary
 
 ```text
 Unary
@@ -319,7 +340,7 @@ Unary
 
 ---
 
-## 17. Call / Access
+## 18. Call / Access
 
 ```text
 Call
@@ -340,7 +361,7 @@ ArgList
 
 ---
 
-## 18. Primary
+## 19. Primary
 
 ```text
 Primary
@@ -358,7 +379,7 @@ Primary
 
 ---
 
-## 19. Literals
+## 20. Literals
 
 ```text
 Literal
@@ -371,7 +392,7 @@ Literal
 
 ---
 
-## 20. Tuple
+## 21. Tuple
 
 ```text
 Tuple
@@ -380,7 +401,7 @@ Tuple
 
 ---
 
-## 21. Array
+## 22. Array
 
 ```text
 Array
@@ -389,7 +410,7 @@ Array
 
 ---
 
-## 22. Struct Literal
+## 23. Struct Literal
 
 ```text
 StructLiteral
@@ -411,7 +432,7 @@ User {
 
 ---
 
-## 23. If Expression
+## 24. If Expression
 
 ```text
 IfExpr
@@ -420,7 +441,7 @@ IfExpr
 
 ---
 
-## 24. Match Expression
+## 25. Match Expression
 
 ```text
 MatchExpr
@@ -432,7 +453,7 @@ MatchArm
 
 ---
 
-## 25. Patterns (v0.1 minimal)
+## 26. Patterns (v0.1 minimal)
 
 ```text
 Patterns
@@ -460,7 +481,7 @@ PatternList
 
 ---
 
-## 26. For Expression
+## 27. For Expression
 
 ```text
 ForExpr
@@ -471,7 +492,7 @@ Same syntax as statement, but used as expression.
 
 ---
 
-## 27. Types
+## 28. Types
 
 ```text
 Type
@@ -498,7 +519,7 @@ TupleType
 
 ---
 
-## 28. Command Expressions
+## 29. Command Expressions
 
 ```text
 CommandExpr
@@ -521,7 +542,7 @@ cmd("cat", ["file.txt"]) | cmd("grep", ["error"])
 
 ---
 
-## 29. Operator Precedence (High → Low)
+## 30. Operator Precedence (High → Low)
 
 1. Call / indexing / member access
 2. Unary (`!`, `-`)
@@ -537,7 +558,7 @@ cmd("cat", ["file.txt"]) | cmd("grep", ["error"])
 
 ---
 
-## 30. Parsing Notes
+## 31. Parsing Notes
 
 - use recursive descent
 - avoid backtracking where possible
@@ -553,13 +574,14 @@ cmd("cat", ["file.txt"]) | cmd("grep", ["error"])
 
 ---
 
-## 31. Minimal AST Nodes (Suggested)
+## 32. Minimal AST Nodes (Suggested)
 
 - File
 - Import
 - Function
 - Struct
 - Enum
+- Interface
 - Extend
 - Block
 - Let / Var
@@ -582,7 +604,7 @@ cmd("cat", ["file.txt"]) | cmd("grep", ["error"])
 
 ---
 
-## 32. Implementation Strategy
+## 33. Implementation Strategy
 
 Start with:
 

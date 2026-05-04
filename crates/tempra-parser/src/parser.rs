@@ -45,6 +45,7 @@ impl<'src> Parser<'src> {
                 || self.at(TokenKind::Struct)
                 || self.at(TokenKind::Enum)
                 || self.at(TokenKind::Extend)
+                || self.at(TokenKind::Interface)
                 || self.at(TokenKind::Pub)
             {
                 items.push(self.parse_item()?);
@@ -89,6 +90,8 @@ impl<'src> Parser<'src> {
                 });
             }
             Ok(Item::Extend(self.parse_extend()?))
+        } else if self.at(TokenKind::Interface) {
+            Ok(Item::Interface(self.parse_interface(visibility)?))
         } else {
             let token = self.current();
             Err(ParseError {
@@ -171,10 +174,18 @@ impl<'src> Parser<'src> {
                     });
                 }
                 let g_name = self.expect_identifier()?;
-                let g_end = g_name.span.end;
+                let mut constraint = None;
+                if self.eat(TokenKind::Colon) {
+                    constraint = Some(self.expect_identifier()?);
+                }
+                let g_end = constraint
+                    .as_ref()
+                    .map(|t| t.span.end)
+                    .unwrap_or(g_name.span.end);
                 generic_parameters.push(GenericParameter {
                     span: Span::new(p_start, g_end),
-                    name: g_name,
+                    name: g_name.clone(),
+                    constraint: constraint.clone(),
                 });
             } else {
                 let is_comptime = self.eat(TokenKind::Comptime);
@@ -191,6 +202,8 @@ impl<'src> Parser<'src> {
                 let p_name = self.expect_identifier()?;
                 let p_ty = if self.eat(TokenKind::Colon) {
                     self.parse_type()?
+                } else if self.text(p_name.span) == "self" {
+                    TypeExpr::SelfType(p_name.span)
                 } else {
                     TypeExpr::Named(NamedTypeExpr {
                         span: p_name.span,
@@ -294,9 +307,18 @@ impl<'src> Parser<'src> {
                     let p_start = self.current().span.start;
                     self.expect(TokenKind::Type)?;
                     let g_name = self.expect_identifier()?;
+                    let mut constraint = None;
+                    if self.eat(TokenKind::Colon) {
+                        constraint = Some(self.expect_identifier()?);
+                    }
+                    let g_end = constraint
+                        .as_ref()
+                        .map(|t| t.span.end)
+                        .unwrap_or(g_name.span.end);
                     generic_parameters.push(GenericParameter {
-                        span: Span::new(p_start, g_name.span.end),
+                        span: Span::new(p_start, g_end),
                         name: g_name,
+                        constraint,
                     });
                     if !self.eat(TokenKind::Comma) {
                         break;
@@ -394,6 +416,80 @@ impl<'src> Parser<'src> {
             name,
             generic_parameters,
             variants,
+        })
+    }
+
+    fn parse_interface(&mut self, visibility: Visibility) -> Result<InterfaceItem, ParseError> {
+        let token = self.expect(TokenKind::Interface)?;
+        let name = self.expect_identifier()?;
+        self.expect(TokenKind::LeftBrace)?;
+
+        let mut methods = Vec::new();
+        while !self.at(TokenKind::RightBrace) && !self.at(TokenKind::EndOfFile) {
+            let m_start = self.current().span.start;
+            self.expect(TokenKind::Fn)?;
+            let m_name = self.expect_identifier()?;
+
+            self.expect(TokenKind::LeftParen)?;
+            let mut parameters = Vec::new();
+            while !self.at(TokenKind::RightParen) && !self.at(TokenKind::EndOfFile) {
+                let p_start = self.current().span.start;
+                let is_inout = self.eat(TokenKind::Inout);
+                let p_name = self.expect_identifier()?;
+                let p_ty = if self.eat(TokenKind::Colon) {
+                    self.parse_type()?
+                } else if self.text(p_name.span) == "self" {
+                    TypeExpr::SelfType(p_name.span)
+                } else {
+                    TypeExpr::Named(NamedTypeExpr {
+                        span: p_name.span,
+                        name: p_name,
+                    })
+                };
+
+                parameters.push(Parameter {
+                    span: Span::new(p_start, p_ty.span().end),
+                    name: p_name,
+                    ty: p_ty,
+                    is_inout,
+                    kind: ParameterKind::Runtime,
+                });
+                if !self.eat(TokenKind::Comma) {
+                    break;
+                }
+            }
+            self.expect(TokenKind::RightParen)?;
+
+            let mut return_type = None;
+            if self.eat(TokenKind::Arrow) {
+                return_type = Some(self.parse_type()?);
+            }
+
+            let m_end = return_type
+                .as_ref()
+                .map(|t| t.span().end)
+                .unwrap_or(self.tokens[self.position - 1].span.end);
+
+            methods.push(InterfaceMethodRequirement {
+                span: Span::new(m_start, m_end),
+                name: m_name,
+                parameters,
+                return_type,
+            });
+
+            // Semicolon is optional but allowed in interfaces (or maybe we don't allow it yet?)
+            // The spec didn't mention it, but usually requirements are terminated.
+            // Tempra blocks don't require semicolons for function declarations if they have a body.
+            // Here they don't. I'll allow an optional semicolon.
+            self.eat(TokenKind::Semicolon);
+        }
+
+        let end_token = self.expect(TokenKind::RightBrace)?;
+        Ok(InterfaceItem {
+            span: Span::new(token.span.start, end_token.span.end),
+            visibility,
+            name,
+            methods,
         })
     }
 
@@ -527,6 +623,9 @@ impl<'src> Parser<'src> {
                     elements,
                 }))
             }
+        } else if self.at(TokenKind::Identifier) && self.text(self.current().span) == "Self" {
+            let token = self.advance();
+            Ok(TypeExpr::SelfType(token.span))
         } else {
             let name = self.expect_identifier()?;
             let mut ty = TypeExpr::Named(NamedTypeExpr {

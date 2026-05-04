@@ -1,5 +1,7 @@
 use crate::check_stmt::check_block;
-use crate::context::{EnumInfo, FunctionSignature, StructFieldInfo, StructInfo, TypeContext};
+use crate::context::{
+    EnumInfo, FunctionSignature, InterfaceInfo, StructFieldInfo, StructInfo, TypeContext,
+};
 use crate::types::{types_compatible, Type};
 use std::collections::HashMap;
 use tempra_hir::{HirFunction, HirItem, HirType, ParameterKind};
@@ -9,7 +11,35 @@ pub fn check_item(ctx: &mut TypeContext, item: &mut HirItem) {
     match item {
         HirItem::Function(f) => check_function(ctx, f),
         // Structs and enums are checked during registration
-        HirItem::Struct(_) | HirItem::Enum(_) | HirItem::Import(_) | HirItem::Extend(_) => {}
+        HirItem::Struct(_)
+        | HirItem::Enum(_)
+        | HirItem::Import(_)
+        | HirItem::Extend(_)
+        | HirItem::Interface(_) => {}
+    }
+}
+
+fn verify_no_self(ctx: &mut TypeContext, ty: &HirType) {
+    match ty {
+        tempra_hir::HirType::SelfType(span) => {
+            ctx.error(
+                "'Self' is only allowed within interface requirements",
+                *span,
+            );
+        }
+        tempra_hir::HirType::Array(_, inner) => verify_no_self(ctx, inner),
+        tempra_hir::HirType::Tuple(_, elems) => {
+            for e in elems {
+                verify_no_self(ctx, e);
+            }
+        }
+        tempra_hir::HirType::Apply(_, callee, args) => {
+            verify_no_self(ctx, callee);
+            for a in args {
+                verify_no_self(ctx, a);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -22,7 +52,10 @@ fn check_function(ctx: &mut TypeContext, f: &mut HirFunction) {
         .expect("Function signature missing");
     ctx.current_generic_params = sig.generic_params.iter().map(|p| p.id).collect();
     ctx.current_generic_params_info = sig.generic_params.clone();
-    
+
+    if let Some(rt) = &f.return_type {
+        verify_no_self(ctx, rt);
+    }
     let mut return_type = f
         .return_type
         .as_ref()
@@ -40,7 +73,24 @@ fn check_function(ctx: &mut TypeContext, f: &mut HirFunction) {
 
     // Bind parameters
     for p in &f.parameters {
-        let ty = ctx.resolve_hir_type(&p.ty);
+        verify_no_self(ctx, &p.ty);
+        let mut ty = ctx.resolve_hir_type(&p.ty);
+        if p.kind == ParameterKind::Type {
+            ty = Type::Meta(Box::new(Type::GenericParam {
+                id: ctx
+                    .current_generic_params_info
+                    .iter()
+                    .find(|gp| gp.name == p.name)
+                    .map(|gp| gp.id)
+                    .unwrap_or(crate::types::GenericParamId(0)),
+                name: p.name.clone(),
+                constraint: ctx
+                    .current_generic_params_info
+                    .iter()
+                    .find(|gp| gp.name == p.name)
+                    .and_then(|gp| gp.constraint.clone()),
+            }));
+        }
         let is_mutable = if p.kind == ParameterKind::Comptime {
             false
         } else {
@@ -88,6 +138,44 @@ fn check_function(ctx: &mut TypeContext, f: &mut HirFunction) {
 
 /// Register all top-level items so that forward references work.
 pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
+    // First pass: register names of all type items to support forward references in Extend
+    for item in items {
+        match item {
+            HirItem::Struct(s) => {
+                ctx.structs.insert(
+                    s.name.clone(),
+                    StructInfo {
+                        visibility: s.visibility,
+                        generic_params: Vec::new(),
+                        fields: HashMap::new(),
+                        field_order: Vec::new(),
+                    },
+                );
+            }
+            HirItem::Enum(e) => {
+                ctx.enums.insert(
+                    e.name.clone(),
+                    EnumInfo {
+                        visibility: e.visibility,
+                        generic_params: Vec::new(),
+                        variants: HashMap::new(),
+                    },
+                );
+            }
+            HirItem::Interface(i) => {
+                ctx.interfaces.insert(
+                    i.name.clone(),
+                    InterfaceInfo {
+                        visibility: i.visibility,
+                        methods: HashMap::new(),
+                    },
+                );
+            }
+            _ => {}
+        }
+    }
+
+    // Second pass: full registration
     for item in items {
         match item {
             HirItem::Function(f) => {
@@ -98,6 +186,7 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
                     generic_params.push(crate::context::GenericParam {
                         id,
                         name: p.name.clone(),
+                        constraint: p.constraint.clone(),
                     });
                 }
                 ctx.current_generic_params = generic_params.iter().map(|p| p.id).collect();
@@ -105,10 +194,19 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
                 let params: Vec<crate::context::FunctionParam> = f
                     .parameters
                     .iter()
-                    .map(|p| crate::context::FunctionParam {
-                        name: p.name.clone(),
-                        ty: ctx.resolve_hir_type(&p.ty),
-                        kind: p.kind,
+                    .map(|p| {
+                        let ty = if p.kind == tempra_ast::ParameterKind::Type {
+                            // The parameter name itself is the generic type it carries
+                            let inner = ctx.resolve_type_name(&p.name);
+                            Type::Meta(Box::new(inner))
+                        } else {
+                            ctx.resolve_hir_type(&p.ty)
+                        };
+                        crate::context::FunctionParam {
+                            name: p.name.clone(),
+                            ty,
+                            kind: p.kind,
+                        }
                     })
                     .collect();
                 let mut return_type = f
@@ -134,11 +232,15 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
             HirItem::Struct(s) => {
                 let mut generic_params = Vec::new();
                 for p in &s.generic_params {
+                    if let Some(_) = &p.constraint {
+                        ctx.error("interface constraints on struct generic parameters are not yet supported".to_string(), p.span);
+                    }
                     let id = crate::types::GenericParamId(ctx.next_generic_param_id);
                     ctx.next_generic_param_id += 1;
                     generic_params.push(crate::context::GenericParam {
                         id,
                         name: p.name.clone(),
+                        constraint: None,
                     });
                 }
                 ctx.current_generic_params = generic_params.iter().map(|p| p.id).collect();
@@ -172,11 +274,15 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
             HirItem::Enum(e) => {
                 let mut generic_params = Vec::new();
                 for p in &e.generic_params {
+                    if let Some(_) = &p.constraint {
+                        ctx.error("interface constraints on enum generic parameters are not yet supported".to_string(), p.span);
+                    }
                     let id = crate::types::GenericParamId(ctx.next_generic_param_id);
                     ctx.next_generic_param_id += 1;
                     generic_params.push(crate::context::GenericParam {
                         id,
                         name: p.name.clone(),
+                        constraint: None,
                     });
                 }
                 ctx.current_generic_params = generic_params.iter().map(|p| p.id).collect();
@@ -211,7 +317,69 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
                 }
                 ctx.current_generic_params.clear();
             }
-            HirItem::Import(_) | HirItem::Extend(_) => {}
+            HirItem::Interface(i) => {
+                let mut methods = HashMap::new();
+                for m in &i.methods {
+                    methods.insert(
+                        m.name.clone(),
+                        crate::context::InterfaceMethodRequirementInfo {
+                            name: m.name.clone(),
+                            params: m
+                                .parameters
+                                .iter()
+                                .map(|p| ctx.resolve_hir_type(&p.ty))
+                                .collect(),
+                            return_type: ctx.resolve_hir_type(&m.return_type),
+                        },
+                    );
+                }
+                ctx.interfaces.insert(
+                    i.name.clone(),
+                    crate::context::InterfaceInfo {
+                        visibility: i.visibility,
+                        methods,
+                    },
+                );
+            }
+            HirItem::Extend(e) => {
+                let target_ty = ctx.resolve_hir_type(&e.target);
+                let mut method_names = Vec::new();
+                for m in &e.methods {
+                    let name = format!("{}.{}", target_ty.get_name(), m.name);
+
+                    let params: Vec<crate::context::FunctionParam> = m
+                        .parameters
+                        .iter()
+                        .map(|p| crate::context::FunctionParam {
+                            name: p.name.clone(),
+                            ty: ctx.resolve_hir_type(&p.ty),
+                            kind: p.kind,
+                        })
+                        .collect();
+                    let return_type = m
+                        .return_type
+                        .as_ref()
+                        .map(|t| ctx.resolve_hir_type(t))
+                        .unwrap_or(Type::Unit);
+
+                    ctx.functions.insert(
+                        name.clone(),
+                        FunctionSignature {
+                            visibility: m.visibility,
+                            generic_params: Vec::new(),
+                            params,
+                            return_type,
+                            is_fallible: m.is_fallible,
+                        },
+                    );
+                    method_names.push(name);
+                }
+                ctx.extends
+                    .entry(target_ty)
+                    .or_default()
+                    .extend(method_names);
+            }
+            HirItem::Import(_) => {}
         }
     }
 }

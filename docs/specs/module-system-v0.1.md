@@ -1,6 +1,6 @@
-# Fero Module System v0.1
+# Tempra Module System v0.1
 
-The Fero module system provides a disciplined and reproducible way to organize code, manage dependencies, and distinguish between script-first and application-first development.
+The Tempra module system provides a disciplined and reproducible way to organize code, manage dependencies, and distinguish between script-first and application-first development.
 
 ## 1. Design Goals
 - **Reproducibility:** Dependencies in App mode must be locked and deterministic.
@@ -11,50 +11,50 @@ The Fero module system provides a disciplined and reproducible way to organize c
 
 ### Standard Library Imports
 Accessed via the `std/` prefix.
-```fero
+```tempra
 import std/io
 import std/fs
 ```
 
 ### Relative Imports
 Used for local file organization.
-```fero
+```tempra
 import ./utils
 import ../models/user
 ```
 
 ### Package Imports
-Refer to external dependencies managed by the Fero package manager.
-```fero
+Refer to external dependencies managed by the Tempra package manager.
+```tempra
 import pkg/json
 import pkg/http
 ```
 
 ### Future Script-only URL Imports
 URL imports may be supported in the future exclusively for **Script Mode** to facilitate quick sharing. They will not be allowed in App Mode to ensure build stability.
-```fero
+```tempra
 // Future direction (v0.x)
-import "https://fero.dev/pkg/math.fero" 
+import "https://tempra.dev/pkg/math.tempra" 
 ```
 
 ## 3. Project Structure
 
 ### Script Mode
-In script mode, any `.fero` file can be executed directly. The module system treats the folder containing the script as the root for relative imports.
+In script mode, any `.tempra` file can be executed directly. The module system treats the folder containing the script as the root for relative imports.
 
 ### App Mode
-Requires a `fero.mod` file at the root. The entrypoint is `main.fero` or a file specified in the manifest containing a `fn main()`.
+Requires a `tempra.mod` file at the root. The entrypoint is `main.tempra` or a file specified in the manifest containing a `fn main()`.
 ```
 project/
-├── fero.mod         # Dependency and metadata
-├── main.fero        # Entrypoint (App mode)
+├── tempra.mod         # Dependency and metadata
+├── main.tempra        # Entrypoint (App mode)
 └── src/
-    └── core.fero    # Sub-module
+    └── core.tempra    # Sub-module
 ```
 
 ## 4. Visibility
 By default, all members of a module are private. The `pub` keyword is used to expose structs, enums, and functions to other modules.
-```fero
+```tempra
 pub struct User {
     pub name: String
     id: Int // Private to the module

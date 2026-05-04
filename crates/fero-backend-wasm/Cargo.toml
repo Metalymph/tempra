@@ -1,8 +1,0 @@
-[package]
-name = "fero-backend-wasm"
-version.workspace = true
-edition.workspace = true
-
-[dependencies]
-fero-ir.workspace = true
-anyhow.workspace = true

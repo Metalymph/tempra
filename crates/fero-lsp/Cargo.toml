@@ -1,8 +1,0 @@
-[package]
-name = "fero-lsp"
-version.workspace = true
-edition.workspace = true
-
-[dependencies]
-fero-driver.workspace = true
-anyhow.workspace = true

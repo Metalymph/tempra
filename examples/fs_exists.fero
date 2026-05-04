@@ -1,2 +1,0 @@
-let ok = fs.exists("examples/env_get.fero")?
-print("exists=", ok)

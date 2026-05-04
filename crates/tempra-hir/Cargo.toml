@@ -1,0 +1,12 @@
+[package]
+name = "tempra-hir"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tempra-span.workspace = true
+tempra-ast.workspace = true
+tempra-lexer.workspace = true
+
+[dev-dependencies]
+tempra-parser.workspace = true

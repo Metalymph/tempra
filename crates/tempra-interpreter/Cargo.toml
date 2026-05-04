@@ -1,0 +1,12 @@
+[package]
+name = "tempra-interpreter"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tempra-hir.workspace = true
+tempra-runtime.workspace = true
+anyhow.workspace = true
+
+[dev-dependencies]
+tempra-parser.workspace = true

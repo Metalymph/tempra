@@ -1,7 +1,0 @@
-[package]
-name = "fero-opt"
-version.workspace = true
-edition.workspace = true
-
-[dependencies]
-fero-ir.workspace = true

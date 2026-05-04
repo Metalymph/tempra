@@ -1,0 +1,8 @@
+[package]
+name = "tempra-fs"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tempra-span.workspace = true
+anyhow.workspace = true

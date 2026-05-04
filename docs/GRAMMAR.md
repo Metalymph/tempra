@@ -1,6 +1,6 @@
-# Fero Grammar v0.1 (Parser-Oriented)
+# Tempra Grammar v0.1 (Parser-Oriented)
 
-This document defines a practical, parser-friendly grammar for Fero v0.1.
+This document defines a practical, parser-friendly grammar for Tempra v0.1.
 
 It is not a formal EBNF, but a structured specification designed for implementing a recursive descent parser.
 
@@ -37,7 +37,7 @@ ImportPath
 
 Examples:
 
-```fero
+```tempra
 import std/fs
 import std/process
 import ./util
@@ -82,7 +82,7 @@ CaptureMode
 
 Example:
 
-```fero
+```tempra
 fn add(a: UInt64, b: UInt64) -> UInt64 {
     a + b
 }
@@ -105,7 +105,7 @@ StructField
 
 Example:
 
-```fero
+```tempra
 struct User {
     name: String
     var bank_value: UInt64 = 0
@@ -131,7 +131,7 @@ TypeList
 
 Example:
 
-```fero
+```tempra
 enum Result {
     Ok(String)
     Err(String)
@@ -149,7 +149,7 @@ Extend
 
 Example:
 
-```fero
+```tempra
 extend User {
     fn is_rich(self) -> Bool {
         self.bank_value > 100000
@@ -229,7 +229,7 @@ ForFilter
 
 Example:
 
-```fero
+```tempra
 for x in items if x > 0 {
     io.println(x)
 }
@@ -402,7 +402,7 @@ StructInitField
 
 Example:
 
-```fero
+```tempra
 User {
     name: "Lorenzo",
     bank_value: 50000,
@@ -515,7 +515,7 @@ Operators:
 
 Example:
 
-```fero
+```tempra
 cmd("cat", ["file.txt"]) | cmd("grep", ["error"])
 ```
 

@@ -1,6 +1,6 @@
-# Fero Syntax Specification v0.1
+# Tempra Syntax Specification v0.1
 
-Fero syntax is designed to be direct and readable, taking inspiration from Swift, Rust, and Go. It balances the ergonomics of a scripting language with the rigor of a compiled language.
+Tempra syntax is designed to be direct and readable, taking inspiration from Swift, Rust, and Go. It balances the ergonomics of a scripting language with the rigor of a compiled language.
 
 ## 1. Core Principles
 - **Small Surface Area:** Minimize the number of keywords and control flow constructs.
@@ -9,15 +9,15 @@ Fero syntax is designed to be direct and readable, taking inspiration from Swift
 
 ## 2. Variables and Bindings
 Variables are immutable by default.
-```fero
-let name = "Fero"      // Immutable
+```tempra
+let name = "Tempra"      // Immutable
 let mut count = 0      // Mutable
 count = 1
 ```
 
 ## 3. Functions
 Functions use the `fn` keyword. Parameters and return types are required in package mode, optional but encouraged in script mode.
-```fero
+```tempra
 fn calculate(x: Int, y: Int) -> Int {
     x + y
 }
@@ -27,13 +27,13 @@ fn calculate(x: Int, y: Int) -> Int {
 
 ### If Expressions
 `if` is an expression and must handle all branches if used as one.
-```fero
+```tempra
 let status = if count > 0 { "Active" } else { "Idle" }
 ```
 
 ### Match Expressions
 Match provides simple pattern matching for values and enums.
-```fero
+```tempra
 match result {
     Ok(val) => print(val)
     Err(e)  => print("Error: " + e)
@@ -41,8 +41,8 @@ match result {
 ```
 
 ### For Statements and Expressions
-Fero uses a single versatile `for` loop.
-```fero
+Tempra uses a single versatile `for` loop.
+```tempra
 // Statement
 for x in items {
     print(x)
@@ -58,7 +58,7 @@ let doubled = for x in items if x % 2 == 0 {
 
 ### Structs
 Simple groupings of data.
-```fero
+```tempra
 struct Point {
     x: Int
     y: Int
@@ -69,7 +69,7 @@ let p = Point { x: 10, y: 20 }
 
 ### Enums (ADTs)
 Enums support payloads, acting as Algebraic Data Types.
-```fero
+```tempra
 enum Shape {
     Circle(Float)
     Rect(Int, Int)
@@ -78,17 +78,17 @@ enum Shape {
 ```
 
 ## 6. Errors
-Fero does not have exceptions. Errors are explicit values, typically returned via a `Result` enum pattern.
-```fero
+Tempra does not have exceptions. Errors are explicit values, typically returned via a `Result` enum pattern.
+```tempra
 fn read_config() -> Result<String, Error> {
-    let content = fs.read_file("config.fero")? // '?' propagates error
+    let content = fs.read_file("config.tempra")? // '?' propagates error
     Ok(content)
 }
 ```
 
 ## 7. Interfaces (Static Duck Typing)
 Interfaces define requirements without explicit implementation markers. If a type matches the signature, it satisfies the interface.
-```fero
+```tempra
 interface Writer {
     write(data: Bytes) -> Int
 }

@@ -1,31 +1,31 @@
 [workspace]
 members = [
-  "crates/fero-cli",
-  "crates/fero-driver",
-  "crates/fero-session",
-  "crates/fero-span",
-  "crates/fero-diagnostics",
-  "crates/fero-fs",
-  "crates/fero-lexer",
-  "crates/fero-parser",
-  "crates/fero-ast",
-  "crates/fero-hir",
-  "crates/fero-typeck",
-  "crates/fero-mir",
-  "crates/fero-ir",
-  "crates/fero-opt",
-  "crates/fero-interpreter",
-  "crates/fero-runtime",
-  "crates/fero-stdlib",
-  "crates/fero-backend-wasm",
-  "crates/fero-wasm-host",
-  "crates/fero-component-host",
-  "crates/fero-backend-cranelift",
-  "crates/fero-linker",
-  "crates/fero-package",
-  "crates/fero-repl",
-  "crates/fero-lsp",
-  "crates/fero-testing",
+  "crates/tempra-cli",
+  "crates/tempra-driver",
+  "crates/tempra-session",
+  "crates/tempra-span",
+  "crates/tempra-diagnostics",
+  "crates/tempra-fs",
+  "crates/tempra-lexer",
+  "crates/tempra-parser",
+  "crates/tempra-ast",
+  "crates/tempra-hir",
+  "crates/tempra-typeck",
+  "crates/tempra-mir",
+  "crates/tempra-ir",
+  "crates/tempra-opt",
+  "crates/tempra-interpreter",
+  "crates/tempra-runtime",
+  "crates/tempra-stdlib",
+  "crates/tempra-backend-wasm",
+  "crates/tempra-wasm-host",
+  "crates/tempra-component-host",
+  "crates/tempra-backend-cranelift",
+  "crates/tempra-linker",
+  "crates/tempra-package",
+  "crates/tempra-repl",
+  "crates/tempra-lsp",
+  "crates/tempra-testing",
 ]
 resolver = "2"
 
@@ -39,31 +39,31 @@ authors = ["Lorenzo Pirro"]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 thiserror = "1"
-fero-session = { path = "crates/fero-session" }
-fero-span = { path = "crates/fero-span" }
-fero-diagnostics = { path = "crates/fero-diagnostics" }
-fero-fs = { path = "crates/fero-fs" }
-fero-lexer = { path = "crates/fero-lexer" }
-fero-parser = { path = "crates/fero-parser" }
-fero-ast = { path = "crates/fero-ast" }
-fero-hir = { path = "crates/fero-hir" }
-fero-typeck = { path = "crates/fero-typeck" }
-fero-mir = { path = "crates/fero-mir" }
-fero-ir = { path = "crates/fero-ir" }
-fero-opt = { path = "crates/fero-opt" }
-fero-interpreter = { path = "crates/fero-interpreter" }
-fero-runtime = { path = "crates/fero-runtime" }
-fero-stdlib = { path = "crates/fero-stdlib" }
-fero-backend-wasm = { path = "crates/fero-backend-wasm" }
-fero-wasm-host = { path = "crates/fero-wasm-host" }
-fero-component-host = { path = "crates/fero-component-host" }
-fero-backend-cranelift = { path = "crates/fero-backend-cranelift" }
-fero-linker = { path = "crates/fero-linker" }
-fero-package = { path = "crates/fero-package" }
-fero-repl = { path = "crates/fero-repl" }
-fero-lsp = { path = "crates/fero-lsp" }
-fero-testing = { path = "crates/fero-testing" }
-fero-driver = { path = "crates/fero-driver" }
+tempra-session = { path = "crates/tempra-session" }
+tempra-span = { path = "crates/tempra-span" }
+tempra-diagnostics = { path = "crates/tempra-diagnostics" }
+tempra-fs = { path = "crates/tempra-fs" }
+tempra-lexer = { path = "crates/tempra-lexer" }
+tempra-parser = { path = "crates/tempra-parser" }
+tempra-ast = { path = "crates/tempra-ast" }
+tempra-hir = { path = "crates/tempra-hir" }
+tempra-typeck = { path = "crates/tempra-typeck" }
+tempra-mir = { path = "crates/tempra-mir" }
+tempra-ir = { path = "crates/tempra-ir" }
+tempra-opt = { path = "crates/tempra-opt" }
+tempra-interpreter = { path = "crates/tempra-interpreter" }
+tempra-runtime = { path = "crates/tempra-runtime" }
+tempra-stdlib = { path = "crates/tempra-stdlib" }
+tempra-backend-wasm = { path = "crates/tempra-backend-wasm" }
+tempra-wasm-host = { path = "crates/tempra-wasm-host" }
+tempra-component-host = { path = "crates/tempra-component-host" }
+tempra-backend-cranelift = { path = "crates/tempra-backend-cranelift" }
+tempra-linker = { path = "crates/tempra-linker" }
+tempra-package = { path = "crates/tempra-package" }
+tempra-repl = { path = "crates/tempra-repl" }
+tempra-lsp = { path = "crates/tempra-lsp" }
+tempra-testing = { path = "crates/tempra-testing" }
+tempra-driver = { path = "crates/tempra-driver" }
 
 
 [profile.release]

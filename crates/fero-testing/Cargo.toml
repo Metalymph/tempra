@@ -1,8 +1,0 @@
-[package]
-name = "fero-testing"
-version.workspace = true
-edition.workspace = true
-
-[dependencies]
-fero-driver.workspace = true
-anyhow.workspace = true

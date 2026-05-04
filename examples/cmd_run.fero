@@ -1,4 +1,0 @@
-fn main() {
-    let result = cmd("echo", "hello fero").run()!
-    print(result.stdout)
-}

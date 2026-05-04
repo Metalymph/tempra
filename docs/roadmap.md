@@ -1,6 +1,6 @@
-# Fero Roadmap
+# Tempra Roadmap
 
-This document outlines the implementation strategy and developmental phases for Fero, a fast, lightweight scripting language that compiles to native binaries.
+This document outlines the implementation strategy and developmental phases for Tempra, a fast, lightweight scripting language that compiles to native binaries.
 
 ## 1. Implementation Phases
 
@@ -11,7 +11,7 @@ This document outlines the implementation strategy and developmental phases for 
 - **Pattern Matching:** Centralized pattern semantics with OR-patterns, nesting, and exhaustiveness checking for finite domains.
 - **Bytecode VM:** A lightweight stack-based interpreter for rapid cold-starts and low memory overhead in script mode.
 - **Minimal Stdlib:** Foundation for `io`, `env`, and basic string/collection manipulation.
-- **Script Mode:** Support for running `.fero` files directly without a `main` entrypoint.
+- **Script Mode:** Support for running `.tempra` files directly without a `main` entrypoint.
 
 ### Phase 2: Native Compilation (v0.2)
 
@@ -52,7 +52,7 @@ This document outlines the implementation strategy and developmental phases for 
 
 ## 3. Explicitly Out of Scope (Non-Goals)
 
-- **JIT Compilation:** Fero prioritizes low cold-start (interpreter) and predictable performance (AOT) over JIT complexity.
+- **JIT Compilation:** Tempra prioritizes low cold-start (interpreter) and predictable performance (AOT) over JIT complexity.
 - **Heavy VM Runtime:** No GC pause or heavy virtual machine environments.
 - **Async/Await Sprawl:** Avoiding the "colored function" problem; preferring lightweight concurrency or explicit event-loop management.
 - **Nominal Trait Hierarchies:** No complex inheritance or rigid trait implementations.

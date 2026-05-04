@@ -1,0 +1,4 @@
+fn main() {
+    let result = cmd("echo", "hello tempra").run()!
+    print(result.stdout)
+}

@@ -1,5 +1,5 @@
 # justfile
-# Fero workspace automation
+# Tempra workspace automation
 
 set shell := ["bash", "-cu"]
 
@@ -23,7 +23,7 @@ check:
 
 # Check single crate
 # usage:
-# just check-crate fero-parser
+# just check-crate tempra-parser
 check-crate crate:
     cargo check -p {{crate}}
 
@@ -41,13 +41,13 @@ build-release:
 
 # Build single crate
 # usage:
-# just build-crate fero-parser
+# just build-crate tempra-parser
 build-crate crate:
     cargo build -p {{crate}}
 
 # Build single crate release
 # usage:
-# just build-crate-release fero-parser
+# just build-crate-release tempra-parser
 build-crate-release crate:
     cargo build -p {{crate}} --release
 
@@ -61,7 +61,7 @@ test:
 
 # Test single crate
 # usage:
-# just test-crate fero-parser
+# just test-crate tempra-parser
 test-crate crate:
     cargo test -p {{crate}}
 
@@ -73,7 +73,7 @@ test-filter filter:
 
 # Test filtered name in crate
 # usage:
-# just test-crate-filter fero-parser lexer
+# just test-crate-filter tempra-parser lexer
 test-crate-filter crate filter:
     cargo test -p {{crate}} {{filter}}
 
@@ -108,8 +108,8 @@ size-build:
 
 # Binary bloat analysis
 # usage:
-# just bloat fero-cli
-bloat crate="fero-cli":
+# just bloat tempra-cli
+bloat crate="tempra-cli":
     cargo bloat --release -p {{crate}}
 
 # Target directory usage
@@ -117,7 +117,7 @@ target-size:
     du -h -d 1 target | sort -h
 
 # Full size analysis
-analyze-size crate="fero-cli":
+analyze-size crate="tempra-cli":
     cargo build --release
     cargo bloat --release -p {{crate}}
     du -h -d 1 target | sort -h

@@ -1,0 +1,7 @@
+[package]
+name = "tempra-ir"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tempra-span.workspace = true

@@ -1,37 +1,37 @@
-# Fero Architecture
+# Tempra Architecture
 
-This document defines the architectural principles, crate responsibilities, and implementation constraints for the Fero programming language.
+This document defines the architectural principles, crate responsibilities, and implementation constraints for the Tempra programming language.
 
 ## 1. Design Summary
 
-Fero is a script-first programming language designed to transition seamlessly from interpreted execution to native binaries. The architecture is built around a multi-stage compilation pipeline that lowers high-level source code into a platform-agnostic intermediate representation (Fero IR). This IR is the single source of truth for all three execution backends:
+Tempra is a script-first programming language designed to transition seamlessly from interpreted execution to native binaries. The architecture is built around a multi-stage compilation pipeline that lowers high-level source code into a platform-agnostic intermediate representation (Tempra IR). This IR is the single source of truth for all three execution backends:
 
-1. **Interpreter**: Direct execution of Fero IR for rapid development and scripting.
+1. **Interpreter**: Direct execution of Tempra IR for rapid development and scripting.
 2. **Wasm Backend**: Generation of standalone WebAssembly modules and components.
 3. **Cranelift Backend**: AOT (Ahead-Of-Time) native machine code generation for performant binaries.
 
 ## 2. Architectural Rules
 
-- **Unidirectional Flow**: Information flows only "forward" through the pipeline stages (AST -> HIR -> MIR -> Fero IR).
+- **Unidirectional Flow**: Information flows only "forward" through the pipeline stages (AST -> HIR -> MIR -> Tempra IR).
 - **Representation Purity**: Each stage must have its own distinct data structures. Mixing AST nodes with Typechecked HIR nodes is prohibited.
-- **Backend Isolation**: Backends (Interpreter, Wasm, Cranelift) must be entirely isolated and communicate only via Fero IR.
+- **Backend Isolation**: Backends (Interpreter, Wasm, Cranelift) must be entirely isolated and communicate only via Tempra IR.
 - **Cranelift usage**: Cranelift is strictly for native AOT. It must **not** be used to generate WebAssembly output.
 - **Host vs. Backend**: A backend *generates* code; a host *executes* code. Wasm output and Wasm hosting are separate concerns handled by separate crates.
 - **Diagnostic Agnosticism**: Error reporting and source spans are managed independently of the compilation backend.
 
 ## 3. Compiler Pipeline
 
-1. **Source** (`fero-fs`)
-2. **Lexer** (`fero-lexer`)
-3. **Parser** (`fero-parser`) -> **AST** (`fero-ast`)
-4. **Lowering** -> **HIR** (`fero-hir`)
-5. **Type Checking** (`fero-typeck`)
-6. **Lowering** -> **MIR** (`fero-mir`)
-7. **Optimization** (`fero-opt`) -> **Fero IR** (`fero-ir`)
+1. **Source** (`tempra-fs`)
+2. **Lexer** (`tempra-lexer`)
+3. **Parser** (`tempra-parser`) -> **AST** (`tempra-ast`)
+4. **Lowering** -> **HIR** (`tempra-hir`)
+5. **Type Checking** (`tempra-typeck`)
+6. **Lowering** -> **MIR** (`tempra-mir`)
+7. **Optimization** (`tempra-opt`) -> **Tempra IR** (`tempra-ir`)
 8. **Backend Emission**:
-    - `fero-interpreter` (Virtual Machine execution)
-    - `fero-backend-wasm` (Wasm output)
-    - `fero-backend-cranelift` (Native AOT output)
+    - `tempra-interpreter` (Virtual Machine execution)
+    - `tempra-backend-wasm` (Wasm output)
+    - `tempra-backend-cranelift` (Native AOT output)
 
 ---
 
@@ -39,7 +39,7 @@ Fero is a script-first programming language designed to transition seamlessly fr
 
 ### Infrastructure Core
 
-#### fero-cli
+#### tempra-cli
 
 **Purpose**: CLI entrypoint and argument parsing.
 
@@ -47,29 +47,29 @@ Fero is a script-first programming language designed to transition seamlessly fr
 - `src/args.rs`: CLI argument definitions (using clap or equivalent).
 - `src/commands//`: Individual command implementations (run, build, check).
 
-#### fero-driver
+#### tempra-driver
 
 **Purpose**: Orchestrates the compilation pipeline.
 
 - `src/lib.rs`: The main `Driver` struct.
-- `src/session_ext.rs`: Integration with `fero-session`.
+- `src/session_ext.rs`: Integration with `tempra-session`.
 - `src/pipeline.rs`: Definition of stages and execution flow.
 
-#### fero-session
+#### tempra-session
 
 **Purpose**: Global compilation state, target configuration, and inter-crate session data.
 
 - `src/session.rs`: The `Session` struct containing target info and global options.
 - `src/config.rs`: Build profiles and configuration file parsing.
 
-#### fero-span
+#### tempra-span
 
 **Purpose**: Source code location tracking (SourceMap) and spans.
 
 - `src/source.rs`: `SourceFile` and `SourceMap`.
 - `src/span.rs`: `Span` and `BytePos` definitions.
 
-#### fero-diagnostics
+#### tempra-diagnostics
 
 **Purpose**: Error reporting, warnings, and diagnostic emission.
 
@@ -77,7 +77,7 @@ Fero is a script-first programming language designed to transition seamlessly fr
 - `src/emitter.rs`: Formatting and terminal output.
 - `src/error.rs`: Standardized error codes.
 
-#### fero-fs
+#### tempra-fs
 
 **Purpose**: Abstraction over the filesystem for source loading and artifact emission.
 
@@ -86,35 +86,35 @@ Fero is a script-first programming language designed to transition seamlessly fr
 
 ### Frontend Stages
 
-#### fero-lexer
+#### tempra-lexer
 
 **Purpose**: Tokenization of raw source code.
 
 - `src/lex.rs`: Lexing engine.
 - `src/token.rs`: Token definitions and keywords.
 
-#### fero-parser
+#### tempra-parser
 
 **Purpose**: Recursive descent parsing and AST construction.
 
 - `src/parser.rs`: Main parser implementation.
 - `src/grammar/`: Individual grammar rules (expressions, statements, declarations).
 
-#### fero-ast
+#### tempra-ast
 
 **Purpose**: Abstract Syntax Tree definitions.
 
 - `src/ast.rs`: AST node structures.
 - `src/visit.rs`: Visitor patterns for AST traversal.
 
-#### fero-hir
+#### tempra-hir
 
 **Purpose**: High-level IR (desugared AST, resolved names).
 
 - `src/hir.rs`: HIR node structures.
 - `src/lower.rs`: Lowering logic from AST to HIR.
 
-#### fero-typeck
+#### tempra-typeck
 
 **Purpose**: Type inference and static analysis.
 
@@ -141,21 +141,21 @@ Pattern matching follows a centralized semantic model:
 
 ### Intermediate Stages
 
-#### fero-mir
+#### tempra-mir
 
 **Purpose**: Mid-level IR (Control-flow oriented, explicit side effects).
 
 - `src/mir.rs`: MIR graph structures (Basic Blocks).
 - `src/lower.rs`: Lowering logic from HIR to MIR.
 
-#### fero-ir
+#### tempra-ir
 
 **Purpose**: Platform-neutral final IR for all backends.
 
 - `src/ir.rs`: IR instruction set and program representation.
-- `src/repr.rs`: Binary/Textual serialization of Fero IR.
+- `src/repr.rs`: Binary/Textual serialization of Tempra IR.
 
-#### fero-opt
+#### tempra-opt
 
 **Purpose**: IR-level optimizations.
 
@@ -164,54 +164,54 @@ Pattern matching follows a centralized semantic model:
 
 ### Execution & Backends
 
-#### fero-interpreter
+#### tempra-interpreter
 
-**Purpose**: Virtual Machine executing Fero IR directly.
+**Purpose**: Virtual Machine executing Tempra IR directly.
 
 - `src/vm.rs`: Execution loop and stack management.
 - `src/opcodes.rs`: Implementation of IR instructions.
 
-#### fero-runtime
+#### tempra-runtime
 
 **Purpose**: Shared runtime primitives (ARC management, intrinsic functions).
 
 - `src/mem.rs`: ARC implementation and allocation strategies.
 - `src/intrinsics.rs`: Low-level system functions available to all backends.
 
-#### fero-stdlib
+#### tempra-stdlib
 
-**Purpose**: The Fero standard library written in Fero.
+**Purpose**: The Tempra standard library written in Tempra.
 
 - `io/`, `fs/`, `os/`: Core namespaces.
 
-#### fero-backend-wasm
+#### tempra-backend-wasm
 
-**Purpose**: Generates Wasm output (.wasm) from Fero IR.
+**Purpose**: Generates Wasm output (.wasm) from Tempra IR.
 
 - `src/emitter.rs`: Generation of WebAssembly binary format.
-- `src/lower.rs`: Lowering Fero IR to Wasm instructions.
+- `src/lower.rs`: Lowering Tempra IR to Wasm instructions.
 
-#### fero-wasm-host
+#### tempra-wasm-host
 
-**Purpose**: Execution of third-party Wasm modules (non-Fero modules).
+**Purpose**: Execution of third-party Wasm modules (non-Tempra modules).
 
 - `src/host.rs`: Integration with Wasmtime.
 - `src/import.rs`: Standardizing imports for external Wasm modules.
 
-#### fero-component-host
+#### tempra-component-host
 
 **Purpose**: Wasm Component Model integration and execution.
 
 - `src/component.rs`: Interaction with Wasm component binaries.
 
-#### fero-backend-cranelift
+#### tempra-backend-cranelift
 
 **Purpose**: Generates native AOT object/binary output using Cranelift.
 
-- `src/translator.rs`: Translating Fero IR to Cranelift IR.
+- `src/translator.rs`: Translating Tempra IR to Cranelift IR.
 - `src/codegen.rs`: Native code generation and machine target handling.
 
-#### fero-linker
+#### tempra-linker
 
 **Purpose**: Invokes system linkers to produce final executables.
 
@@ -219,25 +219,25 @@ Pattern matching follows a centralized semantic model:
 
 ### Tooling & Support
 
-#### fero-package
+#### tempra-package
 
-**Purpose**: Dependency management and `fero.mod` resolution.
+**Purpose**: Dependency management and `tempra.mod` resolution.
 
 - `src/resolver.rs`: Dependency graph resolution.
 
-#### fero-repl
+#### tempra-repl
 
 **Purpose**: Interactive Read-Eval-Print-Loop.
 
 - `src/loop.rs`: Input handling and incremental compilation.
 
-#### fero-lsp
+#### tempra-lsp
 
 **Purpose**: Language Server Protocol implementation.
 
 - `src/server.rs`: LSP message handling.
 
-#### fero-testing
+#### tempra-testing
 
 **Purpose**: Compilation and integration test framework.
 
@@ -256,8 +256,8 @@ Pattern matching follows a centralized semantic model:
 ### Build Modes
 
 - **`fast`**:
-  - Target: `fero-backend-cranelift`.
-  - Optimizations: O3 (via `fero-opt`) + Native codegen opts.
+  - Target: `tempra-backend-cranelift`.
+  - Optimizations: O3 (via `tempra-opt`) + Native codegen opts.
   - Runtime: Aggressive ARC elimination and stack promotion.
 - **`light`**:
   - Target: Any (usually Native or Wasm).
@@ -268,13 +268,13 @@ Pattern matching follows a centralized semantic model:
 
 ### Sequencing
 
-1. **Core Foundation**: `fero-span`, `fero-session`, `fero-diagnostics`.
-2. **Frontend Plumbing**: `fero-lexer`, `fero-parser`, `fero-ast`.
-3. **Semantic Analysis**: `fero-hir`, `fero-typeck`.
-4. **Backend Target**: `fero-ir`.
-5. **Execution (Priority 1)**: `fero-interpreter` (essential for rapid iteration).
-6. **Codegen (Priority 2)**: `fero-backend-cranelift`, `fero-backend-wasm`.
+1. **Core Foundation**: `tempra-span`, `tempra-session`, `tempra-diagnostics`.
+2. **Frontend Plumbing**: `tempra-lexer`, `tempra-parser`, `tempra-ast`.
+3. **Semantic Analysis**: `tempra-hir`, `tempra-typeck`.
+4. **Backend Target**: `tempra-ir`.
+5. **Execution (Priority 1)**: `tempra-interpreter` (essential for rapid iteration).
+6. **Codegen (Priority 2)**: `tempra-backend-cranelift`, `tempra-backend-wasm`.
 
 ### Source of Truth
 
-The **Fero IR** remains the canonical representation of a program once semantic checks pass. No backend is permitted to perform proprietary semantic changes to the program logic. Any logic optimization that affects program semantics must occur in `fero-opt` before reaching the backend emitters.
+The **Tempra IR** remains the canonical representation of a program once semantic checks pass. No backend is permitted to perform proprietary semantic changes to the program logic. Any logic optimization that affects program semantics must occur in `tempra-opt` before reaching the backend emitters.

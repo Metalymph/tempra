@@ -1,6 +1,6 @@
 import re
 
-with open("crates/fero-typeck/src/check_expr.rs", "r") as f:
+with open("crates/tempra-typeck/src/check_expr.rs", "r") as f:
     content = f.read()
 
 def extract_block(name, start_marker, end_marker):
@@ -40,7 +40,7 @@ pattern_rs = f"""//! Shared pattern semantics.
 
 use crate::context::TypeContext;
 use crate::types::Type;
-use fero_hir::*;
+use tempra_hir::*;
 
 pub {block1.replace('fn validate_pattern_type', 'fn validate_pattern_against_type').replace('validate_pattern_type', 'validate_pattern_against_type').replace('extract_pattern_bindings', 'extract_pattern_bindings').replace('compare_bindings', 'compare_bindings').replace('patterns_structurally_identical', 'patterns_structurally_identical')}
 
@@ -71,7 +71,7 @@ pub fn pattern_allowed_in_is(ctx: &mut TypeContext, pattern: &HirPattern) -> boo
 }}
 """
 
-with open("crates/fero-typeck/src/pattern.rs", "w") as f:
+with open("crates/tempra-typeck/src/pattern.rs", "w") as f:
     f.write(pattern_rs)
 
 # Modify check_expr.rs
@@ -115,14 +115,14 @@ is_pattern_replace = """    if !crate::pattern::pattern_allowed_in_is(ctx, &is_p
 
 content = content.replace(is_pattern_search, is_pattern_replace)
 
-with open("crates/fero-typeck/src/check_expr.rs", "w") as f:
+with open("crates/tempra-typeck/src/check_expr.rs", "w") as f:
     f.write(content)
 
 # Modify lib.rs
-with open("crates/fero-typeck/src/lib.rs", "r") as f:
+with open("crates/tempra-typeck/src/lib.rs", "r") as f:
     lib_content = f.read()
 
 lib_content = lib_content.replace("pub mod check_expr;", "pub mod check_expr;\npub mod pattern;")
 
-with open("crates/fero-typeck/src/lib.rs", "w") as f:
+with open("crates/tempra-typeck/src/lib.rs", "w") as f:
     f.write(lib_content)

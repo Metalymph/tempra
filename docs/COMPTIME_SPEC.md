@@ -1,4 +1,4 @@
-# Fero Comptime Specification
+# Tempra Comptime Specification
 
 `comptime` is an explicit compile-time evaluation form. The model is small, typed, and deterministic.
 
@@ -17,11 +17,11 @@
 
 ### Syntax
 
-```fero
+```tempra
 let x = comptime 1 + 2
 ```
 
-```fero
+```tempra
 let y = comptime {
     let a = 1
     let b = 2
@@ -35,13 +35,13 @@ The block form follows normal block expression semantics: the final expression i
 
 `comptime` code may only reference values known at compile time. Runtime parameters and runtime locals are rejected before evaluation regardless of how they were initialized.
 
-```fero
+```tempra
 fn f(x: Int) {
     let y = comptime x + 1 // error: runtime variable 'x' cannot be used in comptime context
 }
 ```
 
-```fero
+```tempra
 fn f(x: Int) {
     let n = 3
     let y = comptime n + 1 // error: runtime variable 'n' cannot be used in comptime context
@@ -54,7 +54,7 @@ The restricted evaluator rejects filesystem, environment, OS, and command/proces
 
 `compile_error("message")` aborts compile-time evaluation with the provided diagnostic message. It is only valid inside a `comptime` context.
 
-```fero
+```tempra
 let x = comptime compile_error("unsupported value")
 ```
 
@@ -74,7 +74,7 @@ Using `compile_error` at runtime is an error.
 
 ### Syntax
 
-```fero
+```tempra
 fn add_n(comptime n: Int, x: Int) -> Int {
     x + n
 }
@@ -113,7 +113,7 @@ SpecializationKey {
 
 ### Error examples
 
-```fero
+```tempra
 fn f(comptime n: Int, x: Int) -> Int { x + n }
 
 fn main() {
@@ -122,12 +122,12 @@ fn main() {
 }
 ```
 
-```fero
+```tempra
 let g = fn(comptime n: Int) -> Int { n }
 // error: comptime parameters are only supported on named functions in this phase
 ```
 
-```fero
+```tempra
 fn f(comptime n: Int) {
     n = 10   // error: cannot assign to immutable value 'n'
 }
@@ -145,7 +145,7 @@ fn f(comptime n: Int) {
 
 ### Syntax
 
-```fero
+```tempra
 fn is_int(type T) -> Bool {
     T == Int
 }

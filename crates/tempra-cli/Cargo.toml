@@ -1,0 +1,15 @@
+[package]
+name = "tempra-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "tempra"
+path = "src/main.rs"
+
+
+[dependencies]
+tempra-driver.workspace = true
+tempra-session.workspace = true
+clap.workspace = true
+anyhow.workspace = true

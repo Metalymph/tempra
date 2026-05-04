@@ -1,0 +1,8 @@
+[package]
+name = "tempra-mir"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tempra-span.workspace = true
+tempra-hir.workspace = true

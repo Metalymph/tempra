@@ -1,4 +1,4 @@
-# Fero Effects v0.1
+# Tempra Effects v0.1
 
 This document reserves design space for a minimal effects system.
 

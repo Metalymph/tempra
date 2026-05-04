@@ -1,0 +1,20 @@
+[package]
+name = "tempra-driver"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tempra-session.workspace = true
+tempra-lexer.workspace = true
+tempra-parser.workspace = true
+tempra-hir.workspace = true
+tempra-typeck.workspace = true
+tempra-mir.workspace = true
+tempra-ir.workspace = true
+tempra-interpreter.workspace = true
+tempra-backend-wasm.workspace = true
+tempra-backend-cranelift.workspace = true
+tempra-linker.workspace = true
+tempra-fs.workspace = true
+tempra-package.workspace = true
+anyhow.workspace = true

@@ -1,8 +1,0 @@
-[package]
-name = "fero-fs"
-version.workspace = true
-edition.workspace = true
-
-[dependencies]
-fero-span.workspace = true
-anyhow.workspace = true

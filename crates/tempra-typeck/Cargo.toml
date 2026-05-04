@@ -1,0 +1,15 @@
+[package]
+name = "tempra-typeck"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tempra-span.workspace = true
+tempra-hir.workspace = true
+tempra-ast.workspace = true
+tempra-interpreter.workspace = true
+anyhow.workspace = true
+
+[dev-dependencies]
+tempra-parser.workspace = true
+tempra-lexer.workspace = true

@@ -1,0 +1,3 @@
+fn main() {
+    fs.write("examples/out.txt", "hello from tempra")
+}

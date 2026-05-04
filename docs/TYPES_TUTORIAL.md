@@ -1,13 +1,13 @@
 # TYPES_TUTORIAL
 
-Guida pratica per aggiungere un nuovo tipo in Fero, dal typechecker all'interprete runtime.
+Guida pratica per aggiungere un nuovo tipo in Tempra, dal typechecker all'interprete runtime.
 
 ## 1. Aggiungi il tipo semantico (typechecker)
 
 File principali:
-- `crates/fero-typeck/src/types.rs`
-- `crates/fero-typeck/src/check_expr.rs`
-- `crates/fero-typeck/src/check_stmt.rs` (se impatta `for`, mutazioni, statement-level typing)
+- `crates/tempra-typeck/src/types.rs`
+- `crates/tempra-typeck/src/check_expr.rs`
+- `crates/tempra-typeck/src/check_stmt.rs` (se impatta `for`, mutazioni, statement-level typing)
 
 Checklist:
 1. Inserisci il nuovo variant in `Type`.
@@ -26,7 +26,7 @@ pub enum Type {
 ## 2. Tipizza costruttori e metodi
 
 File:
-- `crates/fero-typeck/src/check_expr.rs`
+- `crates/tempra-typeck/src/check_expr.rs`
 
 Pattern consigliato:
 1. Intercetta `HirExpression::Call` su `Member(Name("Tipo"), "ctor")` per costruttori statici.
@@ -40,9 +40,9 @@ Nota importante:
 ## 2.1 Type sugar nel parser
 
 Se il nuovo tipo ha sugar sintattico (es. `T?` per `Option[T]`):
-- implementa il parsing in `crates/fero-parser/src/parser.rs` nella parse dei tipi (`parse_type`)
+- implementa il parsing in `crates/tempra-parser/src/parser.rs` nella parse dei tipi (`parse_type`)
 - conserva la distinzione tra type-position e expression-position
-- aggiorna AST/HIR (`crates/fero-ast`, `crates/fero-hir`) per rappresentare il sugar in modo esplicito
+- aggiorna AST/HIR (`crates/tempra-ast`, `crates/tempra-hir`) per rappresentare il sugar in modo esplicito
 
 Caso concreto:
 - `T?` in type position deve diventare semanticamente `Option[T]`
@@ -53,7 +53,7 @@ Caso concreto:
 ## 3. Aggiungi il valore runtime
 
 File:
-- `crates/fero-interpreter/src/value.rs`
+- `crates/tempra-interpreter/src/value.rs`
 
 Checklist:
 1. Inserisci il variant in `Value` (es. `Value::Regex(...)`, `Value::UInt8(u8)`).
@@ -68,7 +68,7 @@ Esempi reali in repo:
 ## 4. Esegui il wiring nell'interprete
 
 File:
-- `crates/fero-interpreter/src/eval_expr.rs`
+- `crates/tempra-interpreter/src/eval_expr.rs`
 
 Checklist:
 1. Nel dispatch delle call, intercetta il namespace statico (`Regex.xxx(...)`).
@@ -88,20 +88,20 @@ Per tipi con semantica di scansione (come `Regex`):
 ## 5. Test obbligatori
 
 Type checker:
-- `crates/fero-typeck/tests/typeck_tests.rs`
+- `crates/tempra-typeck/tests/typeck_tests.rs`
 - Aggiungi test `expect_ok` per casi validi.
 - Aggiungi test `expect_err` per arità/tipi invalidi.
 
 Interprete:
-- `crates/fero-interpreter/tests/interpreter_tests.rs`
+- `crates/tempra-interpreter/tests/interpreter_tests.rs`
 - Verifica semantica reale e output value-level.
 - Copri edge case (Unicode, anchor/zero-width, ecc. se rilevante).
 
 ## 6. Esempi utente e documentazione
 
 Aggiungi:
-- esempi in `examples/*.fero`
-- specifica in `docs/FERO_SURFACE_SPEC_v0.1.md`
+- esempi in `examples/*.tempra`
+- specifica in `docs/TEMPRA_SURFACE_SPEC_v0.1.md`
 
 Per tipi nuovi conviene documentare:
 - costruttori

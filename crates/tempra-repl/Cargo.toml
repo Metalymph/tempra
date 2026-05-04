@@ -1,0 +1,8 @@
+[package]
+name = "tempra-repl"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tempra-driver.workspace = true
+anyhow.workspace = true

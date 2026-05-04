@@ -1,4 +1,4 @@
-use fero_driver::pipeline::test_source;
+use tempra_driver::pipeline::test_source;
 
 fn main() {
     let source = r#"

@@ -1,8 +1,8 @@
-# Fero Pipeline
+# Tempra Pipeline
 
 ## Overview
 
-Fero keeps one canonical compilation path and multiple execution or emission targets.
+Tempra keeps one canonical compilation path and multiple execution or emission targets.
 
 ```text
 source
@@ -12,7 +12,7 @@ source
   -> HIR
   -> typeck
   -> MIR
-  -> Fero IR
+  -> Tempra IR
   -> interpreter
   -> wasm backend
   -> cranelift backend
@@ -26,7 +26,7 @@ source
 - `HIR`: normalized semantic program structure
 - `typeck`: interface validation, inference boundaries, explicit errors
 - `MIR`: control-flow and value lifetime planning
-- `Fero IR`: backend-facing, target-neutral representation
+- `Tempra IR`: backend-facing, target-neutral representation
 
 ## Execution Modes
 
@@ -46,18 +46,18 @@ source
 
 ### Native
 
-- `fero-backend-cranelift` consumes Fero IR
-- `fero-linker` plans system linker invocation
+- `tempra-backend-cranelift` consumes Tempra IR
+- `tempra-linker` plans system linker invocation
 - `--mode fast` and `--mode light` influence codegen priorities
 
 ### Wasm
 
-- `fero-backend-wasm` consumes Fero IR directly
+- `tempra-backend-wasm` consumes Tempra IR directly
 - no Cranelift dependency in the Wasm emission path
-- future WASI-focused packaging can be layered in `fero-package`
+- future WASI-focused packaging can be layered in `tempra-package`
 
 ### Wasm Hosting
 
-- `fero-wasm-host` will host generic Wasm modules
-- `fero-component-host` will host Wasm components
+- `tempra-wasm-host` will host generic Wasm modules
+- `tempra-component-host` will host Wasm components
 - both are runtime integration layers, not compiler backends

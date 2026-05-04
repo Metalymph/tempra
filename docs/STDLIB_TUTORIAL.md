@@ -1,6 +1,6 @@
-# Fero Stdlib Contribution Tutorial
+# Tempra Stdlib Contribution Tutorial
 
-This guide explains how to add a new builtin module and API to the Fero interpreter.
+This guide explains how to add a new builtin module and API to the Tempra interpreter.
 
 ## Overview
 
@@ -13,9 +13,9 @@ Adding a new stdlib API involves changes in four main areas:
 
 ---
 
-## 1. Type Checker (`crates/fero-typeck/src/check_expr.rs`)
+## 1. Type Checker (`crates/tempra-typeck/src/check_expr.rs`)
 
-Fero uses explicit dispatch for builtin namespaces like `fs.*`, `os.*`, and `env.*`.
+Tempra uses explicit dispatch for builtin namespaces like `fs.*`, `os.*`, and `env.*`.
 
 ### Step 1.1: Create a checking function
 
@@ -74,7 +74,7 @@ ResolvedCallee::Namespace(ns, method) => {
 
 ---
 
-## 2. Interpreter (`crates/fero-interpreter/src/eval_expr.rs`)
+## 2. Interpreter (`crates/tempra-interpreter/src/eval_expr.rs`)
 
 ### Step 2.1: Implement evaluation logic
 
@@ -126,9 +126,9 @@ To add a method to a type (e.g., `String.trim()`), add logic to `check_call` and
 
 ## 4. Verification
 
-1. **Type Checker Tests**: Add a test case in `crates/fero-typeck/tests/typeck_tests.rs` using `expect_ok` and `expect_err`.
-2. **Interpreter Tests**: Add an execution test in `crates/fero-interpreter/tests/interpreter_tests.rs`.
-3. **Example**: Add a new `.fero` file in `examples/` to demonstrate usage.
+1. **Type Checker Tests**: Add a test case in `crates/tempra-typeck/tests/typeck_tests.rs` using `expect_ok` and `expect_err`.
+2. **Interpreter Tests**: Add an execution test in `crates/tempra-interpreter/tests/interpreter_tests.rs`.
+3. **Example**: Add a new `.tempra` file in `examples/` to demonstrate usage.
 
 ---
 

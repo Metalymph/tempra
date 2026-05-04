@@ -1,10 +1,10 @@
-# Fero Pattern Matching Spec (v1.6)
+# Tempra Pattern Matching Spec (v1.6)
 
 ## 1. Match Expression
 
 `match` is an expression that evaluates an operand against a series of arms. Each arm consists of a pattern, an optional guard, and a body expression.
 
-```fero
+```tempra
 let x = match value {
     Some(v) => v
     None => default_val
@@ -18,7 +18,7 @@ Match arms are evaluated in order. The first arm whose pattern matches (and whos
 ## 2. Supported Patterns
 
 ### 2.1 Wildcard
-```fero
+```tempra
 _ => expr
 ```
 Matches anything, binds nothing.
@@ -26,7 +26,7 @@ Matches anything, binds nothing.
 ---
 
 ### 2.2 Binding (Catch-all)
-```fero
+```tempra
 x => expr
 ```
 Matches anything, binds the value to `x`.
@@ -34,7 +34,7 @@ Matches anything, binds the value to `x`.
 ---
 
 ### 2.3 Literal
-```fero
+```tempra
 42 => expr
 "hello" => expr
 true => expr
@@ -44,7 +44,7 @@ Matches an exact value.
 ---
 
 ### 2.4 Enum Constructor
-```fero
+```tempra
 Some(v) => expr
 None => expr
 Ok(v) => expr
@@ -60,21 +60,21 @@ Matches a specific enum variant. Payload patterns are fully recursive.
 Three forms are supported, all first-class:
 
 #### Shorthand binding
-```fero
+```tempra
 User { name }
 ```
 - Matches a struct of type `User`.
 - Binds the value of field `name` to a local variable also named `name`.
 
 #### Field renaming
-```fero
+```tempra
 User { name: n }
 ```
 - Matches a struct of type `User`.
 - Binds the value of field `name` to a local variable named `n`.
 
 #### Field subpattern
-```fero
+```tempra
 User { meta: (age, _) }
 User { inner: Data(v) }
 ```
@@ -84,7 +84,7 @@ User { inner: Data(v) }
 
 #### Combinations
 All three forms can be freely combined in a single struct pattern:
-```fero
+```tempra
 User { name: n, meta: (age, _), active }
 ```
 
@@ -103,7 +103,7 @@ Constraints:
 - parentheses do not mean grouping in pattern position
 
 ### 2.7 OR-Patterns
-```fero
+```tempra
 Pattern1 | Pattern2 => expr
 ```
 - Supported in `match` arms only.
@@ -128,7 +128,7 @@ Invalid:
 
 ## 3. Match Guards
 
-```fero
+```tempra
 match x {
     Some(v) if v > 10 => 1
     Some(v) => 2
@@ -164,7 +164,7 @@ match x {
 
 ## 5. Exhaustiveness
 
-Fero performs lightweight exhaustiveness analysis for:
+Tempra performs lightweight exhaustiveness analysis for:
 - `Bool` — requires both `true` and `false`
 - Enums (including `Option` and `Result`) — requires one unguarded arm per variant
 

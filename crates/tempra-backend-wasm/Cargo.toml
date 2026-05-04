@@ -1,0 +1,8 @@
+[package]
+name = "tempra-backend-wasm"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tempra-ir.workspace = true
+anyhow.workspace = true

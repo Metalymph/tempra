@@ -1,2 +1,0 @@
-fs.write("examples/out.txt", "hello from fero")?
-print("written")

@@ -496,11 +496,15 @@ Same syntax as statement, but used as expression.
 
 ```text
 Type
-  = Identifier ("(" TypeList? ")")?  // Named or Type Constructor
-  | ArrayType
+  = TypeAtom ("?" | "!" TypeAtom?)?
+
+TypeAtom
+  = Identifier ("(" TypeList? ")")?  // Named or Type Constructor (e.g. Array(Int))
+  | ArrayType                        // [T] Sugar
   | TupleType
   | FunctionType
   | "Never"
+  | "Self"
 
 FunctionType
   = "fn" "(" TypeList? ")" ReturnType?

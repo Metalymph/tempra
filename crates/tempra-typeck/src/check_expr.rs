@@ -1552,6 +1552,12 @@ fn check_array_method(
             }
             Type::Int
         }
+        "is_empty" => {
+            if !args.is_empty() {
+                ctx.error("'is_empty' method expects 0 arguments", span);
+            }
+            Type::Bool
+        }
         _ => {
             ctx.error(format!("Array/Slice has no method '{}'", name), span);
             Type::Error
@@ -2911,29 +2917,65 @@ fn check_array(
     span: Span,
     expected: Option<&Type>,
 ) -> Type {
-    if elems.is_empty() {
-        return Type::Array(Box::new(Type::Unknown));
-    }
-
     let item_expected = match expected {
         Some(Type::Array(inner)) => Some(&**inner),
         _ => None,
     };
 
-    let first = check_expression(ctx, &mut elems[0], item_expected);
-    for elem in &mut elems[1..] {
-        let ty = check_expression(ctx, elem, item_expected);
-        if ty != Type::Error && first != Type::Error && ty != first {
-            ctx.error(
-                format!(
-                    "Array elements must have the same type: expected {}, found {}",
-                    first, ty
-                ),
-                span,
-            );
+    if elems.is_empty() {
+        if let Some(inner) = item_expected {
+            return Type::Array(Box::new(inner.clone()));
+        } else {
+            ctx.error("cannot infer element type for empty array literal", span);
+            return Type::Array(Box::new(Type::Error));
         }
     }
-    Type::Array(Box::new(first))
+
+    let mut common_ty = item_expected.cloned();
+
+    for elem in elems.iter_mut() {
+        let ty = check_expression(ctx, elem, item_expected);
+        if ty == Type::Error {
+            continue;
+        }
+
+        if let Some(ref current) = common_ty {
+            if !types_compatible(current, &ty) {
+                // If the current common type is Never, it can be promoted to any other type.
+                if *current == Type::Never {
+                    common_ty = Some(ty);
+                } else if ty == Type::Never {
+                    // Never is compatible with anything, so we keep the current type.
+                } else {
+                    ctx.error(
+                        format!(
+                            "array literal elements must have the same type: expected {}, found {}",
+                            current, ty
+                        ),
+                        span,
+                    );
+                }
+            }
+        } else {
+            common_ty = Some(ty);
+        }
+    }
+
+    let result_item_ty = common_ty.unwrap_or(Type::Error);
+
+    if result_item_ty == Type::Never && item_expected.is_none() {
+        ctx.error(
+            "cannot infer element type for array literal with only Never elements",
+            span,
+        );
+        return Type::Array(Box::new(Type::Error));
+    }
+
+    if result_item_ty == Type::Error {
+        return Type::Array(Box::new(Type::Error));
+    }
+
+    Type::Array(Box::new(result_item_ty))
 }
 
 fn check_regex_constructor(

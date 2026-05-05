@@ -188,6 +188,18 @@ impl TypeContext {
                         }
                         Type::Option(Box::new(arg_types[0].clone()))
                     }
+                    Type::Array(_) => {
+                        if arg_types.len() != 1 {
+                            return Type::Error;
+                        }
+                        Type::Array(Box::new(arg_types[0].clone()))
+                    }
+                    Type::Slice(_) => {
+                        if arg_types.len() != 1 {
+                            return Type::Error;
+                        }
+                        Type::Slice(Box::new(arg_types[0].clone()))
+                    }
                     Type::Result(_, _) => {
                         if arg_types.len() != 2 {
                             return Type::Error;

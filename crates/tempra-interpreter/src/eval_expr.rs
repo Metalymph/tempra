@@ -868,6 +868,12 @@ impl Interpreter {
                                 }
                                 return Ok(ControlFlow::Value(Value::Int64(arr.len() as i64)));
                             }
+                            if member.field == "is_empty" {
+                                if !call.args.is_empty() {
+                                    return Err("Method 'is_empty' expects 0 arguments".into());
+                                }
+                                return Ok(ControlFlow::Value(Value::Bool(arr.is_empty())));
+                            }
                             return Err(format!("Unknown method '{}' on Array", member.field));
                         }
                         Value::Slice(slice) => {
@@ -876,6 +882,12 @@ impl Interpreter {
                                     return Err("Method 'len' expects 0 arguments".into());
                                 }
                                 return Ok(ControlFlow::Value(Value::Int64(slice.len() as i64)));
+                            }
+                            if member.field == "is_empty" {
+                                if !call.args.is_empty() {
+                                    return Err("Method 'is_empty' expects 0 arguments".into());
+                                }
+                                return Ok(ControlFlow::Value(Value::Bool(slice.len() == 0)));
                             }
                             return Err(format!("Unknown method '{}' on Slice", member.field));
                         }

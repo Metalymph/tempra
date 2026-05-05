@@ -221,8 +221,8 @@ impl fmt::Display for Type {
             Type::UInt64 => write!(f, "UInt64"),
             Type::Float32 => write!(f, "Float32"),
             Type::Float64 => write!(f, "Float64"),
-            Type::Array(inner) => write!(f, "[{}]", inner),
-            Type::Slice(inner) => write!(f, "Slice[{}]", inner),
+            Type::Array(inner) => write!(f, "Array({})", inner),
+            Type::Slice(inner) => write!(f, "Slice({})", inner),
             Type::Tuple(elems) => {
                 write!(f, "(")?;
                 for (i, t) in elems.iter().enumerate() {
@@ -312,6 +312,8 @@ pub fn resolve_named_type(name: &str) -> Type {
         "Never" => Type::Never,
         "Option" => Type::Option(Box::new(Type::Unknown)),
         "Result" => Type::Result(Box::new(Type::Unknown), Box::new(Type::Unknown)),
+        "Array" => Type::Array(Box::new(Type::Unknown)),
+        "Slice" => Type::Slice(Box::new(Type::Unknown)),
         _ => Type::Unknown, // caller decides if this is struct/enum
     }
 }

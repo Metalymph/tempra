@@ -448,33 +448,38 @@ Rules:
 let xs = [1, 2, 3]
 ```
 
-### Static array
+### Dynamic array (canonical)
 
 ```tempra
-let xs: [UInt64; 4]
+let xs: Array(Int) = [1, 2, 3]
+let ys: [Int] = [1, 2, 3] // sugar for Array(Int)
 ```
 
-### Slice
+### Slice (canonical)
 
 ```tempra
-let part = xs[1..3]
+let part: Slice(Int) = xs[1..3]
 ```
 
 Rules:
 
 - core collection forms are:
-  - dynamic arrays
-  - static arrays
-  - slices
-- slices are **zero-copy views** over arrays or other slices
-- arrays and slices share identical read/write semantics:
+  - dynamic arrays: `Array(T)`
+  - slices: `Slice(T)`
+- slices are **contiguous views** over arrays or other slices.
+- runtime representation of `Slice(T)` is implementation-defined, but it behaves as a view for read access.
+- arrays and slices share identical read methods:
   - `.len()` → `Int`
+  - `.is_empty()` → `Bool`
+- arrays and slices share identical read/write semantics:
   - `xs[i]` → element type (read/write)
   - `xs[a..b]` → `Slice(T)` (read/write)
-  - `for x in xs { ... }` — iteration
-  - `print(xs)` / `dbg(xs)` — identical human-readable formatting `[1, 2, 3]`
-- slice assignment `xs[a..b] = ys` requires matching lengths at runtime
-- no large family of built-in container types in v0
+- slice assignment `xs[a..b] = ys` requires matching lengths at runtime.
+- **Strict Inference**:
+  - `[]` requires an expected type context (e.g., `let xs: Array(Int) = []`).
+  - `[crash("msg")]` requires an expected type context to determine element type.
+  - elements must have compatible types.
+- no large family of built-in container types in v0.1.
 
 ---
 

@@ -163,6 +163,13 @@ pub struct InterfaceItem {
     pub visibility: Visibility,
     pub name: Token,
     pub methods: Vec<InterfaceMethodRequirement>,
+    pub associated_types: Vec<InterfaceAssociatedType>,
+}
+
+#[derive(Debug, Clone)]
+pub struct InterfaceAssociatedType {
+    pub span: Span,
+    pub name: Token,
 }
 
 #[derive(Debug, Clone)]

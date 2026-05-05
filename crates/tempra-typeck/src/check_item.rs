@@ -166,8 +166,10 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
                 ctx.interfaces.insert(
                     i.name.clone(),
                     InterfaceInfo {
+                        name: i.name.clone(),
                         visibility: i.visibility,
                         methods: HashMap::new(),
+                        associated_types: Vec::new(),
                     },
                 );
             }
@@ -319,6 +321,19 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
                 ctx.current_generic_params.clear();
             }
             HirItem::Interface(i) => {
+                ctx.current_interface = Some(i.name.clone());
+
+                let associated_types: Vec<String> = i
+                    .associated_types
+                    .iter()
+                    .map(|at| at.name.clone())
+                    .collect();
+
+                // Update interface with associated types first so resolve_hir_type can find them
+                if let Some(info) = ctx.interfaces.get_mut(&i.name) {
+                    info.associated_types = associated_types.clone();
+                }
+
                 let mut methods = HashMap::new();
                 for m in &i.methods {
                     methods.insert(
@@ -334,13 +349,17 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
                         },
                     );
                 }
+
                 ctx.interfaces.insert(
                     i.name.clone(),
                     crate::context::InterfaceInfo {
+                        name: i.name.clone(),
                         visibility: i.visibility,
                         methods,
+                        associated_types,
                     },
                 );
+                ctx.current_interface = None;
             }
             HirItem::Extend(e) => {
                 let target_ty = ctx.resolve_hir_type(&e.target);

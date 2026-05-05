@@ -62,6 +62,8 @@ pub enum Type {
     Option(Box<Type>),
 
     Never,
+    SelfType,
+    Associated(std::string::String, std::string::String), // InterfaceName, TypeName
 
     /// Used during partial checking when a type is not yet known.
     Unknown,
@@ -81,7 +83,6 @@ pub enum Type {
     },
     /// The type of a type value (metatype)
     Meta(Box<Type>),
-    SelfType,
 }
 
 impl Type {
@@ -284,6 +285,7 @@ impl fmt::Display for Type {
             }
             Type::GenericParam { name, .. } => write!(f, "{}", name),
             Type::SelfType => write!(f, "Self"),
+            Type::Associated(_, name) => write!(f, "{}", name),
         }
     }
 }

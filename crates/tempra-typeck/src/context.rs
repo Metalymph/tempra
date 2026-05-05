@@ -72,8 +72,10 @@ pub struct EnumInfo {
 
 #[derive(Debug, Clone)]
 pub struct InterfaceInfo {
+    pub name: String,
     pub visibility: Visibility,
     pub methods: HashMap<String, InterfaceMethodRequirementInfo>,
+    pub associated_types: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -140,6 +142,15 @@ impl TypeContext {
         let base = resolve_named_type(name);
         if base != Type::Unknown {
             return base;
+        }
+
+        // Associated type lookup
+        if let Some(itf_name) = &self.current_interface {
+            if let Some(itf) = self.interfaces.get(itf_name) {
+                if itf.associated_types.contains(&name.to_string()) {
+                    return Type::Associated(itf_name.clone(), name.to_string());
+                }
+            }
         }
         if let Some(param) = self
             .current_generic_params_info
@@ -224,12 +235,6 @@ impl TypeContext {
                 Type::Function(p_types, Box::new(r_type))
             }
             HirType::SelfType(_span) => {
-                if self.current_interface.is_none() {
-                    // We don't have a direct way to emit error from here without mut?
-                    // Actually, TypeContext has a way to record errors if it's mut.
-                    // resolve_hir_type is &self.
-                    // I'll have to use a placeholder or handle it in check_item.
-                }
                 Type::SelfType
             }
         }
@@ -304,83 +309,31 @@ impl TypeContext {
         receiver_ty: &Type,
         method_name: &str,
     ) -> Option<FunctionSignature> {
-        // 1. Check if it's a struct and the method is defined as a function with name "StructName.methodName"
-        // In Tempra, methods are currently just functions named "Type.method" or similar?
-        // Wait, check_expr.rs check_function_call uses ctx.functions.get(func_name).
+        // 1. Check direct methods and explicitly registered 'extends'
+        if let Some(sig) = self.lookup_direct_method_signature(receiver_ty, method_name) {
+            return Some(sig);
+        }
 
-        // Actually, Tempra v0.1 usually models methods as "TypeName.methodName" in the global function map
-        // for functions defined inside the type or in extend blocks.
+        // 2. Check interface constraints for generic parameters
+        let mut constraint_name = None;
+        if let Type::GenericParam { id, .. } = receiver_ty {
+            constraint_name = self.current_generic_params_info.iter()
+                .find(|p| p.id == *id)
+                .and_then(|p| p.constraint.clone());
+        }
 
-        let type_name = match receiver_ty {
-            Type::Struct(name, _) => Some(name.clone()),
-            Type::Enum(name, _) => Some(name.clone()),
-            Type::GenericParam { id, .. } => {
-                // Find the constraint for this generic parameter
-                let constraint = self
-                    .current_generic_params_info
-                    .iter()
-                    .find(|p| p.id == *id)
-                    .and_then(|p| p.constraint.clone());
-
-                if let Some(interface_name) = constraint {
-                    if let Some(interface) = self.interfaces.get(&interface_name) {
-                        if let Some(req) = interface.methods.get(method_name) {
-                            return Some(FunctionSignature {
-                                visibility: tempra_ast::Visibility::Public,
-                                generic_params: Vec::new(),
-                                params: req
-                                    .params
-                                    .iter()
-                                    .map(|p| crate::context::FunctionParam {
-                                        name: "self".to_string(), // approximation
-                                        ty: substitute_self(p, receiver_ty),
-                                        is_inout: false,
-                                        kind: tempra_ast::ParameterKind::Runtime,
-                                    })
-                                    .collect(),
-                                return_type: substitute_self(&req.return_type, receiver_ty),
-                                is_fallible: false,
-                            });
-                        }
-                    }
-                }
-                None
-            }
-            _ => None,
-        };
-        if let Some(name) = &type_name {
-            // Check if it's a function "Type.method"
-            let mangled = format!("{}.{}", name, method_name);
-            if let Some(sig) = self.functions.get(&mangled) {
-                let mut sig = sig.clone();
-                for p in &mut sig.params {
-                    p.ty = substitute_self(&p.ty, receiver_ty);
-                }
-                sig.return_type = substitute_self(&sig.return_type, receiver_ty);
-                return Some(sig);
-            }
-
-            // Check if it's an interface method (rare but possible if a type is named after an interface)
-            if let Some(interface) = self.interfaces.get(name) {
-                if let Some(req) = interface.methods.get(method_name) {
+        if let Some(itf_name) = constraint_name {
+            if let Some(itf) = self.interfaces.get(&itf_name) {
+                if let Some(req) = itf.methods.get(method_name) {
                     return Some(FunctionSignature {
-                        visibility: interface.visibility,
+                        visibility: itf.visibility,
                         generic_params: Vec::new(),
-                        params: req
-                            .params
-                            .iter()
-                            .enumerate()
-                            .map(|(i, p_ty)| crate::context::FunctionParam {
-                                name: if i == 0 {
-                                    "self".to_string()
-                                } else {
-                                    format!("p{}", i)
-                                },
-                                ty: substitute_self(p_ty, receiver_ty),
-                                is_inout: false,
-                                kind: tempra_ast::ParameterKind::Runtime,
-                            })
-                            .collect(),
+                        params: req.params.iter().enumerate().map(|(i, p_ty)| FunctionParam {
+                            name: if i == 0 { "self".to_string() } else { format!("p{}", i) },
+                            ty: substitute_self(p_ty, receiver_ty),
+                            is_inout: false,
+                            kind: ParameterKind::Runtime,
+                        }).collect(),
                         return_type: substitute_self(&req.return_type, receiver_ty),
                         is_fallible: false,
                     });
@@ -388,20 +341,24 @@ impl TypeContext {
             }
         }
 
-        // 2. Check explicitly registered 'extends' (if we use a different mangling or storage)
-        if let Some(methods) = self.extends.get(receiver_ty) {
-            for m_name in methods {
-                if let Some(idx) = m_name.rfind('.') {
-                    let actual_name = &m_name[idx + 1..];
-                    if actual_name == method_name {
-                        if let Some(sig) = self.functions.get(m_name) {
-                            // Phase 6: Substitute Self with the actual receiver type
-                            let mut sig = sig.clone();
-                            for p in &mut sig.params {
-                                p.ty = substitute_self(&p.ty, receiver_ty);
-                            }
-                            sig.return_type = substitute_self(&sig.return_type, receiver_ty);
-                            return Some(sig);
+        // 3. Check if concrete type satisfies an interface with this method (Projection)
+        for (itf_name, itf) in &self.interfaces {
+            if itf.methods.contains_key(method_name) {
+                if crate::check_expr::satisfies_interface_no_errors(self, receiver_ty, itf_name) {
+                    if let Some(req) = itf.methods.get(method_name) {
+                        if let Some(mappings) = self.infer_associated_types(receiver_ty, itf_name) {
+                            return Some(FunctionSignature {
+                                visibility: itf.visibility,
+                                generic_params: Vec::new(),
+                                params: req.params.iter().enumerate().map(|(i, p_ty)| FunctionParam {
+                                    name: if i == 0 { "self".to_string() } else { format!("p{}", i) },
+                                    ty: self.resolve_associated_types(&substitute_self(p_ty, receiver_ty), &mappings),
+                                    is_inout: false,
+                                    kind: ParameterKind::Runtime,
+                                }).collect(),
+                                return_type: self.resolve_associated_types(&substitute_self(&req.return_type, receiver_ty), &mappings),
+                                is_fallible: false,
+                            });
                         }
                     }
                 }
@@ -409,6 +366,93 @@ impl TypeContext {
         }
 
         None
+    }
+
+    pub fn lookup_direct_method_signature(
+        &self,
+        receiver_ty: &Type,
+        method_name: &str,
+    ) -> Option<FunctionSignature> {
+        // 1. Check direct methods
+        let full_name = format!("{}.{}", receiver_ty.get_name(), method_name);
+        if let Some(sig) = self.functions.get(&full_name) {
+            let mut sig = sig.clone();
+            for p in &mut sig.params {
+                p.ty = substitute_self(&p.ty, receiver_ty);
+            }
+            sig.return_type = substitute_self(&sig.return_type, receiver_ty);
+            return Some(sig);
+        }
+
+        // 2. Check extends
+        if let Some(methods) = self.extends.get(receiver_ty) {
+            for m_name in methods {
+                if m_name.ends_with(&format!(".{}", method_name)) {
+                    if let Some(sig) = self.functions.get(m_name) {
+                        let mut sig = sig.clone();
+                        for p in &mut sig.params {
+                            p.ty = substitute_self(&p.ty, receiver_ty);
+                        }
+                        sig.return_type = substitute_self(&sig.return_type, receiver_ty);
+                        return Some(sig);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    pub fn infer_associated_types(&self, ty: &Type, interface_name: &str) -> Option<HashMap<String, Type>> {
+        let interface = self.interfaces.get(interface_name)?;
+        let mut mappings = HashMap::new();
+        for (method_name, req) in &interface.methods {
+            let full_name = format!("{}.{}", ty.get_name(), method_name);
+            if let Some(sig) = self.functions.get(&full_name) {
+                 let req_params: Vec<Type> = req.params.iter().map(|p| substitute_self(p, ty)).collect();
+                 let req_ret = substitute_self(&req.return_type, ty);
+
+                 for (p_req, p_act) in req_params.iter().zip(sig.params.iter()) {
+                     self.unify_associated_internal(p_req, &p_act.ty, interface_name, &mut mappings);
+                 }
+                 self.unify_associated_internal(&req_ret, &sig.return_type, interface_name, &mut mappings);
+            }
+        }
+        if interface.associated_types.iter().all(|name| mappings.contains_key(name)) {
+            Some(mappings)
+        } else {
+            None
+        }
+    }
+
+    fn unify_associated_internal(&self, req: &Type, actual: &Type, interface_name: &str, mappings: &mut HashMap<String, Type>) {
+        match req {
+            Type::Associated(itf, name) if itf == interface_name => {
+                mappings.entry(name.clone()).or_insert_with(|| actual.clone());
+            }
+            Type::Array(inner) => if let Type::Array(act_inner) = actual { self.unify_associated_internal(inner, act_inner, interface_name, mappings); }
+            Type::Slice(inner) => if let Type::Slice(act_inner) = actual { self.unify_associated_internal(inner, act_inner, interface_name, mappings); }
+            Type::Option(inner) => if let Type::Option(act_inner) = actual { self.unify_associated_internal(inner, act_inner, interface_name, mappings); }
+            Type::Result(ok, err) => if let Type::Result(act_ok, act_err) = actual {
+                self.unify_associated_internal(ok, act_ok, interface_name, mappings);
+                self.unify_associated_internal(err, act_err, interface_name, mappings);
+            }
+            _ => {}
+        }
+    }
+
+    pub fn resolve_associated_types(&self, ty: &Type, mappings: &HashMap<String, Type>) -> Type {
+        match ty {
+            Type::Associated(_, name) => mappings.get(name).cloned().unwrap_or(ty.clone()),
+            Type::Array(inner) => Type::Array(Box::new(self.resolve_associated_types(inner, mappings))),
+            Type::Slice(inner) => Type::Slice(Box::new(self.resolve_associated_types(inner, mappings))),
+            Type::Option(inner) => Type::Option(Box::new(self.resolve_associated_types(inner, mappings))),
+            Type::Result(ok, err) => Type::Result(
+                Box::new(self.resolve_associated_types(ok, mappings)),
+                Box::new(self.resolve_associated_types(err, mappings)),
+            ),
+            Type::Tuple(elems) => Type::Tuple(elems.iter().map(|e| self.resolve_associated_types(e, mappings)).collect()),
+            _ => ty.clone(),
+        }
     }
 }
 

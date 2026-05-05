@@ -60,6 +60,28 @@ fn test_array_slice_write_length_mismatch() {
 }
 
 #[test]
+fn test_slice_as_view_parent_mutation() {
+    let source = r#"
+        var xs = [1, 2, 3]
+        let ys = xs[0..2]
+        xs[0] = 9
+        expect(ys[0] == 9)
+    "#;
+    assert!(test_source(source).is_ok());
+}
+
+#[test]
+fn test_slice_as_view_slice_mutation() {
+    let source = r#"
+        var xs = [1, 2, 3]
+        var ys = xs[0..2]
+        ys[1] = 8
+        expect(xs[1] == 8)
+    "#;
+    assert!(test_source(source).is_ok());
+}
+
+#[test]
 fn test_immutable_index_assign_fails() {
     let source = r#"
         let xs = [1, 2, 3]

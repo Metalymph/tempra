@@ -12,7 +12,7 @@ pub enum Value {
     Float64(f64),
     String(String),
 
-    Array(Rc<Vec<Value>>),
+    Array(Rc<RefCell<Vec<Value>>>),
     Slice(SliceValue),
     Tuple(Vec<Value>),
 
@@ -69,7 +69,7 @@ pub struct CommandResultValue {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum SliceParent {
-    Values(Rc<Vec<Value>>),
+    Values(Rc<RefCell<Vec<Value>>>),
     Bytes(Rc<Vec<u8>>),
 }
 
@@ -88,7 +88,7 @@ impl SliceValue {
     pub fn get(&self, index: usize) -> Option<Value> {
         if index < self.len() {
             match &self.parent {
-                SliceParent::Values(v) => Some(v[self.start + index].clone()),
+                SliceParent::Values(v) => Some(v.borrow()[self.start + index].clone()),
                 SliceParent::Bytes(b) => Some(Value::UInt8(b[self.start + index])),
             }
         } else {
@@ -367,7 +367,7 @@ impl Value {
         match self {
             Value::String(s) => format!("\"{}\"", s),
             Value::Array(arr) => {
-                let elems: Vec<String> = arr.iter().map(|v| v.to_repr()).collect();
+                let elems: Vec<String> = arr.borrow().iter().map(|v| v.to_repr()).collect();
                 format!("[{}]", elems.join(", "))
             }
             Value::Slice(slice) => {
@@ -416,7 +416,7 @@ impl std::fmt::Display for Value {
             Value::String(s) => write!(f, "{}", s), // Direct string output for print
             Value::Array(arr) => {
                 write!(f, "[")?;
-                for (i, val) in arr.iter().enumerate() {
+                for (i, val) in arr.borrow().iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
@@ -512,7 +512,7 @@ impl PartialEq for Value {
             (Value::UInt8(a), Value::UInt8(b)) => a == b,
             (Value::Float64(a), Value::Float64(b)) => a == b,
             (Value::String(a), Value::String(b)) => a == b,
-            (Value::Array(a), Value::Array(b)) => a == b,
+            (Value::Array(a), Value::Array(b)) => *a.borrow() == *b.borrow(),
             (Value::Slice(a), Value::Slice(b)) => a == b,
             (Value::Tuple(a), Value::Tuple(b)) => a == b,
             (Value::Struct(a), Value::Struct(b)) => a == b,

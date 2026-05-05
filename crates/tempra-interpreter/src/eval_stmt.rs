@@ -45,7 +45,7 @@ impl Interpreter {
                     cf => return Ok(cf),
                 };
                 let iter_values: Vec<Value> = match iterable {
-                    Value::Array(arr) => arr.as_ref().clone(),
+                    Value::Array(arr) => arr.borrow().clone(),
                     Value::Slice(slice) => {
                         let mut vals = Vec::new();
                         for i in 0..slice.len() {

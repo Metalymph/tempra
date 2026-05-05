@@ -184,9 +184,10 @@ fn test_os_args() {
     "#;
     let val = assert_runs_with_args(source, vec!["hello".to_string(), "world".to_string()]);
     if let Value::Array(arr) = val {
-        assert_eq!(arr.len(), 2);
-        assert_eq!(arr[0].to_string(), "hello");
-        assert_eq!(arr[1].to_string(), "world");
+        let b = arr.borrow();
+        assert_eq!(b.len(), 2);
+        assert_eq!(b[0].to_string(), "hello");
+        assert_eq!(b[1].to_string(), "world");
     } else {
         panic!("Expected array, got {:?}", val);
     }

@@ -491,6 +491,13 @@ pub struct HirInterface {
     pub visibility: Visibility,
     pub name: String,
     pub methods: Vec<HirInterfaceMethod>,
+    pub associated_types: Vec<HirInterfaceAssociatedType>,
+}
+
+#[derive(Debug, Clone)]
+pub struct HirInterfaceAssociatedType {
+    pub span: Span,
+    pub name: String,
 }
 
 #[derive(Debug, Clone)]

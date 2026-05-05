@@ -47,12 +47,20 @@ impl<'src> Lowerer<'src> {
     fn lower_interface(&self, item: &ast::InterfaceItem) -> HirInterface {
         HirInterface {
             span: item.span,
-            visibility: item.visibility,
+            visibility: item.visibility.into(),
             name: self.text(item.name.span),
             methods: item
                 .methods
                 .iter()
                 .map(|m| self.lower_interface_method(m))
+                .collect(),
+            associated_types: item
+                .associated_types
+                .iter()
+                .map(|at| HirInterfaceAssociatedType {
+                    span: at.span,
+                    name: self.text(at.name.span),
+                })
                 .collect(),
         }
     }

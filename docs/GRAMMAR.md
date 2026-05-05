@@ -145,10 +145,17 @@ enum Result {
 
 ```text
 Interface
-  = "interface" Identifier "{" InterfaceMethod* "}"
+  = "interface" Identifier "{" InterfaceItem* "}"
+
+InterfaceItem
+  = InterfaceMethod
+  | InterfaceAssociatedType
 
 InterfaceMethod
   = "fn" Identifier "(" ParamList? ")" ReturnType?
+
+InterfaceAssociatedType
+  = "type" Identifier
 ```
 
 Example:
@@ -156,6 +163,11 @@ Example:
 ```tempra
 interface Display {
     fn display(self) -> String
+}
+
+interface Iterator {
+    type Item
+    fn next(self) -> Option(Item)
 }
 ```
 

@@ -160,3 +160,25 @@ fn test_mixed_never_unification() {
     let err_msg = format!("{:?}", test_source(source).err().unwrap());
     assert!(!err_msg.contains("TypeError"));
 }
+
+#[test]
+fn test_slice_view_read() {
+    let source = r#"
+        var xs: Array(Int) = [1, 2, 3]
+        let ys: Slice(Int) = xs[0..2]
+        xs[0] = 9
+        expect(ys[0] == 9)
+    "#;
+    assert!(test_source(source).is_ok());
+}
+
+#[test]
+fn test_slice_view_write() {
+    let source = r#"
+        var xs: Array(Int) = [1, 2, 3]
+        var ys: Slice(Int) = xs[0..2]
+        ys[0] = 8
+        expect(xs[0] == 8)
+    "#;
+    assert!(test_source(source).is_ok());
+}

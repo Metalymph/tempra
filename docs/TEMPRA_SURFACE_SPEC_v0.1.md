@@ -217,6 +217,11 @@ Rules:
 - Methods can be on structs/enums or in `extend` blocks.
 - `Self` inside an interface represents the implementing type.
 - Constraints on `struct` or `enum` generic parameters are not supported in v1.
+- Associated types can be declared with `type Name` inside the interface.
+- Associated types can appear in method params and return types.
+- Associated type inference is interface-wide. Missing/conflicting associated type inference is an error.
+- Associated types are only visible inside interface requirements.
+- Projection syntax `T.Output` is not implemented yet.
 
 
 ---
@@ -466,8 +471,8 @@ Rules:
 - core collection forms are:
   - dynamic arrays: `Array(T)`
   - slices: `Slice(T)`
-- slices are **contiguous views** over arrays or other slices.
-- runtime representation of `Slice(T)` is implementation-defined, but it behaves as a view for read access.
+- slices are **contiguous views** over arrays or other slices. `Slice(T)` is a view, not a copy. Modifying a slice element modifies the underlying array.
+- runtime representation of `Slice(T)` is implementation-defined, but it behaves as a view for read and write access.
 - arrays and slices share identical read methods:
   - `.len()` → `Int`
   - `.is_empty()` → `Bool`

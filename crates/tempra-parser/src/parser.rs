@@ -425,63 +425,71 @@ impl<'src> Parser<'src> {
         self.expect(TokenKind::LeftBrace)?;
 
         let mut methods = Vec::new();
+        let mut associated_types = Vec::new();
+
         while !self.at(TokenKind::RightBrace) && !self.at(TokenKind::EndOfFile) {
-            let m_start = self.current().span.start;
-            self.expect(TokenKind::Fn)?;
-            let m_name = self.expect_identifier()?;
-
-            self.expect(TokenKind::LeftParen)?;
-            let mut parameters = Vec::new();
-            while !self.at(TokenKind::RightParen) && !self.at(TokenKind::EndOfFile) {
-                let p_start = self.current().span.start;
-                let is_inout = self.eat(TokenKind::Inout);
-                let p_name = self.expect_identifier()?;
-                let p_ty = if self.eat(TokenKind::Colon) {
-                    self.parse_type()?
-                } else if self.text(p_name.span) == "self" {
-                    TypeExpr::SelfType(p_name.span)
-                } else {
-                    TypeExpr::Named(NamedTypeExpr {
-                        span: p_name.span,
-                        name: p_name,
-                    })
-                };
-
-                parameters.push(Parameter {
-                    span: Span::new(p_start, p_ty.span().end),
-                    name: p_name,
-                    ty: p_ty,
-                    is_inout,
-                    kind: ParameterKind::Runtime,
+            if self.eat(TokenKind::Type) {
+                let t_start = self.tokens[self.position - 1].span.start;
+                let t_name = self.expect_identifier()?;
+                associated_types.push(InterfaceAssociatedType {
+                    span: Span::new(t_start, t_name.span.end),
+                    name: t_name,
                 });
-                if !self.eat(TokenKind::Comma) {
-                    break;
+                self.eat(TokenKind::Semicolon);
+            } else {
+                let m_start = self.current().span.start;
+                self.expect(TokenKind::Fn)?;
+                let m_name = self.expect_identifier()?;
+
+                self.expect(TokenKind::LeftParen)?;
+                let mut parameters = Vec::new();
+                while !self.at(TokenKind::RightParen) && !self.at(TokenKind::EndOfFile) {
+                    let p_start = self.current().span.start;
+                    let is_inout = self.eat(TokenKind::Inout);
+                    let p_name = self.expect_identifier()?;
+                    let p_ty = if self.eat(TokenKind::Colon) {
+                        self.parse_type()?
+                    } else if self.text(p_name.span) == "self" {
+                        TypeExpr::SelfType(p_name.span)
+                    } else {
+                        TypeExpr::Named(NamedTypeExpr {
+                            span: p_name.span,
+                            name: p_name,
+                        })
+                    };
+
+                    parameters.push(Parameter {
+                        span: Span::new(p_start, p_ty.span().end),
+                        name: p_name,
+                        ty: p_ty,
+                        is_inout,
+                        kind: ParameterKind::Runtime,
+                    });
+                    if !self.eat(TokenKind::Comma) {
+                        break;
+                    }
                 }
+                self.expect(TokenKind::RightParen)?;
+
+                let mut return_type = None;
+                if self.eat(TokenKind::Arrow) {
+                    return_type = Some(self.parse_type()?);
+                }
+
+                let m_end = return_type
+                    .as_ref()
+                    .map(|t| t.span().end)
+                    .unwrap_or(self.tokens[self.position - 1].span.end);
+
+                methods.push(InterfaceMethodRequirement {
+                    span: Span::new(m_start, m_end),
+                    name: m_name,
+                    parameters,
+                    return_type,
+                });
+
+                self.eat(TokenKind::Semicolon);
             }
-            self.expect(TokenKind::RightParen)?;
-
-            let mut return_type = None;
-            if self.eat(TokenKind::Arrow) {
-                return_type = Some(self.parse_type()?);
-            }
-
-            let m_end = return_type
-                .as_ref()
-                .map(|t| t.span().end)
-                .unwrap_or(self.tokens[self.position - 1].span.end);
-
-            methods.push(InterfaceMethodRequirement {
-                span: Span::new(m_start, m_end),
-                name: m_name,
-                parameters,
-                return_type,
-            });
-
-            // Semicolon is optional but allowed in interfaces (or maybe we don't allow it yet?)
-            // The spec didn't mention it, but usually requirements are terminated.
-            // Tempra blocks don't require semicolons for function declarations if they have a body.
-            // Here they don't. I'll allow an optional semicolon.
-            self.eat(TokenKind::Semicolon);
         }
 
         let end_token = self.expect(TokenKind::RightBrace)?;
@@ -490,6 +498,7 @@ impl<'src> Parser<'src> {
             visibility,
             name,
             methods,
+            associated_types,
         })
     }
 

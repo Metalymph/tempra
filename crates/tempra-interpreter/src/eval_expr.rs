@@ -349,18 +349,40 @@ impl Interpreter {
                             match obj {
                                 Value::Array(arr) => {
                                     if let Value::Int64(i) = idx_val {
-                                        let mut arr_clone = (*arr).clone();
                                         let idx = i as usize;
-                                        if idx >= arr_clone.len() {
+                                        let mut arr_mut = arr.borrow_mut();
+                                        if idx >= arr_mut.len() {
                                             return Ok(ControlFlow::Crash(format!(
                                                 "Index out of bounds: {} for length {}",
-                                                i, arr_clone.len()
+                                                i,
+                                                arr_mut.len()
                                             )));
                                         }
-                                        arr_clone[idx] = right.clone();
-                                        let new_val = Value::Array(std::rc::Rc::new(arr_clone));
-                                        if !env.update(&receiver_name, new_val) {
-                                            return Err("Failed to update array".into());
+                                        arr_mut[idx] = right.clone();
+                                        return Ok(ControlFlow::Value(right));
+                                    }
+                                    return Err("Index must be Int64".into());
+                                }
+                                Value::Slice(slice) => {
+                                    if let Value::Int64(i) = idx_val {
+                                        let idx = i as usize;
+                                        if idx >= slice.len() {
+                                            return Ok(ControlFlow::Crash(format!(
+                                                "Index out of bounds: {} for slice length {}",
+                                                i,
+                                                slice.len()
+                                            )));
+                                        }
+                                        match &slice.parent {
+                                            crate::value::SliceParent::Values(v) => {
+                                                v.borrow_mut()[slice.start + idx] =
+                                                    right.clone();
+                                            }
+                                            crate::value::SliceParent::Bytes(_) => {
+                                                return Err(
+                                                    "Cannot assign to byte slice element".into(),
+                                                );
+                                            }
                                         }
                                         return Ok(ControlFlow::Value(right));
                                     }
@@ -416,7 +438,7 @@ impl Interpreter {
 
                                         // RHS can be Array or Slice
                                         let rhs_values = match right {
-                                            Value::Array(ref a) => (**a).clone(),
+                                            Value::Array(ref a) => a.borrow().clone(),
                                             Value::Slice(ref s) => s.to_vec(),
                                             _ => {
                                                 return Err(
@@ -435,23 +457,80 @@ impl Interpreter {
                                             )));
                                         }
 
-                                        let mut arr_clone = (*arr).clone();
-                                        if end > arr_clone.len() {
+                                        let mut arr_mut = arr.borrow_mut();
+                                        if end > arr_mut.len() {
                                             return Ok(ControlFlow::Crash(format!(
                                                 "Slice bounds out of range: [{}..{}] for length {}",
-                                                start, end, arr_clone.len()
+                                                start, end, arr_mut.len()
                                             )));
                                         }
                                         for (j, val) in rhs_values.into_iter().enumerate() {
-                                            arr_clone[start + j] = val;
+                                            arr_mut[start + j] = val;
                                         }
-                                        let new_val = Value::Array(std::rc::Rc::new(arr_clone));
-                                        if !env.update(&receiver_name, new_val) {
-                                            return Err("Failed to update array".into());
-                                        }
-                                        return Ok(ControlFlow::Value(Value::Unit));
+                                        return Ok(ControlFlow::Value(right));
                                     }
-                                    return Err("Slice bounds must be integers".into());
+                                    return Err("Slice bounds must be Int64".into());
+                                }
+                                Value::Slice(slice) => {
+                                    if let (Value::Int64(start_i), Value::Int64(end_i)) =
+                                        (start_val, end_val)
+                                    {
+                                        let start = start_i as usize;
+                                        let end = end_i as usize;
+                                        if start > end {
+                                            return Err(format!(
+                                                "Slice start > end: {} > {}",
+                                                start, end
+                                            ));
+                                        }
+                                        let sub_slice_len = end - start;
+                                        if end > slice.len() {
+                                            return Ok(ControlFlow::Crash(format!(
+                                                "Slice bounds out of range: [{}..{}] for slice length {}",
+                                                start,
+                                                end,
+                                                slice.len()
+                                            )));
+                                        }
+
+                                        // RHS can be Array or Slice
+                                        let rhs_values = match right {
+                                            Value::Array(ref a) => a.borrow().clone(),
+                                            Value::Slice(ref s) => s.to_vec(),
+                                            _ => {
+                                                return Err(
+                                                    "Slice assignment RHS must be array or slice"
+                                                        .into(),
+                                                );
+                                            }
+                                        };
+
+                                        if rhs_values.len() != sub_slice_len {
+                                            return Ok(ControlFlow::Crash(format!(
+                                                "slice assignment length mismatch: expected {}, got {}",
+                                                sub_slice_len,
+                                                rhs_values.len()
+                                            )));
+                                        }
+
+                                        match &slice.parent {
+                                            crate::value::SliceParent::Values(v) => {
+                                                let mut v_mut = v.borrow_mut();
+                                                for (j, val) in
+                                                    rhs_values.into_iter().enumerate()
+                                                {
+                                                    v_mut[slice.start + start + j] = val;
+                                                }
+                                            }
+                                            crate::value::SliceParent::Bytes(_) => {
+                                                return Err(
+                                                    "Cannot assign to byte slice".into()
+                                                );
+                                            }
+                                        }
+                                        return Ok(ControlFlow::Value(right));
+                                    }
+                                    return Err("Slice bounds must be Int64".into());
                                 }
                                 Value::Struct(_) | Value::Enum(_) => {
                                     // User-defined set_slice hook
@@ -866,13 +945,13 @@ impl Interpreter {
                                 if !call.args.is_empty() {
                                     return Err("Method 'len' expects 0 arguments".into());
                                 }
-                                return Ok(ControlFlow::Value(Value::Int64(arr.len() as i64)));
+                                return Ok(ControlFlow::Value(Value::Int64(arr.borrow().len() as i64)));
                             }
                             if member.field == "is_empty" {
                                 if !call.args.is_empty() {
                                     return Err("Method 'is_empty' expects 0 arguments".into());
                                 }
-                                return Ok(ControlFlow::Value(Value::Bool(arr.is_empty())));
+                                return Ok(ControlFlow::Value(Value::Bool(arr.borrow().is_empty())));
                             }
                             return Err(format!("Unknown method '{}' on Array", member.field));
                         }
@@ -1304,7 +1383,7 @@ impl Interpreter {
                     Value::Command(c) => match member.field.as_str() {
                         "program" => Ok(ControlFlow::Value(Value::String(c.program.clone()))),
                         "args" => Ok(ControlFlow::Value(Value::Array(std::rc::Rc::new(
-                            c.args.iter().map(|s| Value::String(s.clone())).collect(),
+                            std::cell::RefCell::new(c.args.iter().map(|s| Value::String(s.clone())).collect()),
                         )))),
                         _ => Err(format!("Field {} not found on Command", member.field)),
                     },
@@ -1316,26 +1395,29 @@ impl Interpreter {
                     ControlFlow::Value(v) => v,
                     cf => return Ok(cf),
                 };
-                let idx = match self.eval_expression(&index.index, env)? {
+                let idx_val = match self.eval_expression(&index.index, env)? {
                     ControlFlow::Value(v) => v,
                     cf => return Ok(cf),
                 };
-                match (obj, idx) {
-                    (Value::Array(arr), Value::Int64(i)) => arr
-                        .get(i as usize)
-                        .cloned()
-                        .map(ControlFlow::Value)
-                        .ok_or_else(|| "Index out of bounds".into()),
+                match (&obj, &idx_val) {
+                    (Value::Array(arr), Value::Int64(i)) => {
+                        let arr_ref = arr.borrow();
+                        arr_ref
+                            .get(*i as usize)
+                            .cloned()
+                            .ok_or_else(|| format!("Index out of bounds: {}", i))
+                            .map(ControlFlow::Value)
+                    }
                     (Value::Slice(slice), Value::Int64(i)) => slice
-                        .get(i as usize)
-                        .map(ControlFlow::Value)
-                        .ok_or_else(|| "Index out of bounds".into()),
+                        .get(*i as usize)
+                        .ok_or_else(|| format!("Index out of bounds: {}", i))
+                        .map(ControlFlow::Value),
                     (Value::Array(_), _) | (Value::Slice(_), _) => {
                         Err("Index must be Int64".into())
                     }
-                    (obj, idx) => {
+                    (obj, _idx) => {
                         // Phase 7: User-defined get hook
-                        self.eval_method_call(obj, "get", vec![idx], env)
+                        self.eval_method_call(obj.clone(), "get", vec![idx_val.clone()], env)
                     }
                 }
             }
@@ -1353,9 +1435,10 @@ impl Interpreter {
                     cf => return Ok(cf),
                 };
 
-                let (parent, parent_len, start_offset) = match &obj {
+                let (parent, parent_len, start_offset) = match obj {
                     Value::Array(arr) => {
-                        (crate::value::SliceParent::Values(arr.clone()), arr.len(), 0)
+                        let len = arr.borrow().len();
+                        (crate::value::SliceParent::Values(arr.clone()), len, 0)
                     }
                     Value::Slice(s) => (s.parent.clone(), s.len(), s.start),
                     _ => {
@@ -1446,7 +1529,9 @@ impl Interpreter {
                         cf => return Ok(cf),
                     }
                 }
-                Ok(ControlFlow::Value(Value::Array(std::rc::Rc::new(vals))))
+                Ok(ControlFlow::Value(Value::Array(std::rc::Rc::new(
+                    std::cell::RefCell::new(vals),
+                ))))
             }
             HirExpression::StructLiteral(s) => {
                 let mut fields = HashMap::new();
@@ -1488,7 +1573,7 @@ impl Interpreter {
                     cf => return Ok(cf),
                 };
                 let iter_values: Vec<Value> = match iterable {
-                    Value::Array(arr) => arr.as_ref().clone(),
+                    Value::Array(arr) => arr.borrow().clone(),
                     Value::Slice(slice) => {
                         let mut vals = Vec::new();
                         for i in 0..slice.len() {
@@ -2040,7 +2125,7 @@ impl Interpreter {
                                 }
                                 Ok(ControlFlow::Value(Value::Result(Box::new(
                                     crate::value::ValueResult::Ok(Value::Array(std::rc::Rc::new(
-                                        names,
+                                        std::cell::RefCell::new(names),
                                     ))),
                                 ))))
                             }
@@ -2141,7 +2226,9 @@ impl Interpreter {
         match name {
             "args" => {
                 let val_args = self.args.iter().map(|s| Value::String(s.clone())).collect();
-                Ok(ControlFlow::Value(Value::Array(std::rc::Rc::new(val_args))))
+                Ok(ControlFlow::Value(Value::Array(std::rc::Rc::new(
+                    std::cell::RefCell::new(val_args),
+                ))))
             }
             "cwd" => match std::env::current_dir() {
                 Ok(path) => {
@@ -2244,7 +2331,7 @@ impl Interpreter {
                         .split(p)
                         .map(|part| Value::String(part.to_string()))
                         .collect();
-                    Ok(Value::Array(std::rc::Rc::new(parts)))
+                    Ok(Value::Array(std::rc::Rc::new(std::cell::RefCell::new(parts))))
                 } else {
                     Err("split expects String".into())
                 }

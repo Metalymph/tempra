@@ -3641,9 +3641,10 @@ fn satisfies_interface(ctx: &mut TypeContext, ty: &Type, interface_name: &str) -
 
     use crate::types::substitute_self;
 
+    let mut mappings = HashMap::new();
     let mut satisfied = true;
     for (method_name, req) in &interface.methods {
-        let provided_sig = ctx.lookup_method_signature(ty, method_name);
+        let provided_sig = ctx.lookup_direct_method_signature(ty, method_name);
         match provided_sig {
             Some(sig) => {
                 // Substitute Self in requirement with the concrete type
@@ -3656,15 +3657,19 @@ fn satisfies_interface(ctx: &mut TypeContext, ty: &Type, interface_name: &str) -
                     method_match = false;
                 } else {
                     for (p_prov, p_req) in sig.params.iter().zip(req_params.iter()) {
-                        if !crate::types::types_compatible(p_req, &p_prov.ty) {
+                        if let Err(e) = unify_associated(p_req, &p_prov.ty, interface_name, &mut mappings) {
+                            ctx.error(e, tempra_span::Span::new(0, 0));
                             method_match = false;
                             break;
                         }
                     }
                 }
 
-                if method_match && !crate::types::types_compatible(&req_ret, &sig.return_type) {
-                    method_match = false;
+                if method_match {
+                    if let Err(e) = unify_associated(&req_ret, &sig.return_type, interface_name, &mut mappings) {
+                        ctx.error(e, tempra_span::Span::new(0, 0));
+                        method_match = false;
+                    }
                 }
 
                 if !method_match {
@@ -3685,5 +3690,128 @@ fn satisfies_interface(ctx: &mut TypeContext, ty: &Type, interface_name: &str) -
         }
     }
 
+    if satisfied {
+        // Ensure all associated types were inferred
+        for at_name in &interface.associated_types {
+            if !mappings.contains_key(at_name) {
+                ctx.error(
+                    format!("could not infer associated type '{}'", at_name),
+                    tempra_span::Span::new(0, 0),
+                );
+                satisfied = false;
+            }
+        }
+    }
+
     satisfied
+}
+
+pub fn satisfies_interface_no_errors(ctx: &TypeContext, ty: &Type, interface_name: &str) -> bool {
+    let interface = match ctx.interfaces.get(interface_name) {
+        Some(i) => i.clone(),
+        None => return false,
+    };
+
+    use crate::types::substitute_self;
+    let mut mappings = HashMap::new();
+    let mut satisfied = true;
+    for (method_name, req) in &interface.methods {
+        let provided_sig = ctx.lookup_direct_method_signature(ty, method_name);
+        match provided_sig {
+            Some(sig) => {
+                let req_params: Vec<Type> =
+                    req.params.iter().map(|p| substitute_self(p, ty)).collect();
+                let req_ret = substitute_self(&req.return_type, ty);
+
+                let mut method_match = true;
+                if sig.params.len() != req_params.len() {
+                    method_match = false;
+                } else {
+                    for (p_prov, p_req) in sig.params.iter().zip(req_params.iter()) {
+                        if unify_associated(p_req, &p_prov.ty, interface_name, &mut mappings).is_err() {
+                            method_match = false;
+                            break;
+                        }
+                    }
+                }
+                if method_match && unify_associated(&req_ret, &sig.return_type, interface_name, &mut mappings).is_err() {
+                    method_match = false;
+                }
+                if !method_match {
+                    satisfied = false;
+                    break;
+                }
+            }
+            None => {
+                satisfied = false;
+                break;
+            }
+        }
+    }
+    if satisfied {
+        for at_name in &interface.associated_types {
+            if !mappings.contains_key(at_name) {
+                satisfied = false;
+                break;
+            }
+        }
+    }
+    satisfied
+}
+
+fn unify_associated(
+    req: &Type,
+    actual: &Type,
+    interface_name: &str,
+    mappings: &mut HashMap<String, Type>,
+) -> Result<(), String> {
+    match req {
+        Type::Associated(itf, name) if itf == interface_name => {
+            if let Some(existing) = mappings.get(name) {
+                if existing == actual {
+                    return Ok(());
+                } else {
+                    return Err(format!("conflicting associated type inference for {}", name));
+                }
+            }
+            mappings.insert(name.clone(), actual.clone());
+            Ok(())
+        }
+        Type::Array(inner_req) => {
+            if let Type::Array(inner_act) = actual {
+                unify_associated(inner_req, inner_act, interface_name, mappings)
+            } else {
+                Err("type mismatch".into())
+            }
+        }
+        Type::Slice(inner_req) => {
+            if let Type::Slice(inner_act) = actual {
+                unify_associated(inner_req, inner_act, interface_name, mappings)
+            } else {
+                Err("type mismatch".into())
+            }
+        }
+        Type::Option(inner_req) => {
+            if let Type::Option(inner_act) = actual {
+                unify_associated(inner_req, inner_act, interface_name, mappings)
+            } else {
+                Err("type mismatch".into())
+            }
+        }
+        Type::Result(ok_req, err_req) => {
+            if let Type::Result(ok_act, err_act) = actual {
+                unify_associated(ok_req, ok_act, interface_name, mappings)?;
+                unify_associated(err_req, err_act, interface_name, mappings)
+            } else {
+                Err("type mismatch".into())
+            }
+        }
+        _ => {
+            if crate::types::types_compatible(req, actual) {
+                Ok(())
+            } else {
+                Err("type mismatch".into())
+            }
+        }
+    }
 }

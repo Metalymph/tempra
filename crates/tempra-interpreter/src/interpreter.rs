@@ -108,6 +108,16 @@ impl Interpreter {
         type_args: Option<Vec<Value>>,
         args: Vec<Value>,
     ) -> Result<ControlFlow, String> {
+        self.call_function_with_env(func, type_args, args)
+            .map(|(cf, _)| cf)
+    }
+
+    pub fn call_function_with_env(
+        &mut self,
+        func: &HirFunction,
+        type_args: Option<Vec<Value>>,
+        args: Vec<Value>,
+    ) -> Result<(ControlFlow, RuntimeEnv), String> {
         let mut env = RuntimeEnv::new();
 
         // Bind generic parameters
@@ -130,9 +140,12 @@ impl Interpreter {
             let flow = self.eval_statement(stmt, &mut env)?;
             match flow {
                 ControlFlow::Value(v) => result_val = v,
-                ControlFlow::Return(v) => return Ok(ControlFlow::Return(v)),
-                ControlFlow::Exit(code) => return Ok(ControlFlow::Exit(code)),
-                ControlFlow::Crash(msg) => return Ok(ControlFlow::Crash(msg)),
+                ControlFlow::Return(v) => {
+                    result_val = v;
+                    break;
+                }
+                ControlFlow::Exit(code) => return Ok((ControlFlow::Exit(code), env)),
+                ControlFlow::Crash(msg) => return Ok((ControlFlow::Crash(msg), env)),
                 ControlFlow::Break | ControlFlow::Continue => {
                     return Err("Break/Continue outside of loop".into());
                 }
@@ -141,13 +154,14 @@ impl Interpreter {
 
         if func.is_fallible {
             // Implicit Ok(()) for fallible functions returning Unit
-            // We assume success here if it's Unit success type as per prompt
-            // v0 check: if success type is Unit, wrap in Ok
-            Ok(ControlFlow::Value(Value::Result(Box::new(
-                crate::value::ValueResult::Ok(Value::Unit),
-            ))))
+            Ok((
+                ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(
+                    Value::Unit,
+                )))),
+                env,
+            ))
         } else {
-            Ok(ControlFlow::Value(result_val))
+            Ok((ControlFlow::Value(result_val), env))
         }
     }
 
@@ -176,7 +190,10 @@ impl Interpreter {
             let flow = self.eval_statement(stmt, &mut env)?;
             match flow {
                 ControlFlow::Value(v) => result_val = v,
-                ControlFlow::Return(v) => return Ok(ControlFlow::Return(v)),
+                ControlFlow::Return(v) => {
+                    result_val = v;
+                    break;
+                }
                 ControlFlow::Exit(code) => return Ok(ControlFlow::Exit(code)),
                 ControlFlow::Crash(msg) => return Ok(ControlFlow::Crash(msg)),
                 ControlFlow::Break | ControlFlow::Continue => {

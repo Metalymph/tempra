@@ -300,6 +300,182 @@ impl Interpreter {
                 }
             }
             HirExpression::Binary(binary) => {
+                // Phase 7: Special handling for Assignment to avoid evaluating LHS as an expression
+                // (which would incorrectly trigger 'get' hooks instead of 'set' hooks)
+                if binary.op == HirBinaryOp::Assign {
+                    let right = match self.eval_expression(&binary.right, env)? {
+                        ControlFlow::Value(v) => v,
+                        cf => return Ok(cf),
+                    };
+
+                    match &*binary.left {
+                        HirExpression::Name(_, name) => {
+                            if !env.update(name, right.clone()) {
+                                env.insert(name.clone(), right.clone());
+                            }
+                            return Ok(ControlFlow::Value(right));
+                        }
+                        HirExpression::Member(m) => {
+                            // Target: m.object . m.field
+                            if let HirExpression::Name(_, obj_name) = &*m.object {
+                                let mut obj_val = env
+                                    .get(obj_name)
+                                    .ok_or_else(|| format!("Variable {} not found", obj_name))?;
+                                if let Value::Struct(ref mut s) = obj_val {
+                                    s.fields.insert(m.field.clone(), right.clone());
+                                    if !env.update(obj_name, obj_val.clone()) {
+                                        env.insert(obj_name.clone(), obj_val);
+                                    }
+                                    return Ok(ControlFlow::Value(right));
+                                } else {
+                                    return Err("Member assignment target is not a struct".into());
+                                }
+                            } else {
+                                return Err("Complex member assignment not yet supported".into());
+                            }
+                        }
+                        // Phase 7: Index assignment xs[i] = v
+                        HirExpression::Index(idx) => {
+                            let receiver_name = Self::extract_receiver_name(&idx.object)
+                                .ok_or("Invalid index assignment target")?;
+                            let obj = env
+                                .get(&receiver_name)
+                                .ok_or_else(|| format!("Variable '{}' not found", receiver_name))?;
+                            let idx_val = match self.eval_expression(&idx.index, env)? {
+                                ControlFlow::Value(v) => v,
+                                cf => return Ok(cf),
+                            };
+
+                            match obj {
+                                Value::Array(arr) => {
+                                    if let Value::Int64(i) = idx_val {
+                                        let mut arr_clone = (*arr).clone();
+                                        let idx = i as usize;
+                                        if idx >= arr_clone.len() {
+                                            return Ok(ControlFlow::Crash(format!(
+                                                "Index out of bounds: {} for length {}",
+                                                i, arr_clone.len()
+                                            )));
+                                        }
+                                        arr_clone[idx] = right.clone();
+                                        let new_val = Value::Array(std::rc::Rc::new(arr_clone));
+                                        if !env.update(&receiver_name, new_val) {
+                                            return Err("Failed to update array".into());
+                                        }
+                                        return Ok(ControlFlow::Value(right));
+                                    }
+                                    return Err("Index must be Int64".into());
+                                }
+                                Value::Struct(_) | Value::Enum(_) => {
+                                    // User-defined set hook
+                                    return self.eval_method_call_inout(
+                                        &receiver_name,
+                                        "set",
+                                        vec![idx_val, right],
+                                        env,
+                                    );
+                                }
+                                _ => {
+                                    return Err(format!(
+                                        "Cannot assign to index of type {}",
+                                        obj.type_name()
+                                    ));
+                                }
+                            }
+                        }
+                        // Phase 7: Slice assignment xs[a..b] = values
+                        HirExpression::Slice(slc) => {
+                            let receiver_name = Self::extract_receiver_name(&slc.object)
+                                .ok_or("Invalid slice assignment target")?;
+                            let obj = env
+                                .get(&receiver_name)
+                                .ok_or_else(|| format!("Variable '{}' not found", receiver_name))?;
+                            let start_val = match self.eval_expression(&slc.start, env)? {
+                                ControlFlow::Value(v) => v,
+                                cf => return Ok(cf),
+                            };
+                            let end_val = match self.eval_expression(&slc.end, env)? {
+                                ControlFlow::Value(v) => v,
+                                cf => return Ok(cf),
+                            };
+
+                            match obj {
+                                Value::Array(arr) => {
+                                    if let (Value::Int64(start_i), Value::Int64(end_i)) =
+                                        (start_val, end_val)
+                                    {
+                                        let start = start_i as usize;
+                                        let end = end_i as usize;
+                                        if start > end {
+                                            return Err(format!(
+                                                "Slice start > end: {} > {}",
+                                                start, end
+                                            ));
+                                        }
+                                        let slice_len = end - start;
+
+                                        // RHS can be Array or Slice
+                                        let rhs_values = match right {
+                                            Value::Array(ref a) => (**a).clone(),
+                                            Value::Slice(ref s) => s.to_vec(),
+                                            _ => {
+                                                return Err(
+                                                    "Slice assignment RHS must be array or slice"
+                                                        .into(),
+                                                );
+                                            }
+                                        };
+
+                                        // Runtime length check
+                                        if rhs_values.len() != slice_len {
+                                            return Ok(ControlFlow::Crash(format!(
+                                                "slice assignment length mismatch: expected {}, got {}",
+                                                slice_len,
+                                                rhs_values.len()
+                                            )));
+                                        }
+
+                                        let mut arr_clone = (*arr).clone();
+                                        if end > arr_clone.len() {
+                                            return Ok(ControlFlow::Crash(format!(
+                                                "Slice bounds out of range: [{}..{}] for length {}",
+                                                start, end, arr_clone.len()
+                                            )));
+                                        }
+                                        for (j, val) in rhs_values.into_iter().enumerate() {
+                                            arr_clone[start + j] = val;
+                                        }
+                                        let new_val = Value::Array(std::rc::Rc::new(arr_clone));
+                                        if !env.update(&receiver_name, new_val) {
+                                            return Err("Failed to update array".into());
+                                        }
+                                        return Ok(ControlFlow::Value(Value::Unit));
+                                    }
+                                    return Err("Slice bounds must be integers".into());
+                                }
+                                Value::Struct(_) | Value::Enum(_) => {
+                                    // User-defined set_slice hook
+                                    return self.eval_method_call_inout(
+                                        &receiver_name,
+                                        "set_slice",
+                                        vec![start_val, end_val, right],
+                                        env,
+                                    );
+                                }
+                                _ => {
+                                    return Err(format!(
+                                        "Cannot assign to slice of type {}",
+                                        obj.type_name()
+                                    ));
+                                }
+                            }
+                        }
+                        _ => {
+                            return Err("Invalid assignment target".into());
+                        }
+                    }
+                }
+
                 let mut v_left = None;
 
                 // Special handling for short-circuiting logical operators and pipe
@@ -397,49 +573,6 @@ impl Interpreter {
                         cf => return Ok(cf),
                     }
                 };
-
-                // Assignment
-                if binary.op == HirBinaryOp::Assign {
-                    let right = match self.eval_expression(&binary.right, env)? {
-                        ControlFlow::Value(v) => v,
-                        cf => return Ok(cf),
-                    };
-
-                    match &*binary.left {
-                        HirExpression::Name(_, name) => {
-                            if !env.update(name, right.clone()) {
-                                // Fallback for top-level if not found?
-                                // Actually, it should be there because of register_items or previous defs
-                                env.insert(name.clone(), right.clone());
-                            }
-                            return Ok(ControlFlow::Value(right));
-                        }
-                        HirExpression::Member(m) => {
-                            // Target: m.object . m.field
-                            // We only support first-level struct member assignment for now
-                            if let HirExpression::Name(_, obj_name) = &*m.object {
-                                let mut obj_val = env
-                                    .get(obj_name)
-                                    .ok_or_else(|| format!("Variable {} not found", obj_name))?;
-                                if let Value::Struct(ref mut s) = obj_val {
-                                    s.fields.insert(m.field.clone(), right.clone());
-                                    // Re-insert using update to ensure it goes back to the correct scope
-                                    if !env.update(obj_name, obj_val.clone()) {
-                                        env.insert(obj_name.clone(), obj_val);
-                                    }
-                                    return Ok(ControlFlow::Value(right));
-                                } else {
-                                    return Err("Member assignment target is not a struct".into());
-                                }
-                            } else {
-                                return Err("Complex member assignment not yet supported".into());
-                            }
-                        }
-                        _ => {
-                            return Err("Invalid assignment target".into());
-                        }
-                    }
-                }
 
                 let right = match self.eval_expression(&binary.right, env)? {
                     ControlFlow::Value(v) => v,
@@ -1188,7 +1321,10 @@ impl Interpreter {
                     (Value::Array(_), _) | (Value::Slice(_), _) => {
                         Err("Index must be Int64".into())
                     }
-                    _ => Err("Index access requires an array or slice".into()),
+                    (obj, idx) => {
+                        // Phase 7: User-defined get hook
+                        self.eval_method_call(obj, "get", vec![idx], env)
+                    }
                 }
             }
             HirExpression::Slice(slice) => {
@@ -1210,7 +1346,10 @@ impl Interpreter {
                         (crate::value::SliceParent::Values(arr.clone()), arr.len(), 0)
                     }
                     Value::Slice(s) => (s.parent.clone(), s.len(), s.start),
-                    _ => return Err("Slice requires an array or slice".into()),
+                    _ => {
+                        // Phase 7: User-defined slice hook
+                        return self.eval_method_call(obj, "slice", vec![start_val, end_val], env);
+                    }
                 };
 
                 if let (Value::Int64(start), Value::Int64(end)) = (start_val, end_val) {
@@ -2219,6 +2358,72 @@ impl Interpreter {
                 _ => Err("'replace' expects exactly 2 arguments".into()),
             },
             _ => Err(format!("Unknown Regex method '{}'", name)),
+        }
+    }
+
+    /// Phase 7: Dispatch a read-only method call on a receiver value.
+    /// Used for user-defined `get` and `slice` hooks.
+    fn eval_method_call(
+        &mut self,
+        receiver: Value,
+        method_name: &str,
+        args: Vec<Value>,
+        _env: &mut RuntimeEnv,
+    ) -> Result<ControlFlow, String> {
+        let type_name = match &receiver {
+            Value::Struct(s) => s.name.clone(),
+            Value::Enum(e) => e.enum_name.clone(),
+            _ => return Err(format!("type {} has no method '{}'", receiver.type_name(), method_name)),
+        };
+        let mangled = format!("{}.{}", type_name, method_name);
+        if let Some(func) = self.functions.get(&mangled).cloned() {
+            let mut call_args = vec![receiver];
+            call_args.extend(args);
+            self.call_function(&func, None, call_args)
+        } else {
+            Err(format!("no method '{}' found on type '{}'", method_name, type_name))
+        }
+    }
+
+    /// Phase 7: Dispatch a mutating method call on a receiver identified by variable name.
+    /// Used for user-defined `set` and `set_slice` hooks.
+    /// After the method executes, the (potentially mutated) receiver is written back to env.
+    fn eval_method_call_inout(
+        &mut self,
+        receiver_name: &str,
+        method_name: &str,
+        args: Vec<Value>,
+        env: &mut RuntimeEnv,
+    ) -> Result<ControlFlow, String> {
+        let receiver = env
+            .get(receiver_name)
+            .ok_or_else(|| format!("Variable '{}' not found", receiver_name))?;
+        let type_name = match &receiver {
+            Value::Struct(s) => s.name.clone(),
+            Value::Enum(e) => e.enum_name.clone(),
+            _ => return Err(format!("type {} has no method '{}'", receiver.type_name(), method_name)),
+        };
+        let mangled = format!("{}.{}", type_name, method_name);
+        if let Some(func) = self.functions.get(&mangled).cloned() {
+            let mut call_args = vec![receiver];
+            call_args.extend(args);
+            let (result, call_env) = self.call_function_with_env(&func, None, call_args)?;
+            // Writeback: extract the mutated 'self' and update it in the caller's environment
+            if let Some(mutated_self) = call_env.get("self") {
+                env.update(receiver_name, mutated_self);
+            }
+            Ok(result)
+        } else {
+            Err(format!("no method '{}' found on type '{}'", method_name, type_name))
+        }
+    }
+
+    /// Phase 7: Extract the root variable name from an assignment target expression.
+    fn extract_receiver_name(expr: &HirExpression) -> Option<String> {
+        match expr {
+            HirExpression::Name(_, name) => Some(name.clone()),
+            HirExpression::Member(m) => Self::extract_receiver_name(&m.object),
+            _ => None,
         }
     }
 }

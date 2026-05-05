@@ -564,6 +564,10 @@ fn check_unary(ctx: &mut TypeContext, u: &mut HirUnary) -> Type {
 }
 
 fn check_binary(ctx: &mut TypeContext, b: &mut HirBinary, _expected: Option<&Type>) -> Type {
+    if b.op == HirBinaryOp::Assign {
+        return check_assignment(ctx, b);
+    }
+
     let left = check_expression(ctx, &mut b.left, None);
     let right = check_expression(ctx, &mut b.right, None);
 
@@ -573,6 +577,7 @@ fn check_binary(ctx: &mut TypeContext, b: &mut HirBinary, _expected: Option<&Typ
     }
 
     match b.op {
+        HirBinaryOp::Assign => unreachable!(),
         HirBinaryOp::Add | HirBinaryOp::Sub | HirBinaryOp::Mul | HirBinaryOp::Div => {
             if b.op == HirBinaryOp::Add && left == Type::String && right == Type::String {
                 return Type::String;
@@ -661,47 +666,6 @@ fn check_binary(ctx: &mut TypeContext, b: &mut HirBinary, _expected: Option<&Typ
             }
             Type::Bool
         }
-        HirBinaryOp::Assign => {
-            if let HirExpression::Member(m) = &mut *b.left {
-                let obj_ty = check_expression(ctx, &mut m.object, None);
-                if let Type::Struct(name, _) = &obj_ty {
-                    if let Some(info) = ctx.structs.get(name) {
-                        if let Some(field_info) = info.fields.get(&m.field) {
-                            if !field_info.is_mutable {
-                                ctx.error(
-                                    format!(
-                                        "Cannot assign to immutable field '{}' in struct '{}'",
-                                        m.field, name
-                                    ),
-                                    b.span,
-                                );
-                            }
-                        }
-                    }
-                }
-            } else if let HirExpression::Name(span, name) = &*b.left {
-                if let Some(info) = ctx.scopes.lookup(name) {
-                    if !info.is_mutable {
-                        if info.is_capture {
-                            ctx.error(format!("cannot assign to ref capture '{}'", name), *span);
-                        } else {
-                            ctx.error(
-                                format!("cannot assign to immutable value '{}'", name),
-                                *span,
-                            );
-                        }
-                    }
-                }
-            } else {
-                // For now only Name and Member are assignable
-                ctx.error("invalid assignment target".to_string(), b.span);
-            }
-
-            if !types_compatible(&left, &right) {
-                ctx.error(format!("Cannot assign {} to {}", right, left), b.span);
-            }
-            Type::Unit
-        }
         HirBinaryOp::Pipe => {
             if left == Type::Command && right == Type::Command {
                 return Type::CommandResult;
@@ -717,6 +681,181 @@ fn check_binary(ctx: &mut TypeContext, b: &mut HirBinary, _expected: Option<&Typ
             Type::Error
         }
     }
+}
+fn check_assignment(ctx: &mut TypeContext, b: &mut HirBinary) -> Type {
+    let right = check_expression(ctx, &mut b.right, None);
+    if right == Type::Error {
+        return Type::Error;
+    }
+
+    enum TargetKind {
+        Name(Span, String),
+        Member,
+        Index,
+        Slice,
+        Other,
+    }
+    let kind = match &*b.left {
+        HirExpression::Name(span, name) => TargetKind::Name(*span, name.clone()),
+        HirExpression::Member(_) => TargetKind::Member,
+        HirExpression::Index(_) => TargetKind::Index,
+        HirExpression::Slice(_) => TargetKind::Slice,
+        _ => TargetKind::Other,
+    };
+
+    match kind {
+        TargetKind::Name(span, name) => {
+            let info = ctx.scopes.lookup(&name).cloned();
+            if let Some(info) = info {
+                if !info.is_mutable {
+                    if info.is_capture {
+                        ctx.error(format!("cannot assign to ref capture '{}'", name), span);
+                    } else {
+                        ctx.error(format!("cannot assign to immutable value '{}'", name), span);
+                    }
+                }
+                if !types_compatible(&info.ty, &right) {
+                    ctx.error(format!("Cannot assign {} to {}", right, info.ty), b.span);
+                }
+            } else {
+                ctx.error(format!("undefined variable '{}'", name), span);
+            }
+        }
+        TargetKind::Member => {
+            let left_ty = check_expression(ctx, &mut b.left, None);
+            if let HirExpression::Member(m) = &mut *b.left {
+                // Phase 7: Check field mutability.
+                let obj_ty = check_expression(ctx, &mut m.object, None);
+                if let Type::Struct(name, _) = obj_ty {
+                    if let Some(info) = ctx.structs.get(name.as_str()) {
+                        if let Some(field_info) = info.fields.get(&m.field) {
+                            if !field_info.is_mutable {
+                                ctx.error(
+                                    format!("cannot mutate immutable field '{}' of struct '{}'", m.field, name),
+                                    b.span,
+                                );
+                            }
+                        }
+                    }
+                }
+                // NOTE: Tempra allows mutating 'var' fields even on 'let' instances.
+            }
+            if left_ty != Type::Error && !types_compatible(&left_ty, &right) {
+                ctx.error(format!("Cannot assign {} to {}", right, left_ty), b.span);
+            }
+        }
+        TargetKind::Index => {
+            if let HirExpression::Index(idx) = &mut *b.left {
+                let object_ty = check_expression(ctx, &mut idx.object, None);
+                let index_ty = check_expression(ctx, &mut idx.index, None);
+                check_receiver_mutable(ctx, &idx.object, b.span);
+
+                if object_ty == Type::String {
+                    ctx.error("string indexing is intentionally unsupported".to_string(), b.span);
+                    return Type::Error;
+                }
+
+                if matches!(&*idx.object, HirExpression::Index(_) | HirExpression::Slice(_)) {
+                    ctx.error("nested subscript assignment is not supported in v1".to_string(), b.span);
+                }
+
+                if let Type::Array(elem) | Type::Slice(elem) = &object_ty {
+                    if !index_ty.is_integer() && index_ty != Type::Error {
+                        ctx.error(format!("index must be integer, found {}", index_ty), idx.index.span());
+                    }
+                    if !types_compatible(elem, &right) {
+                        ctx.error(format!("Cannot assign {} to element of type {}", right, elem), b.span);
+                    }
+                    return Type::Unit;
+                }
+
+                if let Some(sig) = ctx.lookup_method_signature(&object_ty, "set") {
+                    if sig.params.len() != 3 {
+                        ctx.error("'set' hook must take exactly 2 arguments (index, value)".to_string(), b.span);
+                        return Type::Error;
+                    }
+                    if !sig.params[0].is_inout {
+                        ctx.error("'set' hook receiver must be 'inout self'".to_string(), b.span);
+                    }
+                    if sig.return_type != Type::Unit && sig.return_type != Type::Error {
+                        ctx.error("'set' hook must return Unit".to_string(), b.span);
+                    }
+                    if !types_compatible(&sig.params[1].ty, &index_ty) {
+                        ctx.error(format!("Index type mismatch: expected {}, found {}", sig.params[1].ty, index_ty), idx.index.span());
+                    }
+                    if !types_compatible(&sig.params[2].ty, &right) {
+                        ctx.error(format!("Cannot assign {} to {}", right, sig.params[2].ty), b.right.span());
+                    }
+                    return Type::Unit;
+                }
+
+                if object_ty != Type::Error {
+                    ctx.error(format!("Cannot assign to index of type {} (missing 'set' method)", object_ty), b.span);
+                }
+            }
+        }
+        TargetKind::Slice => {
+            if let HirExpression::Slice(slc) = &mut *b.left {
+                let object_ty = check_expression(ctx, &mut slc.object, None);
+                let start_ty = check_expression(ctx, &mut slc.start, None);
+                let end_ty = check_expression(ctx, &mut slc.end, None);
+                check_receiver_mutable(ctx, &slc.object, b.span);
+
+                if !start_ty.is_integer() && start_ty != Type::Error {
+                    ctx.error(format!("slice start bound must be integer, found {}", start_ty), slc.start.span());
+                }
+                if !end_ty.is_integer() && end_ty != Type::Error {
+                    ctx.error(format!("slice end bound must be integer, found {}", end_ty), slc.end.span());
+                }
+
+                if matches!(&*slc.object, HirExpression::Index(_) | HirExpression::Slice(_)) {
+                    ctx.error("nested subscript assignment is not supported in v1".to_string(), b.span);
+                }
+
+                if let Type::Array(elem) | Type::Slice(elem) = &object_ty {
+                    let compatible = match &right {
+                        Type::Array(rhs_elem) | Type::Slice(rhs_elem) => types_compatible(elem, rhs_elem),
+                        _ => false,
+                    };
+                    if !compatible {
+                        ctx.error(format!("Cannot assign {} to slice of type {}", right, object_ty), b.span);
+                    }
+                    return Type::Unit;
+                }
+
+                if let Some(sig) = ctx.lookup_method_signature(&object_ty, "set_slice") {
+                    if sig.params.len() != 4 {
+                        ctx.error("'set_slice' hook must take exactly 3 arguments (start, end, value)".to_string(), b.span);
+                        return Type::Error;
+                    }
+                    if !sig.params[0].is_inout {
+                        ctx.error("'set_slice' hook receiver must be 'inout self'".to_string(), b.span);
+                    }
+                    if sig.return_type != Type::Unit && sig.return_type != Type::Error {
+                        ctx.error("'set_slice' hook must return Unit".to_string(), b.span);
+                    }
+                    if !types_compatible(&sig.params[1].ty, &start_ty) {
+                        ctx.error(format!("Start bound type mismatch: expected {}, found {}", sig.params[1].ty, start_ty), slc.start.span());
+                    }
+                    if !types_compatible(&sig.params[2].ty, &end_ty) {
+                        ctx.error(format!("End bound type mismatch: expected {}, found {}", sig.params[2].ty, end_ty), slc.end.span());
+                    }
+                    if !types_compatible(&sig.params[3].ty, &right) {
+                        ctx.error(format!("Cannot assign {} to {}", right, sig.params[3].ty), b.right.span());
+                    }
+                    return Type::Unit;
+                }
+
+                if object_ty != Type::Error {
+                    ctx.error(format!("Cannot assign to slice of type {} (missing 'set_slice' method)", object_ty), b.span);
+                }
+            }
+        }
+        TargetKind::Other => {
+            ctx.error("invalid assignment target".to_string(), b.span);
+        }
+    }
+    Type::Unit
 }
 
 fn check_builtin(
@@ -2108,13 +2247,49 @@ fn check_index(ctx: &mut TypeContext, i: &mut HirIndex) -> Type {
     let object_ty = check_expression(ctx, &mut i.object, None);
     let index_ty = check_expression(ctx, &mut i.index, None);
 
+    // Phase 7: String indexing is intentionally unsupported
+    if object_ty == Type::String {
+        ctx.error(
+            "string indexing is intentionally unsupported".to_string(),
+            i.span,
+        );
+        return Type::Error;
+    }
+
     if let Type::Array(elem) | Type::Slice(elem) = &object_ty {
         if !index_ty.is_integer() && index_ty != Type::Error {
             ctx.error(format!("index must be integer, found {}", index_ty), i.span);
         }
         return *elem.clone();
     }
-    ctx.error(format!("Cannot index type {}", object_ty), i.span);
+
+    // Phase 7: User-defined get hook
+    if let Some(sig) = ctx.lookup_method_signature(&object_ty, "get") {
+        // Verify index type matches the first non-self parameter
+        if sig.params.len() >= 2 {
+            let expected_idx_ty = &sig.params[1].ty;
+            if !index_ty.is_integer() && index_ty != Type::Error {
+                ctx.error(
+                    format!(
+                        "index must be integer, found {} (expected {})",
+                        index_ty, expected_idx_ty
+                    ),
+                    i.span,
+                );
+            }
+        }
+        return sig.return_type.clone();
+    }
+
+    if object_ty != Type::Error {
+        ctx.error(
+            format!(
+                "Cannot index type {} (missing 'get' method)",
+                object_ty
+            ),
+            i.span,
+        );
+    }
     Type::Error
 }
 
@@ -2140,10 +2315,49 @@ fn check_slice(ctx: &mut TypeContext, s: &mut HirSlice) -> Type {
         return Type::Slice(elem.clone());
     }
 
+    // Phase 7: User-defined slice hook
+    if let Some(sig) = ctx.lookup_method_signature(&object_ty, "slice") {
+        return sig.return_type.clone();
+    }
+
     if object_ty != Type::Error {
-        ctx.error(format!("cannot slice type {}", object_ty), s.span);
+        ctx.error(
+            format!(
+                "cannot slice type {} (missing 'slice' method)",
+                object_ty
+            ),
+            s.span,
+        );
     }
     Type::Error
+}
+
+/// Phase 7: Check that the receiver expression is mutable (for index/slice assignment).
+fn check_receiver_mutable(ctx: &mut TypeContext, expr: &HirExpression, span: Span) {
+    match expr {
+        HirExpression::Name(_, name) => {
+            if let Some(info) = ctx.scopes.lookup(name) {
+                if !info.is_mutable {
+                    ctx.error(
+                        format!(
+                            "cannot mutate immutable value '{}'",
+                            name
+                        ),
+                        span,
+                    );
+                }
+            }
+        }
+        HirExpression::Member(m) => {
+            check_receiver_mutable(ctx, &m.object, span);
+        }
+        _ => {
+            ctx.error(
+                "invalid assignment target: receiver is not an assignable value".to_string(),
+                span,
+            );
+        }
+    }
 }
 
 fn check_block_expr(ctx: &mut TypeContext, block: &mut HirBlock, expected: Option<&Type>) -> Type {

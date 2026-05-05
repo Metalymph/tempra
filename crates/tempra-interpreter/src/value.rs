@@ -95,6 +95,14 @@ impl SliceValue {
             None
         }
     }
+
+    pub fn to_vec(&self) -> Vec<Value> {
+        let mut v = Vec::with_capacity(self.len());
+        for i in 0..self.len() {
+            v.push(self.get(i).unwrap());
+        }
+        v
+    }
 }
 
 /// The structured Regex IR — a real value type, not just a text pattern.

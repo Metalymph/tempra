@@ -31,6 +31,7 @@ pub struct SpecializationKey {
 pub struct FunctionParam {
     pub name: String,
     pub ty: Type,
+    pub is_inout: bool,
     pub kind: tempra_ast::ParameterKind,
 }
 
@@ -321,6 +322,7 @@ impl TypeContext {
                                     .map(|p| crate::context::FunctionParam {
                                         name: "self".to_string(), // approximation
                                         ty: substitute_self(p, receiver_ty),
+                                        is_inout: false,
                                         kind: tempra_ast::ParameterKind::Runtime,
                                     })
                                     .collect(),
@@ -363,6 +365,7 @@ impl TypeContext {
                                     format!("p{}", i)
                                 },
                                 ty: substitute_self(p_ty, receiver_ty),
+                                is_inout: false,
                                 kind: tempra_ast::ParameterKind::Runtime,
                             })
                             .collect(),

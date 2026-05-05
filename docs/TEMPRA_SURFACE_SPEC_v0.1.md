@@ -467,13 +467,13 @@ Rules:
   - static arrays
   - slices
 - slices are **zero-copy views** over arrays or other slices
-- arrays and slices share identical **read-only** semantics:
+- arrays and slices share identical read/write semantics:
   - `.len()` → `Int`
-  - `xs[i]` → element type
-  - `xs[a..b]` → `Slice(T)`
+  - `xs[i]` → element type (read/write)
+  - `xs[a..b]` → `Slice(T)` (read/write)
   - `for x in xs { ... }` — iteration
   - `print(xs)` / `dbg(xs)` — identical human-readable formatting `[1, 2, 3]`
-- slices are **read-only** at the language level in v0.1 (no write-through)
+- slice assignment `xs[a..b] = ys` requires matching lengths at runtime
 - no large family of built-in container types in v0
 
 ---
@@ -852,3 +852,38 @@ Rules:
 - `std/...` for standard library modules
 - `./...` for relative imports
 - `pkg/...` for package imports
+---
+23. Subscript Hooks
+
+Tempra allows user-defined types to support indexing and slicing via special method hooks.
+
+### Hook Signatures
+
+```tempra
+extend MyType {
+    // x[i]
+    fn get(self, index: IdxType) -> ValueType { ... }
+
+    // x[i] = value
+    fn set(inout self, index: IdxType, value: ValueType) { ... }
+
+    // x[a..b]
+    fn slice(self, start: IdxType, end: IdxType) -> ValueType { ... }
+
+    // x[a..b] = value
+    fn set_slice(inout self, start: IdxType, end: IdxType, value: ValueType) { ... }
+}
+```
+
+Rules:
+- Hooks must be named exactly `get`, `set`, `slice`, or `set_slice`.
+- `set` and `set_slice` **must** return `Unit` and **must** take `inout self` as the first parameter.
+- Subscript assignment `x[i] = v` is only allowed if `x` is a mutable binding (`var`).
+- The index type (`IdxType`) and value type (`ValueType`) can be any valid Tempra type.
+- For built-in arrays, `set_slice` requires the RHS to have the same length as the slice range.
+
+### Limitations in v0.1
+- **Nested Subscript Assignment:** `x[i][j] = v` is unsupported in v1 (requires a reference system).
+- **String Indexing:** `s[i]` remains intentionally unsupported to avoid common UTF-8 pitfalls. Use `s.bytes()[i]` or explicit iteration.
+- **No Protocols:** There are no `Indexable` or `Sliceable` interfaces yet. Hooks are resolved structurally by name.
+- **No Associated Types:** The return type of `get` and the value type of `set` are independent but must be compatible for valid assignment.

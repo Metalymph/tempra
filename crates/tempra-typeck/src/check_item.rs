@@ -205,6 +205,7 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
                         crate::context::FunctionParam {
                             name: p.name.clone(),
                             ty,
+                            is_inout: p.is_inout,
                             kind: p.kind,
                         }
                     })
@@ -353,6 +354,7 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
                         .map(|p| crate::context::FunctionParam {
                             name: p.name.clone(),
                             ty: ctx.resolve_hir_type(&p.ty),
+                            is_inout: p.is_inout,
                             kind: p.kind,
                         })
                         .collect();

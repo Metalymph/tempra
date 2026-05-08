@@ -517,6 +517,7 @@ TypeAtom
   | FunctionType
   | "Never"
   | "Self"
+  | Identifier "." Identifier  // Projection (e.g. T.Output)
 
 FunctionType
   = "fn" "(" TypeList? ")" ReturnType?

@@ -106,3 +106,122 @@ fn main() {
     let err = format!("{:?}", res.err().unwrap());
     assert!(err.contains("associated type projection is only valid on constrained generic parameters"));
 }
+
+#[test]
+fn test_associated_type_nested_array() {
+    let code = r#"
+interface Buffer {
+    type Item
+    fn items(self) -> Array(Item)
+}
+
+struct IntBuffer {
+    data: Array(Int)
+}
+
+extend IntBuffer {
+    fn items(self) -> Array(Int) {
+        self.data
+    }
+}
+
+fn get_items(type T: Buffer, value: T) -> Array(T.Item) {
+    value.items()
+}
+
+fn main() {
+    let b = IntBuffer { data: [1, 2, 3] }
+    let items: Array(Int) = get_items(IntBuffer, b)
+    expect(items.len() == 3)
+}
+"#;
+    let result = run_source(code);
+    assert!(result.is_ok(), "Expected success, got {:?}", result.err());
+}
+
+#[test]
+fn test_associated_type_nested_slice() {
+    let code = r#"
+interface View {
+    type Item
+    fn view(self) -> Slice(Item)
+}
+
+struct IntView {
+    data: Array(Int)
+}
+
+extend IntView {
+    fn view(self) -> Slice(Int) {
+        self.data[0..self.data.len()]
+    }
+}
+
+fn get_view(type T: View, value: T) -> Slice(T.Item) {
+    value.view()
+}
+
+fn main() {
+    let v = IntView { data: [1, 2, 3] }
+    let s: Slice(Int) = get_view(IntView, v)
+    expect(s.len() == 3)
+}
+"#;
+    let result = run_source(code);
+    assert!(result.is_ok(), "Expected success, got {:?}", result.err());
+}
+
+#[test]
+fn test_associated_type_function_type() {
+    let code = r#"
+interface Mapper {
+    type Input
+    type Output
+    fn mapper(self) -> fn(Input) -> Output
+}
+
+struct IntToStringMapper {}
+extend IntToStringMapper {
+    fn mapper(self) -> fn(Int) -> String {
+        fn(x: Int) -> String { fmt(x) }
+    }
+}
+
+fn get_mapper(type T: Mapper, value: T) -> fn(T.Input) -> T.Output {
+    value.mapper()
+}
+
+fn main() {
+    let m = IntToStringMapper {}
+    let f: fn(Int) -> String = get_mapper(IntToStringMapper, m)
+    let s: String = f(123)
+    expect(s == "123")
+}
+"#;
+    let result = run_source(code);
+    assert!(result.is_ok(), "Expected success, got {:?}", result.err());
+}
+
+#[test]
+fn test_associated_type_mismatch_fails() {
+    let code = r#"
+interface A {
+    type Item
+    fn item(self) -> Item
+}
+interface B {
+    type Item
+    fn item(self) -> Item
+}
+struct MyA {}
+extend MyA {
+    fn item(self) -> Int { 1 }
+}
+
+fn bad(type T: A, type U: B, a: T) -> U.Item {
+    a.item()
+}
+"#;
+    let res = check_source(code);
+    assert!(res.is_err());
+}

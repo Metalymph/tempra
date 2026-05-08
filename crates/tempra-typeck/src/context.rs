@@ -434,7 +434,7 @@ impl TypeContext {
         None
     }
 
-    pub fn infer_associated_types(&mut self, ty: &Type, interface_name: &str) -> Option<HashMap<String, Type>> {
+    pub fn infer_associated_types(&self, ty: &Type, interface_name: &str) -> Option<HashMap<String, Type>> {
         let interface = self.interfaces.get(interface_name)?;
         let mut mappings = HashMap::new();
         for (method_name, req) in &interface.methods {
@@ -468,6 +468,38 @@ impl TypeContext {
                 self.unify_associated_internal(ok, act_ok, interface_name, mappings);
                 self.unify_associated_internal(err, act_err, interface_name, mappings);
             }
+            Type::Tuple(elems) => if let Type::Tuple(act_elems) = actual {
+                if elems.len() == act_elems.len() {
+                    for (e, ae) in elems.iter().zip(act_elems.iter()) {
+                        self.unify_associated_internal(e, ae, interface_name, mappings);
+                    }
+                }
+            }
+            Type::Function(params, ret) => if let Type::Function(act_params, act_ret) = actual {
+                if params.len() == act_params.len() {
+                    for (p, ap) in params.iter().zip(act_params.iter()) {
+                        self.unify_associated_internal(p, ap, interface_name, mappings);
+                    }
+                    self.unify_associated_internal(ret, act_ret, interface_name, mappings);
+                }
+            }
+            Type::Struct(name, args) => if let Type::Struct(act_name, act_args) = actual {
+                if name == act_name && args.len() == act_args.len() {
+                    for (a, aa) in args.iter().zip(act_args.iter()) {
+                        self.unify_associated_internal(a, aa, interface_name, mappings);
+                    }
+                }
+            }
+            Type::Enum(name, args) => if let Type::Enum(act_name, act_args) = actual {
+                if name == act_name && args.len() == act_args.len() {
+                    for (a, aa) in args.iter().zip(act_args.iter()) {
+                        self.unify_associated_internal(a, aa, interface_name, mappings);
+                    }
+                }
+            }
+            Type::Meta(inner) => if let Type::Meta(act_inner) = actual {
+                self.unify_associated_internal(inner, act_inner, interface_name, mappings);
+            }
             _ => {}
         }
     }
@@ -483,6 +515,19 @@ impl TypeContext {
                 Box::new(self.resolve_associated_types(err, mappings)),
             ),
             Type::Tuple(elems) => Type::Tuple(elems.iter().map(|e| self.resolve_associated_types(e, mappings)).collect()),
+            Type::Function(params, ret) => Type::Function(
+                params.iter().map(|p| self.resolve_associated_types(p, mappings)).collect(),
+                Box::new(self.resolve_associated_types(ret, mappings)),
+            ),
+            Type::Struct(name, args) => Type::Struct(
+                name.clone(),
+                args.iter().map(|a| self.resolve_associated_types(a, mappings)).collect(),
+            ),
+            Type::Enum(name, args) => Type::Enum(
+                name.clone(),
+                args.iter().map(|a| self.resolve_associated_types(a, mappings)).collect(),
+            ),
+            Type::Meta(inner) => Type::Meta(Box::new(self.resolve_associated_types(inner, mappings))),
             _ => ty.clone(),
         }
     }
@@ -498,6 +543,19 @@ impl TypeContext {
                 Box::new(self.resolve_associated_to_projections(err, base_id)),
             ),
             Type::Tuple(elems) => Type::Tuple(elems.iter().map(|e| self.resolve_associated_to_projections(e, base_id)).collect()),
+            Type::Function(params, ret) => Type::Function(
+                params.iter().map(|p| self.resolve_associated_to_projections(p, base_id)).collect(),
+                Box::new(self.resolve_associated_to_projections(ret, base_id)),
+            ),
+            Type::Struct(name, args) => Type::Struct(
+                name.clone(),
+                args.iter().map(|a| self.resolve_associated_to_projections(a, base_id)).collect(),
+            ),
+            Type::Enum(name, args) => Type::Enum(
+                name.clone(),
+                args.iter().map(|a| self.resolve_associated_to_projections(a, base_id)).collect(),
+            ),
+            Type::Meta(inner) => Type::Meta(Box::new(self.resolve_associated_to_projections(inner, base_id))),
             _ => ty.clone(),
         }
     }

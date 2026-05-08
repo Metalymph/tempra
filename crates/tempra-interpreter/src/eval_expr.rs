@@ -1306,9 +1306,27 @@ impl Interpreter {
                         .ok_or_else(|| format!("Function {} not found", name))?;
 
                     let mut final_args = vec![None; func.parameters.len()];
-                    for (i, v) in positional_values.into_iter().enumerate() {
-                        if i < final_args.len() {
-                            final_args[i] = Some(v);
+                    let num_positional_args = positional_values.len();
+                    let mut type_params_skipped = 0;
+                    let mut param_idx = 0;
+
+                    for v in positional_values {
+                        // Determine if we should skip 'type' parameters
+                        while param_idx < func.parameters.len() && func.parameters[param_idx].kind == ParameterKind::Type {
+                            let already_satisfied = call.type_args.is_some();
+                            let not_enough_args = (num_positional_args - (param_idx - type_params_skipped)) < (func.parameters.len() - param_idx);
+
+                            if already_satisfied || not_enough_args {
+                                param_idx += 1;
+                                type_params_skipped += 1;
+                            } else {
+                                break;
+                            }
+                        }
+
+                        if param_idx < final_args.len() {
+                            final_args[param_idx] = Some(v);
+                            param_idx += 1;
                         } else {
                             return Err(format!("Too many arguments for {}", name));
                         }
@@ -1332,10 +1350,25 @@ impl Interpreter {
                         match opt_v {
                             Some(v) => args.push(v),
                             None => {
-                                return Err(format!(
-                                    "Missing argument for parameter {}",
-                                    func.parameters[i].name
-                                ))
+                                let param = &func.parameters[i];
+                                let mut satisfied_by_type_arg = false;
+                                if param.kind == ParameterKind::Type {
+                                    if let Some(t_args) = &call.type_args {
+                                        if t_args.len() == func.generic_parameters.len() {
+                                            satisfied_by_type_arg = true;
+                                        }
+                                    }
+                                }
+
+                                if !satisfied_by_type_arg {
+                                    return Err(format!(
+                                        "Missing argument for parameter {}",
+                                        param.name
+                                    ));
+                                } else {
+                                    // Push a dummy value, it will be overridden by the actual type argument in call_function
+                                    args.push(Value::Unit);
+                                }
                             }
                         }
                     }

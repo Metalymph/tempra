@@ -220,8 +220,10 @@ Rules:
 - Associated types can be declared with `type Name` inside the interface.
 - Associated types can appear in method params and return types.
 - Associated type inference is interface-wide. Missing/conflicting associated type inference is an error.
-- Associated types are only visible inside interface requirements.
-- Projection syntax `T.Output` is not implemented yet.
+- Associated types are visible outside interfaces via projection syntax `T.Output`.
+- Projection resolves during specialization to concrete types.
+- Nested projection is supported in compound types (e.g. `Array(T.Item)`).
+- Cyclic associated type inference is rejected.
 
 
 ---

@@ -120,19 +120,19 @@ impl Interpreter {
     ) -> Result<(ControlFlow, RuntimeEnv), String> {
         let mut env = RuntimeEnv::new();
 
-        // Bind generic parameters
-        if let Some(t_args) = type_args {
-            for (param, arg) in func.generic_parameters.iter().zip(t_args.into_iter()) {
-                env.insert(param.name.clone(), arg);
-            }
-        }
-
         // Bind parameters
         if func.parameters.len() != args.len() {
             return Err(format!("Arg count mismatch for {}", func.name));
         }
         for (param, arg) in func.parameters.iter().zip(args.into_iter()) {
             env.insert(param.name.clone(), arg);
+        }
+
+        // Bind generic parameters
+        if let Some(t_args) = type_args {
+            for (param, arg) in func.generic_parameters.iter().zip(t_args.into_iter()) {
+                env.insert(param.name.clone(), arg);
+            }
         }
 
         let mut result_val = Value::Unit;

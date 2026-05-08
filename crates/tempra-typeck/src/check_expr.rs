@@ -1927,67 +1927,12 @@ pub(crate) fn substitute_generics(
     ty: &Type,
     map: &std::collections::HashMap<crate::types::GenericParamId, Type>,
 ) -> Type {
-    match ty {
-        Type::GenericParam { id, .. } => map.get(id).cloned().unwrap_or_else(|| ty.clone()),
-        Type::Array(inner) => Type::Array(Box::new(substitute_generics(ctx, inner, map))),
-        Type::Slice(inner) => Type::Slice(Box::new(substitute_generics(ctx, inner, map))),
-        Type::Option(inner) => Type::Option(Box::new(substitute_generics(ctx, inner, map))),
-        Type::Result(ok, err) => Type::Result(
-            Box::new(substitute_generics(ctx, ok, map)),
-            Box::new(substitute_generics(ctx, err, map)),
-        ),
-        Type::Tuple(elems) => {
-            let mut resolved = Vec::new();
-            for e in elems {
-                resolved.push(substitute_generics(ctx, e, map));
-            }
-            Type::Tuple(resolved)
-        }
-        Type::Struct(name, args) => {
-            let mut resolved_args = Vec::new();
-            for a in args {
-                resolved_args.push(substitute_generics(ctx, a, map));
-            }
-            Type::Struct(name.clone(), resolved_args)
-        }
-        Type::Enum(name, args) => {
-            let mut resolved_args = Vec::new();
-            for a in args {
-                resolved_args.push(substitute_generics(ctx, a, map));
-            }
-            Type::Enum(name.clone(), resolved_args)
-        }
-        Type::Meta(inner) => Type::Meta(Box::new(substitute_generics(ctx, inner, map))),
-        Type::Projection { base, assoc } => {
-            if let Some(substituted_base) = map.get(base) {
-                if !substituted_base.contains_generic_param() {
-                    // Try to resolve concrete associated type
-                    // We need to know which interface was constraining 'base'.
-                    // For now, we search all interfaces satisfied by 'substituted_base'
-                    // that have this associated type.
-                    let itf_candidates: Vec<String> = ctx.interfaces.iter()
-                        .filter(|(_, itf)| itf.associated_types.contains(assoc))
-                        .map(|(name, _)| name.clone())
-                        .collect();
-
-                    for itf_name in itf_candidates {
-                        if satisfies_interface_no_errors(ctx, substituted_base, &itf_name) {
-                            if let Some(mappings) = ctx.infer_associated_types(substituted_base, &itf_name) {
-                                if let Some(resolved) = mappings.get(assoc) {
-                                    return resolved.clone();
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            Type::Projection {
-                base: *base,
-                assoc: assoc.clone(),
-            }
-        }
-        _ => ty.clone(),
-    }
+    let empty_bindings = std::collections::HashMap::new();
+    let env = crate::projection::ProjectionEnv {
+        generic_subst: map,
+        associated_bindings: &empty_bindings,
+    };
+    crate::projection::normalize_type_projections(ty, &env, ctx)
 }
 
 fn get_call_arg_mut_legacy<'a>(
@@ -2027,17 +1972,35 @@ fn check_function_call(
         (0..sig.params.len()).map(|_| None).collect();
     let mut named_keys = std::collections::HashSet::new();
 
-    for (i, arg) in c.args.iter_mut().enumerate() {
+    let num_args = c.args.iter().filter(|a| matches!(a, HirCallArgument::Positional(_))).count();
+    let mut type_params_skipped = 0;
+    let mut param_idx = 0;
+
+    for arg in c.args.iter_mut() {
         match arg {
             HirCallArgument::Positional(e) => {
-                if i >= sig.params.len() {
+                // Determine if we should skip 'type' parameters
+                while param_idx < sig.params.len() && sig.params[param_idx].kind == tempra_ast::ParameterKind::Type {
+                    let already_satisfied = explicit_type_args.is_some();
+                    let not_enough_args = (num_args - (param_idx - type_params_skipped)) < (sig.params.len() - param_idx);
+                    
+                    if already_satisfied || not_enough_args {
+                        param_idx += 1;
+                        type_params_skipped += 1;
+                    } else {
+                        break;
+                    }
+                }
+
+                if param_idx >= sig.params.len() {
                     ctx.error(
                         format!("too many positional arguments for '{}'", func_name),
                         e.span(),
                     );
                     continue;
                 }
-                resolved_args[i] = Some(e);
+                resolved_args[param_idx] = Some(e);
+                param_idx += 1;
             }
             HirCallArgument::Named(n) => {
                 if !named_keys.insert(n.name.clone()) {
@@ -2201,13 +2164,27 @@ fn check_function_call(
                 }
             }
         } else {
-            ctx.error(
-                format!(
-                    "missing required argument '{}' for function '{}'",
-                    param.name, func_name
-                ),
-                c.span,
-            );
+            // Skip missing argument error if it is a 'type' parameter and we already have it inferred
+            let is_type_param = param.kind == tempra_ast::ParameterKind::Type;
+            let already_inferred = if let Type::Meta(inner) = &param.ty {
+                if let Type::GenericParam { id, .. } = &**inner {
+                    inferred.contains_key(id)
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+
+            if !is_type_param || !already_inferred {
+                ctx.error(
+                    format!(
+                        "missing required argument '{}' for function '{}'",
+                        param.name, func_name
+                    ),
+                    c.span,
+                );
+            }
         }
     }
 
@@ -3849,6 +3826,69 @@ fn unify_associated(
             if let Type::Result(ok_act, err_act) = actual {
                 unify_associated(ok_req, ok_act, interface_name, mappings)?;
                 unify_associated(err_req, err_act, interface_name, mappings)
+            } else {
+                Err("type mismatch".into())
+            }
+        }
+        Type::Tuple(elems_req) => {
+            if let Type::Tuple(elems_act) = actual {
+                if elems_req.len() == elems_act.len() {
+                    for (er, ea) in elems_req.iter().zip(elems_act.iter()) {
+                        unify_associated(er, ea, interface_name, mappings)?;
+                    }
+                    Ok(())
+                } else {
+                    Err("tuple length mismatch".into())
+                }
+            } else {
+                Err("type mismatch".into())
+            }
+        }
+        Type::Function(params_req, ret_req) => {
+            if let Type::Function(params_act, ret_act) = actual {
+                if params_req.len() == params_act.len() {
+                    for (pr, pa) in params_req.iter().zip(params_act.iter()) {
+                        unify_associated(pr, pa, interface_name, mappings)?;
+                    }
+                    unify_associated(ret_req, ret_act, interface_name, mappings)
+                } else {
+                    Err("function parameter count mismatch".into())
+                }
+            } else {
+                Err("type mismatch".into())
+            }
+        }
+        Type::Struct(name_req, args_req) => {
+            if let Type::Struct(name_act, args_act) = actual {
+                if name_req == name_act && args_req.len() == args_act.len() {
+                    for (ar, aa) in args_req.iter().zip(args_act.iter()) {
+                        unify_associated(ar, aa, interface_name, mappings)?;
+                    }
+                    Ok(())
+                } else {
+                    Err("struct mismatch".into())
+                }
+            } else {
+                Err("type mismatch".into())
+            }
+        }
+        Type::Enum(name_req, args_req) => {
+            if let Type::Enum(name_act, args_act) = actual {
+                if name_req == name_act && args_req.len() == args_act.len() {
+                    for (ar, aa) in args_req.iter().zip(args_act.iter()) {
+                        unify_associated(ar, aa, interface_name, mappings)?;
+                    }
+                    Ok(())
+                } else {
+                    Err("enum mismatch".into())
+                }
+            } else {
+                Err("type mismatch".into())
+            }
+        }
+        Type::Meta(inner_req) => {
+            if let Type::Meta(inner_act) = actual {
+                unify_associated(inner_req, inner_act, interface_name, mappings)
             } else {
                 Err("type mismatch".into())
             }

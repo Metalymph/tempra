@@ -371,10 +371,10 @@ pub fn types_compatible(expected: &Type, actual: &Type) -> bool {
         (Type::Meta(expected_inner), Type::Meta(actual_inner)) => {
             types_compatible(expected_inner, actual_inner)
         }
-        (Type::Associated(_, n1), Type::Associated(_, n2)) => n1 == n2,
-        (Type::Projection { assoc: n1, .. }, Type::Projection { assoc: n2, .. }) => n1 == n2,
-        (Type::Associated(_, n1), Type::Projection { assoc: n2, .. }) => n1 == n2,
-        (Type::Projection { assoc: n1, .. }, Type::Associated(_, n2)) => n1 == n2,
+        (Type::Associated(itf1, n1), Type::Associated(itf2, n2)) => itf1 == itf2 && n1 == n2,
+        (Type::Projection { base: b1, assoc: n1 }, Type::Projection { base: b2, assoc: n2 }) => {
+            b1 == b2 && n1 == n2
+        }
         _ => false,
     }
 }

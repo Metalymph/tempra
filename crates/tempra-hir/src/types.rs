@@ -83,6 +83,11 @@ pub enum Type {
     },
     /// The type of a type value (metatype)
     Meta(Box<Type>),
+    /// A projection from a generic parameter (e.g. T.Output)
+    Projection {
+        base: GenericParamId,
+        assoc: String,
+    },
 }
 
 impl Type {
@@ -135,7 +140,7 @@ impl Type {
             Type::Function(params, ret) => {
                 params.iter().any(|p| p.contains_generic_param()) || ret.contains_generic_param()
             }
-            Type::GenericParam { .. } => true,
+            Type::GenericParam { .. } | Type::Projection { .. } => true,
             _ => false,
         }
     }
@@ -167,6 +172,7 @@ impl Type {
                 params.extend(ret.get_generic_params());
             }
             Type::GenericParam { id, .. } => params.push(*id),
+            Type::Projection { base, .. } => params.push(*base),
             _ => {}
         }
         params
@@ -286,6 +292,7 @@ impl fmt::Display for Type {
             Type::GenericParam { name, .. } => write!(f, "{}", name),
             Type::SelfType => write!(f, "Self"),
             Type::Associated(_, name) => write!(f, "{}", name),
+            Type::Projection { base, assoc } => write!(f, "GP({:?}).{}", base, assoc),
         }
     }
 }
@@ -361,7 +368,13 @@ pub fn types_compatible(expected: &Type, actual: &Type) -> bool {
             };
             ok_ok && err_ok
         }
-        (Type::Meta(e), Type::Meta(a)) => types_compatible(e, a),
+        (Type::Meta(expected_inner), Type::Meta(actual_inner)) => {
+            types_compatible(expected_inner, actual_inner)
+        }
+        (Type::Associated(_, n1), Type::Associated(_, n2)) => n1 == n2,
+        (Type::Projection { assoc: n1, .. }, Type::Projection { assoc: n2, .. }) => n1 == n2,
+        (Type::Associated(_, n1), Type::Projection { assoc: n2, .. }) => n1 == n2,
+        (Type::Projection { assoc: n1, .. }, Type::Associated(_, n2)) => n1 == n2,
         _ => false,
     }
 }

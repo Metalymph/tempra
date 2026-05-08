@@ -163,10 +163,10 @@ pub fn validate_pattern_against_type(
                             }
                         }
 
-                        let substituted_payloads: Vec<Type> = payload_tys
-                            .iter()
-                            .map(|t| crate::check_expr::substitute_generics(t, &sub_map))
-                            .collect();
+                        let mut substituted_payloads = Vec::new();
+                        for t in payload_tys {
+                            substituted_payloads.push(crate::check_expr::substitute_generics(ctx, t, &sub_map));
+                        }
                         // Validate arity
                         if pat_args.len() != payload_tys.len() {
                             ctx.error(
@@ -354,7 +354,7 @@ pub fn validate_pattern_against_type(
                         if let Some(field_def) = def.fields.get(field_name) {
                             if let Some(pat) = field_pat {
                                 let expected =
-                                    crate::check_expr::substitute_generics(&field_def.ty, &sub_map);
+                                    crate::check_expr::substitute_generics(ctx, &field_def.ty, &sub_map);
                                 validate_pattern_against_type(ctx, &expected, pat);
                             }
                         } else {
@@ -458,7 +458,7 @@ pub fn validate_pattern_against_type(
 }
 
 pub fn extract_pattern_bindings(
-    ctx: &TypeContext,
+    ctx: &mut TypeContext,
     val_ty: &Type,
     pattern: &mut HirPattern,
     out: &mut Vec<(String, Type)>,
@@ -471,7 +471,7 @@ pub fn extract_pattern_bindings(
             if let Type::Enum(enum_name, args) = val_ty {
                 if enum_name == &e.enum_name {
                     if let Some(info) = ctx.enums.get(enum_name) {
-                        if let Some(payload_tys) = info.variants.get(&e.variant_name) {
+                        if let Some(payload_tys) = info.variants.get(&e.variant_name).cloned() {
                             let mut sub_map = std::collections::HashMap::new();
                             if info.generic_params.len() == args.len() {
                                 for (param, arg) in info.generic_params.iter().zip(args.iter()) {
@@ -480,7 +480,7 @@ pub fn extract_pattern_bindings(
                             }
                             for (arg_pat, arg_ty) in e.payloads.iter_mut().zip(payload_tys.iter()) {
                                 let substituted =
-                                    crate::check_expr::substitute_generics(arg_ty, &sub_map);
+                                    crate::check_expr::substitute_generics(ctx, arg_ty, &sub_map);
                                 extract_pattern_bindings(ctx, &substituted, arg_pat, out);
                             }
                         }
@@ -523,10 +523,13 @@ pub fn extract_pattern_bindings(
                     for (param, arg) in def.generic_params.iter().zip(args.iter()) {
                         sub_map.insert(param.id, arg.clone());
                     }
-                    for (field_name, field_pat) in fields.iter_mut() {
-                        if let Some(field_info) = def.fields.get(field_name) {
-                            let substituted =
-                                crate::check_expr::substitute_generics(&field_info.ty, &sub_map);
+                    let mut field_types = Vec::new();
+                    for (name, _) in fields.iter() {
+                        field_types.push(def.fields.get(name).map(|f| f.ty.clone()).unwrap_or(Type::Unknown));
+                    }
+                    for ((field_name, field_pat), field_ty) in fields.iter_mut().zip(field_types) {
+                        if field_ty != Type::Unknown {
+                            let substituted = crate::check_expr::substitute_generics(ctx, &field_ty, &sub_map);
                             if let Some(pat) = field_pat {
                                 extract_pattern_bindings(ctx, &substituted, pat, out);
                             } else {

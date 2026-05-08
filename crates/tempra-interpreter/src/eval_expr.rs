@@ -113,6 +113,7 @@ fn format_hir_type(ty: &HirType) -> String {
             format!("fn({}) -> {}", p, format_hir_type(ret))
         }
         HirType::SelfType(_) => "Self".to_string(),
+        HirType::Projection(_, base, member) => format!("{}.{}", format_hir_type(base), member),
     }
 }
 
@@ -121,6 +122,7 @@ impl Interpreter {
         match ty {
             HirType::Named(_, n) => n.clone(),
             HirType::Apply(_, callee, _) => Self::get_type_name(callee),
+            HirType::Projection(_, base, member) => format!("{}.{}", Self::get_type_name(base), member),
             _ => "Unknown".to_string(),
         }
     }
@@ -196,6 +198,7 @@ impl Interpreter {
             },
             HirType::Function(_, _, _) => matches!(value, Value::Closure(_)),
             HirType::SelfType(_) => false, // Should not happen at runtime
+            HirType::Projection(_, _, _) => false, // Should not happen at runtime
         }
     }
 

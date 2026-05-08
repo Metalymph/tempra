@@ -657,6 +657,18 @@ impl<'src> Parser<'src> {
                     arguments,
                 });
             }
+
+            if self.at(TokenKind::Dot) {
+                self.advance();
+                let member = self.expect_identifier()?;
+                let span = Span::new(ty.span().start, member.span.end);
+                ty = TypeExpr::Projection(TypeProjectionExpr {
+                    span,
+                    base: Box::new(ty),
+                    member,
+                });
+            }
+
             Ok(ty)
         }
     }

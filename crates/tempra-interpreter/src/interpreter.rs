@@ -270,6 +270,7 @@ impl Interpreter {
                 Box::new(self.resolve_hir_type(ret)),
             ),
             HirType::SelfType(_) => tempra_hir::types::Type::SelfType,
+            HirType::Projection(_, _, _) => tempra_hir::types::Type::Error,
         }
     }
 }

@@ -435,6 +435,7 @@ pub enum HirType {
     Result(Span, Box<HirType>, Box<HirType>),
     Function(Span, Vec<HirType>, Box<HirType>),
     SelfType(Span),
+    Projection(Span, Box<HirType>, String),
 }
 
 impl HirType {
@@ -448,6 +449,7 @@ impl HirType {
             HirType::Result(span, _, _) => *span,
             HirType::Function(span, _, _) => *span,
             HirType::SelfType(span) => *span,
+            HirType::Projection(span, _, _) => *span,
         }
     }
 }

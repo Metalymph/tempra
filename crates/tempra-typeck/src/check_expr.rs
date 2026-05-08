@@ -1681,10 +1681,10 @@ fn check_call(ctx: &mut TypeContext, expr: &mut HirExpression, expected: Option<
                 }
             }
 
-            let payload_tys: Vec<Type> = info.variants[&variant_name]
-                .iter()
-                .map(|t| substitute_generics(t, &sub_map))
-                .collect();
+            let mut payload_tys = Vec::new();
+            for t in &info.variants[&variant_name] {
+                payload_tys.push(substitute_generics(ctx, t, &sub_map));
+            }
 
             let mut error_occurred = false;
 
@@ -1907,6 +1907,11 @@ fn match_generic_types(
             }
             Ok(())
         }
+        (Type::Projection { base: b1, assoc: a1 }, Type::Projection { base: b2, assoc: a2 }) => {
+            if b1 == b2 && a1 == a2 { Ok(()) } else { Err(()) }
+        }
+        (Type::Projection { .. }, _) => Ok(()),
+        (_, Type::Projection { .. }) => Ok(()),
         _ => {
             if param_ty == arg_ty {
                 Ok(())
@@ -1918,30 +1923,69 @@ fn match_generic_types(
 }
 
 pub(crate) fn substitute_generics(
+    ctx: &mut TypeContext,
     ty: &Type,
     map: &std::collections::HashMap<crate::types::GenericParamId, Type>,
 ) -> Type {
     match ty {
         Type::GenericParam { id, .. } => map.get(id).cloned().unwrap_or_else(|| ty.clone()),
-        Type::Array(inner) => Type::Array(Box::new(substitute_generics(inner, map))),
-        Type::Slice(inner) => Type::Slice(Box::new(substitute_generics(inner, map))),
-        Type::Option(inner) => Type::Option(Box::new(substitute_generics(inner, map))),
+        Type::Array(inner) => Type::Array(Box::new(substitute_generics(ctx, inner, map))),
+        Type::Slice(inner) => Type::Slice(Box::new(substitute_generics(ctx, inner, map))),
+        Type::Option(inner) => Type::Option(Box::new(substitute_generics(ctx, inner, map))),
         Type::Result(ok, err) => Type::Result(
-            Box::new(substitute_generics(ok, map)),
-            Box::new(substitute_generics(err, map)),
+            Box::new(substitute_generics(ctx, ok, map)),
+            Box::new(substitute_generics(ctx, err, map)),
         ),
         Type::Tuple(elems) => {
-            Type::Tuple(elems.iter().map(|e| substitute_generics(e, map)).collect())
+            let mut resolved = Vec::new();
+            for e in elems {
+                resolved.push(substitute_generics(ctx, e, map));
+            }
+            Type::Tuple(resolved)
         }
-        Type::Struct(name, args) => Type::Struct(
-            name.clone(),
-            args.iter().map(|a| substitute_generics(a, map)).collect(),
-        ),
-        Type::Enum(name, args) => Type::Enum(
-            name.clone(),
-            args.iter().map(|a| substitute_generics(a, map)).collect(),
-        ),
-        Type::Meta(inner) => Type::Meta(Box::new(substitute_generics(inner, map))),
+        Type::Struct(name, args) => {
+            let mut resolved_args = Vec::new();
+            for a in args {
+                resolved_args.push(substitute_generics(ctx, a, map));
+            }
+            Type::Struct(name.clone(), resolved_args)
+        }
+        Type::Enum(name, args) => {
+            let mut resolved_args = Vec::new();
+            for a in args {
+                resolved_args.push(substitute_generics(ctx, a, map));
+            }
+            Type::Enum(name.clone(), resolved_args)
+        }
+        Type::Meta(inner) => Type::Meta(Box::new(substitute_generics(ctx, inner, map))),
+        Type::Projection { base, assoc } => {
+            if let Some(substituted_base) = map.get(base) {
+                if !substituted_base.contains_generic_param() {
+                    // Try to resolve concrete associated type
+                    // We need to know which interface was constraining 'base'.
+                    // For now, we search all interfaces satisfied by 'substituted_base'
+                    // that have this associated type.
+                    let itf_candidates: Vec<String> = ctx.interfaces.iter()
+                        .filter(|(_, itf)| itf.associated_types.contains(assoc))
+                        .map(|(name, _)| name.clone())
+                        .collect();
+
+                    for itf_name in itf_candidates {
+                        if satisfies_interface_no_errors(ctx, substituted_base, &itf_name) {
+                            if let Some(mappings) = ctx.infer_associated_types(substituted_base, &itf_name) {
+                                if let Some(resolved) = mappings.get(assoc) {
+                                    return resolved.clone();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Type::Projection {
+                base: *base,
+                assoc: assoc.clone(),
+            }
+        }
         _ => ty.clone(),
     }
 }
@@ -2046,7 +2090,7 @@ fn check_function_call(
         match resolved {
             Some(arg_expr) => {
                 let expected_arg_ty = if !pre_inferred.is_empty() && i < sig.params.len() {
-                    Some(substitute_generics(&sig.params[i].ty, &pre_inferred))
+                    Some(substitute_generics(ctx, &sig.params[i].ty, &pre_inferred))
                 } else {
                     None
                 };
@@ -2117,7 +2161,7 @@ fn check_function_call(
     let mut comptime_args = Vec::new();
     for (i, resolved) in resolved_args.iter_mut().enumerate() {
         let param = &sig.params[i];
-        let substituted_param_ty = substitute_generics(&param.ty, &inferred);
+        let substituted_param_ty = substitute_generics(ctx, &param.ty, &inferred);
         let arg_ty = &arg_types[i];
 
         if let Some(arg_expr) = resolved {
@@ -2182,7 +2226,7 @@ fn check_function_call(
     };
     ctx.specialization_log.insert(spec_key);
 
-    substitute_generics(&sig.return_type, &inferred)
+    substitute_generics(ctx, &sig.return_type, &inferred)
 }
 
 fn evaluate_comptime_arg(
@@ -2220,7 +2264,7 @@ fn check_member(ctx: &mut TypeContext, m: &mut HirMember, _expected: Option<&Typ
                         sub_map.insert(param.id, arg.clone());
                     }
                 }
-                return substitute_generics(&field_info.ty, &sub_map);
+                return substitute_generics(ctx, &field_info.ty, &sub_map);
             }
             ctx.error(
                 format!("struct '{}' has no field '{}'", name, m.field),
@@ -3202,12 +3246,15 @@ fn check_struct_literal(ctx: &mut TypeContext, s: &mut HirStructLiteral) -> Type
         }
 
         let field_info = info.fields.get(field_name.as_str());
-        let expected_ty = field_info.map(|f| substitute_generics(&f.ty, &sub_map));
+        let mut expected_ty = None;
+        if let Some(f) = field_info {
+            expected_ty = Some(substitute_generics(ctx, &f.ty, &sub_map));
+        }
         let actual_ty = check_expression(ctx, field_expr, expected_ty.as_ref());
 
         match field_info {
             Some(field_info) => {
-                let expected = substitute_generics(&field_info.ty, &sub_map);
+                let expected = substitute_generics(ctx, &field_info.ty, &sub_map);
                 if actual_ty != Type::Error && !types_compatible(&expected, &actual_ty) {
                     ctx.error(
                         format!(

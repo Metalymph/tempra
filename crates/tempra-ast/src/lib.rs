@@ -248,6 +248,7 @@ pub enum TypeExpr {
     Result(ResultTypeExpr),
     Function(FunctionTypeExpr),
     SelfType(Span),
+    Projection(TypeProjectionExpr),
 }
 
 impl TypeExpr {
@@ -261,6 +262,7 @@ impl TypeExpr {
             TypeExpr::Result(expr) => expr.span,
             TypeExpr::Function(expr) => expr.span,
             TypeExpr::SelfType(span) => *span,
+            TypeExpr::Projection(expr) => expr.span,
         }
     }
 }
@@ -310,6 +312,13 @@ pub struct FunctionTypeExpr {
     pub parameters: Vec<TypeExpr>,
     pub return_type: Box<TypeExpr>,
     pub is_fallible: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct TypeProjectionExpr {
+    pub span: Span,
+    pub base: Box<TypeExpr>,
+    pub member: Token,
 }
 
 // ----------------------------------------------------------------------------

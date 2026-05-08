@@ -176,19 +176,23 @@ impl TypeContext {
     }
 
     /// Resolve an HIR type node into a semantic Type.
-    pub fn resolve_hir_type(&self, hir_type: &HirType) -> Type {
+    pub fn resolve_hir_type(&mut self, hir_type: &HirType) -> Type {
         match hir_type {
             HirType::Named(_, name) => self.resolve_type_name(name),
             HirType::Array(_, inner) => Type::Array(Box::new(self.resolve_hir_type(inner))),
             HirType::Tuple(_, elems) => {
-                Type::Tuple(elems.iter().map(|e| self.resolve_hir_type(e)).collect())
+                let mut resolved = Vec::new();
+                for e in elems {
+                    resolved.push(self.resolve_hir_type(e));
+                }
+                Type::Tuple(resolved)
             }
             HirType::Apply(_, callee, args) => {
                 let base = self.resolve_hir_type(callee);
-                let arg_types = args
-                    .iter()
-                    .map(|a| self.resolve_hir_type(a))
-                    .collect::<Vec<_>>();
+                let mut arg_types = Vec::new();
+                for a in args {
+                    arg_types.push(self.resolve_hir_type(a));
+                }
 
                 match base {
                     Type::Struct(name, _) => Type::Struct(name, arg_types),
@@ -230,12 +234,34 @@ impl TypeContext {
                 Type::Result(Box::new(ok_ty), Box::new(err_ty))
             }
             HirType::Function(_, params, ret) => {
-                let p_types = params.iter().map(|p| self.resolve_hir_type(p)).collect();
+                let mut p_types = Vec::new();
+                for p in params {
+                    p_types.push(self.resolve_hir_type(p));
+                }
                 let r_type = self.resolve_hir_type(ret);
                 Type::Function(p_types, Box::new(r_type))
             }
             HirType::SelfType(_span) => {
                 Type::SelfType
+            }
+            HirType::Projection(span, base_hir, assoc) => {
+                let base_ty = self.resolve_hir_type(base_hir);
+                if let Type::GenericParam { id, name, constraint } = base_ty {
+                    if let Some(itf_name) = constraint {
+                        if let Some(itf) = self.interfaces.get(&itf_name) {
+                            if itf.associated_types.contains(assoc) {
+                                return Type::Projection { base: id, assoc: assoc.clone() };
+                            } else {
+                                self.error(format!("generic parameter {} has no interface constraint declaring associated type {}", name, assoc), *span);
+                            }
+                        }
+                    } else {
+                        self.error(format!("associated type projection is only valid on constrained generic parameters"), *span);
+                    }
+                } else if base_ty != Type::Error {
+                    self.error(format!("associated type projection is only valid on constrained generic parameters"), *span);
+                }
+                Type::Error
             }
         }
     }
@@ -305,7 +331,7 @@ impl TypeContext {
     /// Centralized method lookup for Phase 6.
     /// Returns the signature of a method if found on the type or in an 'extend' block.
     pub fn lookup_method_signature(
-        &self,
+        &mut self,
         receiver_ty: &Type,
         method_name: &str,
     ) -> Option<FunctionSignature> {
@@ -315,14 +341,16 @@ impl TypeContext {
         }
 
         // 2. Check interface constraints for generic parameters
-        let mut constraint_name = None;
+        let mut generic_info = None;
         if let Type::GenericParam { id, .. } = receiver_ty {
-            constraint_name = self.current_generic_params_info.iter()
+            if let Some(constraint) = self.current_generic_params_info.iter()
                 .find(|p| p.id == *id)
-                .and_then(|p| p.constraint.clone());
+                .and_then(|p| p.constraint.clone()) {
+                generic_info = Some((*id, constraint));
+            }
         }
 
-        if let Some(itf_name) = constraint_name {
+        if let Some((id, itf_name)) = generic_info {
             if let Some(itf) = self.interfaces.get(&itf_name) {
                 if let Some(req) = itf.methods.get(method_name) {
                     return Some(FunctionSignature {
@@ -330,11 +358,11 @@ impl TypeContext {
                         generic_params: Vec::new(),
                         params: req.params.iter().enumerate().map(|(i, p_ty)| FunctionParam {
                             name: if i == 0 { "self".to_string() } else { format!("p{}", i) },
-                            ty: substitute_self(p_ty, receiver_ty),
+                            ty: self.resolve_associated_to_projections(&substitute_self(p_ty, receiver_ty), id),
                             is_inout: false,
                             kind: ParameterKind::Runtime,
                         }).collect(),
-                        return_type: substitute_self(&req.return_type, receiver_ty),
+                        return_type: self.resolve_associated_to_projections(&substitute_self(&req.return_type, receiver_ty), id),
                         is_fallible: false,
                     });
                 }
@@ -342,24 +370,28 @@ impl TypeContext {
         }
 
         // 3. Check if concrete type satisfies an interface with this method (Projection)
-        for (itf_name, itf) in &self.interfaces {
-            if itf.methods.contains_key(method_name) {
-                if crate::check_expr::satisfies_interface_no_errors(self, receiver_ty, itf_name) {
-                    if let Some(req) = itf.methods.get(method_name) {
-                        if let Some(mappings) = self.infer_associated_types(receiver_ty, itf_name) {
-                            return Some(FunctionSignature {
-                                visibility: itf.visibility,
-                                generic_params: Vec::new(),
-                                params: req.params.iter().enumerate().map(|(i, p_ty)| FunctionParam {
-                                    name: if i == 0 { "self".to_string() } else { format!("p{}", i) },
-                                    ty: self.resolve_associated_types(&substitute_self(p_ty, receiver_ty), &mappings),
-                                    is_inout: false,
-                                    kind: ParameterKind::Runtime,
-                                }).collect(),
-                                return_type: self.resolve_associated_types(&substitute_self(&req.return_type, receiver_ty), &mappings),
-                                is_fallible: false,
-                            });
-                        }
+        let itf_names: Vec<String> = self.interfaces.keys().cloned().collect();
+        for itf_name in itf_names {
+            let (has_method, visibility) = {
+                let itf = &self.interfaces[&itf_name];
+                (itf.methods.contains_key(method_name), itf.visibility)
+            };
+            if has_method {
+                if crate::check_expr::satisfies_interface_no_errors(self, receiver_ty, &itf_name) {
+                    let req = self.interfaces[&itf_name].methods.get(method_name).cloned().unwrap();
+                    if let Some(mappings) = self.infer_associated_types(receiver_ty, &itf_name) {
+                        return Some(FunctionSignature {
+                            visibility,
+                            generic_params: Vec::new(),
+                            params: req.params.iter().enumerate().map(|(i, p_ty)| FunctionParam {
+                                name: if i == 0 { "self".to_string() } else { format!("p{}", i) },
+                                ty: self.resolve_associated_types(&substitute_self(p_ty, receiver_ty), &mappings),
+                                is_inout: false,
+                                kind: ParameterKind::Runtime,
+                            }).collect(),
+                            return_type: self.resolve_associated_types(&substitute_self(&req.return_type, receiver_ty), &mappings),
+                            is_fallible: false,
+                        });
                     }
                 }
             }
@@ -402,7 +434,7 @@ impl TypeContext {
         None
     }
 
-    pub fn infer_associated_types(&self, ty: &Type, interface_name: &str) -> Option<HashMap<String, Type>> {
+    pub fn infer_associated_types(&mut self, ty: &Type, interface_name: &str) -> Option<HashMap<String, Type>> {
         let interface = self.interfaces.get(interface_name)?;
         let mut mappings = HashMap::new();
         for (method_name, req) in &interface.methods {
@@ -451,6 +483,21 @@ impl TypeContext {
                 Box::new(self.resolve_associated_types(err, mappings)),
             ),
             Type::Tuple(elems) => Type::Tuple(elems.iter().map(|e| self.resolve_associated_types(e, mappings)).collect()),
+            _ => ty.clone(),
+        }
+    }
+
+    pub fn resolve_associated_to_projections(&self, ty: &Type, base_id: crate::types::GenericParamId) -> Type {
+        match ty {
+            Type::Associated(_, name) => Type::Projection { base: base_id, assoc: name.clone() },
+            Type::Array(inner) => Type::Array(Box::new(self.resolve_associated_to_projections(inner, base_id))),
+            Type::Slice(inner) => Type::Slice(Box::new(self.resolve_associated_to_projections(inner, base_id))),
+            Type::Option(inner) => Type::Option(Box::new(self.resolve_associated_to_projections(inner, base_id))),
+            Type::Result(ok, err) => Type::Result(
+                Box::new(self.resolve_associated_to_projections(ok, base_id)),
+                Box::new(self.resolve_associated_to_projections(err, base_id)),
+            ),
+            Type::Tuple(elems) => Type::Tuple(elems.iter().map(|e| self.resolve_associated_to_projections(e, base_id)).collect()),
             _ => ty.clone(),
         }
     }

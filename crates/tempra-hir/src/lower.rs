@@ -104,11 +104,21 @@ impl<'src> Lowerer<'src> {
                 .iter()
                 .map(|p| self.lower_generic_param(p))
                 .collect(),
-            parameters: item
-                .parameters
-                .iter()
-                .map(|p| self.lower_parameter(p))
-                .collect(),
+            parameters: {
+                let mut params: Vec<HirParameter> = item
+                    .generic_parameters
+                    .iter()
+                    .map(|gp| HirParameter {
+                        span: gp.span,
+                        name: self.text(gp.name.span),
+                        ty: HirType::Named(gp.span, "Type".to_string()),
+                        is_inout: false,
+                        kind: tempra_ast::ParameterKind::Type,
+                    })
+                    .collect();
+                params.extend(item.parameters.iter().map(|p| self.lower_parameter(p)));
+                params
+            },
             return_type: item.return_type.as_ref().map(|t| self.lower_type(t)),
             is_fallible: item.is_fallible,
             body: self.lower_block(&item.body),
@@ -232,6 +242,11 @@ impl<'src> Lowerer<'src> {
                 Box::new(self.lower_type(&t.return_type)),
             ),
             ast::TypeExpr::SelfType(span) => HirType::SelfType(*span),
+            ast::TypeExpr::Projection(t) => HirType::Projection(
+                t.span,
+                Box::new(self.lower_type(&t.base)),
+                self.text(t.member.span),
+            ),
         }
     }
 

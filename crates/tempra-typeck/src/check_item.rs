@@ -193,25 +193,22 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
                 }
                 ctx.current_generic_params = generic_params.iter().map(|p| p.id).collect();
                 ctx.current_generic_params_info = generic_params.clone();
-                let params: Vec<crate::context::FunctionParam> = f
-                    .parameters
-                    .iter()
-                    .map(|p| {
-                        let ty = if p.kind == tempra_ast::ParameterKind::Type {
-                            // The parameter name itself is the generic type it carries
-                            let inner = ctx.resolve_type_name(&p.name);
-                            Type::Meta(Box::new(inner))
-                        } else {
-                            ctx.resolve_hir_type(&p.ty)
-                        };
-                        crate::context::FunctionParam {
-                            name: p.name.clone(),
-                            ty,
-                            is_inout: p.is_inout,
-                            kind: p.kind,
-                        }
-                    })
-                    .collect();
+                let mut params = Vec::new();
+                for p in &f.parameters {
+                    let ty = if p.kind == tempra_ast::ParameterKind::Type {
+                        // Resolve the generic param name to get the correct GenericParamId
+                        // And wrap it in Meta because it's a type value parameter.
+                        Type::Meta(Box::new(ctx.resolve_type_name(&p.name)))
+                    } else {
+                        ctx.resolve_hir_type(&p.ty)
+                    };
+                    params.push(crate::context::FunctionParam {
+                        name: p.name.clone(),
+                        ty,
+                        is_inout: p.is_inout,
+                        kind: p.kind,
+                    });
+                }
                 let mut return_type = f
                     .return_type
                     .as_ref()
@@ -303,8 +300,10 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
 
                 let mut resolved_variants = HashMap::new();
                 for v in &e.variants {
-                    let payload: Vec<Type> =
-                        v.payload.iter().map(|t| ctx.resolve_hir_type(t)).collect();
+                    let mut payload = Vec::new();
+                    for t in &v.payload {
+                        payload.push(ctx.resolve_hir_type(t));
+                    }
                     resolved_variants.insert(v.name.clone(), payload);
 
                     // Track which enums have this variant for ambiguity detection
@@ -336,16 +335,17 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
 
                 let mut methods = HashMap::new();
                 for m in &i.methods {
+                    let mut params = Vec::new();
+                    for p in &m.parameters {
+                        params.push(ctx.resolve_hir_type(&p.ty));
+                    }
+                    let return_type = ctx.resolve_hir_type(&m.return_type);
                     methods.insert(
                         m.name.clone(),
                         crate::context::InterfaceMethodRequirementInfo {
                             name: m.name.clone(),
-                            params: m
-                                .parameters
-                                .iter()
-                                .map(|p| ctx.resolve_hir_type(&p.ty))
-                                .collect(),
-                            return_type: ctx.resolve_hir_type(&m.return_type),
+                            params,
+                            return_type,
                         },
                     );
                 }
@@ -367,16 +367,15 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
                 for m in &e.methods {
                     let name = format!("{}.{}", target_ty.get_name(), m.name);
 
-                    let params: Vec<crate::context::FunctionParam> = m
-                        .parameters
-                        .iter()
-                        .map(|p| crate::context::FunctionParam {
+                    let mut params = Vec::new();
+                    for p in &m.parameters {
+                        params.push(crate::context::FunctionParam {
                             name: p.name.clone(),
                             ty: ctx.resolve_hir_type(&p.ty),
                             is_inout: p.is_inout,
                             kind: p.kind,
-                        })
-                        .collect();
+                        });
+                    }
                     let return_type = m
                         .return_type
                         .as_ref()

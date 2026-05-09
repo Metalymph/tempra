@@ -106,11 +106,16 @@ impl<'src> Lexer<'src> {
             }
             b'>' => {
                 self.advance();
-                if self.current_byte() == Some(b'>') {
-                    self.advance();
-                    self.make_token(TokenKind::ShiftRight, start, self.position)
-                } else {
-                    self.make_token(TokenKind::Greater, start, self.position)
+                match self.current_byte() {
+                    Some(b'>') => {
+                        self.advance();
+                        self.make_token(TokenKind::ShiftRight, start, self.position)
+                    }
+                    Some(b'=') => {
+                        self.advance();
+                        self.make_token(TokenKind::GreaterEqual, start, self.position)
+                    }
+                    _ => self.make_token(TokenKind::Greater, start, self.position),
                 }
             }
             b'!' => {
@@ -159,7 +164,12 @@ impl<'src> Lexer<'src> {
             }
             b'<' => {
                 self.advance();
-                self.make_token(TokenKind::Less, start, self.position)
+                if self.current_byte() == Some(b'=') {
+                    self.advance();
+                    self.make_token(TokenKind::LessEqual, start, self.position)
+                } else {
+                    self.make_token(TokenKind::Less, start, self.position)
+                }
             }
             b'?' => {
                 self.advance();

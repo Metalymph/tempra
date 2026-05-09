@@ -626,7 +626,7 @@ fn check_binary(ctx: &mut TypeContext, b: &mut HirBinary, _expected: Option<&Typ
             }
             Type::Bool
         }
-        HirBinaryOp::Less | HirBinaryOp::Greater => {
+        HirBinaryOp::Less | HirBinaryOp::LessEq | HirBinaryOp::Greater | HirBinaryOp::GreaterEq => {
             if !left.is_numeric() {
                 ctx.error(
                     format!("Comparison operator expects numeric type, found {}", left),
@@ -2917,29 +2917,38 @@ fn check_match(ctx: &mut TypeContext, m: &mut HirMatch, expected: Option<&Type>)
 
 fn check_for_expr(ctx: &mut TypeContext, f: &mut HirForExpr) -> Type {
     let iter_ty = check_expression(ctx, &mut f.iterable, None);
-    let elem_ty = match &iter_ty {
-        Type::Struct(_, _) | Type::Enum(_, _) => {
-            ctx.error(
-                format!("structs and enums are not iterable, found {}", iter_ty),
-                f.span,
-            );
-            Type::Error
-        }
-        Type::Array(inner) => *inner.clone(),
-        Type::Slice(inner) => *inner.clone(),
-        Type::String => Type::String,
-        _ => {
-            if iter_ty != Type::Error {
+
+    // Determine the element type by routing through the Iterable protocol.
+    // String is kept as a built-in special case (iterates chars as String).
+    // Arrays and Slices satisfy Iterable via compiler-known shortcuts.
+    // Custom structs/enums can satisfy Iterable structurally.
+    let elem_ty = if iter_ty == Type::String {
+        Type::String
+    } else if iter_ty == Type::Error {
+        Type::Error
+    } else if satisfies_interface(ctx, &iter_ty, "Iterable") {
+        // Resolve the Item associated type from Iterable
+        match ctx.infer_associated_types(&iter_ty, "Iterable") {
+            Some(mappings) => mappings.get("Item").cloned().unwrap_or(Type::Error),
+            None => {
                 ctx.error(
-                    format!(
-                        "for iterable must be an array, slice, or string, found {}",
-                        iter_ty
-                    ),
+                    format!("could not infer 'Item' from Iterable type '{}'", iter_ty),
                     f.span,
                 );
+                Type::Error
             }
-            Type::Error
         }
+    } else {
+        if iter_ty != Type::Error {
+            ctx.error(
+                format!(
+                    "type '{}' does not satisfy Iterable — implement 'iter(self) -> Iter' where Iter: Iterator",
+                    iter_ty
+                ),
+                f.span,
+            );
+        }
+        Type::Error
     };
 
     ctx.scopes.push_scope();
@@ -3689,7 +3698,7 @@ fn semantic_check_block(block: &HirBlock, ctx: &TypeContext) -> Result<(), (Stri
     Ok(())
 }
 
-fn satisfies_interface(ctx: &mut TypeContext, ty: &Type, interface_name: &str) -> bool {
+pub(crate) fn satisfies_interface(ctx: &mut TypeContext, ty: &Type, interface_name: &str) -> bool {
     if interface_name == "Collection" {
         if matches!(ty, Type::Array(_) | Type::Slice(_)) {
             return true;
@@ -3698,6 +3707,36 @@ fn satisfies_interface(ctx: &mut TypeContext, ty: &Type, interface_name: &str) -
     if interface_name == "Iterator" {
         if matches!(ty, Type::ArrayIter(_) | Type::SliceIter(_)) {
             return true;
+        }
+    }
+    if interface_name == "Iterable" {
+        if matches!(ty, Type::Array(_) | Type::Slice(_)) {
+            return true;
+        }
+    }
+
+    if let Type::GenericParam { constraint, .. } = ty {
+        if let Some(c) = constraint {
+            if c == interface_name {
+                return true;
+            }
+            if satisfies_interface_no_errors(ctx, &Type::Interface(c.clone()), interface_name) {
+                return true;
+            }
+        }
+    }
+    if let Type::Interface(name) = ty {
+        if name == interface_name {
+            return true;
+        }
+    }
+    if let Type::Projection { base, assoc } = ty {
+        if interface_name == "Iterator" && assoc == "Iter" {
+             if let Some(p) = ctx.current_generic_params_info.iter().find(|p| p.id == *base) {
+                 if p.constraint.as_deref() == Some("Iterable") {
+                     return true;
+                 }
+             }
         }
     }
     let interface = match ctx.interfaces.get(interface_name) {
@@ -3785,6 +3824,18 @@ fn satisfies_interface(ctx: &mut TypeContext, ty: &Type, interface_name: &str) -
     }
 
     if satisfied {
+        // Special case for Iterable: Item is often not directly in the iter() signature,
+        // but it is the Item of the returned Iter (which must satisfy Iterator).
+        if interface_name == "Iterable" && !mappings.contains_key("Item") {
+            if let Some(iter_ty) = mappings.get("Iter") {
+                if let Some(it_mappings) = ctx.infer_associated_types(iter_ty, "Iterator") {
+                    if let Some(item_ty) = it_mappings.get("Item") {
+                        mappings.insert("Item".to_string(), item_ty.clone());
+                    }
+                }
+            }
+        }
+
         // Ensure all associated types were inferred
         for at_name in &interface.associated_types {
             if !mappings.contains_key(at_name) {
@@ -3809,6 +3860,36 @@ pub fn satisfies_interface_no_errors(ctx: &TypeContext, ty: &Type, interface_nam
     if interface_name == "Iterator" {
         if matches!(ty, Type::ArrayIter(_) | Type::SliceIter(_)) {
             return true;
+        }
+    }
+    if interface_name == "Iterable" {
+        if matches!(ty, Type::Array(_) | Type::Slice(_)) {
+            return true;
+        }
+    }
+
+    if let Type::GenericParam { constraint, .. } = ty {
+        if let Some(c) = constraint {
+            if c == interface_name {
+                return true;
+            }
+            if satisfies_interface_no_errors(ctx, &Type::Interface(c.clone()), interface_name) {
+                return true;
+            }
+        }
+    }
+    if let Type::Interface(name) = ty {
+        if name == interface_name {
+            return true;
+        }
+    }
+    if let Type::Projection { base, assoc } = ty {
+        if interface_name == "Iterator" && assoc == "Iter" {
+             if let Some(p) = ctx.current_generic_params_info.iter().find(|p| p.id == *base) {
+                 if p.constraint.as_deref() == Some("Iterable") {
+                     return true;
+                 }
+             }
         }
     }
     let interface = match ctx.interfaces.get(interface_name) {
@@ -3864,6 +3945,18 @@ pub fn satisfies_interface_no_errors(ctx: &TypeContext, ty: &Type, interface_nam
         }
     }
     if satisfied {
+        // Special case for Iterable: Item is often not directly in the iter() signature,
+        // but it is the Item of the returned Iter (which must satisfy Iterator).
+        if interface_name == "Iterable" && !mappings.contains_key("Item") {
+            if let Some(iter_ty) = mappings.get("Iter") {
+                if let Some(it_mappings) = ctx.infer_associated_types(iter_ty, "Iterator") {
+                    if let Some(item_ty) = it_mappings.get("Item") {
+                        mappings.insert("Item".to_string(), item_ty.clone());
+                    }
+                }
+            }
+        }
+
         for at_name in &interface.associated_types {
             if !mappings.contains_key(at_name) {
                 satisfied = false;

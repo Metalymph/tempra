@@ -70,7 +70,9 @@ pub enum TokenKind {
     Star,         // *
     Slash,        // /
     Less,         // <
+    LessEqual,    // <=
     Greater,      // >
+    GreaterEqual, // >=
     Pipe,         // |
     AndAnd,       // &&
     OrOr,         // ||
@@ -176,7 +178,9 @@ impl std::fmt::Display for TokenKind {
             TokenKind::Star => "'*'",
             TokenKind::Slash => "'/'",
             TokenKind::Less => "'<'",
+            TokenKind::LessEqual => "'<='",
             TokenKind::Greater => "'>'",
+            TokenKind::GreaterEqual => "'>='",
             TokenKind::Pipe => "'|'",
             TokenKind::AndAnd => "'&&'",
             TokenKind::OrOr => "'||'",

@@ -1,31 +1,42 @@
-use tempra_driver::check_source;
+use tempra_driver::run_source;
 
 fn main() {
     let source = r#"
-        struct MyIter {
-            var count: Int
+        struct CounterIter {
+            current: Int
+            end: Int
         }
-        extend MyIter {
+        extend CounterIter {
             fn next(inout self) -> Int? {
-                if self.count > 0 {
-                    self.count = self.count - 1;
-                    return Some(self.count);
+                if self.current >= self.end {
+                    return None;
                 }
-                return None;
+                let out = self.current;
+                self.current = self.current + 1;
+                return Some(out);
             }
         }
 
-        fn consume_one(type T: Iterator, it: inout T) -> T.Item? {
-            it.next()
+        struct CounterRange {
+            end: Int
+        }
+        extend CounterRange {
+            fn iter(self) -> CounterIter {
+                CounterIter { current: 0, end: self.end }
+            }
         }
 
         fn main() {
-            var it = MyIter { count: 10 };
-            let _res = consume_one[MyIter](inout it);
+            let r = CounterRange { end: 3 };
+            var sum = 0;
+            for x in r {
+                sum = sum + x;
+            }
+            if sum != 3 { crash("sum is not 3") }
         }
     "#;
-    match check_source(source) {
+    match run_source(source) {
         Ok(_) => println!("OK"),
-        Err(e) => println!("ERROR: {:?}", e),
+        Err(e) => println!("FAIL: {:?}", e),
     }
 }

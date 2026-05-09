@@ -182,6 +182,24 @@ impl TypeContext {
             },
         );
         self.interfaces.insert("Iterator".to_string(), iterator);
+
+        // Iterable: types that can produce an Iterator via iter()
+        let mut iterable = InterfaceInfo {
+            name: "Iterable".to_string(),
+            visibility: Visibility::Public,
+            methods: HashMap::new(),
+            associated_types: vec!["Item".to_string(), "Iter".to_string()],
+        };
+        iterable.methods.insert(
+            "iter".to_string(),
+            InterfaceMethodRequirementInfo {
+                name: "iter".to_string(),
+                params: vec![Type::SelfType],
+                param_inout: vec![false],
+                return_type: Type::Associated("Iterable".to_string(), "Iter".to_string()),
+            },
+        );
+        self.interfaces.insert("Iterable".to_string(), iterable);
     }
 
     pub fn error(&mut self, message: impl Into<String>, span: Span) {
@@ -506,7 +524,56 @@ impl TypeContext {
                 _ => {}
             }
         }
-        let interface = self.interfaces.get(interface_name)?;
+        if interface_name == "Iterable" {
+            match ty {
+                Type::Array(inner) => {
+                    let mut mappings = HashMap::new();
+                    mappings.insert("Item".to_string(), (**inner).clone());
+                    mappings.insert("Iter".to_string(), Type::ArrayIter(inner.clone()));
+                    return Some(mappings);
+                }
+                Type::Slice(inner) => {
+                    let mut mappings = HashMap::new();
+                    mappings.insert("Item".to_string(), (**inner).clone());
+                    mappings.insert("Iter".to_string(), Type::SliceIter(inner.clone()));
+                    return Some(mappings);
+                }
+                _ => {}
+            }
+        }
+
+        if let Type::GenericParam { id, constraint, .. } = ty {
+            if let Some(c) = constraint {
+                if c == interface_name {
+                    let mut mappings = HashMap::new();
+                    if let Some(itf) = self.interfaces.get(c) {
+                        for assoc in &itf.associated_types {
+                            mappings.insert(
+                                assoc.clone(),
+                                Type::Projection {
+                                    base: *id,
+                                    assoc: assoc.clone(),
+                                },
+                            );
+                        }
+                    }
+                    return Some(mappings);
+                }
+            }
+        }
+        if let Type::Interface(name) = ty {
+            if name == interface_name {
+                let mut mappings = HashMap::new();
+                if let Some(itf) = self.interfaces.get(name) {
+                    for assoc in &itf.associated_types {
+                        mappings.insert(assoc.clone(), Type::Associated(name.clone(), assoc.clone()));
+                    }
+                }
+                return Some(mappings);
+            }
+        }
+
+        let interface = self.interfaces.get(interface_name)?.clone();
         let mut mappings = HashMap::new();
         for (method_name, req) in &interface.methods {
             let full_name = format!("{}.{}", ty.get_name(), method_name);
@@ -520,6 +587,19 @@ impl TypeContext {
                  self.unify_associated_internal(&req_ret, &sig.return_type, interface_name, &mut mappings);
             }
         }
+        
+        // Special case for Iterable: Item is often not directly in the iter() signature,
+        // but it is the Item of the returned Iter (which must satisfy Iterator).
+        if interface_name == "Iterable" && !mappings.contains_key("Item") {
+            if let Some(iter_ty) = mappings.get("Iter") {
+                if let Some(it_mappings) = self.infer_associated_types(iter_ty, "Iterator") {
+                    if let Some(item_ty) = it_mappings.get("Item") {
+                        mappings.insert("Item".to_string(), item_ty.clone());
+                    }
+                }
+            }
+        }
+
         if interface.associated_types.iter().all(|name| mappings.contains_key(name)) {
             Some(mappings)
         } else {

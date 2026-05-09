@@ -143,22 +143,35 @@ pub fn check_statement(
         HirStatement::Break(_) | HirStatement::Continue(_) => Type::Never,
         HirStatement::For(f) => {
             let iter_ty = check_expression(ctx, &mut f.iterable, None);
-            let elem_ty = match &iter_ty {
-                Type::Array(inner) => *inner.clone(),
-                Type::Slice(inner) => *inner.clone(),
-                Type::String => Type::String,
-                _ => {
-                    if iter_ty != Type::Error {
+
+            // Determine the element type by routing through the Iterable protocol.
+            let elem_ty = if iter_ty == Type::String {
+                Type::String
+            } else if iter_ty == Type::Error {
+                Type::Error
+            } else if crate::check_expr::satisfies_interface(ctx, &iter_ty, "Iterable") {
+                // Resolve the Item associated type from Iterable
+                match ctx.infer_associated_types(&iter_ty, "Iterable") {
+                    Some(mappings) => mappings.get("Item").cloned().unwrap_or(Type::Error),
+                    None => {
                         ctx.error(
-                            format!(
-                                "for iterable must be an array, slice, or string, found {}",
-                                iter_ty
-                            ),
+                            format!("could not infer 'Item' from Iterable type '{}'", iter_ty),
                             f.span,
                         );
+                        Type::Error
                     }
-                    Type::Error
                 }
+            } else {
+                if iter_ty != Type::Error {
+                    ctx.error(
+                        format!(
+                            "type '{}' does not satisfy Iterable — implement 'iter(self) -> Iter' where Iter: Iterator",
+                            iter_ty
+                        ),
+                        f.span,
+                    );
+                }
+                Type::Error
             };
 
             ctx.scopes.push_scope();

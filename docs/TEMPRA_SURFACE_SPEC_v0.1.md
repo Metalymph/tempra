@@ -222,7 +222,8 @@ Rules:
 - Associated type inference is interface-wide. Missing/conflicting associated type inference is an error.
 - Associated types are visible outside interfaces via projection syntax `T.Output`.
 - Projection resolves during specialization to concrete types.
-- Associated type projection is also supported as an expression (e.g. `T.Item` returns the type value).
+- **Projection is type-position only.** It is valid in: return types, parameter types, variable annotations, and compound type arguments (e.g. `Array(T.Item)`).
+- **Projection in expression position is a type error.** `let x = T.Item` and `print(T.Item)` are rejected with a diagnostic: *associated type projection is only valid in type positions*.
 - Nested projection is supported in compound types (e.g. `Array(T.Item)`).
 - Cyclic associated type inference is rejected.
 

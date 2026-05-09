@@ -2261,40 +2261,43 @@ fn check_member(ctx: &mut TypeContext, m: &mut HirMember, _expected: Option<&Typ
         }
     }
 
-    // Support associated type projection in expression position (e.g. T.Item or MyIter.Item)
+    // Projection (T.Item, MyIter.Item) is only valid in type positions.
+    // If we reach here with a Meta object, detect the pattern and emit a clear diagnostic
+    // rather than silently resolving it as an expression value.
     if let Type::Meta(inner) = &object_ty {
-        if let Type::GenericParam { id, .. } = inner.as_ref() {
-            // Find the generic parameter info
-            let constraint = ctx.current_generic_params_info.iter()
-                .find(|p| p.id == *id)
-                .and_then(|p| p.constraint.clone());
+        // Check if this looks like an associated type projection attempt
+        let is_projection_attempt = match inner.as_ref() {
+            // T.Item where T is a generic param constrained to an interface
+            Type::GenericParam { id, .. } => {
+                ctx.current_generic_params_info.iter()
+                    .find(|p| p.id == *id)
+                    .and_then(|p| p.constraint.as_deref())
+                    .and_then(|iface| ctx.interfaces.get(iface))
+                    .map(|iface| iface.associated_types.contains(&m.field))
+                    .unwrap_or(false)
+            }
+            // MyIter.Item where MyIter is a concrete type satisfying some interface
+            other => {
+                let interfaces = ctx.interfaces.clone();
+                interfaces.values().any(|iface| {
+                    iface.associated_types.contains(&m.field)
+                        && satisfies_interface_no_errors(ctx, other, &iface.name)
+                })
+            }
+        };
 
-            if let Some(interface_name) = constraint {
-                if let Some(interface) = ctx.interfaces.get(&interface_name) {
-                    if interface.associated_types.contains(&m.field) {
-                        return Type::Meta(Box::new(Type::Projection {
-                            base: *id,
-                            assoc: m.field.clone()
-                        }));
-                    }
-                }
-            }
-        } else {
-            // Try to infer from concrete type
-            let interfaces = ctx.interfaces.clone(); // Avoid borrow conflict
-            for (interface_name, interface) in &interfaces {
-                if interface.associated_types.contains(&m.field) {
-                    if satisfies_interface_no_errors(ctx, inner.as_ref(), interface_name) {
-                        if let Some(mappings) = ctx.infer_associated_types(inner.as_ref(), interface_name) {
-                            if let Some(at) = mappings.get(&m.field) {
-                                return Type::Meta(Box::new(at.clone()));
-                            }
-                        }
-                    }
-                }
-            }
+        if is_projection_attempt {
+            ctx.error(
+                format!(
+                    "associated type projection '{}.{}' is only valid in type positions, not in expressions",
+                    inner, m.field
+                ),
+                m.span,
+            );
+            return Type::Error;
         }
     }
+
     if object_ty != Type::Error {
         // Distinguish: shadowed namespace used as a value vs. plain wrong type
         ctx.error(

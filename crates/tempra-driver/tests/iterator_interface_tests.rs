@@ -1,12 +1,10 @@
-use tempra_driver::{check_source, run_source};
+use tempra_driver::check_source;
 
 fn test_source(source: &str) -> Result<(), String> {
     check_source(source).map_err(|e| format!("{:?}", e))
 }
 
-fn test_source_run(source: &str) -> Result<(), String> {
-    run_source(source).map_err(|e| format!("{:?}", e))
-}
+// ─── Satisfaction Tests ───────────────────────────────────────────────────────
 
 #[test]
 fn test_custom_iterator_success() {
@@ -30,7 +28,7 @@ fn test_custom_iterator_success() {
 
         fn main() {
             var it = MyIter { count: 10 };
-            let _res = consume_one[MyIter](it);
+            let dummy = consume_one[MyIter](it);
         }
     "#;
     let res = test_source(source);
@@ -47,7 +45,7 @@ fn test_missing_inout_fails() {
             var count: Int
         }
         extend MyIter {
-            // Missing inout self
+            // Missing inout self — must fail Iterator satisfaction
             fn next(self) -> Int? {
                 return None;
             }
@@ -60,8 +58,7 @@ fn test_missing_inout_fails() {
             consume_one[MyIter](it);
         }
     "#;
-    let res = test_source(source);
-    assert!(res.is_err());
+    assert!(test_source(source).is_err());
 }
 
 #[test]
@@ -69,7 +66,7 @@ fn test_wrong_return_type_fails() {
     let source = r#"
         struct MyIter {}
         extend MyIter {
-            // Returns Int instead of Int?
+            // Returns Int instead of Int? — must fail
             fn next(inout self) -> Int {
                 return 0;
             }
@@ -85,37 +82,121 @@ fn test_wrong_return_type_fails() {
     assert!(test_source(source).is_err());
 }
 
+// ─── Projection Type-Position Tests ──────────────────────────────────────────
+
 #[test]
-fn test_iterator_projection() {
+fn test_projection_in_return_type() {
+    // T.Item is valid in return type position
     let source = r#"
         struct MyIter {}
         extend MyIter {
             fn next(inout self) -> Int? { return None; }
         }
-
+        fn get_item(type T: Iterator, inout it: T) -> T.Item? {
+            it.next()
+        }
         fn main() {
-            type T = MyIter;
-            let t = T.Item;
-            assert(t == Int);
+            var it = MyIter {};
+            let dummy = get_item[MyIter](it);
         }
     "#;
-    // Projection on non-generic T might need T to be bound to Iterator
-    // Or we use a generic function:
-    let source_gen = r#"
+    let res = test_source(source);
+    if let Err(e) = &res {
+        println!("FAIL: {}", e);
+    }
+    assert!(res.is_ok());
+}
+
+#[test]
+fn test_projection_in_param_type() {
+    // T.Item is valid as a parameter type
+    let source = r#"
         struct MyIter {}
         extend MyIter {
             fn next(inout self) -> Int? { return None; }
         }
-        fn check_it(type T: Iterator, x: T.Item) -> T.Item {
-            return x;
+        fn accept_item(type T: Iterator, value: T.Item) -> T.Item {
+            return value;
         }
         fn main() {
-            // If this passes type checking, projection is working
-            let dummy = check_it[MyIter](10);
+            let dummy = accept_item[MyIter](42);
         }
     "#;
-    assert!(test_source(source_gen).is_ok());
+    let res = test_source(source);
+    if let Err(e) = &res {
+        println!("FAIL: {}", e);
+    }
+    assert!(res.is_ok());
 }
+
+#[test]
+fn test_projection_in_nested_type() {
+    // T.Item is valid inside Array(T.Item)
+    let source = r#"
+        struct MyIter {}
+        extend MyIter {
+            fn next(inout self) -> Int? { return None; }
+        }
+        fn collect(type T: Iterator) -> Array(T.Item) {
+            return [];
+        }
+        fn main() {
+            let dummy: Array(Int) = collect[MyIter]();
+        }
+    "#;
+    let res = test_source(source);
+    if let Err(e) = &res {
+        println!("FAIL: {}", e);
+    }
+    assert!(res.is_ok());
+}
+
+// ─── Projection Expression-Position Rejection Tests ──────────────────────────
+
+#[test]
+fn test_projection_in_expression_rejected_generic() {
+    // let x = T.Item inside a generic function must be rejected
+    let source = r#"
+        fn check_it(type T: Iterator) {
+            let x = T.Item;
+        }
+        fn main() {}
+    "#;
+    let res = test_source(source);
+    assert!(res.is_err(), "Expected error for projection in expression position");
+}
+
+#[test]
+fn test_projection_in_expression_rejected_concrete() {
+    // MyIter.Item as expression must be rejected
+    let source = r#"
+        struct MyIter {}
+        extend MyIter {
+            fn next(inout self) -> Int? { return None; }
+        }
+        fn main() {
+            let x = MyIter.Item;
+        }
+    "#;
+    let res = test_source(source);
+    assert!(res.is_err(), "Expected error for concrete projection in expression position");
+}
+
+#[test]
+fn test_projection_in_call_arg_rejected() {
+    // Projection used as a function argument must be rejected
+    let source = r#"
+        fn take_it(x: Int) {}
+        fn check_it(type T: Iterator) {
+            take_it(T.Item);
+        }
+        fn main() {}
+    "#;
+    let res = test_source(source);
+    assert!(res.is_err(), "Expected error for projection passed as call argument");
+}
+
+// ─── Interface-as-Runtime-Type Rejection Tests ───────────────────────────────
 
 #[test]
 fn test_iterator_rejection_as_runtime_type() {

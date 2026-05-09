@@ -226,6 +226,8 @@ dependencies = [
  "tempra-parser",
  "tempra-repl",
  "tempra-session",
+ "tempra-tir",
+ "tempra-tir-lower",
  "tempra-typeck",
 ]
 
@@ -374,6 +376,14 @@ dependencies = [
 name = "tempra-tir"
 version = "0.1.0"
 dependencies = [
+ "thiserror",
+]
+
+[[package]]
+name = "tempra-tir-interp"
+version = "0.1.0"
+dependencies = [
+ "tempra-tir",
  "thiserror",
 ]
 

@@ -28,6 +28,7 @@ members = [
   "crates/tempra-testing",
   "crates/tempra-tir",
   "crates/tempra-tir-lower",
+  "crates/tempra-tir-interp",
 ]
 resolver = "2"
 
@@ -68,6 +69,7 @@ tempra-testing = { path = "crates/tempra-testing" }
 tempra-driver = { path = "crates/tempra-driver" }
 tempra-tir = { path = "crates/tempra-tir" }
 tempra-tir-lower = { path = "crates/tempra-tir-lower" }
+tempra-tir-interp = { path = "crates/tempra-tir-interp" }
 
 
 [profile.release]

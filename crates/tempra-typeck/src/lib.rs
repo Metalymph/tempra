@@ -19,7 +19,7 @@ pub mod error;
 pub mod pattern;
 pub mod types;
 
-pub use check_file::check_file;
+pub use check_file::{check_file, check_file_with_context};
 pub use env::VariableInfo;
 pub use error::TypeError;
 pub use types::Type;

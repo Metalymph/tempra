@@ -15,6 +15,8 @@ pub enum Commands {
     Check(CheckArgs),
     Test(TestArgs),
     Repl,
+    /// Emit TIR (Tempra Intermediate Representation) for a source file [experimental]
+    EmitTir(EmitTirArgs),
 }
 
 #[derive(Parser)]
@@ -30,5 +32,10 @@ pub struct CheckArgs {
 
 #[derive(Parser)]
 pub struct TestArgs {
+    pub path: PathBuf,
+}
+
+#[derive(Parser)]
+pub struct EmitTirArgs {
     pub path: PathBuf,
 }

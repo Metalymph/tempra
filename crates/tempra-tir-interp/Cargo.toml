@@ -1,0 +1,8 @@
+[package]
+name = "tempra-tir-interp"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tempra-tir.workspace = true
+thiserror = "1"

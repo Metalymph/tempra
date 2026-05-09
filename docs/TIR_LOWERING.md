@@ -47,3 +47,33 @@ Parameters are treated as local slots initialized in the entry block. This ensur
 
 ## Call Policy
 Functions must be present in the `TypeContext` to be callable. The lowerer performs a simple arity check and declares the function in the `ModuleBuilder` to obtain a stable `TirFunctionId`.
+
+---
+
+## Phase 12.3 — `emit-tir` CLI (Experimental)
+
+### Usage
+```bash
+tempra emit-tir <file.tmpr>
+```
+
+This command parses, type-checks, lowers to TIR, verifies the result, and prints a human-readable representation to stdout. It does **not** execute the program.
+
+### Pipeline
+1. `parse_source` → AST
+2. `lower_file` → HIR
+3. `check_file_with_context` → TypeContext
+4. `lower_function` (per function) → TIR instructions
+5. `verify_module` → structural validation
+6. `format_tir_module` → pretty-printed output
+
+### Error Behavior
+- **Parse/Type errors** are reported in the existing format.
+- **Unsupported constructs** produce: `emit-tir unsupported in fn '<name>': <detail>`
+- **Internal verifier failures** produce: `internal TIR verifier error: <detail>`
+- The command **never panics** on user input.
+
+### Non-Goals
+- `emit-tir` does not affect `tempra run`, `tempra check`, or `tempra test`.
+- TIR emission is not required for any existing workflow.
+- This is an experimental developer tool for inspecting the lowering output.

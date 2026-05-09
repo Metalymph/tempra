@@ -1,0 +1,46 @@
+warning: variable `last_val` is assigned to, but never used
+    --> crates/tempra-interpreter/src/eval_expr.rs:1711:21
+     |
+1711 |                 let mut last_val = Value::Unit;
+     |                     ^^^^^^^^^^^^
+     |
+     = note: consider using `_last_val` instead
+     = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: value assigned to `last_val` is never read
+    --> crates/tempra-interpreter/src/eval_expr.rs:1741:33
+     |
+1741 | ...                   last_val = v.clone();
+     |                       ^^^^^^^^
+     |
+     = help: maybe it is overwritten before being read?
+     = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: value assigned to `last_val` is never read
+    --> crates/tempra-interpreter/src/eval_expr.rs:1857:41
+     |
+1857 | ...                   last_val = v.clone();
+     |                       ^^^^^^^^
+     |
+     = help: maybe it is overwritten before being read?
+
+warning: `tempra-interpreter` (lib) generated 3 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/iterable_tests.rs (target/debug/deps/iterable_tests-2c47f0c14043dae1)
+
+running 1 test
+FAIL: TypeError("[TypeError { message: \"could not infer associated type 'Item'\", span: Span { start: 0, end: 0 } }, TypeError { message: \"type 'CounterRange' does not satisfy Iterable — implement 'iter(self) -> Iter' where Iter: Iterator\", span: Span { start: 533, end: 590 } }]")
+
+thread 'test_custom_iterable' (26824191) panicked at crates/tempra-driver/tests/iterable_tests.rs:129:5:
+assertion failed: res.is_ok()
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test test_custom_iterable ... FAILED
+
+failures:
+
+failures:
+    test_custom_iterable
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p tempra-driver --test iterable_tests`

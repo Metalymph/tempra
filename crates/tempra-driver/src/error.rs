@@ -6,6 +6,7 @@ pub enum DriverError {
     ParseError(String),
     TypeError(String),
     RuntimeError(String),
+    TirLowerError(String),
     Exit(i32),
 }
 
@@ -22,6 +23,7 @@ impl std::fmt::Display for DriverError {
             DriverError::ParseError(e) => write!(f, "Parse error:\n{}", e),
             DriverError::TypeError(e) => write!(f, "Type error:\n{}", e),
             DriverError::RuntimeError(e) => write!(f, "{}", e),
+            DriverError::TirLowerError(e) => write!(f, "TIR lowering error:\n{}", e),
             DriverError::Exit(code) => write!(f, "Exit signal ({})", code),
         }
     }

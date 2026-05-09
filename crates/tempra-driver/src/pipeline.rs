@@ -2,6 +2,7 @@ use crate::error::DriverError;
 use std::fs;
 use std::path::Path;
 use tempra_hir::lower_file;
+use tempra_hir::HirItem;
 use tempra_interpreter::run;
 use tempra_parser::parse_source;
 use tempra_typeck::check_file as typeck_check_file;
@@ -59,6 +60,49 @@ pub fn check_source(source: &str) -> Result<(), DriverError> {
 pub fn check_file(path: &Path) -> Result<(), DriverError> {
     let source = fs::read_to_string(path)?;
     check_source(&source)
+}
+
+pub fn emit_tir_source(source: &str) -> Result<String, DriverError> {
+    let ast = parse_source(source).map_err(|e| DriverError::ParseError(format!("{:?}", e)))?;
+
+    let mut hir = lower_file(source, &ast);
+
+    let type_ctx = tempra_typeck::check_file_with_context(&mut hir).map_err(|errs| DriverError::TypeError(format!("{:?}", errs)))?;
+
+    let mut module_builder = tempra_tir::builder::ModuleBuilder::new();
+
+    let mut errors = Vec::new();
+
+    for item in &hir.items {
+        if let HirItem::Function(func) = item {
+            match tempra_tir_lower::lower::lower_function(func, &type_ctx, &mut module_builder) {
+                Ok(tir_func) => {
+                    module_builder.add_function(tir_func);
+                }
+                Err(e) => {
+                    errors.push(format!("emit-tir unsupported in fn '{}': {}", func.name, e));
+                }
+            }
+        }
+    }
+
+    if !errors.is_empty() {
+        return Err(DriverError::TirLowerError(errors.join("\n")));
+    }
+
+    let module = module_builder.module;
+
+    if let Err(verifier_errors) = tempra_tir::verifier::verify_module(&module) {
+        let msgs: Vec<String> = verifier_errors.iter().map(|e| format!("internal TIR verifier error: {:?}", e)).collect();
+        return Err(DriverError::TirLowerError(msgs.join("\n")));
+    }
+
+    Ok(tempra_tir::pretty::format_tir_module(&module))
+}
+
+pub fn emit_tir_file(path: &Path) -> Result<String, DriverError> {
+    let source = fs::read_to_string(path)?;
+    emit_tir_source(&source)
 }
 
 pub fn test_source(source: &str) -> Result<(), DriverError> {
@@ -176,5 +220,33 @@ mod tests {
         ";
         let result = test_source(source);
         assert!(matches!(result, Err(DriverError::RuntimeError(msg)) if msg.contains("boom")));
+    }
+
+    #[test]
+    fn test_emit_tir_simple_add() {
+        let source = "
+        fn add(a: Int64, b: Int64) -> Int64 {
+            return a + b
+        }
+        ";
+        let result = emit_tir_source(source);
+        assert!(result.is_ok(), "Expected TIR output, got {:?}", result.err().unwrap());
+        let tir = result.unwrap();
+        assert!(tir.contains("fn add"));
+        assert!(tir.contains("add %"));
+        assert!(tir.contains("ret %"));
+    }
+
+    #[test]
+    fn test_emit_tir_unsupported_for_error() {
+        let source = "
+        fn main() {
+            for i in [1, 2, 3] {
+                print(i)
+            }
+        }
+        ";
+        let result = emit_tir_source(source);
+        assert!(matches!(result, Err(DriverError::TirLowerError(_))));
     }
 }

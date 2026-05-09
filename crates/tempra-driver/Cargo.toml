@@ -17,6 +17,8 @@ tempra-backend-cranelift.workspace = true
 tempra-linker.workspace = true
 tempra-fs.workspace = true
 tempra-package.workspace = true
+tempra-tir.workspace = true
+tempra-tir-lower.workspace = true
 anyhow.workspace = true
 
 [dev-dependencies]

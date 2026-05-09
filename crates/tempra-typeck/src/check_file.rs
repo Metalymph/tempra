@@ -38,3 +38,35 @@ pub fn check_file(file: &mut HirFile) -> Result<(), Vec<TypeError>> {
         Err(ctx.errors)
     }
 }
+
+/// Type-check a complete HIR file and return the populated TypeContext.
+///
+/// This is used by downstream passes (e.g. TIR lowering) that need
+/// the type information gathered during checking.
+pub fn check_file_with_context(file: &mut HirFile) -> Result<TypeContext, Vec<TypeError>> {
+    let mut ctx = TypeContext::new();
+    ctx.interpreter = Some(tempra_interpreter::interpreter::Interpreter::new(file));
+
+    register_items(&mut ctx, &file.items);
+
+    for item in &mut file.items {
+        check_item(&mut ctx, item);
+    }
+
+    if !file.top_level_statements.is_empty() {
+        ctx.current_is_fallible = true;
+        ctx.current_return_type = None;
+        ctx.scopes.push_scope();
+        for stmt in &mut file.top_level_statements {
+            crate::check_stmt::check_statement(&mut ctx, stmt, None);
+        }
+        ctx.scopes.pop_scope();
+        ctx.current_is_fallible = false;
+    }
+
+    if ctx.errors.is_empty() {
+        Ok(ctx)
+    } else {
+        Err(ctx.errors)
+    }
+}

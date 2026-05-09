@@ -29,6 +29,7 @@ members = [
   "crates/tempra-tir",
   "crates/tempra-tir-lower",
   "crates/tempra-tir-interp",
+  "crates/tempra-bytecode",
 ]
 resolver = "2"
 
@@ -70,6 +71,7 @@ tempra-driver = { path = "crates/tempra-driver" }
 tempra-tir = { path = "crates/tempra-tir" }
 tempra-tir-lower = { path = "crates/tempra-tir-lower" }
 tempra-tir-interp = { path = "crates/tempra-tir-interp" }
+tempra-bytecode = { path = "crates/tempra-bytecode" }
 
 
 [profile.release]

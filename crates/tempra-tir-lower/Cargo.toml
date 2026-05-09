@@ -1,0 +1,14 @@
+[package]
+name = "tempra-tir-lower"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+tempra-hir = { path = "../tempra-hir" }
+tempra-typeck = { path = "../tempra-typeck" }
+tempra-tir = { path = "../tempra-tir" }
+tempra-span = { path = "../tempra-span" }
+tempra-ast = { path = "../tempra-ast" }
+thiserror = "1"

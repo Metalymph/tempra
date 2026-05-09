@@ -188,6 +188,8 @@ dependencies = [
  "anyhow",
  "clap",
  "tempra-driver",
+ "tempra-interpreter",
+ "tempra-repl",
  "tempra-session",
 ]
 
@@ -222,6 +224,7 @@ dependencies = [
  "tempra-mir",
  "tempra-package",
  "tempra-parser",
+ "tempra-repl",
  "tempra-session",
  "tempra-typeck",
 ]
@@ -320,7 +323,13 @@ name = "tempra-repl"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "tempra-ast",
  "tempra-driver",
+ "tempra-hir",
+ "tempra-interpreter",
+ "tempra-parser",
+ "tempra-span",
+ "tempra-typeck",
 ]
 
 [[package]]
@@ -359,6 +368,25 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "tempra-driver",
+]
+
+[[package]]
+name = "tempra-tir"
+version = "0.1.0"
+dependencies = [
+ "thiserror",
+]
+
+[[package]]
+name = "tempra-tir-lower"
+version = "0.1.0"
+dependencies = [
+ "tempra-ast",
+ "tempra-hir",
+ "tempra-span",
+ "tempra-tir",
+ "tempra-typeck",
+ "thiserror",
 ]
 
 [[package]]

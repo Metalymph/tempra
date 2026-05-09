@@ -956,6 +956,15 @@ impl Interpreter {
                                 }
                                 return Ok(ControlFlow::Value(Value::Bool(arr.borrow().is_empty())));
                             }
+                            if member.field == "iter" {
+                                if !call.args.is_empty() {
+                                    return Err("Method 'iter' expects 0 arguments".into());
+                                }
+                                return Ok(ControlFlow::Value(Value::ArrayIter(crate::value::ArrayIterValue {
+                                    array: arr.clone(),
+                                    index: std::rc::Rc::new(std::cell::RefCell::new(0)),
+                                })));
+                            }
                             return Err(format!("Unknown method '{}' on Array", member.field));
                         }
                         Value::Slice(slice) => {
@@ -971,7 +980,49 @@ impl Interpreter {
                                 }
                                 return Ok(ControlFlow::Value(Value::Bool(slice.len() == 0)));
                             }
+                            if member.field == "iter" {
+                                if !call.args.is_empty() {
+                                    return Err("Method 'iter' expects 0 arguments".into());
+                                }
+                                return Ok(ControlFlow::Value(Value::SliceIter(crate::value::SliceIterValue {
+                                    slice: slice.clone(),
+                                    index: std::rc::Rc::new(std::cell::RefCell::new(0)),
+                                })));
+                            }
                             return Err(format!("Unknown method '{}' on Slice", member.field));
+                        }
+                        Value::ArrayIter(iter) => {
+                            if member.field == "next" {
+                                if !call.args.is_empty() {
+                                    return Err("Method 'next' expects 0 arguments".into());
+                                }
+                                let mut idx = iter.index.borrow_mut();
+                                let arr = iter.array.borrow();
+                                if *idx < arr.len() {
+                                    let val = arr[*idx].clone();
+                                    *idx += 1;
+                                    return Ok(ControlFlow::Value(Value::Option(crate::value::OptionValue::Some(Box::new(val)))));
+                                } else {
+                                    return Ok(ControlFlow::Value(Value::Option(crate::value::OptionValue::None)));
+                                }
+                            }
+                            return Err(format!("Unknown method '{}' on ArrayIter", member.field));
+                        }
+                        Value::SliceIter(iter) => {
+                            if member.field == "next" {
+                                if !call.args.is_empty() {
+                                    return Err("Method 'next' expects 0 arguments".into());
+                                }
+                                let mut idx = iter.index.borrow_mut();
+                                if *idx < iter.slice.len() {
+                                    let val = iter.slice.get(*idx).unwrap();
+                                    *idx += 1;
+                                    return Ok(ControlFlow::Value(Value::Option(crate::value::OptionValue::Some(Box::new(val)))));
+                                } else {
+                                    return Ok(ControlFlow::Value(Value::Option(crate::value::OptionValue::None)));
+                                }
+                            }
+                            return Err(format!("Unknown method '{}' on SliceIter", member.field));
                         }
                         Value::Command(cmd) => {
                             if member.field != "run" {

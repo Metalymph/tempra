@@ -82,6 +82,7 @@ pub struct InterfaceInfo {
 pub struct InterfaceMethodRequirementInfo {
     pub name: String,
     pub params: Vec<Type>,
+    pub param_inout: Vec<bool>,
     pub return_type: Type,
 }
 
@@ -112,7 +113,7 @@ pub struct TypeContext {
 
 impl TypeContext {
     pub fn new() -> Self {
-        Self {
+        let mut ctx = Self {
             functions: HashMap::new(),
             structs: HashMap::new(),
             enums: HashMap::new(),
@@ -130,7 +131,57 @@ impl TypeContext {
             is_comptime: false,
             interpreter: None,
             specialization_log: HashSet::new(),
-        }
+        };
+        ctx.register_builtins();
+        ctx
+    }
+
+    pub fn register_builtins(&mut self) {
+        let mut collection = InterfaceInfo {
+            name: "Collection".to_string(),
+            visibility: Visibility::Public,
+            methods: HashMap::new(),
+            associated_types: vec!["Item".to_string()],
+        };
+        collection.methods.insert(
+            "len".to_string(),
+            InterfaceMethodRequirementInfo {
+                name: "len".to_string(),
+                params: vec![Type::SelfType],
+                param_inout: vec![false],
+                return_type: Type::Int,
+            },
+        );
+        collection.methods.insert(
+            "is_empty".to_string(),
+            InterfaceMethodRequirementInfo {
+                name: "is_empty".to_string(),
+                params: vec![Type::SelfType],
+                param_inout: vec![false],
+                return_type: Type::Bool,
+            },
+        );
+        self.interfaces.insert("Collection".to_string(), collection);
+
+        let mut iterator = InterfaceInfo {
+            name: "Iterator".to_string(),
+            visibility: Visibility::Public,
+            methods: HashMap::new(),
+            associated_types: vec!["Item".to_string()],
+        };
+        iterator.methods.insert(
+            "next".to_string(),
+            InterfaceMethodRequirementInfo {
+                name: "next".to_string(),
+                params: vec![Type::SelfType],
+                param_inout: vec![true],
+                return_type: Type::Option(Box::new(Type::Associated(
+                    "Iterator".to_string(),
+                    "Item".to_string(),
+                ))),
+            },
+        );
+        self.interfaces.insert("Iterator".to_string(), iterator);
     }
 
     pub fn error(&mut self, message: impl Into<String>, span: Span) {
@@ -170,7 +221,7 @@ impl TypeContext {
             return Type::Enum(name.to_string(), vec![]);
         }
         if self.interfaces.contains_key(name) {
-            return Type::Struct(name.to_string(), vec![]);
+            return Type::Interface(name.to_string());
         }
         Type::Unknown
     }
@@ -359,7 +410,7 @@ impl TypeContext {
                         params: req.params.iter().enumerate().map(|(i, p_ty)| FunctionParam {
                             name: if i == 0 { "self".to_string() } else { format!("p{}", i) },
                             ty: self.resolve_associated_to_projections(&substitute_self(p_ty, receiver_ty), id),
-                            is_inout: false,
+                            is_inout: req.param_inout[i],
                             kind: ParameterKind::Runtime,
                         }).collect(),
                         return_type: self.resolve_associated_to_projections(&substitute_self(&req.return_type, receiver_ty), id),
@@ -386,7 +437,7 @@ impl TypeContext {
                             params: req.params.iter().enumerate().map(|(i, p_ty)| FunctionParam {
                                 name: if i == 0 { "self".to_string() } else { format!("p{}", i) },
                                 ty: self.resolve_associated_types(&substitute_self(p_ty, receiver_ty), &mappings),
-                                is_inout: false,
+                                is_inout: req.param_inout[i],
                                 kind: ParameterKind::Runtime,
                             }).collect(),
                             return_type: self.resolve_associated_types(&substitute_self(&req.return_type, receiver_ty), &mappings),
@@ -435,6 +486,26 @@ impl TypeContext {
     }
 
     pub fn infer_associated_types(&self, ty: &Type, interface_name: &str) -> Option<HashMap<String, Type>> {
+        if interface_name == "Collection" {
+            match ty {
+                Type::Array(inner) | Type::Slice(inner) => {
+                    let mut mappings = HashMap::new();
+                    mappings.insert("Item".to_string(), (**inner).clone());
+                    return Some(mappings);
+                }
+                _ => {}
+            }
+        }
+        if interface_name == "Iterator" {
+            match ty {
+                Type::ArrayIter(inner) | Type::SliceIter(inner) => {
+                    let mut mappings = HashMap::new();
+                    mappings.insert("Item".to_string(), (**inner).clone());
+                    return Some(mappings);
+                }
+                _ => {}
+            }
+        }
         let interface = self.interfaces.get(interface_name)?;
         let mut mappings = HashMap::new();
         for (method_name, req) in &interface.methods {
@@ -572,6 +643,11 @@ impl TypeContext {
                     span,
                 );
             }
+        } else if let Type::Interface(_) = ty {
+            self.error(
+                format!("interfaces are static constraints and cannot be used as runtime types"),
+                span,
+            );
         } else if let Type::Enum(name, _) = ty {
             if self.interfaces.contains_key(name) {
                 self.error(

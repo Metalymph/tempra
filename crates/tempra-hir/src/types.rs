@@ -88,6 +88,9 @@ pub enum Type {
         base: GenericParamId,
         assoc: String,
     },
+    Interface(String),
+    ArrayIter(Box<Type>),
+    SliceIter(Box<Type>),
 }
 
 impl Type {
@@ -293,6 +296,9 @@ impl fmt::Display for Type {
             Type::SelfType => write!(f, "Self"),
             Type::Associated(_, name) => write!(f, "{}", name),
             Type::Projection { base, assoc } => write!(f, "GP({:?}).{}", base, assoc),
+            Type::Interface(name) => write!(f, "{}", name),
+            Type::ArrayIter(inner) => write!(f, "ArrayIter({})", inner),
+            Type::SliceIter(inner) => write!(f, "SliceIter({})", inner),
         }
     }
 }
@@ -398,6 +404,9 @@ impl Type {
         match self {
             Type::Struct(name, _) => name.clone(),
             Type::Enum(name, _) => name.clone(),
+            Type::Interface(name) => name.clone(),
+            Type::ArrayIter(_) => "ArrayIter".to_string(),
+            Type::SliceIter(_) => "SliceIter".to_string(),
             _ => "Unknown".to_string(),
         }
     }
@@ -408,6 +417,8 @@ pub fn substitute_self(ty: &Type, self_ty: &Type) -> Type {
         Type::SelfType => self_ty.clone(),
         Type::Array(inner) => Type::Array(Box::new(substitute_self(inner, self_ty))),
         Type::Slice(inner) => Type::Slice(Box::new(substitute_self(inner, self_ty))),
+        Type::ArrayIter(inner) => Type::ArrayIter(Box::new(substitute_self(inner, self_ty))),
+        Type::SliceIter(inner) => Type::SliceIter(Box::new(substitute_self(inner, self_ty))),
         Type::Option(inner) => Type::Option(Box::new(substitute_self(inner, self_ty))),
         Type::Result(ok, err) => Type::Result(
             Box::new(substitute_self(ok, self_ty)),

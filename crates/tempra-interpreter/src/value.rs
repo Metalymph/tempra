@@ -30,6 +30,8 @@ pub enum Value {
     Cell(Rc<RefCell<Value>>),
     Namespace(String),
     Type(Type),
+    ArrayIter(ArrayIterValue),
+    SliceIter(SliceIterValue),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -78,6 +80,18 @@ pub struct SliceValue {
     pub parent: SliceParent,
     pub start: usize,
     pub end: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ArrayIterValue {
+    pub array: Rc<RefCell<Vec<Value>>>,
+    pub index: Rc<RefCell<usize>>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SliceIterValue {
+    pub slice: SliceValue,
+    pub index: Rc<RefCell<usize>>,
 }
 
 impl SliceValue {
@@ -360,6 +374,8 @@ impl Value {
             Value::Cell(c) => c.borrow().type_name(),
             Value::Namespace(_) => "Namespace",
             Value::Type(_) => "Type",
+            Value::ArrayIter(_) => "ArrayIter",
+            Value::SliceIter(_) => "SliceIter",
         }
     }
 
@@ -400,6 +416,8 @@ impl Value {
             }
             Value::Closure(_) => "fn(...)".to_string(),
             Value::Namespace(n) => n.clone(),
+            Value::ArrayIter(_) => "ArrayIter(...)".to_string(),
+            Value::SliceIter(_) => "SliceIter(...)".to_string(),
             _ => self.to_string(),
         }
     }
@@ -499,6 +517,8 @@ impl std::fmt::Display for Value {
             Value::Cell(c) => write!(f, "Ref({})", c.borrow().to_repr()),
             Value::Namespace(n) => write!(f, "{}", n),
             Value::Type(t) => write!(f, "{}", t),
+            Value::ArrayIter(_) => write!(f, "ArrayIter(...)"),
+            Value::SliceIter(_) => write!(f, "SliceIter(...)"),
         }
     }
 }
@@ -527,6 +547,8 @@ impl PartialEq for Value {
             (Value::Cell(a), Value::Cell(b)) => Rc::ptr_eq(a, b) || *a.borrow() == *b.borrow(),
             (Value::Namespace(a), Value::Namespace(b)) => a == b,
             (Value::Type(a), Value::Type(b)) => a == b,
+            (Value::ArrayIter(a), Value::ArrayIter(b)) => a == b,
+            (Value::SliceIter(a), Value::SliceIter(b)) => a == b,
             _ => false,
         }
     }

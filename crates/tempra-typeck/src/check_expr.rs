@@ -122,9 +122,9 @@ pub fn check_expression(
     }
 }
 
-fn is_valid_type(ty: &Type) -> bool {
+pub fn is_valid_type(ty: &Type) -> bool {
     match ty {
-        Type::Unknown | Type::Error => false,
+        Type::Unknown | Type::Error | Type::Interface(_) => false,
         Type::Array(inner) => is_valid_type(inner),
         Type::Slice(inner) => is_valid_type(inner),
         Type::Tuple(elems) => elems.iter().all(is_valid_type),
@@ -333,8 +333,8 @@ fn resolve_name(
         return Ok(ResolvedName::Type(Type::Enum(name.to_string(), vec![])));
     }
     if let Some(_) = ctx.interfaces.get(name) {
-        // Interface names can be used as type values (e.g. for constraints)
-        return Ok(ResolvedName::Type(Type::Struct(name.to_string(), vec![])));
+        // Interface names are not valid value types (except as constraints)
+        return Ok(ResolvedName::Type(Type::Interface(name.to_string())));
     }
 
     if let Some(param) = ctx
@@ -2260,6 +2260,41 @@ fn check_member(ctx: &mut TypeContext, m: &mut HirMember, _expected: Option<&Typ
             }
         }
     }
+
+    // Support associated type projection in expression position (e.g. T.Item or MyIter.Item)
+    if let Type::Meta(inner) = &object_ty {
+        if let Type::GenericParam { id, .. } = inner.as_ref() {
+            // Find the generic parameter info
+            let constraint = ctx.current_generic_params_info.iter()
+                .find(|p| p.id == *id)
+                .and_then(|p| p.constraint.clone());
+
+            if let Some(interface_name) = constraint {
+                if let Some(interface) = ctx.interfaces.get(&interface_name) {
+                    if interface.associated_types.contains(&m.field) {
+                        return Type::Meta(Box::new(Type::Projection {
+                            base: *id,
+                            assoc: m.field.clone()
+                        }));
+                    }
+                }
+            }
+        } else {
+            // Try to infer from concrete type
+            let interfaces = ctx.interfaces.clone(); // Avoid borrow conflict
+            for (interface_name, interface) in &interfaces {
+                if interface.associated_types.contains(&m.field) {
+                    if satisfies_interface_no_errors(ctx, inner.as_ref(), interface_name) {
+                        if let Some(mappings) = ctx.infer_associated_types(inner.as_ref(), interface_name) {
+                            if let Some(at) = mappings.get(&m.field) {
+                                return Type::Meta(Box::new(at.clone()));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
     if object_ty != Type::Error {
         // Distinguish: shadowed namespace used as a value vs. plain wrong type
         ctx.error(
@@ -3652,6 +3687,16 @@ fn semantic_check_block(block: &HirBlock, ctx: &TypeContext) -> Result<(), (Stri
 }
 
 fn satisfies_interface(ctx: &mut TypeContext, ty: &Type, interface_name: &str) -> bool {
+    if interface_name == "Collection" {
+        if matches!(ty, Type::Array(_) | Type::Slice(_)) {
+            return true;
+        }
+    }
+    if interface_name == "Iterator" {
+        if matches!(ty, Type::ArrayIter(_) | Type::SliceIter(_)) {
+            return true;
+        }
+    }
     let interface = match ctx.interfaces.get(interface_name) {
         Some(i) => i.clone(),
         None => {
@@ -3680,8 +3725,30 @@ fn satisfies_interface(ctx: &mut TypeContext, ty: &Type, interface_name: &str) -
                 if sig.params.len() != req_params.len() {
                     method_match = false;
                 } else {
-                    for (p_prov, p_req) in sig.params.iter().zip(req_params.iter()) {
-                        if let Err(e) = unify_associated(p_req, &p_prov.ty, interface_name, &mut mappings) {
+                    for (i, ((p_prov, p_req), req_inout)) in sig
+                        .params
+                        .iter()
+                        .zip(req_params.iter())
+                        .zip(req.param_inout.iter())
+                        .enumerate()
+                    {
+                        if p_prov.is_inout != *req_inout {
+                            ctx.error(
+                                format!(
+                                    "mismatched inout for parameter {} of '{}': expected {}, found {}",
+                                    if i == 0 { "self".to_string() } else { i.to_string() },
+                                    method_name,
+                                    if *req_inout { "inout" } else { "normal" },
+                                    if p_prov.is_inout { "inout" } else { "normal" }
+                                ),
+                                tempra_span::Span::new(0, 0),
+                            );
+                            method_match = false;
+                            break;
+                        }
+                        if let Err(e) =
+                            unify_associated(p_req, &p_prov.ty, interface_name, &mut mappings)
+                        {
                             ctx.error(e, tempra_span::Span::new(0, 0));
                             method_match = false;
                             break;
@@ -3731,6 +3798,16 @@ fn satisfies_interface(ctx: &mut TypeContext, ty: &Type, interface_name: &str) -
 }
 
 pub fn satisfies_interface_no_errors(ctx: &TypeContext, ty: &Type, interface_name: &str) -> bool {
+    if interface_name == "Collection" {
+        if matches!(ty, Type::Array(_) | Type::Slice(_)) {
+            return true;
+        }
+    }
+    if interface_name == "Iterator" {
+        if matches!(ty, Type::ArrayIter(_) | Type::SliceIter(_)) {
+            return true;
+        }
+    }
     let interface = match ctx.interfaces.get(interface_name) {
         Some(i) => i.clone(),
         None => return false,
@@ -3751,8 +3828,19 @@ pub fn satisfies_interface_no_errors(ctx: &TypeContext, ty: &Type, interface_nam
                 if sig.params.len() != req_params.len() {
                     method_match = false;
                 } else {
-                    for (p_prov, p_req) in sig.params.iter().zip(req_params.iter()) {
-                        if unify_associated(p_req, &p_prov.ty, interface_name, &mut mappings).is_err() {
+                    for ((p_prov, p_req), req_inout) in sig
+                        .params
+                        .iter()
+                        .zip(req_params.iter())
+                        .zip(req.param_inout.iter())
+                    {
+                        if p_prov.is_inout != *req_inout {
+                            method_match = false;
+                            break;
+                        }
+                        if unify_associated(p_req, &p_prov.ty, interface_name, &mut mappings)
+                            .is_err()
+                        {
                             method_match = false;
                             break;
                         }

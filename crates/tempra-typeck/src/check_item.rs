@@ -200,7 +200,9 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
                         // And wrap it in Meta because it's a type value parameter.
                         Type::Meta(Box::new(ctx.resolve_type_name(&p.name)))
                     } else {
-                        ctx.resolve_hir_type(&p.ty)
+                        let ty = ctx.resolve_hir_type(&p.ty);
+                        ctx.verify_not_interface(&ty, p.ty.span());
+                        ty
                     };
                     params.push(crate::context::FunctionParam {
                         name: p.name.clone(),
@@ -212,7 +214,11 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
                 let mut return_type = f
                     .return_type
                     .as_ref()
-                    .map(|t| ctx.resolve_hir_type(t))
+                    .map(|t| {
+                        let ty = ctx.resolve_hir_type(t);
+                        ctx.verify_not_interface(&ty, t.span());
+                        ty
+                    })
                     .unwrap_or(Type::Unit);
                 if f.is_fallible && !matches!(return_type, Type::Result(_, _)) {
                     return_type = Type::Result(Box::new(return_type), Box::new(Type::BuiltinError));
@@ -249,11 +255,13 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
                 let mut fields = HashMap::new();
                 let mut field_order = Vec::new();
                 for field in &s.fields {
+                    let field_ty = ctx.resolve_hir_type(&field.ty);
+                    ctx.verify_not_interface(&field_ty, field.span);
                     fields.insert(
                         field.name.clone(),
                         StructFieldInfo {
                             visibility: field.visibility,
-                            ty: ctx.resolve_hir_type(&field.ty),
+                            ty: field_ty,
                             is_mutable: field.is_mutable,
                             has_default: field.default_value.is_some(),
                         },
@@ -302,7 +310,9 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
                 for v in &e.variants {
                     let mut payload = Vec::new();
                     for t in &v.payload {
-                        payload.push(ctx.resolve_hir_type(t));
+                        let ty = ctx.resolve_hir_type(t);
+                        ctx.verify_not_interface(&ty, v.span);
+                        payload.push(ty);
                     }
                     resolved_variants.insert(v.name.clone(), payload);
 
@@ -336,8 +346,10 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
                 let mut methods = HashMap::new();
                 for m in &i.methods {
                     let mut params = Vec::new();
+                    let mut param_inout = Vec::new();
                     for p in &m.parameters {
                         params.push(ctx.resolve_hir_type(&p.ty));
+                        param_inout.push(p.is_inout);
                     }
                     let return_type = ctx.resolve_hir_type(&m.return_type);
                     methods.insert(
@@ -345,6 +357,7 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
                         crate::context::InterfaceMethodRequirementInfo {
                             name: m.name.clone(),
                             params,
+                            param_inout,
                             return_type,
                         },
                     );

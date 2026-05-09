@@ -222,8 +222,26 @@ Rules:
 - Associated type inference is interface-wide. Missing/conflicting associated type inference is an error.
 - Associated types are visible outside interfaces via projection syntax `T.Output`.
 - Projection resolves during specialization to concrete types.
+- Associated type projection is also supported as an expression (e.g. `T.Item` returns the type value).
 - Nested projection is supported in compound types (e.g. `Array(T.Item)`).
 - Cyclic associated type inference is rejected.
+
+### Iterator Protocol
+
+Tempra defines a built-in static interface for iteration:
+
+```tempra
+interface Iterator {
+    type Item
+    fn next(inout self) -> Item?
+}
+```
+
+Rules:
+- `Iterator` is a static-only constraint. It cannot be used as a runtime type.
+- The `next` method MUST be `inout self` as it mutates the iterator state.
+- Built-in collections provide `.iter()` which returns internal iterator types satisfying `Iterator`.
+- Custom types can satisfy `Iterator` by providing a matching `next` method.
 
 
 ---
@@ -865,7 +883,8 @@ Rules:
 - `./...` for relative imports
 - `pkg/...` for package imports
 ---
-23. Subscript Hooks
+
+## 24. Subscript Hooks
 
 Tempra allows user-defined types to support indexing and slicing via special method hooks.
 
@@ -899,3 +918,48 @@ Rules:
 - **String Indexing:** `s[i]` remains intentionally unsupported to avoid common UTF-8 pitfalls. Use `s.bytes()[i]` or explicit iteration.
 - **No Protocols:** There are no `Indexable` or `Sliceable` interfaces yet. Hooks are resolved structurally by name.
 - **No Associated Types:** The return type of `get` and the value type of `set` are independent but must be compatible for valid assignment.
+
+---
+
+## 25. Built-in Interfaces
+
+Tempra introduces minimal built-in interfaces to facilitate generic programming over core types.
+
+### Collection
+
+The `Collection` interface represents types that have a known length and can be checked for emptiness.
+
+```tempra
+interface Collection {
+    type Item
+    fn len(self) -> Int
+    fn is_empty(self) -> Bool
+}
+```
+
+**Satisfaction Rules:**
+- `Array(T)` automatically satisfies `Collection` with `Item = T`.
+- `Slice(T)` automatically satisfies `Collection` with `Item = T`.
+- User-defined types satisfy `Collection` structurally if they provide the required methods and `Item` can be inferred.
+
+**Example usage:**
+
+```tempra
+fn size(type T: Collection, value: T) -> Int {
+    value.len()
+}
+
+fn id_item(type T: Collection, value: T.Item) -> T.Item {
+    value
+}
+```
+
+---
+
+## 26. Future Directions (v0.2+)
+
+- Iterators and `Iterable` interface
+- `for-in` protocol lowering
+- Associated constants
+- Existential interfaces and dynamic dispatch
+- Ownership and borrow analysis

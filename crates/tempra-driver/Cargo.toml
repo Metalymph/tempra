@@ -18,3 +18,6 @@ tempra-linker.workspace = true
 tempra-fs.workspace = true
 tempra-package.workspace = true
 anyhow.workspace = true
+
+[dev-dependencies]
+tempra-repl.workspace = true

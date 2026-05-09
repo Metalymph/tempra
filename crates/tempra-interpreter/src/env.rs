@@ -1,6 +1,7 @@
 use crate::value::Value;
 use std::collections::HashMap;
 
+#[derive(Clone)]
 pub struct RuntimeEnv {
     scopes: Vec<HashMap<String, Value>>,
 }

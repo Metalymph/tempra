@@ -11,5 +11,7 @@ path = "src/main.rs"
 [dependencies]
 tempra-driver.workspace = true
 tempra-session.workspace = true
+tempra-repl.workspace = true
+tempra-interpreter.workspace = true
 clap.workspace = true
 anyhow.workspace = true

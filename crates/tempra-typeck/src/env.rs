@@ -12,6 +12,7 @@ pub struct VariableInfo {
 }
 
 /// A stack of lexical scopes mapping variable names to their types and metadata.
+#[derive(Clone)]
 pub struct ScopeStack {
     scopes: Vec<HashMap<String, VariableInfo>>,
     boundaries: Vec<usize>,

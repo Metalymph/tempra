@@ -88,6 +88,7 @@ pub struct InterfaceMethodRequirementInfo {
 
 /// Global type-checking context that is built in a registration pass and
 /// then queried during the checking pass.
+#[derive(Clone)]
 pub struct TypeContext {
     pub functions: HashMap<String, FunctionSignature>,
     pub structs: HashMap<String, StructInfo>,

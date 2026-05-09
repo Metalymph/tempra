@@ -14,7 +14,7 @@ pub enum EvalMode {
     Runtime,
     Comptime,
 }
-
+#[derive(Clone)]
 pub struct Interpreter {
     pub functions: HashMap<String, HirFunction>,
     pub structs: HashMap<String, HirStruct>,

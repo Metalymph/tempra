@@ -5,4 +5,10 @@ edition.workspace = true
 
 [dependencies]
 tempra-driver.workspace = true
+tempra-parser.workspace = true
+tempra-ast.workspace = true
+tempra-hir.workspace = true
+tempra-typeck.workspace = true
+tempra-interpreter.workspace = true
+tempra-span.workspace = true
 anyhow.workspace = true

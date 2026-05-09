@@ -14,6 +14,7 @@ pub enum Commands {
     Run(RunArgs),
     Check(CheckArgs),
     Test(TestArgs),
+    Repl,
 }
 
 #[derive(Parser)]

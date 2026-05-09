@@ -227,6 +227,7 @@ dependencies = [
  "tempra-repl",
  "tempra-session",
  "tempra-tir",
+ "tempra-tir-interp",
  "tempra-tir-lower",
  "tempra-typeck",
 ]

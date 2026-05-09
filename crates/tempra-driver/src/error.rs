@@ -7,6 +7,7 @@ pub enum DriverError {
     TypeError(String),
     RuntimeError(String),
     TirLowerError(String),
+    TirInterpError(tempra_tir_interp::TirInterpError),
     Exit(i32),
 }
 
@@ -24,6 +25,7 @@ impl std::fmt::Display for DriverError {
             DriverError::TypeError(e) => write!(f, "Type error:\n{}", e),
             DriverError::RuntimeError(e) => write!(f, "{}", e),
             DriverError::TirLowerError(e) => write!(f, "TIR lowering error:\n{}", e),
+            DriverError::TirInterpError(e) => write!(f, "TIR interpreter error: {}", e),
             DriverError::Exit(code) => write!(f, "Exit signal ({})", code),
         }
     }

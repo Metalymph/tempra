@@ -105,6 +105,40 @@ pub fn emit_tir_file(path: &Path) -> Result<String, DriverError> {
     emit_tir_source(&source)
 }
 
+pub fn interpret_tir_source(
+    source: &str,
+    function_name: &str,
+    args: Vec<tempra_tir_interp::TirRuntimeValue>,
+) -> Result<tempra_tir_interp::TirRuntimeValue, DriverError> {
+    let ast = parse_source(source).map_err(|e| DriverError::ParseError(format!("{:?}", e)))?;
+    let mut hir = lower_file(source, &ast);
+    let type_ctx = tempra_typeck::check_file_with_context(&mut hir).map_err(|errs| DriverError::TypeError(format!("{:?}", errs)))?;
+
+    let mut module_builder = tempra_tir::builder::ModuleBuilder::new();
+    let mut errors = Vec::new();
+
+    for item in &hir.items {
+        if let HirItem::Function(func) = item {
+            match tempra_tir_lower::lower::lower_function(func, &type_ctx, &mut module_builder) {
+                Ok(tir_func) => {
+                    module_builder.add_function(tir_func);
+                }
+                Err(e) => {
+                    errors.push(format!("lower error in fn '{}': {}", func.name, e));
+                }
+            }
+        }
+    }
+
+    if !errors.is_empty() {
+        return Err(DriverError::TirLowerError(errors.join("\n")));
+    }
+
+    let module = module_builder.module;
+    tempra_tir_interp::interpret_function(&module, function_name, args)
+        .map_err(DriverError::TirInterpError)
+}
+
 pub fn test_source(source: &str) -> Result<(), DriverError> {
     let ast = parse_source(source).map_err(|e| DriverError::ParseError(format!("{:?}", e)))?;
 
@@ -248,5 +282,95 @@ mod tests {
         ";
         let result = emit_tir_source(source);
         assert!(matches!(result, Err(DriverError::TirLowerError(_))));
+    }
+
+    #[test]
+    fn test_tir_interp_source_const_return() {
+        let source = "fn main() -> Int64 { return 42 }";
+        let result = interpret_tir_source(source, "main", vec![]);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), tempra_tir_interp::TirRuntimeValue::Int64(42));
+    }
+
+    #[test]
+    fn test_tir_interp_source_add_function() {
+        let source = "
+        fn add(a: Int64, b: Int64) -> Int64 {
+            return a + b
+        }
+        fn main() -> Int64 {
+            return add(10, 32)
+        }
+        ";
+        let result = interpret_tir_source(source, "main", vec![]);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), tempra_tir_interp::TirRuntimeValue::Int64(42));
+    }
+
+    #[test]
+    fn test_tir_interp_source_param_identity() {
+        let source = "fn id(x: Int64) -> Int64 { return x }";
+        let result = interpret_tir_source(source, "id", vec![tempra_tir_interp::TirRuntimeValue::Int64(99)]);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), tempra_tir_interp::TirRuntimeValue::Int64(99));
+    }
+
+    #[test]
+    fn test_tir_interp_source_if_return() {
+        let source = "
+        fn test(cond: Bool) -> Int64 {
+            if cond {
+                return 1
+            } else {
+                return 0
+            }
+        }
+        ";
+        let res_t = interpret_tir_source(source, "test", vec![tempra_tir_interp::TirRuntimeValue::Bool(true)]);
+        assert_eq!(res_t.unwrap(), tempra_tir_interp::TirRuntimeValue::Int64(1));
+        
+        let res_f = interpret_tir_source(source, "test", vec![tempra_tir_interp::TirRuntimeValue::Bool(false)]);
+        assert_eq!(res_f.unwrap(), tempra_tir_interp::TirRuntimeValue::Int64(0));
+    }
+
+    #[test]
+    fn test_tir_interp_source_var_assignment() {
+        let source = "
+        fn test() -> Int64 {
+            var x = 10
+            x = 20
+            return x
+        }
+        ";
+        let result = interpret_tir_source(source, "test", vec![]);
+        assert_eq!(result.unwrap(), tempra_tir_interp::TirRuntimeValue::Int64(20));
+    }
+
+    #[test]
+    fn test_tir_interp_source_call_simple() {
+        let source = "
+        fn double(x: Int64) -> Int64 { return x * 2 }
+        fn test() -> Int64 { return double(21) }
+        ";
+        let result = interpret_tir_source(source, "test", vec![]);
+        assert_eq!(result.unwrap(), tempra_tir_interp::TirRuntimeValue::Int64(42));
+    }
+
+    #[test]
+    fn test_tir_interp_source_unsupported_for_error() {
+        let source = "
+        fn main() {
+            for i in [1, 2, 3] {}
+        }
+        ";
+        let result = interpret_tir_source(source, "main", vec![]);
+        assert!(matches!(result, Err(DriverError::TirLowerError(_))));
+    }
+
+    #[test]
+    fn test_tir_interp_unknown_function_error() {
+        let source = "fn main() {}";
+        let result = interpret_tir_source(source, "ghost", vec![]);
+        assert!(matches!(result, Err(DriverError::TirInterpError(tempra_tir_interp::TirInterpError::UnknownFunction(_)))));
     }
 }

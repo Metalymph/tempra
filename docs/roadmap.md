@@ -9,7 +9,7 @@ This document outlines the implementation strategy and developmental phases for 
 - **Compiler Frontend:** Implementation of the lexer, recursive descent parser, and Abstract Tree (AST).
 - **Semantics:** Initial symbol resolution, type checking for core compound types (`struct`, `enum`), and Zig-style generic stabilization.
 - **Pattern Matching:** Centralized pattern semantics with OR-patterns, nesting, and exhaustiveness checking for finite domains.
-- **Bytecode VM:** A lightweight stack-based interpreter for rapid cold-starts and low memory overhead in script mode.
+- **Bytecode VM:** A lightweight stack-based interpreter for rapid cold-starts and low memory overhead in script mode. See [BYTECODE_ISA.md](BYTECODE_ISA.md).
 - **Minimal Stdlib:** Foundation for `io`, `env`, and basic string/collection manipulation.
 - **Script Mode:** Support for running `.tempra` files directly without a `main` entrypoint.
 

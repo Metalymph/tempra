@@ -1,6 +1,6 @@
-# Tempra TIR Interpreter — Phase 12.4
+# Tempra TIR Interpreter — Phase 12.5
 
-## Status: Experimental Micro-Step Interpreter
+## Status: Experimental Micro-Step Interpreter (Hardened)
 
 The `tempra-tir-interp` crate provides a minimal interpreter for TIR modules.
 It is **not** the runtime for `tempra run` and is used exclusively for
@@ -26,6 +26,20 @@ interpret_function(
 
 The module is verified (`verify_module`) before execution. If verification
 fails, `TirInterpError::VerifierFailed` is returned immediately.
+
+## Phase 12.5 — Internal Pipeline Hook
+
+A new internal hook has been added to the `tempra-driver` to allow end-to-end testing of the TIR pipeline:
+
+```rust
+interpret_tir_source(
+    source: &str,
+    function_name: &str,
+    args: Vec<TirRuntimeValue>,
+) -> Result<TirRuntimeValue, DriverError>
+```
+
+This hook is used exclusively for regression testing of the compiler frontend and the TIR lowerer. It ensures that real Tempra code (within the supported TIR subset) can be successfully compiled and executed.
 
 ## Supported Instructions
 

@@ -70,7 +70,7 @@ pub fn verify_function(func: &TirFunction, functions: &HashMap<TirFunctionId, &T
                     };
                     value_types.insert(*res, Some(ty));
                 }
-                TirInstr::Make(res, ty, args) => {
+                TirInstr::Make(res, ty, _variant, args) => {
                     for arg in args {
                         if !value_types.contains_key(arg) {
                             errors.push(VerifierError::UndeclaredValue(*arg));
@@ -96,7 +96,7 @@ pub fn verify_function(func: &TirFunction, functions: &HashMap<TirFunctionId, &T
                     }
                     value_types.insert(*res, Some(TirType::Tag));
                 }
-                TirInstr::Unwrap(res, target) => {
+                TirInstr::Unwrap(res, target, _variant, _index) => {
                     if !value_types.contains_key(target) {
                         errors.push(VerifierError::UndeclaredValue(*target));
                     }

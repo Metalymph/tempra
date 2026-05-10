@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use tempra_tir::ir::*;
 use tempra_bytecode::*;
 use tempra_bytecode::opcode::stack_effect;
+use tempra_bytecode::constant::BytecodeConstant;
 use crate::error::BytecodeLowerError;
 
 pub fn lower_tir_module(module: &TirModule) -> Result<BytecodeModule, BytecodeLowerError> {
@@ -249,11 +250,36 @@ impl<'a> FunctionLowerer<'a> {
                 self.store_res(*res)?;
             }
             TirInstr::Slot(_, _) => {}
-            TirInstr::Make(_, _, _) | TirInstr::Get(_, _, _) | TirInstr::Set(_, _, _) |
-            TirInstr::Tag(_, _) | TirInstr::Unwrap(_, _) => {
+            TirInstr::Make(res, ty, variant, args) => {
+                for arg in args {
+                    self.load_val(*arg)?;
+                }
+                let enum_name = match ty {
+                    tempra_tir::ir::TirType::Option(_) => "Option",
+                    tempra_tir::ir::TirType::Result(_, _) => "Result",
+                    _ => "Enum",
+                };
+                let enum_id = self.bc_module.add_constant(BytecodeConstant::String(enum_name.to_string()));
+                let variant_id = self.bc_module.add_constant(BytecodeConstant::String(variant.clone().unwrap_or_else(|| "Unknown".to_string())));
+                self.emit(BytecodeInstr::MakeEnum(enum_id, variant_id, args.len() as u16));
+                self.store_res(*res)?;
+            }
+            TirInstr::Tag(res, target) => {
+                self.load_val(*target)?;
+                self.emit(BytecodeInstr::Tag);
+                self.store_res(*res)?;
+            }
+            TirInstr::Unwrap(res, target, variant, idx) => {
+                self.load_val(*target)?;
+                let variant_id = self.bc_module.add_constant(BytecodeConstant::String(variant.clone()));
+                self.emit(BytecodeInstr::Unwrap(variant_id, *idx));
+                self.store_res(*res)?;
+            }
+            TirInstr::Get(_, _, _) | TirInstr::Set(_, _, _) => {
                 return Err(BytecodeLowerError::UnsupportedInstr(format!("{:?}", instr)));
             }
         }
+
         Ok(())
     }
 
@@ -334,6 +360,9 @@ impl<'a> FunctionLowerer<'a> {
                     .ok_or_else(|| BytecodeLowerError::UnknownFunction(format!("@{}", func_id.0)))?;
                 Ok(target.ret)
             }
+            TirInstr::Make(_, _, _, _) => Ok(BytecodeType::Any),
+            TirInstr::Tag(_, _) => Ok(BytecodeType::String),
+            TirInstr::Unwrap(_, _, _, _) => Ok(BytecodeType::Any),
             _ => Err(BytecodeLowerError::UnsupportedInstr(format!("Cannot infer type for {:?}", instr))),
         }
     }
@@ -348,8 +377,8 @@ fn get_instr_res_id(instr: &TirInstr) -> Option<TirValueId> {
         TirInstr::Eq(id, _, _) | TirInstr::Lt(id, _, _) | TirInstr::Gt(id, _, _) |
         TirInstr::And(id, _, _) | TirInstr::Or(id, _, _) | TirInstr::Not(id, _) |
         TirInstr::Call(id, _, _) => Some(*id),
-        TirInstr::Make(id, _, _) | TirInstr::Get(id, _, _) | TirInstr::Set(id, _, _) |
-        TirInstr::Tag(id, _) | TirInstr::Unwrap(id, _) => Some(*id),
+        TirInstr::Make(id, _, _, _) | TirInstr::Get(id, _, _) | TirInstr::Set(id, _, _) |
+        TirInstr::Tag(id, _) | TirInstr::Unwrap(id, _, _, _) => Some(*id),
         _ => None,
     }
 }

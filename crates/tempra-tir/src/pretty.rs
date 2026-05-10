@@ -66,11 +66,11 @@ pub fn format_type(ty: &TirType) -> String {
 pub fn format_instr(instr: &TirInstr) -> String {
     match instr {
         TirInstr::Const(res, val) => format!("%{} = const {}", res.0, format_const(val)),
-        TirInstr::Make(res, ty, args) => format!("%{} = make {} ({})", res.0, format_type(ty), format_args(args)),
+        TirInstr::Make(res, ty, variant, args) => format!("%{} = make {}::{:?} ({})", res.0, format_type(ty), variant, format_args(args)),
         TirInstr::Get(res, target, key) => format!("%{} = get %{}, {}", res.0, target.0, format_key(key)),
         TirInstr::Set(target, key, val) => format!("set %{}, {}, %{}", target.0, format_key(key), val.0),
         TirInstr::Tag(res, target) => format!("%{} = tag %{}", res.0, target.0),
-        TirInstr::Unwrap(res, target) => format!("%{} = unwrap %{}", res.0, target.0),
+        TirInstr::Unwrap(res, target, variant, idx) => format!("%{} = unwrap %{} as {}.{}", res.0, target.0, variant, idx),
         TirInstr::Slot(slot, ty) => format!("slot ${}: {}", slot.0, format_type(ty)),
         TirInstr::Load(res, slot) => format!("%{} = load ${}", res.0, slot.0),
         TirInstr::Store(slot, val) => format!("store ${}, %{}", slot.0, val.0),

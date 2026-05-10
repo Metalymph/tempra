@@ -1,6 +1,6 @@
 use crate::constant::{BytecodeConstant, ConstId};
 use crate::function::{BytecodeFunction, FunctionId};
-
+#[derive(Debug, Clone)]
 pub struct BytecodeModule {
     pub version: u32,
     pub constants: Vec<BytecodeConstant>,

@@ -156,7 +156,7 @@ fn interpret_division_by_zero_error() {
 #[test]
 fn interpret_unsupported_make_error() {
     let module = build_simple_module("test", TirType::Unit, |fb| {
-        let _ = fb.build_make(TirType::Struct("Foo".into()), vec![]).unwrap();
+        let _ = fb.build_make(TirType::Struct("Foo".into()), None, vec![]).unwrap();
         fb.build_ret(None).unwrap();
     });
     let result = interpret_function(&module, "test", vec![]);

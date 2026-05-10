@@ -51,11 +51,11 @@ pub enum TirKey {
 #[derive(Debug, Clone)]
 pub enum TirInstr {
     Const(TirValueId, TirConst),
-    Make(TirValueId, TirType, Vec<TirValueId>),
+    Make(TirValueId, TirType, Option<String>, Vec<TirValueId>),
     Get(TirValueId, TirValueId, TirKey),
     Set(TirValueId, TirKey, TirValueId),
     Tag(TirValueId, TirValueId),
-    Unwrap(TirValueId, TirValueId),
+    Unwrap(TirValueId, TirValueId, String, u16),
 
     Slot(TirSlotId, TirType),
     Load(TirValueId, TirSlotId),

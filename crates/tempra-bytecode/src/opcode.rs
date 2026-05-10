@@ -46,6 +46,11 @@ pub enum BytecodeInstr {
 
     // Calls
     Call(FunctionId, u16), // ID, argc
+
+    // Enum-like
+    MakeEnum(ConstId, ConstId, u16), // enum_name, variant_name, payload_count
+    Tag,
+    Unwrap(ConstId, u16), // variant_name, payload_index
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,6 +97,9 @@ pub fn stack_effect(
             let pushes = if target.ret == BytecodeType::Unit { 0 } else { 1 };
             StackEffect { pops: *argc, pushes }
         }
+        BytecodeInstr::MakeEnum(_, _, count) => StackEffect { pops: *count, pushes: 1 },
+        BytecodeInstr::Tag => StackEffect { pops: 1, pushes: 1 },
+        BytecodeInstr::Unwrap(_, _) => StackEffect { pops: 1, pushes: 1 },
     };
     Ok(effect)
 }

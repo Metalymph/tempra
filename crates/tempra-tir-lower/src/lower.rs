@@ -68,6 +68,27 @@ impl<'a> LowerContext<'a> {
             HirExpression::Unary(u) => {
                 if u.op == HirUnaryOp::Not { Ok(Type::Bool) } else { self.infer_expr_type(&u.expr) }
             }
+            HirExpression::Call(c) => {
+                if let HirExpression::Name(_, name) = &*c.callee {
+                    match name.as_str() {
+                        "Some" => {
+                            if let Some(arg) = c.args.first() {
+                                let arg_expr = match arg {
+                                    HirCallArgument::Positional(e) => e,
+                                    HirCallArgument::Named(n) => &n.value,
+                                };
+                                let inner = self.infer_expr_type(arg_expr)?;
+                                return Ok(Type::Option(Box::new(inner)));
+                            }
+                            Ok(Type::Unknown)
+                        }
+                        "Ok" | "Err" => Ok(Type::Unknown), // Result type: unknown without more context
+                        _ => Err(TirLowerError::UnsupportedExpr(format!("Cannot infer call type for {}", name), c.span)),
+                    }
+                } else {
+                    Err(TirLowerError::UnsupportedExpr("Cannot infer call type for complex callee".into(), c.span))
+                }
+            }
             _ => Err(TirLowerError::UnsupportedExpr(format!("{:?}", expr), expr.span())),
         }
     }
@@ -124,6 +145,9 @@ impl<'a> LowerContext<'a> {
                 self.builder.build_const(TirConst::String(s.clone())).map_err(|e| e.into())
             }
             HirExpression::Name(span, name) => {
+                if name == "None" {
+                    return Err(TirLowerError::UnsupportedExpr("None requires explicit expected type context which is not fully plumbed in Phase 14.3 lowering".into(), *span));
+                }
                 if let Some((slot, _ty, _)) = self.locals.get(name) {
                     self.builder.build_load(*slot).map_err(|e| e.into())
                 } else {
@@ -238,6 +262,25 @@ impl<'a> LowerContext<'a> {
             }
             HirExpression::Call(c) => {
                 if let HirExpression::Name(span, name) = &*c.callee {
+                    if matches!(name.as_str(), "Some" | "Ok" | "Err") {
+                        if c.args.len() != 1 {
+                            return Err(TirLowerError::UnsupportedExpr(format!("wrong arity for {}", name), *span));
+                        }
+                        let arg_expr = match &c.args[0] {
+                            HirCallArgument::Positional(e) => e,
+                            HirCallArgument::Named(n) => &n.value,
+                        };
+                        let arg_val = self.lower_expression(arg_expr)?;
+                        let arg_hir_ty = self.infer_expr_type(arg_expr)?;
+                        let arg_tir_ty = map_type(&arg_hir_ty)?;
+                        let ty = if name == "Some" {
+                            TirType::Option(Box::new(arg_tir_ty))
+                        } else {
+                            TirType::Result(Box::new(arg_tir_ty), Box::new(TirType::Unit))
+                        };
+                        return self.builder.build_make(ty, Some(name.clone()), vec![arg_val]).map_err(|e| e.into());
+                    }
+
                     if let Some(sig) = self.type_ctx.functions.get(name) {
                         if sig.params.len() != c.args.len() {
                             return Err(TirLowerError::UnsupportedExpr(format!("wrong arity for call to {}: expected {}, found {}", name, sig.params.len(), c.args.len()), c.span));

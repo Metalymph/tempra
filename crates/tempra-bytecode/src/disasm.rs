@@ -84,6 +84,13 @@ pub fn disassemble_function(module: &BytecodeModule, func_id: FunctionId) -> Res
                 let name = target.map(|f| f.name.as_str()).unwrap_or("unknown");
                 out.push_str(&format!("Call @{} ({}) // {}\n", id.0, argc, name));
             }
+            BytecodeInstr::MakeEnum(enum_id, variant_id, count) => {
+                out.push_str(&format!("MakeEnum #{} #{} count={}\n", enum_id.0, variant_id.0, count));
+            }
+            BytecodeInstr::Tag => out.push_str("Tag\n"),
+            BytecodeInstr::Unwrap(variant_id, idx) => {
+                out.push_str(&format!("Unwrap #{} idx={}\n", variant_id.0, idx));
+            }
         }
     }
     Ok(out)

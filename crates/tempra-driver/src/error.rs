@@ -9,6 +9,11 @@ pub enum DriverError {
     TirLowerError(String),
     TirInterpError(tempra_tir_interp::TirInterpError),
     Exit(i32),
+    BytecodeSerializeError(String),
+    VmError(String),
+    CacheIoError(String),
+    CacheIncompatible(String),
+    UnsupportedExperimentalVm(String),
 }
 
 impl From<io::Error> for DriverError {
@@ -27,6 +32,11 @@ impl std::fmt::Display for DriverError {
             DriverError::TirLowerError(e) => write!(f, "TIR lowering error:\n{}", e),
             DriverError::TirInterpError(e) => write!(f, "TIR interpreter error: {}", e),
             DriverError::Exit(code) => write!(f, "Exit signal ({})", code),
+            DriverError::BytecodeSerializeError(e) => write!(f, "Bytecode serialization error: {}", e),
+            DriverError::VmError(e) => write!(f, "VM error: {}", e),
+            DriverError::CacheIoError(e) => write!(f, "Cache IO error: {}", e),
+            DriverError::CacheIncompatible(e) => write!(f, "Cache incompatible: {}", e),
+            DriverError::UnsupportedExperimentalVm(e) => write!(f, "Unsupported by experimental VM: {}", e),
         }
     }
 }

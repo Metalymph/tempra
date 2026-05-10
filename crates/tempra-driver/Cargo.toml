@@ -20,6 +20,9 @@ tempra-package.workspace = true
 tempra-tir.workspace = true
 tempra-tir-lower.workspace = true
 tempra-tir-interp.workspace = true
+tempra-bytecode.workspace = true
+tempra-bytecode-lower.workspace = true
+tempra-vm.workspace = true
 anyhow.workspace = true
 
 [dev-dependencies]

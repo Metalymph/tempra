@@ -21,6 +21,8 @@ pub enum Commands {
 
 #[derive(Parser)]
 pub struct RunArgs {
+    #[arg(long, help = "Use the experimental bytecode VM and cache")]
+    pub experimental_vm: bool,
     pub path: PathBuf,
     pub args: Vec<String>,
 }

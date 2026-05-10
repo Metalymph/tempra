@@ -11,6 +11,77 @@ pub fn run_source(source: &str) -> Result<(), DriverError> {
     run_source_with_args(source, &[])
 }
 
+pub fn run_source_with_experimental_vm(source: &str, args: &[String]) -> Result<(), DriverError> {
+    if !args.is_empty() {
+        return Err(DriverError::UnsupportedExperimentalVm("CLI arguments are not yet supported in experimental VM".into()));
+    }
+
+    let hash = crate::cache::compute_source_hash(source);
+    let cache_path = crate::cache::get_cache_path(&hash);
+    let fingerprint = format!("tempra-{}", env!("CARGO_PKG_VERSION"));
+
+    let module = if let Ok(artifact) = crate::cache::read_cache_artifact(&cache_path) {
+        if artifact.header.compiler_fingerprint == fingerprint && artifact.header.source_hash == hash {
+            artifact.module
+        } else {
+            compile_and_cache_module(source, &hash, &cache_path, &fingerprint)?
+        }
+    } else {
+        compile_and_cache_module(source, &hash, &cache_path, &fingerprint)?
+    };
+
+    let has_main = module.functions.iter().any(|f| f.name == "main");
+    if !has_main {
+        return Err(DriverError::UnsupportedExperimentalVm("experimental VM currently requires main()".into()));
+    }
+
+    match tempra_vm::run_function(&module, "main", vec![]) {
+        Ok(_) => Ok(()),
+        Err(e) => Err(DriverError::VmError(format!("{:?}", e))),
+    }
+}
+
+fn compile_and_cache_module(source: &str, hash: &[u8; 32], cache_path: &std::path::Path, fingerprint: &str) -> Result<tempra_bytecode::BytecodeModule, DriverError> {
+    let ast = tempra_parser::parse_source(source).map_err(|e| DriverError::ParseError(format!("{:?}", e)))?;
+    let mut hir = tempra_hir::lower_file(source, &ast);
+    let type_ctx = tempra_typeck::check_file_with_context(&mut hir).map_err(|errs| DriverError::TypeError(format!("{:?}", errs)))?;
+
+    let mut module_builder = tempra_tir::builder::ModuleBuilder::new();
+    let mut errors = Vec::new();
+    for item in &hir.items {
+        if let tempra_hir::HirItem::Function(func) = item {
+            match tempra_tir_lower::lower::lower_function(func, &type_ctx, &mut module_builder) {
+                Ok(tir_func) => { module_builder.add_function(tir_func); }
+                Err(e) => { errors.push(format!("unsupported in fn '{}': {}", func.name, e)); }
+            }
+        }
+    }
+    if !errors.is_empty() {
+        return Err(DriverError::UnsupportedExperimentalVm(errors.join("\n")));
+    }
+
+    let bc_module = tempra_bytecode_lower::lower_tir_module(&module_builder.module)
+        .map_err(|e| DriverError::UnsupportedExperimentalVm(format!("bytecode lowering error: {:?}", e)))?;
+
+    tempra_bytecode::verify::verify_module(&bc_module)
+        .map_err(|e| DriverError::UnsupportedExperimentalVm(format!("verification error: {:?}", e)))?;
+
+    let mut header = tempra_bytecode::BytecodeCacheHeader::default();
+    header.compiler_fingerprint = fingerprint.to_string();
+    header.source_hash = *hash;
+
+    let artifact = tempra_bytecode::BytecodeCacheArtifact {
+        header,
+        module: bc_module.clone(),
+    };
+
+    if let Err(e) = crate::cache::write_cache_artifact(cache_path, &artifact) {
+        eprintln!("Warning: failed to write cache artifact: {}", e);
+    }
+
+    Ok(bc_module)
+}
+
 pub fn run_source_with_args(source: &str, args: &[String]) -> Result<(), DriverError> {
     let ast = parse_source(source).map_err(|e| DriverError::ParseError(format!("{:?}", e)))?;
 
@@ -40,6 +111,11 @@ pub fn run_source_with_args(source: &str, args: &[String]) -> Result<(), DriverE
 
 pub fn run_file(path: &Path) -> Result<(), DriverError> {
     run_file_with_args(path, &[])
+}
+
+pub fn run_file_with_experimental_vm(path: &Path, args: &[String]) -> Result<(), DriverError> {
+    let source = fs::read_to_string(path)?;
+    run_source_with_experimental_vm(&source, args)
 }
 
 pub fn run_file_with_args(path: &Path, args: &[String]) -> Result<(), DriverError> {

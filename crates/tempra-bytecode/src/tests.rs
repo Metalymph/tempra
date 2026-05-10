@@ -4,6 +4,7 @@ use crate::function::{BytecodeFunction, BytecodeType, FunctionId, LocalId};
 use crate::opcode::{BytecodeInstr, stack_effect};
 use crate::disasm::disassemble_function;
 use crate::verify::{verify_function, BytecodeVerifyError};
+use crate::serialize::{encode_module, encode_artifact, decode_artifact, decode_and_verify_artifact, BytecodeCacheArtifact, BytecodeSerializeError};
 
 #[test]
 fn test_create_module_with_constant() {
@@ -184,4 +185,104 @@ fn verify_call_wrong_arity_error() {
     func.code.push(BytecodeInstr::Call(target_id, 0)); // Expected 1
     let f_id = module.add_function(func);
     assert!(matches!(verify_function(&module, f_id), Err(BytecodeVerifyError::CallArityMismatch { .. })));
+}
+
+// --- Serialization Tests ---
+
+#[test]
+fn test_serialize_roundtrip_minimal() {
+    let module = BytecodeModule::new();
+    let bytes = encode_module(&module).unwrap();
+    let decoded = decode_artifact(&bytes).unwrap();
+    
+    assert_eq!(decoded.module.version, module.version);
+    assert!(decoded.module.constants.is_empty());
+    assert!(decoded.module.functions.is_empty());
+}
+
+#[test]
+fn test_serialize_roundtrip_complex() {
+    let mut module = BytecodeModule::new();
+    let c_id = module.add_constant(BytecodeConstant::String("hello".into()));
+    module.add_constant(BytecodeConstant::Float64(3.14));
+    
+    let mut func = BytecodeFunction::new("test".into(), vec![BytecodeType::String], BytecodeType::Unit);
+    func.locals = vec![BytecodeType::String, BytecodeType::Int64];
+    func.max_stack = 4;
+    func.code.push(BytecodeInstr::ConstString(c_id));
+    func.code.push(BytecodeInstr::LoadLocal(LocalId(0)));
+    func.code.push(BytecodeInstr::JumpIfFalse(crate::opcode::InstrOffset(42)));
+    func.code.push(BytecodeInstr::Return);
+    module.add_function(func);
+
+    let bytes = encode_module(&module).unwrap();
+    let decoded = decode_artifact(&bytes).unwrap();
+
+    let dec_mod = decoded.module;
+    assert_eq!(dec_mod.constants.len(), 2);
+    assert_eq!(dec_mod.constants[0], BytecodeConstant::String("hello".into()));
+    assert_eq!(dec_mod.constants[1], BytecodeConstant::Float64(3.14));
+
+    assert_eq!(dec_mod.functions.len(), 1);
+    let dec_f = &dec_mod.functions[0];
+    assert_eq!(dec_f.name, "test");
+    assert_eq!(dec_f.params, vec![BytecodeType::String]);
+    assert_eq!(dec_f.ret, BytecodeType::Unit);
+    assert_eq!(dec_f.locals, vec![BytecodeType::String, BytecodeType::Int64]);
+    assert_eq!(dec_f.max_stack, 4);
+    assert_eq!(dec_f.code.len(), 4);
+    assert_eq!(dec_f.code[0], BytecodeInstr::ConstString(c_id));
+    assert_eq!(dec_f.code[2], BytecodeInstr::JumpIfFalse(crate::opcode::InstrOffset(42)));
+}
+
+#[test]
+fn test_serialize_invalid_magic() {
+    let bytes = vec![0, 0, 0, 0, 1, 0, 0, 0];
+    let res = decode_artifact(&bytes);
+    assert_eq!(res.unwrap_err(), BytecodeSerializeError::InvalidMagic);
+}
+
+#[test]
+fn test_serialize_truncated() {
+    let module = BytecodeModule::new();
+    let mut bytes = encode_module(&module).unwrap();
+    bytes.pop(); // truncate 1 byte
+    
+    let res = decode_artifact(&bytes);
+    assert_eq!(res.unwrap_err(), BytecodeSerializeError::UnexpectedEof);
+}
+
+#[test]
+fn test_serialize_trailing_bytes() {
+    let module = BytecodeModule::new();
+    let mut bytes = encode_module(&module).unwrap();
+    bytes.push(0); // trailing byte
+    
+    let res = decode_artifact(&bytes);
+    assert_eq!(res.unwrap_err(), BytecodeSerializeError::TrailingBytes);
+}
+
+#[test]
+fn test_decode_and_verify_ok() {
+    let mut module = BytecodeModule::new();
+    let mut func = BytecodeFunction::new("test".into(), vec![], BytecodeType::Unit);
+    func.code.push(BytecodeInstr::Return);
+    module.add_function(func);
+
+    let bytes = encode_module(&module).unwrap();
+    let res = decode_and_verify_artifact(&bytes);
+    assert!(res.is_ok());
+}
+
+#[test]
+fn test_decode_and_verify_fail() {
+    let mut module = BytecodeModule::new();
+    let mut func = BytecodeFunction::new("test".into(), vec![], BytecodeType::Unit);
+    func.code.push(BytecodeInstr::Pop); // Invalid: pop empty stack
+    func.code.push(BytecodeInstr::Return);
+    module.add_function(func);
+
+    let bytes = encode_module(&module).unwrap();
+    let res = decode_and_verify_artifact(&bytes);
+    assert!(matches!(res, Err(BytecodeSerializeError::VerifyError(_))));
 }

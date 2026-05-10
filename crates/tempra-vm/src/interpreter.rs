@@ -296,6 +296,49 @@ impl<'a> Interpreter<'a> {
                     }
                 }
 
+                BytecodeInstr::MakeEnum(enum_id, variant_id, count) => {
+                    let mut payloads = Vec::with_capacity(count as usize);
+                    for _ in 0..count {
+                        payloads.push(self.pop()?);
+                    }
+                    payloads.reverse(); // Args are pushed left-to-right
+                    
+                    let enum_name = match self.module.constants.get(enum_id.0 as usize) {
+                        Some(tempra_bytecode::constant::BytecodeConstant::String(s)) => s.clone(),
+                        _ => return Err(VmError::Message("Invalid enum name constant".into())),
+                    };
+                    let variant_name = match self.module.constants.get(variant_id.0 as usize) {
+                        Some(tempra_bytecode::constant::BytecodeConstant::String(s)) => s.clone(),
+                        _ => return Err(VmError::Message("Invalid variant name constant".into())),
+                    };
+                    self.push(VmValue::Enum(enum_name, variant_name, payloads))?;
+                }
+                BytecodeInstr::Tag => {
+                    let val = self.pop()?;
+                    if let VmValue::Enum(_, variant, _) = val {
+                        self.push(VmValue::String(variant))?;
+                    } else {
+                        return Err(VmError::ExpectedEnum);
+                    }
+                }
+                BytecodeInstr::Unwrap(variant_id, index) => {
+                    let expected_variant = match self.module.constants.get(variant_id.0 as usize) {
+                        Some(tempra_bytecode::constant::BytecodeConstant::String(s)) => s.clone(),
+                        _ => return Err(VmError::Message("Invalid variant name constant".into())),
+                    };
+                    let val = self.pop()?;
+                    if let VmValue::Enum(_, variant, payloads) = val {
+                        if variant != expected_variant {
+                            return Err(VmError::WrongVariant { expected: expected_variant, found: variant });
+                        }
+                        if index as usize >= payloads.len() {
+                            return Err(VmError::PayloadOutOfBounds(index));
+                        }
+                        self.push(payloads[index as usize].clone())?;
+                    } else {
+                        return Err(VmError::ExpectedEnum);
+                    }
+                }
                 BytecodeInstr::Unreachable => return Err(VmError::UnreachableExecuted),
             }
         }

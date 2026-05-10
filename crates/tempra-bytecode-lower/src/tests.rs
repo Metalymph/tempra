@@ -140,15 +140,19 @@ fn test_unsupported_make_error() {
         params: vec![],
         return_type: TirType::Unit,
         blocks: vec![],
-        next_value_id: 1,
+        next_value_id: 2,
         next_block_id: 1,
         next_slot_id: 0,
         debug_slots: Default::default(),
     };
     
+    // Get is still unsupported in Phase 14.3 lowering (Make is now supported)
     func.blocks.push(TirBlock {
         id: TirBlockId(0),
-        instrs: vec![TirInstr::Make(TirValueId(0), TirType::Unit, vec![])],
+        instrs: vec![
+            TirInstr::Make(TirValueId(0), TirType::Enum("Foo".into()), Some("Bar".into()), vec![]),
+            TirInstr::Get(TirValueId(1), TirValueId(0), TirKey::Field("x".into())),
+        ],
         terminator: Some(TirTerminator::Ret(None)),
     });
     module.functions.push(func);

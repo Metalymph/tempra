@@ -231,6 +231,8 @@ dependencies = [
  "anyhow",
  "tempra-backend-cranelift",
  "tempra-backend-wasm",
+ "tempra-bytecode",
+ "tempra-bytecode-lower",
  "tempra-fs",
  "tempra-hir",
  "tempra-interpreter",
@@ -246,6 +248,7 @@ dependencies = [
  "tempra-tir-interp",
  "tempra-tir-lower",
  "tempra-typeck",
+ "tempra-vm",
 ]
 
 [[package]]

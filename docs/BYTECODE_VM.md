@@ -61,8 +61,23 @@ Errors include:
 - `TypeMismatch`: Runtime type error (should be caught by verifier).
 - `UnreachableExecuted`: Execution reached an `Unreachable` instruction.
 
+## Experimental Integration
+
+The VM is currently integrated into `tempra run` as an **opt-in experimental feature**. You can test it using the `--experimental-vm` flag:
+
+```bash
+tempra run --experimental-vm file.tmpr
+```
+
+The experimental VM pipeline works as follows:
+1. It computes a cache key (hash) of the source file.
+2. It attempts to load a pre-compiled bytecode artifact from `.tempra/cache/`.
+3. If successful and compatible, it decodes and verifies the bytecode, then executes the `main` function.
+4. On a cache miss or corruption, it lowers the code from source all the way to bytecode, verifies it, writes a new cache artifact, and then executes it.
+
+**Note:** The fallback policy is strict. If the code uses language features not yet supported by the Bytecode Lowering phase (e.g., loops, classes, standard library), the execution will fail cleanly. It will **not** silently fall back to the HIR interpreter.
+
 ## Non-Goals (v0)
 
 - **Performance**: v0 is a naive interpreter. Optimization (JIT, Register VM, etc.) is deferred.
-- **Public Runtime**: The VM is currently internal and used for testing. `tempra run` still uses the HIR interpreter.
-- **Cache**: Bytecode is generated and verified on the fly. Persistent cache is planned for a future phase.
+- **Default Runtime**: The default `tempra run` still uses the HIR interpreter. The VM remains strictly opt-in.

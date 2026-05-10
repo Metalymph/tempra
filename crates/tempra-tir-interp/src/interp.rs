@@ -229,7 +229,7 @@ impl<'a> Frame<'a> {
                 let result = child_frame.execute()?;
                 self.values.insert(*res, result);
             }
-            TirInstr::Make(_, _, _) => {
+            TirInstr::Make(_, _, _, _) => {
                 return Err(TirInterpError::UnsupportedInstr("make".into()));
             }
             TirInstr::Get(_, _, _) => {
@@ -241,7 +241,7 @@ impl<'a> Frame<'a> {
             TirInstr::Tag(_, _) => {
                 return Err(TirInterpError::UnsupportedInstr("tag".into()));
             }
-            TirInstr::Unwrap(_, _) => {
+            TirInstr::Unwrap(_, _, _, _) => {
                 return Err(TirInterpError::UnsupportedInstr("unwrap".into()));
             }
         }

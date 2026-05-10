@@ -5,6 +5,12 @@ pub mod error;
 pub mod function;
 pub mod opcode;
 pub mod verify;
+pub mod serialize;
+
+pub use serialize::{
+    encode_artifact, decode_artifact, decode_and_verify_artifact,
+    BytecodeCacheArtifact, BytecodeCacheHeader, BytecodeSerializeError
+};
 
 pub use bytecode::BytecodeModule;
 pub use constant::{BytecodeConstant, ConstId};

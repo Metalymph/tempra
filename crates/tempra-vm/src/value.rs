@@ -8,6 +8,7 @@ pub enum VmValue {
     UInt64(u64),
     Float64(f64),
     String(String),
+    Enum(String, String, Vec<VmValue>), // enum_name, variant_name, payloads
 }
 
 impl fmt::Display for VmValue {
@@ -19,6 +20,18 @@ impl fmt::Display for VmValue {
             VmValue::UInt64(u) => write!(f, "{}", u),
             VmValue::Float64(v) => write!(f, "{}", v),
             VmValue::String(s) => write!(f, "{:?}", s),
+            VmValue::Enum(_e, v, payloads) => {
+                if payloads.is_empty() {
+                    write!(f, "{}", v)
+                } else {
+                    write!(f, "{}(", v)?;
+                    for (i, p) in payloads.iter().enumerate() {
+                        if i > 0 { write!(f, ", ")?; }
+                        write!(f, "{}", p)?;
+                    }
+                    write!(f, ")")
+                }
+            }
         }
     }
 }

@@ -191,7 +191,7 @@ fn test_make_get_set_smoke() {
     
     let t = TirType::Struct("MyStruct".to_string());
     let val = func.build_const(TirConst::Int64(42)).unwrap();
-    let obj = func.build_make(t, vec![val]).unwrap();
+    let obj = func.build_make(t, None, vec![val]).unwrap();
     let _extracted = func.build_get(obj, TirKey::Field("field".to_string())).unwrap();
     func.build_set(obj, TirKey::Field("field".to_string()), val).unwrap();
     
@@ -208,9 +208,9 @@ fn test_tag_unwrap_smoke() {
     func.set_current_block(b1);
     
     let t = TirType::Enum("MyEnum".to_string());
-    let obj = func.build_make(t, vec![]).unwrap();
+    let obj = func.build_make(t, None, vec![]).unwrap();
     let _tag = func.build_tag(obj).unwrap();
-    let _unwrapped = func.build_unwrap(obj).unwrap();
+    let _unwrapped = func.build_unwrap(obj, "MyVariant".to_string(), 0).unwrap();
     
     func.build_ret(None).unwrap();
     builder.add_function(func.build());

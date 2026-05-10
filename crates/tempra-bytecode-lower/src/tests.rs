@@ -1,5 +1,6 @@
 use tempra_tir::ir::*;
 use tempra_bytecode::disasm::disassemble_module;
+use tempra_bytecode::verify::verify_module;
 use crate::lower::lower_tir_module;
 
 #[test]
@@ -30,6 +31,7 @@ fn test_lower_const_return_i64() {
     module.functions.push(func);
 
     let bc_module = lower_tir_module(&module).unwrap();
+    verify_module(&bc_module).unwrap();
     let disasm = disassemble_module(&bc_module);
     
     assert!(disasm.contains("ConstI64 #0"));
@@ -67,8 +69,8 @@ fn test_lower_add_i64() {
     };
     func.blocks.push(block);
     module.functions.push(func);
-
     let bc_module = lower_tir_module(&module).unwrap();
+    verify_module(&bc_module).unwrap();
     let disasm = disassemble_module(&bc_module);
 
     assert!(disasm.contains("LoadLocal $0"));
@@ -118,8 +120,8 @@ fn test_lower_if_condbr() {
     });
 
     module.functions.push(func);
-
     let bc_module = lower_tir_module(&module).unwrap();
+    verify_module(&bc_module).unwrap();
     let disasm = disassemble_module(&bc_module);
 
     // Verify jumps are patched

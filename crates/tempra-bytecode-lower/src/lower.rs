@@ -34,6 +34,7 @@ fn lower_function(tir_func: &TirFunction, bc_module: &mut BytecodeModule) -> Res
         bc_func: BytecodeFunction::new(tir_func.name.clone(), params, ret),
         value_to_local: HashMap::new(),
         slot_to_local: HashMap::new(),
+        slot_types: HashMap::new(),
         block_to_offset: HashMap::new(),
         jump_fixups: Vec::new(),
         current_stack: 0,
@@ -50,6 +51,7 @@ struct FunctionLowerer<'a> {
     bc_func: BytecodeFunction,
     value_to_local: HashMap<TirValueId, LocalId>,
     slot_to_local: HashMap<TirSlotId, LocalId>,
+    slot_types: HashMap<TirSlotId, BytecodeType>,
     block_to_offset: HashMap<TirBlockId, usize>,
     jump_fixups: Vec<(usize, TirBlockId)>, 
     current_stack: u32,
@@ -64,12 +66,15 @@ impl<'a> FunctionLowerer<'a> {
         }
         let mut next_local = self.tir_func.params.len() as u32;
 
-        // 2. Map TIR slots to locals
-        let mut slot_ids: Vec<_> = self.tir_func.debug_slots.keys().cloned().collect();
-        slot_ids.sort_by_key(|s| s.0);
-        for slot_id in slot_ids {
-            self.slot_to_local.insert(slot_id, LocalId(next_local));
-            next_local += 1;
+        // 2. Map TIR slots to locals and collect their types
+        for block in &self.tir_func.blocks {
+            for instr in &block.instrs {
+                if let TirInstr::Slot(id, ty) = instr {
+                    self.slot_to_local.insert(*id, LocalId(next_local));
+                    self.slot_types.insert(*id, map_type(ty)?);
+                    next_local += 1;
+                }
+            }
         }
 
         // 3. Map all other TirValueId to temporary locals
@@ -84,7 +89,32 @@ impl<'a> FunctionLowerer<'a> {
             }
         }
 
-        self.bc_func.locals = vec![BytecodeType::Int64; next_local as usize];
+        let mut local_types = vec![BytecodeType::Unit; next_local as usize];
+
+        // Map params types
+        for (val_id, ty) in &self.tir_func.params {
+            if let Some(local) = self.value_to_local.get(val_id) {
+                local_types[local.0 as usize] = map_type(ty)?;
+            }
+        }
+
+        // Map slot types
+        for (slot_id, local) in &self.slot_to_local {
+            local_types[local.0 as usize] = *self.slot_types.get(slot_id).unwrap();
+        }
+
+        // Map SSA values types
+        for block in &self.tir_func.blocks {
+            for instr in &block.instrs {
+                if let Some(id) = get_instr_res_id(instr) {
+                    if let Some(local) = self.value_to_local.get(&id) {
+                        local_types[local.0 as usize] = self.infer_instr_res_type(instr)?;
+                    }
+                }
+            }
+        }
+
+        self.bc_func.locals = local_types;
 
         // 4. Lower blocks
         for block in &self.tir_func.blocks {
@@ -279,6 +309,33 @@ impl<'a> FunctionLowerer<'a> {
             self.max_stack = self.current_stack;
         }
         self.bc_func.code.push(instr);
+    }
+
+    fn infer_instr_res_type(&self, instr: &TirInstr) -> Result<BytecodeType, BytecodeLowerError> {
+        match instr {
+            TirInstr::Const(_, val) => match val {
+                TirConst::Unit => Ok(BytecodeType::Unit),
+                TirConst::Bool(_) => Ok(BytecodeType::Bool),
+                TirConst::Int64(_) => Ok(BytecodeType::Int64),
+                TirConst::UInt64(_) => Ok(BytecodeType::UInt64),
+                TirConst::Float64(_) => Ok(BytecodeType::Float64),
+                TirConst::String(_) => Ok(BytecodeType::String),
+            },
+            TirInstr::Load(_, slot_id) => {
+                self.slot_types.get(slot_id).cloned()
+                    .ok_or_else(|| BytecodeLowerError::UnknownSlot(format!("${}", slot_id.0)))
+            }
+            TirInstr::Add(_, _, _) | TirInstr::Sub(_, _, _) |
+            TirInstr::Mul(_, _, _) | TirInstr::Div(_, _, _) => Ok(BytecodeType::Int64),
+            TirInstr::Eq(_, _, _) | TirInstr::Lt(_, _, _) | TirInstr::Gt(_, _, _) |
+            TirInstr::And(_, _, _) | TirInstr::Or(_, _, _) | TirInstr::Not(_, _) => Ok(BytecodeType::Bool),
+            TirInstr::Call(_, func_id, _) => {
+                let target = self.bc_module.functions.get(func_id.0 as usize)
+                    .ok_or_else(|| BytecodeLowerError::UnknownFunction(format!("@{}", func_id.0)))?;
+                Ok(target.ret)
+            }
+            _ => Err(BytecodeLowerError::UnsupportedInstr(format!("Cannot infer type for {:?}", instr))),
+        }
     }
 }
 

@@ -1,0 +1,9 @@
+[package]
+name = "tempra-bytecode-lower"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tempra-tir.workspace = true
+tempra-bytecode.workspace = true
+thiserror.workspace = true

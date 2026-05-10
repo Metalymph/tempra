@@ -189,6 +189,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "tempra-bytecode-lower"
+version = "0.1.0"
+dependencies = [
+ "tempra-bytecode",
+ "tempra-tir",
+ "thiserror",
+]
+
+[[package]]
 name = "tempra-cli"
 version = "0.1.0"
 dependencies = [

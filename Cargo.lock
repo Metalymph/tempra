@@ -430,6 +430,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "tempra-vm"
+version = "0.1.0"
+dependencies = [
+ "tempra-bytecode",
+ "tempra-bytecode-lower",
+ "tempra-hir",
+ "tempra-parser",
+ "tempra-tir",
+ "tempra-tir-lower",
+ "tempra-typeck",
+]
+
+[[package]]
 name = "tempra-wasm-host"
 version = "0.1.0"
 dependencies = [

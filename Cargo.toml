@@ -30,7 +30,7 @@ members = [
   "crates/tempra-tir-lower",
   "crates/tempra-tir-interp",
   "crates/tempra-bytecode",
-  "crates/tempra-bytecode-lower",
+  "crates/tempra-bytecode-lower", "crates/tempra-vm",
 ]
 resolver = "2"
 

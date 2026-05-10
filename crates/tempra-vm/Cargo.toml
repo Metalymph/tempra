@@ -1,0 +1,15 @@
+[package]
+name = "tempra-vm"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tempra-bytecode = { path = "../tempra-bytecode" }
+
+[dev-dependencies]
+tempra-parser = { path = "../tempra-parser" }
+tempra-hir = { path = "../tempra-hir" }
+tempra-tir = { path = "../tempra-tir" }
+tempra-tir-lower = { path = "../tempra-tir-lower" }
+tempra-bytecode-lower = { path = "../tempra-bytecode-lower" }
+tempra-typeck = { path = "../tempra-typeck" }

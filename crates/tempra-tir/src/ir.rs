@@ -18,6 +18,7 @@ pub enum TirType {
     Bool,
     Int64,
     UInt64,
+    UInt8,
     Float64,
     String,
     Never,
@@ -78,6 +79,8 @@ pub enum TirInstr {
     GetIndex(TirValueId, TirValueId, TirValueId),      // dest, object, index
     Slice(TirValueId, TirValueId, TirValueId, TirValueId), // dest, object, start, end
     Len(TirValueId, TirValueId),                       // dest, object
+    Size(TirValueId, TirValueId),                      // dest, object
+    Bytes(TirValueId, TirValueId),                     // dest, object
 }
 
 #[derive(Debug, Clone)]

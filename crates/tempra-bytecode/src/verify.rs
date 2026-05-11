@@ -268,9 +268,13 @@ pub fn verify_function(module: &BytecodeModule, func_id: FunctionId) -> Result<(
                     state.stack.pop().unwrap(); // pop object
                     state.stack.push(BytecodeType::Any);
                 }
-                BytecodeInstr::Len => {
+                BytecodeInstr::Len | BytecodeInstr::Size => {
                     state.stack.pop().unwrap(); // pop object
                     state.stack.push(BytecodeType::Int64);
+                }
+                BytecodeInstr::Bytes => {
+                    state.stack.pop().unwrap(); // pop object
+                    state.stack.push(BytecodeType::Any);
                 }
             }
 

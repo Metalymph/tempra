@@ -73,6 +73,7 @@ The VM handles the following primitive types directly:
 - **Bool**: `true` or `false`.
 - **Int64**: 64-bit signed integer.
 - **UInt64**: 64-bit unsigned integer.
+- **UInt8**: 8-bit unsigned integer (often used for bytes).
 - **Float64**: 64-bit IEEE-754 floating point.
 - **String**: Reference to a string (interned or heap-allocated).
 - **Composite/Placeholder**: (Future) Metadata for structs, enums, and arrays.
@@ -157,13 +158,15 @@ The VM handles the following primitive types directly:
 | `Tag` | - | `[enum] -> [string]` | Extracts the variant name (tag) from an enum. |
 | `Unwrap` | variant, index | `[enum] -> [T]` | Extracts the `index`-th payload of a specific variant. |
 
-### Arrays & Slices
+### Collections & Strings
 | Opcode | Operands | Stack Effect | Description |
 |---|---|---|---|
 | `MakeArray` | count | `[args...] -> [array]` | Pops `count` elements and creates an array. |
 | `GetIndex` | - | `[object, index] -> [T]` | Accesses an element by dynamic index. |
 | `Slice` | - | `[object, start, end] -> [slice]` | Creates a view into an array or slice. |
-| `Len` | - | `[object] -> [i64]` | Retrieves the length of the collection. |
+| `Len` | - | `[object] -> [i64]` | Retrieves count of elements (Array/Slice) or chars (String). |
+| `Size` | - | `[str] -> [i64]` | Retrieves UTF-8 byte size of String. |
+| `Bytes` | - | `[str] -> [slice]` | Retrieves a Slice(UInt8) view of String bytes. |
 
 ---
 

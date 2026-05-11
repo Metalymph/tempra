@@ -249,6 +249,18 @@ pub fn verify_function(func: &TirFunction, functions: &HashMap<TirFunctionId, &T
                     }
                     value_types.insert(*res, Some(TirType::Int64));
                 }
+                TirInstr::Size(res, object) => {
+                    if !value_types.contains_key(object) {
+                        errors.push(VerifierError::UndeclaredValue(*object));
+                    }
+                    value_types.insert(*res, Some(TirType::Int64));
+                }
+                TirInstr::Bytes(res, object) => {
+                    if !value_types.contains_key(object) {
+                        errors.push(VerifierError::UndeclaredValue(*object));
+                    }
+                    value_types.insert(*res, Some(TirType::Slice(Box::new(TirType::UInt8))));
+                }
             }
         }
 

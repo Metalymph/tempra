@@ -25,6 +25,7 @@ pub enum BytecodeType {
     Bool,
     Int64,
     UInt64,
+    UInt8,
     Float64,
     String,
     /// Verifier-only escape hatch for dynamic enum payloads.
@@ -38,6 +39,7 @@ impl fmt::Display for BytecodeType {
             BytecodeType::Bool => write!(f, "Bool"),
             BytecodeType::Int64 => write!(f, "Int64"),
             BytecodeType::UInt64 => write!(f, "UInt64"),
+            BytecodeType::UInt8 => write!(f, "UInt8"),
             BytecodeType::Float64 => write!(f, "Float64"),
             BytecodeType::String => write!(f, "String"),
             BytecodeType::Any => write!(f, "Any"),

@@ -11,7 +11,8 @@ pub fn map_type(ty: &Type) -> Result<TirType, TirLowerError> {
         Type::Unit => Ok(TirType::Unit),
         Type::Bool => Ok(TirType::Bool),
         Type::Int | Type::Int8 | Type::Int16 | Type::Int32 | Type::Int64 => Ok(TirType::Int64),
-        Type::UInt8 | Type::UInt16 | Type::UInt32 | Type::UInt64 => Ok(TirType::UInt64),
+        Type::UInt16 | Type::UInt32 | Type::UInt64 => Ok(TirType::UInt64),
+        Type::UInt8 => Ok(TirType::UInt8),
         Type::Float32 | Type::Float64 => Ok(TirType::Float64),
         Type::String => Ok(TirType::String),
         Type::Never => Ok(TirType::Never),
@@ -62,6 +63,7 @@ pub fn unmap_type(tir_ty: &TirType) -> Result<Type, TirLowerError> {
         TirType::Bool => Ok(Type::Bool),
         TirType::Int64 => Ok(Type::Int64),
         TirType::UInt64 => Ok(Type::UInt64),
+        TirType::UInt8 => Ok(Type::UInt8),
         TirType::Float64 => Ok(Type::Float64),
         TirType::String => Ok(Type::String),
         TirType::Never => Ok(Type::Never),
@@ -188,9 +190,13 @@ impl<'a> LowerContext<'a> {
                 }
             }
             HirExpression::Member(m) => {
+                let obj_ty = self.infer_expr_type(&m.object)?;
                 if m.field == "len" {
-                    let obj_ty = self.infer_expr_type(&m.object)?;
-                    if matches!(obj_ty, Type::Array(_) | Type::Slice(_)) {
+                    if matches!(obj_ty, Type::Array(_) | Type::Slice(_) | Type::String) {
+                        return Ok(Type::Int64);
+                    }
+                } else if m.field == "size" {
+                    if matches!(obj_ty, Type::String) {
                         return Ok(Type::Int64);
                     }
                 }
@@ -198,8 +204,11 @@ impl<'a> LowerContext<'a> {
             }
             HirExpression::Call(c) => {
                 if let HirExpression::Member(m) = &*c.callee {
-                    if m.field == "len" {
+                    if m.field == "len" || m.field == "size" {
                         return Ok(Type::Int64);
+                    }
+                    if m.field == "bytes" {
+                        return Ok(Type::Slice(Box::new(Type::UInt8)));
                     }
                 }
                 if let HirExpression::Name(_, name) = &*c.callee {
@@ -404,7 +413,12 @@ impl<'a> LowerContext<'a> {
                 self.builder.build_const(TirConst::Bool(*b)).map_err(|e| e.into())
             }
             HirExpression::String(_, s) => {
-                self.builder.build_const(TirConst::String(s.clone())).map_err(|e| e.into())
+                let unquoted = if s.starts_with('"') && s.ends_with('"') && s.len() >= 2 {
+                    &s[1..s.len() - 1]
+                } else {
+                    s.as_str()
+                };
+                self.builder.build_const(TirConst::String(unquoted.to_string())).map_err(|e| e.into())
             }
             HirExpression::Name(span, name) => {
                 if name == "None" {
@@ -531,11 +545,23 @@ impl<'a> LowerContext<'a> {
             HirExpression::Call(c) => {
                 // Handle .len() method call
                 if let HirExpression::Member(m) = &*c.callee {
-                    if m.field == "len" && c.args.is_empty() {
+                    if c.args.is_empty() {
                         let obj_ty = self.infer_expr_type(&m.object)?;
-                        if matches!(obj_ty, Type::Array(_) | Type::Slice(_)) {
-                            let obj = self.lower_expression(&m.object)?;
-                            return self.builder.build_len(obj).map_err(|e| e.into());
+                        if m.field == "len" {
+                            if matches!(obj_ty, Type::Array(_) | Type::Slice(_) | Type::String) {
+                                let obj = self.lower_expression(&m.object)?;
+                                return self.builder.build_len(obj).map_err(|e| e.into());
+                            }
+                        } else if m.field == "size" {
+                            if matches!(obj_ty, Type::String) {
+                                let obj = self.lower_expression(&m.object)?;
+                                return self.builder.build_size(obj).map_err(|e| e.into());
+                            }
+                        } else if m.field == "bytes" {
+                            if matches!(obj_ty, Type::String) {
+                                let obj = self.lower_expression(&m.object)?;
+                                return self.builder.build_bytes(obj).map_err(|e| e.into());
+                            }
                         }
                     }
                 }
@@ -630,22 +656,35 @@ impl<'a> LowerContext<'a> {
                 self.builder.build_make(tir_ty, None, vals).map_err(|e| e.into())
             }
             HirExpression::Index(i) => {
+                let obj_ty = self.infer_expr_type(&i.object)?;
+                if matches!(obj_ty, Type::String) {
+                    return Err(TirLowerError::UnsupportedExpr("String indexing is not supported in the experimental VM".into(), i.span));
+                }
                 let obj = self.lower_expression(&i.object)?;
                 let idx = self.lower_expression(&i.index)?;
                 self.builder.build_get_index(obj, idx).map_err(|e| e.into())
             }
             HirExpression::Slice(s) => {
+                let obj_ty = self.infer_expr_type(&s.object)?;
+                if matches!(obj_ty, Type::String) {
+                    return Err(TirLowerError::UnsupportedExpr("String slicing is not supported in the experimental VM".into(), s.span));
+                }
                 let obj = self.lower_expression(&s.object)?;
                 let start = self.lower_expression(&s.start)?;
                 let end = self.lower_expression(&s.end)?;
                 self.builder.build_slice(obj, start, end).map_err(|e| e.into())
             }
             HirExpression::Member(m) => {
+                let obj_ty = self.infer_expr_type(&m.object)?;
                 if m.field == "len" {
-                    let obj_ty = self.infer_expr_type(&m.object)?;
-                    if matches!(obj_ty, Type::Array(_) | Type::Slice(_)) {
+                    if matches!(obj_ty, Type::Array(_) | Type::Slice(_) | Type::String) {
                         let obj = self.lower_expression(&m.object)?;
                         return self.builder.build_len(obj).map_err(|e| e.into());
+                    }
+                } else if m.field == "size" {
+                    if matches!(obj_ty, Type::String) {
+                        let obj = self.lower_expression(&m.object)?;
+                        return self.builder.build_size(obj).map_err(|e| e.into());
                     }
                 }
                 Err(TirLowerError::UnsupportedExpr(format!("Member access: {}", m.field), m.span))

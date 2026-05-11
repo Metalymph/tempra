@@ -242,3 +242,74 @@ fn test_pipeline_for_unsupported_error() {
     });
     assert!(res.is_err());
 }
+
+#[test]
+fn test_pipeline_string_basics() {
+    let source = r#"
+        fn main() -> String {
+            return "hello tempra"
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::String("hello tempra".into()));
+}
+
+#[test]
+fn test_pipeline_string_eq() {
+    let source = r#"
+        fn main() -> Bool {
+            let s1 = "abc"
+            let s2 = "abc"
+            let s3 = "def"
+            return s1 == s2 && s1 != s3
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Bool(true));
+}
+
+#[test]
+fn test_pipeline_string_len() {
+    let source = r#"
+        fn main() -> Int64 {
+            let s = "👋 tempra" // 👋 is 1 char, space 1, tempra 6 -> total 8
+            return s.len()
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(8));
+}
+
+#[test]
+fn test_pipeline_string_size() {
+    let source = r#"
+        fn main() -> Int64 {
+            let s = "👋 tempra" // 👋 is 4 bytes, space 1, tempra 6 -> total 11
+            return s.size()
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(11));
+}
+
+#[test]
+fn test_pipeline_string_bytes() {
+    let source = r#"
+        fn main() -> UInt8 {
+            let s = "ABC"
+            let bs = s.bytes()
+            return bs[0] // 'A' is 65
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::UInt8(65));
+}
+
+#[test]
+fn test_pipeline_string_unsupported() {
+    let source = r#"
+        fn main() -> UInt8 {
+            let s = "ABC"
+            return s[0]
+        }
+    "#;
+    let res = std::panic::catch_unwind(|| {
+        run_source(source, "main", vec![])
+    });
+    assert!(res.is_err());
+}

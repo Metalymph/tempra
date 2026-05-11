@@ -313,4 +313,16 @@ impl FunctionBuilder {
         self.push_instr(TirInstr::Len(id, object))?;
         Ok(id)
     }
+
+    pub fn build_size(&mut self, object: TirValueId) -> Result<TirValueId, TirBuildError> {
+        let id = self.next_value();
+        self.push_instr(TirInstr::Size(id, object))?;
+        Ok(id)
+    }
+
+    pub fn build_bytes(&mut self, object: TirValueId) -> Result<TirValueId, TirBuildError> {
+        let id = self.next_value();
+        self.push_instr(TirInstr::Bytes(id, object))?;
+        Ok(id)
+    }
 }

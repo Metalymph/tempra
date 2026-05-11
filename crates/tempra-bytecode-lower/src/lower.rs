@@ -300,6 +300,16 @@ impl<'a> FunctionLowerer<'a> {
                 self.emit(BytecodeInstr::Len);
                 self.store_res(*res)?;
             }
+            TirInstr::Size(res, obj) => {
+                self.load_val(*obj)?;
+                self.emit(BytecodeInstr::Size);
+                self.store_res(*res)?;
+            }
+            TirInstr::Bytes(res, obj) => {
+                self.load_val(*obj)?;
+                self.emit(BytecodeInstr::Bytes);
+                self.store_res(*res)?;
+            }
             TirInstr::Get(_, _, _) | TirInstr::Set(_, _, _) => {
                 return Err(BytecodeLowerError::UnsupportedInstr(format!("{:?}", instr)));
             }
@@ -391,6 +401,8 @@ impl<'a> FunctionLowerer<'a> {
             TirInstr::GetIndex(_, _, _) => Ok(BytecodeType::Any),
             TirInstr::Slice(_, _, _, _) => Ok(BytecodeType::Any),
             TirInstr::Len(_, _) => Ok(BytecodeType::Int64),
+            TirInstr::Size(_, _) => Ok(BytecodeType::Int64),
+            TirInstr::Bytes(_, _) => Ok(BytecodeType::Any),
             _ => Err(BytecodeLowerError::UnsupportedInstr(format!("Cannot infer type for {:?}", instr))),
         }
     }
@@ -407,7 +419,8 @@ fn get_instr_res_id(instr: &TirInstr) -> Option<TirValueId> {
         TirInstr::Call(id, _, _) => Some(*id),
         TirInstr::Make(id, _, _, _) | TirInstr::Get(id, _, _) | TirInstr::Set(id, _, _) |
         TirInstr::Tag(id, _) | TirInstr::Unwrap(id, _, _, _) |
-        TirInstr::GetIndex(id, _, _) | TirInstr::Slice(id, _, _, _) | TirInstr::Len(id, _) => Some(*id),
+        TirInstr::GetIndex(id, _, _) | TirInstr::Slice(id, _, _, _) |
+        TirInstr::Len(id, _) | TirInstr::Size(id, _) | TirInstr::Bytes(id, _) => Some(*id),
         _ => None,
     }
 }
@@ -424,6 +437,7 @@ fn map_type(ty: &TirType) -> Result<BytecodeType, BytecodeLowerError> {
         TirType::Option(_) => Ok(BytecodeType::Any),
         TirType::Array(_) => Ok(BytecodeType::Any),
         TirType::Slice(_) => Ok(BytecodeType::Any),
+        TirType::UInt8 => Ok(BytecodeType::UInt8),
         _ => Err(BytecodeLowerError::UnsupportedType(format!("{:?}", ty))),
     }
 }

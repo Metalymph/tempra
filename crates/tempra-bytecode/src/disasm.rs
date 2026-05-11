@@ -95,6 +95,8 @@ pub fn disassemble_function(module: &BytecodeModule, func_id: FunctionId) -> Res
             BytecodeInstr::GetIndex => out.push_str("GetIndex\n"),
             BytecodeInstr::Slice => out.push_str("Slice\n"),
             BytecodeInstr::Len => out.push_str("Len\n"),
+            BytecodeInstr::Size => out.push_str("Size\n"),
+            BytecodeInstr::Bytes => out.push_str("Bytes\n"),
         }
     }
     Ok(out)

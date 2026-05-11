@@ -198,6 +198,7 @@ fn write_type(w: &mut impl Write, ty: &BytecodeType) -> io::Result<()> {
         BytecodeType::Float64 => 4,
         BytecodeType::String => 5,
         BytecodeType::Any => 6,
+        BytecodeType::UInt8 => 7,
     };
     w.write_all(&[tag])
 }
@@ -290,6 +291,8 @@ fn write_instr(w: &mut impl Write, instr: &BytecodeInstr) -> io::Result<()> {
         BytecodeInstr::GetIndex => w.write_all(&[41]),
         BytecodeInstr::Slice => w.write_all(&[42]),
         BytecodeInstr::Len => w.write_all(&[43]),
+        BytecodeInstr::Size => w.write_all(&[44]),
+        BytecodeInstr::Bytes => w.write_all(&[45]),
     }
 }
 
@@ -429,6 +432,7 @@ fn read_type(r: &mut impl Read) -> Result<BytecodeType, BytecodeSerializeError> 
         4 => Ok(BytecodeType::Float64),
         5 => Ok(BytecodeType::String),
         6 => Ok(BytecodeType::Any),
+        7 => Ok(BytecodeType::UInt8),
         _ => Err(BytecodeSerializeError::InvalidTag),
     }
 }
@@ -509,6 +513,8 @@ fn read_instr(r: &mut impl Read) -> Result<BytecodeInstr, BytecodeSerializeError
         41 => Ok(BytecodeInstr::GetIndex),
         42 => Ok(BytecodeInstr::Slice),
         43 => Ok(BytecodeInstr::Len),
+        44 => Ok(BytecodeInstr::Size),
+        45 => Ok(BytecodeInstr::Bytes),
         _ => Err(BytecodeSerializeError::InvalidTag),
     }
 }

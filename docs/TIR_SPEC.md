@@ -22,7 +22,7 @@ Currently, HIR interpreter continues to be used. TIR generation will be incremen
 ## TIR v0.1 Types
 TIR supports a minimal subset of types in v0.1:
 - `Unit`, `Bool`, `Never`
-- Numeric: `Int64`, `UInt64`, `Float64`
+- Numeric: `Int64`, `UInt64`, `UInt8`, `Float64`
 - Strings: `String`
 - Composite: `Tuple`, `Array`, `Slice`, `Struct`, `Enum`, `Option`, `Result`
 - Special: `Tag`, `Function`
@@ -44,7 +44,9 @@ Variables in TIR are managed explicitly through memory slots:
 - `get` / `set`: Access elements (fields, constant indices) within objects.
 - `get_index`: Access an element of an Array or Slice using a dynamic index.
 - `slice`: Create a read-only Slice view from an Array or another Slice.
-- `len`: Retrieve the length of an Array or Slice.
+- `len`: Retrieve the length of an Array or Slice (element count) or String (scalar count).
+- `size`: Retrieve the UTF-8 byte size of a String.
+- `bytes`: Retrieve a read-only Slice view of a String's bytes as UInt8.
 - `tag` / `unwrap`: Support for algebraic data type destructuring.
 - `add`, `sub`, `mul`, `div`: Numeric arithmetic operations.
 - `eq`, `lt`, `gt`: Numeric comparison, producing boolean results.

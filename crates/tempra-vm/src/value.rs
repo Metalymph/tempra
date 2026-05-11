@@ -7,6 +7,7 @@ pub enum VmValue {
     Bool(bool),
     Int64(i64),
     UInt64(u64),
+    UInt8(u8),
     Float64(f64),
     String(String),
     Enum(String, String, Vec<VmValue>), // enum_name, variant_name, payloads
@@ -25,6 +26,7 @@ impl VmValue {
             VmValue::Bool(_) => "Bool",
             VmValue::Int64(_) => "Int64",
             VmValue::UInt64(_) => "UInt64",
+            VmValue::UInt8(_) => "UInt8",
             VmValue::Float64(_) => "Float64",
             VmValue::String(_) => "String",
             VmValue::Enum(_, _, _) => "Enum",
@@ -41,6 +43,7 @@ impl fmt::Display for VmValue {
             VmValue::Bool(b) => write!(f, "{}", b),
             VmValue::Int64(i) => write!(f, "{}", i),
             VmValue::UInt64(u) => write!(f, "{}", u),
+            VmValue::UInt8(b) => write!(f, "{}", b),
             VmValue::Float64(v) => write!(f, "{}", v),
             VmValue::String(s) => write!(f, "{:?}", s),
             VmValue::Enum(_e, v, payloads) => {

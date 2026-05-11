@@ -45,6 +45,7 @@ pub fn format_type(ty: &TirType) -> String {
         TirType::Bool => "bool".to_string(),
         TirType::Int64 => "i64".to_string(),
         TirType::UInt64 => "u64".to_string(),
+        TirType::UInt8 => "u8".to_string(),
         TirType::Float64 => "f64".to_string(),
         TirType::String => "String".to_string(),
         TirType::Never => "!".to_string(),
@@ -88,6 +89,8 @@ pub fn format_instr(instr: &TirInstr) -> String {
         TirInstr::GetIndex(res, obj, idx) => format!("%{} = get_index %{}, %{}", res.0, obj.0, idx.0),
         TirInstr::Slice(res, obj, s, e) => format!("%{} = slice %{}, %{}..%{}", res.0, obj.0, s.0, e.0),
         TirInstr::Len(res, obj) => format!("%{} = len %{}", res.0, obj.0),
+        TirInstr::Size(res, obj) => format!("%{} = size %{}", res.0, obj.0),
+        TirInstr::Bytes(res, obj) => format!("%{} = bytes %{}", res.0, obj.0),
     }
 }
 

@@ -413,7 +413,33 @@ impl<'a> Interpreter<'a> {
                         VmValue::Slice { start, end, .. } => {
                             self.push(VmValue::Int64((end - start) as i64))?;
                         }
+                        VmValue::String(s) => {
+                            // Number of Unicode scalar values (chars)
+                            self.push(VmValue::Int64(s.chars().count() as i64))?;
+                        }
                         _ => return Err(VmError::ExpectedArrayOrSlice),
+                    }
+                }
+                BytecodeInstr::Size => {
+                    let object = self.pop()?;
+                    if let VmValue::String(s) = object {
+                        self.push(VmValue::Int64(s.len() as i64))?; // UTF-8 byte count
+                    } else {
+                        return Err(VmError::Message("Expected String for .size()".into()));
+                    }
+                }
+                BytecodeInstr::Bytes => {
+                    let object = self.pop()?;
+                    if let VmValue::String(s) = object {
+                        let bytes: Vec<VmValue> = s.as_bytes().iter().map(|&b| VmValue::UInt8(b)).collect();
+                        let len = bytes.len();
+                        self.push(VmValue::Slice {
+                            parent: Rc::new(bytes),
+                            start: 0,
+                            end: len,
+                        })?;
+                    } else {
+                        return Err(VmError::Message("Expected String for .bytes()".into()));
                     }
                 }
                 BytecodeInstr::Unreachable => return Err(VmError::UnreachableExecuted),

@@ -57,6 +57,8 @@ pub enum BytecodeInstr {
     GetIndex,
     Slice,
     Len,
+    Size,
+    Bytes,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -109,7 +111,7 @@ pub fn stack_effect(
         BytecodeInstr::MakeArray(count) => StackEffect { pops: *count, pushes: 1 },
         BytecodeInstr::GetIndex => StackEffect { pops: 2, pushes: 1 },
         BytecodeInstr::Slice => StackEffect { pops: 3, pushes: 1 },
-        BytecodeInstr::Len => StackEffect { pops: 1, pushes: 1 },
+        BytecodeInstr::Len | BytecodeInstr::Size | BytecodeInstr::Bytes => StackEffect { pops: 1, pushes: 1 },
     };
     Ok(effect)
 }

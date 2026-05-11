@@ -85,3 +85,42 @@ This command parses, type-checks, lowers to TIR, verifies the result, and prints
 - `emit-tir` does not affect `tempra run`, `tempra check`, or `tempra test`.
 - TIR emission is not required for any existing workflow.
 - This is an experimental developer tool for inspecting the lowering output.
+
+---
+
+## Phase 14.7 — VM Coverage Expansion v5 (for-in)
+
+### 1. `for-in` on Arrays and Slices
+
+In the experimental VM, `for-in` loops over `Array(T)` and `Slice(T)` are lowered to an explicit index-based loop. This avoids the overhead of the full `Iterator`/`Iterable` protocol while the VM pipeline is still in early development.
+
+#### High-Level Pattern
+
+```tempra
+for x in xs {
+    body
+}
+```
+
+#### Lowered TIR Structure
+
+1.  **Preparation**:
+    - Evaluate `xs` and store it in a hidden slot `$iter_obj`.
+    - Create a hidden slot `$idx` initialized to `0`.
+    - Create a hidden slot `$len` initialized to `len($iter_obj)`.
+
+2.  **CFG**:
+    - **CondBlock**: Loads `idx` and `len`, performs `idx < len`, and branches to **BodyBlock** or **ExitBlock**.
+    - **BodyBlock**:
+        - `x = xs[idx]` (GetIndex).
+        - Declares loop variable `x` as a local slot.
+        - Executes loop body statements.
+        - Increments `idx` (`idx = idx + 1`).
+        - Branches back to **CondBlock**.
+    - **ExitBlock**: Continues execution after the loop.
+
+3.  **Implementation Details**:
+    - **Hidden Slots**: The slots for `$iter_obj`, `$idx`, and `$len` are unique to each loop and are not accessible by user code.
+    - **Loop Variable**: The loop variable `x` is declared as a local slot within the `BodyBlock`. Its scope is limited to the loop body.
+    - **Bounds Checking**: Since TIR `GetIndex` performs runtime bounds checking, the loop is safe.
+    - **Performance**: This direct lowering is efficient as it maps directly to basic arithmetic and jump instructions in the VM.

@@ -97,6 +97,23 @@ fn resolve_hir_type(hir_ty: &HirType, _type_ctx: &TypeContext) -> Result<Type, T
             let inner_ty = resolve_hir_type(inner_hir, _type_ctx)?;
             Ok(Type::Option(Box::new(inner_ty)))
         }
+        HirType::Array(_, inner_hir) => {
+            let inner_ty = resolve_hir_type(inner_hir, _type_ctx)?;
+            Ok(Type::Array(Box::new(inner_ty)))
+        }
+        HirType::Apply(_, callee, args) => {
+            if let HirType::Named(_, name) = &**callee {
+                if name == "Slice" && args.len() == 1 {
+                    let inner_ty = resolve_hir_type(&args[0], _type_ctx)?;
+                    return Ok(Type::Slice(Box::new(inner_ty)));
+                }
+                if name == "Array" && args.len() == 1 {
+                    let inner_ty = resolve_hir_type(&args[0], _type_ctx)?;
+                    return Ok(Type::Array(Box::new(inner_ty)));
+                }
+            }
+            Err(TirLowerError::UnsupportedType(format!("Cannot resolve HirType::Apply: {:?}", hir_ty)))
+        }
         _ => Err(TirLowerError::UnsupportedType(format!("Cannot resolve HirType: {:?}", hir_ty))),
     }
 }
@@ -234,62 +251,7 @@ impl<'a> LowerContext<'a> {
             HirStatement::Let(l) => {
                 // Use explicit type if available, otherwise infer
                 let val_ty = if let Some(hir_ty) = &l.ty {
-                    // Manual resolution for simple types since we only have &TypeContext
-                    match hir_ty {
-                        HirType::Named(_, name) if name == "Int64" => Type::Int64,
-                        HirType::Named(_, name) if name == "Bool" => Type::Bool,
-                        HirType::Named(_, name) if name == "String" => Type::String,
-                        HirType::Optional(_, inner) => {
-                            if let HirType::Named(_, name) = &**inner {
-                                if name == "Int64" {
-                                    Type::Option(Box::new(Type::Int64))
-                                } else if name == "Bool" {
-                                    Type::Option(Box::new(Type::Bool))
-                                } else if name == "String" {
-                                    Type::Option(Box::new(Type::String))
-                                } else {
-                                    self.infer_expr_type(&l.value)?
-                                }
-                            } else {
-                                self.infer_expr_type(&l.value)?
-                            }
-                        }
-                        HirType::Result(_, ok_hir, err_hir) => {
-                            let ok_ty = if let HirType::Named(_, name) = &**ok_hir {
-                                if name == "Int64" {
-                                    Type::Int64
-                                } else if name == "Bool" {
-                                    Type::Bool
-                                } else if name == "String" {
-                                    Type::String
-                                } else {
-                                    Type::Unknown
-                                }
-                            } else {
-                                Type::Unknown
-                            };
-                            let err_ty = if let HirType::Named(_, name) = &**err_hir {
-                                if name == "Int64" {
-                                    Type::Int64
-                                } else if name == "Bool" {
-                                    Type::Bool
-                                } else if name == "String" {
-                                    Type::String
-                                } else {
-                                    Type::Unknown
-                                }
-                            } else {
-                                Type::Unknown
-                            };
-
-                            if ok_ty != Type::Unknown && err_ty != Type::Unknown {
-                                Type::Result(Box::new(ok_ty), Box::new(err_ty))
-                            } else {
-                                self.infer_expr_type(&l.value)?
-                            }
-                        }
-                        _ => self.infer_expr_type(&l.value)?,
-                    }
+                    resolve_hir_type(hir_ty, self.type_ctx)?
                 } else {
                     self.infer_expr_type(&l.value)?
                 };
@@ -301,6 +263,9 @@ impl<'a> LowerContext<'a> {
                     HirExpression::Name(_, name) if name == "None" => {
                         self.builder.build_make(tir_ty.clone(), Some("None".to_string()), vec![])?
                     }
+                    HirExpression::Array(_, elements) if elements.is_empty() => {
+                        self.builder.build_make(tir_ty.clone(), None, vec![])?
+                    }
                     _ => self.lower_expression(&l.value)?,
                 };
                 self.builder.build_store(slot, val)?;
@@ -308,61 +273,7 @@ impl<'a> LowerContext<'a> {
             }
             HirStatement::Var(v) => {
                 let val_ty = if let Some(hir_ty) = &v.ty {
-                    match hir_ty {
-                        HirType::Named(_, name) if name == "Int64" => Type::Int64,
-                        HirType::Named(_, name) if name == "Bool" => Type::Bool,
-                        HirType::Named(_, name) if name == "String" => Type::String,
-                        HirType::Optional(_, inner) => {
-                            if let HirType::Named(_, name) = &**inner {
-                                if name == "Int64" {
-                                    Type::Option(Box::new(Type::Int64))
-                                } else if name == "Bool" {
-                                    Type::Option(Box::new(Type::Bool))
-                                } else if name == "String" {
-                                    Type::Option(Box::new(Type::String))
-                                } else {
-                                    self.infer_expr_type(&v.value)?
-                                }
-                            } else {
-                                self.infer_expr_type(&v.value)?
-                            }
-                        }
-                        HirType::Result(_, ok_hir, err_hir) => {
-                            let ok_ty = if let HirType::Named(_, name) = &**ok_hir {
-                                if name == "Int64" {
-                                    Type::Int64
-                                } else if name == "Bool" {
-                                    Type::Bool
-                                } else if name == "String" {
-                                    Type::String
-                                } else {
-                                    Type::Unknown
-                                }
-                            } else {
-                                Type::Unknown
-                            };
-                            let err_ty = if let HirType::Named(_, name) = &**err_hir {
-                                if name == "Int64" {
-                                    Type::Int64
-                                } else if name == "Bool" {
-                                    Type::Bool
-                                } else if name == "String" {
-                                    Type::String
-                                } else {
-                                    Type::Unknown
-                                }
-                            } else {
-                                Type::Unknown
-                            };
-
-                            if ok_ty != Type::Unknown && err_ty != Type::Unknown {
-                                Type::Result(Box::new(ok_ty), Box::new(err_ty))
-                            } else {
-                                self.infer_expr_type(&v.value)?
-                            }
-                        }
-                        _ => self.infer_expr_type(&v.value)?,
-                    }
+                    resolve_hir_type(hir_ty, self.type_ctx)?
                 } else {
                     self.infer_expr_type(&v.value)?
                 };
@@ -373,6 +284,9 @@ impl<'a> LowerContext<'a> {
                 let val = match &v.value {
                     HirExpression::Name(_, name) if name == "None" => {
                         self.builder.build_make(tir_ty.clone(), Some("None".to_string()), vec![])?
+                    }
+                    HirExpression::Array(_, elements) if elements.is_empty() => {
+                        self.builder.build_make(tir_ty.clone(), None, vec![])?
                     }
                     _ => self.lower_expression(&v.value)?,
                 };
@@ -388,8 +302,96 @@ impl<'a> LowerContext<'a> {
                 self.builder.build_ret(None)?;
                 Ok(())
             }
-            _ => Err(TirLowerError::UnsupportedStmt(format!("Stmt"), tempra_span::Span::new(0, 0))),
+            HirStatement::For(f) => {
+                self.lower_for(f)
+            }
+            _ => Err(TirLowerError::UnsupportedStmt(format!("{:?}", stmt), stmt.span())),
         }
+    }
+
+    fn lower_for(&mut self, f: &HirFor) -> Result<(), TirLowerError> {
+        let iterable_ty = self.infer_expr_type(&f.iterable)?;
+        if !matches!(iterable_ty, Type::Array(_) | Type::Slice(_)) {
+            return Err(TirLowerError::UnsupportedExpr(
+                "for-in currently only supports Array/Slice in experimental VM".into(),
+                f.iterable.span(),
+            ));
+        }
+
+        let element_ty = match &iterable_ty {
+            Type::Array(inner) | Type::Slice(inner) => inner.as_ref().clone(),
+            _ => unreachable!(),
+        };
+
+        // 1. Lower iterable and store in a hidden slot
+        let iter_val = self.lower_expression(&f.iterable)?;
+        let tir_iterable_ty = map_type(&iterable_ty)?;
+        let iter_obj_slot = self.builder.build_slot(tir_iterable_ty, Some(&format!("$iter_obj_{}", f.span.start)))?;
+        self.builder.build_store(iter_obj_slot, iter_val)?;
+
+        // 2. Initialize index slot
+        let zero = self.builder.build_const(TirConst::Int64(0))?;
+        let idx_slot = self.builder.build_slot(TirType::Int64, Some(&format!("$idx_{}", f.span.start)))?;
+        self.builder.build_store(idx_slot, zero)?;
+
+        // 3. Initialize length slot
+        let loaded_iter = self.builder.build_load(iter_obj_slot)?;
+        let len_val = self.builder.build_len(loaded_iter)?;
+        let len_slot = self.builder.build_slot(TirType::Int64, Some(&format!("$len_{}", f.span.start)))?;
+        self.builder.build_store(len_slot, len_val)?;
+
+        // 4. Create blocks
+        let cond_block = self.builder.new_block();
+        let body_block = self.builder.new_block();
+        let exit_block = self.builder.new_block();
+
+        // Branch to cond
+        self.builder.build_br(cond_block)?;
+
+        // 5. Condition Block
+        self.builder.set_current_block(cond_block);
+        let curr_idx = self.builder.build_load(idx_slot)?;
+        let curr_len = self.builder.build_load(len_slot)?;
+        let is_less = self.builder.build_lt(curr_idx, curr_len)?;
+        self.builder.build_condbr(is_less, body_block, exit_block)?;
+
+        // 6. Body Block
+        self.builder.set_current_block(body_block);
+        
+        // Load element
+        let iter_obj_for_get = self.builder.build_load(iter_obj_slot)?;
+        let idx_for_get = self.builder.build_load(idx_slot)?;
+        let element_val = self.builder.build_get_index(iter_obj_for_get, idx_for_get)?;
+        
+        // Scope for loop variable
+        let old_locals = self.locals.clone();
+        
+        let tir_element_ty = map_type(&element_ty)?;
+        let x_slot = self.builder.build_slot(tir_element_ty.clone(), Some(&f.binding))?;
+        self.builder.build_store(x_slot, element_val)?;
+        self.locals.insert(f.binding.clone(), (x_slot, tir_element_ty, false));
+
+        // Lower body statements
+        for stmt in &f.body.statements {
+            self.lower_statement(stmt)?;
+        }
+        
+        // Restore locals scope
+        self.locals = old_locals;
+
+        // Increment index
+        if !self.builder.is_terminated() {
+            let idx_to_inc = self.builder.build_load(idx_slot)?;
+            let one = self.builder.build_const(TirConst::Int64(1))?;
+            let next_idx = self.builder.build_add(idx_to_inc, one)?;
+            self.builder.build_store(idx_slot, next_idx)?;
+            self.builder.build_br(cond_block)?;
+        }
+
+        // 7. Exit Block
+        self.builder.set_current_block(exit_block);
+
+        Ok(())
     }
 
     pub fn lower_expression(&mut self, expr: &HirExpression) -> Result<TirValueId, TirLowerError> {

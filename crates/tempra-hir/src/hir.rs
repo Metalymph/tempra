@@ -124,6 +124,20 @@ pub enum HirStatement {
     For(HirFor),
     Expr(HirExpression),
 }
+impl HirStatement {
+    pub fn span(&self) -> Span {
+        match self {
+            HirStatement::Let(l) => l.span,
+            HirStatement::Var(v) => v.span,
+            HirStatement::Return(Some(e)) => e.span(),
+            HirStatement::Return(None) => Span::new(0, 0), // FIXME: Store span in Return
+            HirStatement::Break(span) => *span,
+            HirStatement::Continue(span) => *span,
+            HirStatement::For(f) => f.span,
+            HirStatement::Expr(e) => e.span(),
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct HirLet {

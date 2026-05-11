@@ -94,6 +94,7 @@ The experimental VM pipeline works as follows:
     - Indexing: `xs[i]` for both arrays and slices.
     - Slicing: `xs[a..b]` creates a view without copying data.
     - Length: `xs.len()` or `xs.len` retrieves the element count.
+    - Iteration: `for x in xs` is supported via index-based lowering.
 - **Bytecode Cache**: Persistent storage in `.tempra/cache/`.
 
 

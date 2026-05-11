@@ -162,3 +162,83 @@ fn test_pipeline_nested_slice() {
     "#;
     assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(2));
 }
+
+#[test]
+fn test_pipeline_for_array_sum() {
+    let source = r#"
+        fn main() -> Int64 {
+            let xs = [1, 2, 3, 4]
+            var sum = 0
+            for x in xs {
+                sum = sum + x
+            }
+            return sum
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(10));
+}
+
+#[test]
+fn test_pipeline_for_slice_sum() {
+    let source = r#"
+        fn main() -> Int64 {
+            let xs = [1, 2, 3, 4, 5]
+            let s = xs[1..4] // [2, 3, 4]
+            var sum = 0
+            for x in s {
+                sum = sum + x
+            }
+            return sum
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(9));
+}
+
+#[test]
+fn test_pipeline_for_empty() {
+    let source = r#"
+        fn main() -> Int64 {
+            let xs: [Int64] = []
+            var count = 0
+            for x in xs {
+                count = count + 1
+            }
+            return count
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(0));
+}
+
+#[test]
+fn test_pipeline_nested_for() {
+    let source = r#"
+        fn main() -> Int64 {
+            let xss = [[1, 2], [3, 4]]
+            var sum = 0
+            for xs in xss {
+                for x in xs {
+                    sum = sum + x
+                }
+            }
+            return sum
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(10));
+}
+#[test]
+fn test_pipeline_for_unsupported_error() {
+    let source = r#"
+        fn main() -> Int64 {
+            let x = 123
+            var sum = 0
+            for i in x {
+                sum = sum + i
+            }
+            return sum
+        }
+    "#;
+    let res = std::panic::catch_unwind(|| {
+        run_source(source, "main", vec![])
+    });
+    assert!(res.is_err());
+}

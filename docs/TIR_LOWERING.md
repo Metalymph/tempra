@@ -2,8 +2,9 @@
 
 This document describes the compilation strategy from Tempra Typed HIR to TIR.
 
-## Status: Phase 12.2 — Hardening
-We have moved from a smoke-test implementation to a more robust, verified lowering process.
+## Status: Phase 14.4 — VM Coverage Expansion v2
+We have expanded the TIR lowerer to handle Result propagation and basic ADT operations for the experimental VM.
+
 
 ### Major Changes in 12.2:
 - **Strict Return Checks**: Functions now require an explicit `return` unless they return `Unit`. Implicit `ret` is only emitted at the end of `Unit` functions.
@@ -12,11 +13,16 @@ We have moved from a smoke-test implementation to a more robust, verified loweri
 - **Function Calls**: Support for simple calls to known functions. The lowerer verifies arity against the `TypeContext`.
 - **CFG Improvements**: The `If` statement lowering is more intelligent about branch termination. If both branches terminate, no join block is created, avoiding dead code generation.
 - **Builder Hardening**: The TIR builder now returns `Result` for all operations. Attempts to append instructions to an already-terminated block result in an explicit error.
+- **Result Propagation (`?`)**: Support for desugaring `expr?` into explicit control flow using `tag`, `eq`, `condbr`, `unwrap`, and early `ret`.
+- **ADT Operations**: Basic support for mapping Result/Option types and operations (`make`, `tag`, `unwrap`) to TIR.
+
 
 ## Supported Subset
 
 ### Types
 - `Unit`, `Bool`, `Int64`, `UInt64`, `Float64`, `String`, `Never`.
+- `Result(T, E)`, `Option(T)`.
+
 
 ### Expressions
 - **Literals**: Integer, Bool, String.
@@ -25,6 +31,8 @@ We have moved from a smoke-test implementation to a more robust, verified loweri
 - **Logic**: `and`, `or`, `not`.
 - **Variables**: Load from local slots.
 - **Calls**: Direct calls to functions declared in `TypeContext`.
+- **Propagation**: `expr?` for Result types, desugared into explicit blocks.
+
 
 ### Statements
 - **Let/Var**: Local bindings with mutability tracking.

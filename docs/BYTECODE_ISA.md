@@ -150,6 +150,21 @@ The VM handles the following primitive types directly:
 |---|---|---|---|
 | `Call` | fn_idx, argc| `[args...] -> [ret?]` | Calls function by index in function table. |
 
+### Enums
+| Opcode | Operands | Stack Effect | Description |
+|---|---|---|---|
+| `MakeEnum` | enum, var, cnt| `[payloads...] -> [enum]` | Creates an enum instance with `cnt` payloads. |
+| `Tag` | - | `[enum] -> [string]` | Extracts the variant name (tag) from an enum. |
+| `Unwrap` | variant, index | `[enum] -> [T]` | Extracts the `index`-th payload of a specific variant. |
+
+### Arrays & Slices
+| Opcode | Operands | Stack Effect | Description |
+|---|---|---|---|
+| `MakeArray` | count | `[args...] -> [array]` | Pops `count` elements and creates an array. |
+| `GetIndex` | - | `[object, index] -> [T]` | Accesses an element by dynamic index. |
+| `Slice` | - | `[object, start, end] -> [slice]` | Creates a view into an array or slice. |
+| `Len` | - | `[object] -> [i64]` | Retrieves the length of the collection. |
+
 ---
 
 ## 5. Bytecode Verifier Specification

@@ -18,6 +18,10 @@ pub enum VmError {
     InvalidInstructionPointer(usize),
     MissingReturn,
     Message(String),
+    ExpectedArrayOrSlice,
+    IndexOutOfBounds(usize),
+    InvalidSliceRange { start: usize, end: usize, len: usize },
+    ExpectedIntIndex,
 }
 
 impl fmt::Display for VmError {
@@ -38,6 +42,10 @@ impl fmt::Display for VmError {
             VmError::InvalidInstructionPointer(ip) => write!(f, "Invalid instruction pointer: {}", ip),
             VmError::MissingReturn => write!(f, "Missing return instruction"),
             VmError::Message(s) => write!(f, "{}", s),
+            VmError::ExpectedArrayOrSlice => write!(f, "Expected array or slice"),
+            VmError::IndexOutOfBounds(i) => write!(f, "Index out of bounds: {}", i),
+            VmError::InvalidSliceRange { start, end, len } => write!(f, "Invalid slice range: {}..{} for length {}", start, end, len),
+            VmError::ExpectedIntIndex => write!(f, "Expected integer index"),
         }
     }
 }

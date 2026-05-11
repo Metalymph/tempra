@@ -73,6 +73,11 @@ pub enum TirInstr {
     And(TirValueId, TirValueId, TirValueId),
     Or(TirValueId, TirValueId, TirValueId),
     Not(TirValueId, TirValueId),
+
+    // Array/Slice dynamic operations
+    GetIndex(TirValueId, TirValueId, TirValueId),      // dest, object, index
+    Slice(TirValueId, TirValueId, TirValueId, TirValueId), // dest, object, start, end
+    Len(TirValueId, TirValueId),                       // dest, object
 }
 
 #[derive(Debug, Clone)]

@@ -41,7 +41,10 @@ Variables in TIR are managed explicitly through memory slots:
 - `store`: Writes a value to a slot.
 
 ### Operations
-- `get` / `set`: Access elements (fields, indices) within objects.
+- `get` / `set`: Access elements (fields, constant indices) within objects.
+- `get_index`: Access an element of an Array or Slice using a dynamic index.
+- `slice`: Create a read-only Slice view from an Array or another Slice.
+- `len`: Retrieve the length of an Array or Slice.
 - `tag` / `unwrap`: Support for algebraic data type destructuring.
 - `add`, `sub`, `mul`, `div`: Numeric arithmetic operations.
 - `eq`, `lt`, `gt`: Numeric comparison, producing boolean results.

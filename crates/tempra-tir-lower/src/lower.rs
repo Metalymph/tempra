@@ -35,8 +35,8 @@ pub fn map_type(ty: &Type) -> Result<TirType, TirLowerError> {
         Type::Unknown => Err(TirLowerError::UnsupportedType("Unknown".to_string())),
         Type::Error => Err(TirLowerError::UnsupportedType("Error".to_string())),
         
-        Type::Array(_) => Err(TirLowerError::UnsupportedType("Array".to_string())),
-        Type::Slice(_) => Err(TirLowerError::UnsupportedType("Slice".to_string())),
+        Type::Array(inner) => Ok(TirType::Array(Box::new(map_type(inner)?))),
+        Type::Slice(inner) => Ok(TirType::Slice(Box::new(map_type(inner)?))),
         Type::Tuple(_) => Err(TirLowerError::UnsupportedType("Tuple".to_string())),
         Type::Struct(name, _) => Err(TirLowerError::UnsupportedType(format!("Struct({})", name))),
         Type::Command => Err(TirLowerError::UnsupportedType("Command".to_string())),
@@ -70,6 +70,9 @@ pub fn unmap_type(tir_ty: &TirType) -> Result<Type, TirLowerError> {
             Box::new(unmap_type(ok)?),
             Box::new(unmap_type(err)?),
         )),
+        TirType::Tag => Ok(Type::String),
+        TirType::Array(inner) => Ok(Type::Array(Box::new(unmap_type(inner)?))),
+        TirType::Slice(inner) => Ok(Type::Slice(Box::new(unmap_type(inner)?))),
         _ => Err(TirLowerError::UnsupportedType(format!("{:?}", tir_ty))),
     }
 }
@@ -145,7 +148,43 @@ impl<'a> LowerContext<'a> {
             HirExpression::Unary(u) => {
                 if u.op == HirUnaryOp::Not { Ok(Type::Bool) } else { self.infer_expr_type(&u.expr) }
             }
+            HirExpression::Array(_, elements) => {
+                if let Some(first) = elements.first() {
+                    let inner = self.infer_expr_type(first)?;
+                    Ok(Type::Array(Box::new(inner)))
+                } else {
+                    Ok(Type::Array(Box::new(Type::Unknown)))
+                }
+            }
+            HirExpression::Index(i) => {
+                let obj_ty = self.infer_expr_type(&i.object)?;
+                match obj_ty {
+                    Type::Array(inner) | Type::Slice(inner) => Ok(*inner),
+                    _ => Err(TirLowerError::UnsupportedExpr("Indexing non-array/slice".into(), i.span)),
+                }
+            }
+            HirExpression::Slice(s) => {
+                let obj_ty = self.infer_expr_type(&s.object)?;
+                match obj_ty {
+                    Type::Array(inner) | Type::Slice(inner) => Ok(Type::Slice(inner)),
+                    _ => Err(TirLowerError::UnsupportedExpr("Slicing non-array/slice".into(), s.span)),
+                }
+            }
+            HirExpression::Member(m) => {
+                if m.field == "len" {
+                    let obj_ty = self.infer_expr_type(&m.object)?;
+                    if matches!(obj_ty, Type::Array(_) | Type::Slice(_)) {
+                        return Ok(Type::Int64);
+                    }
+                }
+                Err(TirLowerError::UnsupportedExpr(format!("Member access: {}", m.field), m.span))
+            }
             HirExpression::Call(c) => {
+                if let HirExpression::Member(m) = &*c.callee {
+                    if m.field == "len" {
+                        return Ok(Type::Int64);
+                    }
+                }
                 if let HirExpression::Name(_, name) = &*c.callee {
                     match name.as_str() {
                         "Some" => {
@@ -159,9 +198,8 @@ impl<'a> LowerContext<'a> {
                             }
                             Ok(Type::Unknown)
                         }
-                        "Ok" | "Err" => Ok(Type::Unknown), // Result type: unknown without more context
+                        "Ok" | "Err" => Ok(Type::Unknown),
                         _ => {
-                            // Look up function signature in TypeContext
                             if let Some(sig) = self.type_ctx.functions.get(name.as_str()) {
                                 Ok(sig.return_type.clone())
                             } else {
@@ -174,7 +212,6 @@ impl<'a> LowerContext<'a> {
                 }
             }
             HirExpression::Try(e) => {
-                // The result of expr? is the Ok type of the inner Result
                 let inner_ty = self.infer_expr_type(&e.expr)?;
                 match inner_ty {
                     Type::Result(ok, _) => Ok(*ok),
@@ -490,6 +527,17 @@ impl<'a> LowerContext<'a> {
                 }
             }
             HirExpression::Call(c) => {
+                // Handle .len() method call
+                if let HirExpression::Member(m) = &*c.callee {
+                    if m.field == "len" && c.args.is_empty() {
+                        let obj_ty = self.infer_expr_type(&m.object)?;
+                        if matches!(obj_ty, Type::Array(_) | Type::Slice(_)) {
+                            let obj = self.lower_expression(&m.object)?;
+                            return self.builder.build_len(obj).map_err(|e| e.into());
+                        }
+                    }
+                }
+
                 if let HirExpression::Name(span, name) = &*c.callee {
                     if matches!(name.as_str(), "Some" | "Ok" | "Err") {
                         if c.args.len() != 1 {
@@ -570,7 +618,37 @@ impl<'a> LowerContext<'a> {
                 Ok(ok_val)
             }
             HirExpression::IsPattern(i) => self.lower_is_pattern(i),
-            _ => Err(TirLowerError::UnsupportedExpr("Unsupported expression".into(), expr.span())),
+            HirExpression::Array(_, elements) => {
+                let mut vals = Vec::new();
+                for e in elements {
+                    vals.push(self.lower_expression(e)?);
+                }
+                let hir_ty = self.infer_expr_type(expr)?;
+                let tir_ty = map_type(&hir_ty)?;
+                self.builder.build_make(tir_ty, None, vals).map_err(|e| e.into())
+            }
+            HirExpression::Index(i) => {
+                let obj = self.lower_expression(&i.object)?;
+                let idx = self.lower_expression(&i.index)?;
+                self.builder.build_get_index(obj, idx).map_err(|e| e.into())
+            }
+            HirExpression::Slice(s) => {
+                let obj = self.lower_expression(&s.object)?;
+                let start = self.lower_expression(&s.start)?;
+                let end = self.lower_expression(&s.end)?;
+                self.builder.build_slice(obj, start, end).map_err(|e| e.into())
+            }
+            HirExpression::Member(m) => {
+                if m.field == "len" {
+                    let obj_ty = self.infer_expr_type(&m.object)?;
+                    if matches!(obj_ty, Type::Array(_) | Type::Slice(_)) {
+                        let obj = self.lower_expression(&m.object)?;
+                        return self.builder.build_len(obj).map_err(|e| e.into());
+                    }
+                }
+                Err(TirLowerError::UnsupportedExpr(format!("Member access: {}", m.field), m.span))
+            }
+            _ => Err(TirLowerError::UnsupportedExpr(format!("Unsupported expression: {:?}", expr), expr.span())),
         }
     }
 

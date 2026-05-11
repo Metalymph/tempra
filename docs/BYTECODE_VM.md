@@ -52,7 +52,8 @@ The VM uses the `VmValue` enum for all runtime values:
 - `Float64(f64)`: 64-bit floating point numbers.
 - `String(String)`: UTF-8 strings.
 - `Enum(String, String, Vec<VmValue>)`: Enum variants, represented as `(EnumName, VariantName, Payloads)`. Used for `Option` and `Result`.
-
+- `Array(Rc<Vec<VmValue>>)`: Reference-counted collection of values.
+- `Slice { parent, start, end }`: A read-only view into a portion of an array or another slice.
 
 ## Error Handling
 
@@ -88,11 +89,11 @@ The experimental VM pipeline works as follows:
 - **Enums (Option/Result)**:
     - Construction: `Some(x)`, `None`, `Ok(x)`, `Err(e)`.
     - Propagation: The `?` operator for `Result` types is supported via explicit desugaring in TIR.
-    - Desugaring pattern for `expr?`:
-        1. Evaluate `expr`.
-        2. Check the tag using `Tag`.
-        3. If `Err`: `Unwrap` the error, wrap it in a new `Result::Err`, and `Return` early.
-        4. If `Ok`: `Unwrap` the value and continue execution.
+- **Arrays & Slices**:
+    - Creation: Array literals `[1, 2, 3]`.
+    - Indexing: `xs[i]` for both arrays and slices.
+    - Slicing: `xs[a..b]` creates a view without copying data.
+    - Length: `xs.len()` or `xs.len` retrieves the element count.
 - **Bytecode Cache**: Persistent storage in `.tempra/cache/`.
 
 

@@ -283,6 +283,13 @@ fn write_instr(w: &mut impl Write, instr: &BytecodeInstr) -> io::Result<()> {
             write_u32(w, variant_id.0)?;
             w.write_all(&idx.to_le_bytes())
         }
+        BytecodeInstr::MakeArray(count) => {
+            w.write_all(&[40])?;
+            w.write_all(&count.to_le_bytes())
+        }
+        BytecodeInstr::GetIndex => w.write_all(&[41]),
+        BytecodeInstr::Slice => w.write_all(&[42]),
+        BytecodeInstr::Len => w.write_all(&[43]),
     }
 }
 
@@ -493,6 +500,15 @@ fn read_instr(r: &mut impl Read) -> Result<BytecodeInstr, BytecodeSerializeError
             let idx = u16::from_le_bytes(idx_bytes);
             Ok(BytecodeInstr::Unwrap(variant_id, idx))
         }
+        40 => {
+            let mut count_bytes = [0u8; 2];
+            r.read_exact(&mut count_bytes)?;
+            let count = u16::from_le_bytes(count_bytes);
+            Ok(BytecodeInstr::MakeArray(count))
+        }
+        41 => Ok(BytecodeInstr::GetIndex),
+        42 => Ok(BytecodeInstr::Slice),
+        43 => Ok(BytecodeInstr::Len),
         _ => Err(BytecodeSerializeError::InvalidTag),
     }
 }

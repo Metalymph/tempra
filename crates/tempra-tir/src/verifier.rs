@@ -222,6 +222,33 @@ pub fn verify_function(func: &TirFunction, functions: &HashMap<TirFunctionId, &T
                     }
                     value_types.insert(*res, Some(TirType::Bool));
                 }
+                TirInstr::GetIndex(res, object, index) => {
+                    if !value_types.contains_key(object) {
+                        errors.push(VerifierError::UndeclaredValue(*object));
+                    }
+                    if !value_types.contains_key(index) {
+                        errors.push(VerifierError::UndeclaredValue(*index));
+                    }
+                    value_types.insert(*res, None);
+                }
+                TirInstr::Slice(res, object, start, end) => {
+                    if !value_types.contains_key(object) {
+                        errors.push(VerifierError::UndeclaredValue(*object));
+                    }
+                    if !value_types.contains_key(start) {
+                        errors.push(VerifierError::UndeclaredValue(*start));
+                    }
+                    if !value_types.contains_key(end) {
+                        errors.push(VerifierError::UndeclaredValue(*end));
+                    }
+                    value_types.insert(*res, None);
+                }
+                TirInstr::Len(res, object) => {
+                    if !value_types.contains_key(object) {
+                        errors.push(VerifierError::UndeclaredValue(*object));
+                    }
+                    value_types.insert(*res, Some(TirType::Int64));
+                }
             }
         }
 

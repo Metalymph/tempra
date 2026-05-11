@@ -51,6 +51,12 @@ pub enum BytecodeInstr {
     MakeEnum(ConstId, ConstId, u16), // enum_name, variant_name, payload_count
     Tag,
     Unwrap(ConstId, u16), // variant_name, payload_index
+
+    // Array/Slice
+    MakeArray(u16), // count
+    GetIndex,
+    Slice,
+    Len,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,6 +106,10 @@ pub fn stack_effect(
         BytecodeInstr::MakeEnum(_, _, count) => StackEffect { pops: *count, pushes: 1 },
         BytecodeInstr::Tag => StackEffect { pops: 1, pushes: 1 },
         BytecodeInstr::Unwrap(_, _) => StackEffect { pops: 1, pushes: 1 },
+        BytecodeInstr::MakeArray(count) => StackEffect { pops: *count, pushes: 1 },
+        BytecodeInstr::GetIndex => StackEffect { pops: 2, pushes: 1 },
+        BytecodeInstr::Slice => StackEffect { pops: 3, pushes: 1 },
+        BytecodeInstr::Len => StackEffect { pops: 1, pushes: 1 },
     };
     Ok(effect)
 }

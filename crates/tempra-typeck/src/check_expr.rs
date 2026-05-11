@@ -2259,6 +2259,10 @@ fn check_member(ctx: &mut TypeContext, m: &mut HirMember, _expected: Option<&Typ
                 return Type::Error;
             }
         }
+    } else if matches!(object_ty, Type::Array(_) | Type::Slice(_)) {
+        if m.field == "len" {
+            return Type::Int64;
+        }
     }
 
     // Projection (T.Item, MyIter.Item) is only valid in type positions.

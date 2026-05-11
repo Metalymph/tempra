@@ -113,3 +113,52 @@ fn test_pipeline_is_outside_if_no_binding() {
     "#;
     assert_eq!(run_source(source, "main", vec![]), VmValue::Bool(true));
 }
+
+#[test]
+fn test_pipeline_array_literal() {
+    let source = "fn main() -> Int64 { let xs = [1, 2, 3]; return xs[1]; }";
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(2));
+}
+
+#[test]
+fn test_pipeline_array_len_call() {
+    let source = "fn main() -> Int64 { let xs = [1, 2]; return xs.len(); }";
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(2));
+}
+
+#[test]
+fn test_pipeline_array_len_member() {
+    let source = "fn main() -> Int64 { let xs = [1, 2, 3]; return xs.len; }";
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(3));
+}
+
+#[test]
+fn test_pipeline_slice_basics() {
+    let source = r#"
+        fn main() -> Int64 {
+            let xs = [0, 1, 2, 3, 4, 5]
+            let s = xs[1..4] // [1, 2, 3]
+            return s[1]      // 2
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(2));
+}
+
+#[test]
+fn test_pipeline_slice_len() {
+    let source = "fn main() -> Int64 { let xs = [0, 1, 2, 3, 4]; return xs[1..4].len(); }";
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(3));
+}
+
+#[test]
+fn test_pipeline_nested_slice() {
+    let source = r#"
+        fn main() -> Int64 {
+            let xs = [0, 1, 2, 3, 4, 5, 6]
+            let s1 = xs[1..6] // [1, 2, 3, 4, 5]
+            let s2 = s1[1..4] // [2, 3, 4]
+            return s2[0]      // 2
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(2));
+}

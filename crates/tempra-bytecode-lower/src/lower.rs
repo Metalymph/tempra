@@ -254,14 +254,21 @@ impl<'a> FunctionLowerer<'a> {
                 for arg in args {
                     self.load_val(*arg)?;
                 }
-                let enum_name = match ty {
-                    tempra_tir::ir::TirType::Option(_) => "Option",
-                    tempra_tir::ir::TirType::Result(_, _) => "Result",
-                    _ => "Enum",
-                };
-                let enum_id = self.bc_module.add_constant(BytecodeConstant::String(enum_name.to_string()));
-                let variant_id = self.bc_module.add_constant(BytecodeConstant::String(variant.clone().unwrap_or_else(|| "Unknown".to_string())));
-                self.emit(BytecodeInstr::MakeEnum(enum_id, variant_id, args.len() as u16));
+                match ty {
+                    TirType::Array(_) => {
+                        self.emit(BytecodeInstr::MakeArray(args.len() as u16));
+                    }
+                    _ => {
+                        let enum_name = match ty {
+                            tempra_tir::ir::TirType::Option(_) => "Option",
+                            tempra_tir::ir::TirType::Result(_, _) => "Result",
+                            _ => "Enum",
+                        };
+                        let enum_id = self.bc_module.add_constant(BytecodeConstant::String(enum_name.to_string()));
+                        let variant_id = self.bc_module.add_constant(BytecodeConstant::String(variant.clone().unwrap_or_else(|| "Unknown".to_string())));
+                        self.emit(BytecodeInstr::MakeEnum(enum_id, variant_id, args.len() as u16));
+                    }
+                }
                 self.store_res(*res)?;
             }
             TirInstr::Tag(res, target) => {
@@ -273,6 +280,24 @@ impl<'a> FunctionLowerer<'a> {
                 self.load_val(*target)?;
                 let variant_id = self.bc_module.add_constant(BytecodeConstant::String(variant.clone()));
                 self.emit(BytecodeInstr::Unwrap(variant_id, *idx));
+                self.store_res(*res)?;
+            }
+            TirInstr::GetIndex(res, obj, idx) => {
+                self.load_val(*obj)?;
+                self.load_val(*idx)?;
+                self.emit(BytecodeInstr::GetIndex);
+                self.store_res(*res)?;
+            }
+            TirInstr::Slice(res, obj, start, end) => {
+                self.load_val(*obj)?;
+                self.load_val(*start)?;
+                self.load_val(*end)?;
+                self.emit(BytecodeInstr::Slice);
+                self.store_res(*res)?;
+            }
+            TirInstr::Len(res, obj) => {
+                self.load_val(*obj)?;
+                self.emit(BytecodeInstr::Len);
                 self.store_res(*res)?;
             }
             TirInstr::Get(_, _, _) | TirInstr::Set(_, _, _) => {
@@ -363,6 +388,9 @@ impl<'a> FunctionLowerer<'a> {
             TirInstr::Make(_, _, _, _) => Ok(BytecodeType::Any),
             TirInstr::Tag(_, _) => Ok(BytecodeType::String),
             TirInstr::Unwrap(_, _, _, _) => Ok(BytecodeType::Any),
+            TirInstr::GetIndex(_, _, _) => Ok(BytecodeType::Any),
+            TirInstr::Slice(_, _, _, _) => Ok(BytecodeType::Any),
+            TirInstr::Len(_, _) => Ok(BytecodeType::Int64),
             _ => Err(BytecodeLowerError::UnsupportedInstr(format!("Cannot infer type for {:?}", instr))),
         }
     }
@@ -378,7 +406,8 @@ fn get_instr_res_id(instr: &TirInstr) -> Option<TirValueId> {
         TirInstr::And(id, _, _) | TirInstr::Or(id, _, _) | TirInstr::Not(id, _) |
         TirInstr::Call(id, _, _) => Some(*id),
         TirInstr::Make(id, _, _, _) | TirInstr::Get(id, _, _) | TirInstr::Set(id, _, _) |
-        TirInstr::Tag(id, _) | TirInstr::Unwrap(id, _, _, _) => Some(*id),
+        TirInstr::Tag(id, _) | TirInstr::Unwrap(id, _, _, _) |
+        TirInstr::GetIndex(id, _, _) | TirInstr::Slice(id, _, _, _) | TirInstr::Len(id, _) => Some(*id),
         _ => None,
     }
 }
@@ -393,6 +422,8 @@ fn map_type(ty: &TirType) -> Result<BytecodeType, BytecodeLowerError> {
         TirType::String => Ok(BytecodeType::String),
         TirType::Result(_, _) => Ok(BytecodeType::Any),
         TirType::Option(_) => Ok(BytecodeType::Any),
+        TirType::Array(_) => Ok(BytecodeType::Any),
+        TirType::Slice(_) => Ok(BytecodeType::Any),
         _ => Err(BytecodeLowerError::UnsupportedType(format!("{:?}", ty))),
     }
 }

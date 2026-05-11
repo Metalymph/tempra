@@ -1,3 +1,4 @@
+use std::rc::Rc;
 use tempra_bytecode::bytecode::BytecodeModule;
 use tempra_bytecode::function::{FunctionId, BytecodeType};
 use tempra_bytecode::opcode::BytecodeInstr;
@@ -337,6 +338,82 @@ impl<'a> Interpreter<'a> {
                         self.push(payloads[index as usize].clone())?;
                     } else {
                         return Err(VmError::ExpectedEnum);
+                    }
+                }
+                BytecodeInstr::MakeArray(count) => {
+                    let mut elements = Vec::with_capacity(count as usize);
+                    for _ in 0..count {
+                        elements.push(self.pop()?);
+                    }
+                    elements.reverse();
+                    self.push(VmValue::Array(Rc::new(elements)))?;
+                }
+                BytecodeInstr::GetIndex => {
+                    let index_val = self.pop()?;
+                    let object = self.pop()?;
+                    let index = match index_val {
+                        VmValue::Int64(i) if i >= 0 => i as usize,
+                        _ => return Err(VmError::ExpectedIntIndex),
+                    };
+
+                    match object {
+                        VmValue::Array(arr) => {
+                            if index >= arr.len() {
+                                return Err(VmError::IndexOutOfBounds(index));
+                            }
+                            self.push(arr[index].clone())?;
+                        }
+                        VmValue::Slice { parent, start, end } => {
+                            let len = end - start;
+                            if index >= len {
+                                return Err(VmError::IndexOutOfBounds(index));
+                            }
+                            self.push(parent[start + index].clone())?;
+                        }
+                        _ => return Err(VmError::ExpectedArrayOrSlice),
+                    }
+                }
+                BytecodeInstr::Slice => {
+                    let end_val = self.pop()?;
+                    let start_val = self.pop()?;
+                    let object = self.pop()?;
+
+                    let start = match start_val {
+                        VmValue::Int64(i) if i >= 0 => i as usize,
+                        _ => return Err(VmError::ExpectedIntIndex),
+                    };
+                    let end = match end_val {
+                        VmValue::Int64(i) if i >= 0 => i as usize,
+                        _ => return Err(VmError::ExpectedIntIndex),
+                    };
+
+                    match object {
+                        VmValue::Array(arr) => {
+                            if start > end || end > arr.len() {
+                                return Err(VmError::InvalidSliceRange { start, end, len: arr.len() });
+                            }
+                            self.push(VmValue::Slice { parent: arr, start, end })?;
+                        }
+                        VmValue::Slice { parent, start: p_start, end: p_end } => {
+                            let p_len = p_end - p_start;
+                            if start > end || end > p_len {
+                                return Err(VmError::InvalidSliceRange { start, end, len: p_len });
+                            }
+                            self.push(VmValue::Slice { parent, start: p_start + start, end: p_start + end })?;
+                        }
+                        _ => return Err(VmError::ExpectedArrayOrSlice),
+                    }
+                }
+                BytecodeInstr::Len => {
+                    let object = self.pop()?;
+                    match object {
+                        VmValue::Array(arr) => {
+                            self.push(VmValue::Int64(arr.len() as i64))?;
+                        }
+                        VmValue::Slice { start, end, .. } => {
+                            self.push(VmValue::Int64((end - start) as i64))?;
+                        }
+                        _ => return Err(VmError::ExpectedArrayOrSlice),
                     }
                 }
                 BytecodeInstr::Unreachable => return Err(VmError::UnreachableExecuted),

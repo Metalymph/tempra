@@ -295,4 +295,22 @@ impl FunctionBuilder {
         self.set_terminator(TirTerminator::Unreachable)?;
         Ok(())
     }
+
+    pub fn build_get_index(&mut self, object: TirValueId, index: TirValueId) -> Result<TirValueId, TirBuildError> {
+        let id = self.next_value();
+        self.push_instr(TirInstr::GetIndex(id, object, index))?;
+        Ok(id)
+    }
+
+    pub fn build_slice(&mut self, object: TirValueId, start: TirValueId, end: TirValueId) -> Result<TirValueId, TirBuildError> {
+        let id = self.next_value();
+        self.push_instr(TirInstr::Slice(id, object, start, end))?;
+        Ok(id)
+    }
+
+    pub fn build_len(&mut self, object: TirValueId) -> Result<TirValueId, TirBuildError> {
+        let id = self.next_value();
+        self.push_instr(TirInstr::Len(id, object))?;
+        Ok(id)
+    }
 }

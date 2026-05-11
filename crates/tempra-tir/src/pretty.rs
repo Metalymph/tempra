@@ -85,6 +85,9 @@ pub fn format_instr(instr: &TirInstr) -> String {
         TirInstr::And(res, a, b) => format!("%{} = and %{}, %{}", res.0, a.0, b.0),
         TirInstr::Or(res, a, b) => format!("%{} = or %{}, %{}", res.0, a.0, b.0),
         TirInstr::Not(res, a) => format!("%{} = not %{}", res.0, a.0),
+        TirInstr::GetIndex(res, obj, idx) => format!("%{} = get_index %{}, %{}", res.0, obj.0, idx.0),
+        TirInstr::Slice(res, obj, s, e) => format!("%{} = slice %{}, %{}..%{}", res.0, obj.0, s.0, e.0),
+        TirInstr::Len(res, obj) => format!("%{} = len %{}", res.0, obj.0),
     }
 }
 

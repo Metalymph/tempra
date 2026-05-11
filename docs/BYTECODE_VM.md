@@ -51,6 +51,8 @@ The VM uses the `VmValue` enum for all runtime values:
 - `UInt64(u64)`: 64-bit unsigned integers.
 - `Float64(f64)`: 64-bit floating point numbers.
 - `String(String)`: UTF-8 strings.
+- `Enum(String, String, Vec<VmValue>)`: Enum variants, represented as `(EnumName, VariantName, Payloads)`. Used for `Option` and `Result`.
+
 
 ## Error Handling
 
@@ -76,6 +78,23 @@ The experimental VM pipeline works as follows:
 4. On a cache miss or corruption, it lowers the code from source all the way to bytecode, verifies it, writes a new cache artifact, and then executes it.
 
 **Note:** The fallback policy is strict. If the code uses language features not yet supported by the Bytecode Lowering phase (e.g., loops, classes, standard library), the execution will fail cleanly. It will **not** silently fall back to the HIR interpreter.
+
+### Supported Language Features (v0.x)
+
+- **Basic Arithmetic & Logic**: `+`, `-`, `*`, `/`, `==`, `!=`, `<`, `>`, `&&`, `||`, `!`.
+- **Variables**: `let`, `var`, `assign`.
+- **Functions**: Calls, parameters, returns.
+- **Control Flow**: `if`/`else`.
+- **Enums (Option/Result)**:
+    - Construction: `Some(x)`, `None`, `Ok(x)`, `Err(e)`.
+    - Propagation: The `?` operator for `Result` types is supported via explicit desugaring in TIR.
+    - Desugaring pattern for `expr?`:
+        1. Evaluate `expr`.
+        2. Check the tag using `Tag`.
+        3. If `Err`: `Unwrap` the error, wrap it in a new `Result::Err`, and `Return` early.
+        4. If `Ok`: `Unwrap` the value and continue execution.
+- **Bytecode Cache**: Persistent storage in `.tempra/cache/`.
+
 
 ## Non-Goals (v0)
 

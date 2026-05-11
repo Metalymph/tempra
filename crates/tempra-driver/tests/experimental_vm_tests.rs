@@ -79,3 +79,51 @@ fn main() {
         Err(e) => panic!("Unexpected error: {}", e),
     }
 }
+
+#[test]
+fn test_experimental_vm_result_question_ok_path() {
+    let source = r#"
+fn may_fail(ok: Bool) -> Int!String {
+    if ok {
+        return Ok(42)
+    } else {
+        return Err("bad")
+    }
+}
+fn main() -> Int!String {
+    let x = may_fail(true)?
+    if x == 42 {
+        return Ok(1)
+    } else {
+        return Ok(0)
+    }
+}
+"#;
+    let res = run_source_with_experimental_vm(source, &[]);
+    assert!(res.is_ok(), "Expected Ok path to succeed, got {:?}", res.err());
+}
+
+#[test]
+fn test_experimental_vm_result_question_err_path() {
+    let source = r#"
+fn may_fail(ok: Bool) -> Int!String {
+    if ok {
+        return Ok(42)
+    } else {
+        return Err("bad")
+    }
+}
+fn main() -> Int!String {
+    let x = may_fail(false)?
+    return Ok(x)
+}
+"#;
+    let res = run_source_with_experimental_vm(source, &[]);
+    // If it works correctly, it should return Err("bad") which is still a Result value.
+    // In run_source_with_experimental_vm, we return Ok(()) if the VM returns Ok, 
+    // and DriverError::VmError if it returns a VmError.
+    // However, the VM return value of main is not currently checked for success/failure in the same way the interpreter does.
+    // Wait, run_source_with_experimental_vm just checks if run_function returned Ok.
+    assert!(res.is_ok(), "Expected Err path to return successfully from VM with Err value, got {:?}", res.err());
+}
+

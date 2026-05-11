@@ -15,7 +15,36 @@ pub fn map_type(ty: &Type) -> Result<TirType, TirLowerError> {
         Type::Float64 => Ok(TirType::Float64),
         Type::String => Ok(TirType::String),
         Type::Never => Ok(TirType::Never),
+        Type::Result(ok, err) => Ok(TirType::Result(
+            Box::new(map_type(ok)?),
+            Box::new(map_type(err)?),
+        )),
+        Type::Option(inner) => Ok(TirType::Option(Box::new(map_type(inner)?))),
         _ => Err(TirLowerError::UnsupportedType(format!("{:?}", ty))),
+    }
+}
+
+/// Resolve an HirType to a semantic Type. Minimal — only handles what Phase 14.4 needs.
+fn resolve_hir_type(hir_ty: &HirType, _type_ctx: &TypeContext) -> Result<Type, TirLowerError> {
+    match hir_ty {
+        HirType::Named(_, name) => {
+            let ty = tempra_typeck::types::resolve_named_type(name);
+            if ty == Type::Unknown {
+                Err(TirLowerError::UnsupportedType(format!("Unknown type name: {}", name)))
+            } else {
+                Ok(ty)
+            }
+        }
+        HirType::Result(_, ok_hir, err_hir) => {
+            let ok_ty = resolve_hir_type(ok_hir, _type_ctx)?;
+            let err_ty = resolve_hir_type(err_hir, _type_ctx)?;
+            Ok(Type::Result(Box::new(ok_ty), Box::new(err_ty)))
+        }
+        HirType::Optional(_, inner_hir) => {
+            let inner_ty = resolve_hir_type(inner_hir, _type_ctx)?;
+            Ok(Type::Option(Box::new(inner_ty)))
+        }
+        _ => Err(TirLowerError::UnsupportedType(format!("Cannot resolve HirType: {:?}", hir_ty))),
     }
 }
 
@@ -83,10 +112,27 @@ impl<'a> LowerContext<'a> {
                             Ok(Type::Unknown)
                         }
                         "Ok" | "Err" => Ok(Type::Unknown), // Result type: unknown without more context
-                        _ => Err(TirLowerError::UnsupportedExpr(format!("Cannot infer call type for {}", name), c.span)),
+                        _ => {
+                            // Look up function signature in TypeContext
+                            if let Some(sig) = self.type_ctx.functions.get(name.as_str()) {
+                                Ok(sig.return_type.clone())
+                            } else {
+                                Err(TirLowerError::UnsupportedExpr(format!("Cannot infer call type for {}", name), c.span))
+                            }
+                        }
                     }
                 } else {
                     Err(TirLowerError::UnsupportedExpr("Cannot infer call type for complex callee".into(), c.span))
+                }
+            }
+            HirExpression::Try(e) => {
+                // The result of expr? is the Ok type of the inner Result
+                let inner_ty = self.infer_expr_type(&e.expr)?;
+                match inner_ty {
+                    Type::Result(ok, _) => Ok(*ok),
+                    _ => Err(TirLowerError::UnsupportedExpr(
+                        "'?' operator expects a Result type".into(), e.span,
+                    )),
                 }
             }
             _ => Err(TirLowerError::UnsupportedExpr(format!("{:?}", expr), expr.span())),
@@ -303,6 +349,43 @@ impl<'a> LowerContext<'a> {
                 }
                 Err(TirLowerError::UnsupportedExpr("Complex call resolution not supported in Phase 12.2".into(), c.span))
             }
+            HirExpression::Try(e) => {
+                // Desugar expr? into: tag/eq/condbr/unwrap/make/ret
+                // Step 1: Lower the inner expression
+                let r_val = self.lower_expression(&e.expr)?;
+
+                // Step 2: Store in a slot so both branches can access it
+                let tmp_slot = self.builder.build_slot(TirType::Result(Box::new(TirType::Unit), Box::new(TirType::Unit)), Some("__try_tmp"))?;
+                self.builder.build_store(tmp_slot, r_val)?;
+
+                // Step 3: Tag the result and compare to "Err"
+                let r_for_tag = self.builder.build_load(tmp_slot)?;
+                let tag_val = self.builder.build_tag(r_for_tag)?;
+                let err_str = self.builder.build_const(TirConst::String("Err".to_string()))?;
+                let is_err = self.builder.build_eq(tag_val, err_str)?;
+
+                // Step 4: Create err_block and ok_block
+                let err_block = self.builder.new_block();
+                let ok_block = self.builder.new_block();
+                self.builder.build_condbr(is_err, err_block, ok_block)?;
+
+                // Step 5: err_block — unwrap Err payload, wrap in Result::Err, return early
+                self.builder.set_current_block(err_block);
+                let r_err = self.builder.build_load(tmp_slot)?;
+                let err_payload = self.builder.build_unwrap(r_err, "Err".to_string(), 0)?;
+                // Use the enclosing function's return type for the Make
+                let fn_ret_ty = self.builder.func.return_type.clone();
+                let err_out = self.builder.build_make(fn_ret_ty, Some("Err".to_string()), vec![err_payload])?;
+                self.builder.build_ret(Some(err_out))?;
+
+                // Step 6: ok_block — unwrap Ok payload, continue
+                self.builder.set_current_block(ok_block);
+                let r_ok = self.builder.build_load(tmp_slot)?;
+                let ok_val = self.builder.build_unwrap(r_ok, "Ok".to_string(), 0)?;
+
+                // ok_val is the result of the ? expression; ok_block is now current
+                Ok(ok_val)
+            }
             _ => Err(TirLowerError::UnsupportedExpr("Unsupported expression".into(), expr.span())),
         }
     }
@@ -310,11 +393,16 @@ impl<'a> LowerContext<'a> {
 
 pub fn lower_function(func: &HirFunction, type_ctx: &TypeContext, module_builder: &mut ModuleBuilder) -> Result<TirFunction, TirLowerError> {
     let ret_ty = if let Some(rt) = &func.return_type {
-        let ty = tempra_typeck::types::resolve_named_type(match rt {
-            HirType::Named(_, n) => n,
-            _ => return Err(TirLowerError::UnsupportedType("Complex return type".into())),
-        });
-        map_type(&ty)?
+        match rt {
+            HirType::Named(_, n) => {
+                let ty = tempra_typeck::types::resolve_named_type(n);
+                map_type(&ty)?
+            }
+            _ => {
+                let ty = resolve_hir_type(rt, type_ctx)?;
+                map_type(&ty)?
+            }
+        }
     } else {
         TirType::Unit
     };
@@ -327,10 +415,10 @@ pub fn lower_function(func: &HirFunction, type_ctx: &TypeContext, module_builder
     ctx.builder.set_current_block(entry_block);
     
     for p in &func.parameters {
-        let ty = tempra_typeck::types::resolve_named_type(match &p.ty {
-            HirType::Named(_, n) => n,
-            _ => return Err(TirLowerError::UnsupportedType("Complex param type".into())),
-        });
+        let ty = match &p.ty {
+            HirType::Named(_, n) => tempra_typeck::types::resolve_named_type(n),
+            _ => resolve_hir_type(&p.ty, type_ctx)?,
+        };
         let tir_ty = map_type(&ty)?;
         let val_id = ctx.builder.add_param(tir_ty.clone());
         

@@ -391,6 +391,8 @@ fn map_type(ty: &TirType) -> Result<BytecodeType, BytecodeLowerError> {
         TirType::UInt64 => Ok(BytecodeType::UInt64),
         TirType::Float64 => Ok(BytecodeType::Float64),
         TirType::String => Ok(BytecodeType::String),
+        TirType::Result(_, _) => Ok(BytecodeType::Any),
+        TirType::Option(_) => Ok(BytecodeType::Any),
         _ => Err(BytecodeLowerError::UnsupportedType(format!("{:?}", ty))),
     }
 }

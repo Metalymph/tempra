@@ -43,3 +43,73 @@ fn test_pipeline_vars() {
     let source = "fn test(x: Int64) -> Int64 { var y = x + 1; return y * 2; }";
     assert_eq!(run_source(source, "test", vec![VmValue::Int64(10)]), VmValue::Int64(22));
 }
+#[test]
+fn test_pipeline_is_some_narrowing() {
+    let source = r#"
+        fn main() -> Int64 {
+            let x: Int64? = Some(41)
+            if x is Some(v) {
+                return v + 1
+            } else {
+                return 0
+            }
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(42));
+}
+
+#[test]
+fn test_pipeline_is_none() {
+    let source = r#"
+        fn main() -> Int64 {
+            let x: Int64? = None
+            if x is None {
+                return 1
+            } else {
+                return 0
+            }
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(1));
+}
+
+#[test]
+fn test_pipeline_is_ok_narrowing() {
+    let source = r#"
+        fn main() -> Int64 {
+            let r: Int64!String = Ok(10)
+            if r is Ok(v) {
+                return v
+            } else {
+                return 0
+            }
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(10));
+}
+
+#[test]
+fn test_pipeline_is_err_narrowing() {
+    let source = r#"
+        fn main() -> Int64 {
+            let r: Int64!String = Err("bad")
+            if r is Err(e) {
+                return 1
+            } else {
+                return 0
+            }
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(1));
+}
+
+#[test]
+fn test_pipeline_is_outside_if_no_binding() {
+    let source = r#"
+        fn main() -> Bool {
+            let x: Int64? = Some(42)
+            return x is Some
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Bool(true));
+}

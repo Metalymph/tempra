@@ -224,11 +224,8 @@ pub fn validate_pattern_against_type(
                     if let Type::Option(inner) = val_ty {
                         if pat_args.len() == 1 {
                             validate_pattern_against_type(ctx, inner, &mut pat_args[0]);
-
-                            // Optional: Could rewrite built-ins too, but spec focusing on user-defined enums.
-                            // For v1, resolving user-defined enums is the priority.
-                        } else {
-                            ctx.error("some pattern expects 1 argument", span_val);
+                        } else if pat_args.len() > 1 {
+                            ctx.error("some pattern expects at most 1 argument", span_val);
                         }
                     } else if *val_ty != Type::Error {
                         ctx.error(
@@ -258,8 +255,8 @@ pub fn validate_pattern_against_type(
                     if let Type::Result(ok_ty, _) = val_ty {
                         if pat_args.len() == 1 {
                             validate_pattern_against_type(ctx, ok_ty, &mut pat_args[0]);
-                        } else {
-                            ctx.error("ok pattern expects 1 argument", span_val);
+                        } else if pat_args.len() > 1 {
+                            ctx.error("ok pattern expects at most 1 argument", span_val);
                         }
                     } else if *val_ty != Type::Error {
                         ctx.error(
@@ -275,8 +272,8 @@ pub fn validate_pattern_against_type(
                     if let Type::Result(_, err_ty) = val_ty {
                         if pat_args.len() == 1 {
                             validate_pattern_against_type(ctx, err_ty, &mut pat_args[0]);
-                        } else {
-                            ctx.error("err pattern expects 1 argument", span_val);
+                        } else if pat_args.len() > 1 {
+                            ctx.error("err pattern expects at most 1 argument", span_val);
                         }
                     } else if *val_ty != Type::Error {
                         ctx.error(

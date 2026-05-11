@@ -1,18 +1,18 @@
 use crate::error::TirLowerError;
 use std::collections::HashMap;
+use tempra_hir::Type;
 use tempra_hir::*;
 use tempra_tir::builder::{FunctionBuilder, ModuleBuilder};
 use tempra_tir::ir::*;
 use tempra_typeck::context::TypeContext;
-use tempra_typeck::Type;
 
 pub fn map_type(ty: &Type) -> Result<TirType, TirLowerError> {
     match ty {
         Type::Unit => Ok(TirType::Unit),
         Type::Bool => Ok(TirType::Bool),
-        Type::Int64 | Type::Int => Ok(TirType::Int64),
-        Type::UInt64 => Ok(TirType::UInt64),
-        Type::Float64 => Ok(TirType::Float64),
+        Type::Int | Type::Int8 | Type::Int16 | Type::Int32 | Type::Int64 => Ok(TirType::Int64),
+        Type::UInt8 | Type::UInt16 | Type::UInt32 | Type::UInt64 => Ok(TirType::UInt64),
+        Type::Float32 | Type::Float64 => Ok(TirType::Float64),
         Type::String => Ok(TirType::String),
         Type::Never => Ok(TirType::Never),
         Type::Result(ok, err) => Ok(TirType::Result(
@@ -20,7 +20,57 @@ pub fn map_type(ty: &Type) -> Result<TirType, TirLowerError> {
             Box::new(map_type(err)?),
         )),
         Type::Option(inner) => Ok(TirType::Option(Box::new(map_type(inner)?))),
-        _ => Err(TirLowerError::UnsupportedType(format!("{:?}", ty))),
+        Type::Enum(name, args) => {
+            if name == "Option" && args.len() == 1 {
+                Ok(TirType::Option(Box::new(map_type(&args[0])?)))
+            } else if name == "Result" && args.len() == 2 {
+                Ok(TirType::Result(
+                    Box::new(map_type(&args[0])?),
+                    Box::new(map_type(&args[1])?),
+                ))
+            } else {
+                Err(TirLowerError::UnsupportedType(format!("Enum({})", name)))
+            }
+        }
+        Type::Unknown => Err(TirLowerError::UnsupportedType("Unknown".to_string())),
+        Type::Error => Err(TirLowerError::UnsupportedType("Error".to_string())),
+        
+        Type::Array(_) => Err(TirLowerError::UnsupportedType("Array".to_string())),
+        Type::Slice(_) => Err(TirLowerError::UnsupportedType("Slice".to_string())),
+        Type::Tuple(_) => Err(TirLowerError::UnsupportedType("Tuple".to_string())),
+        Type::Struct(name, _) => Err(TirLowerError::UnsupportedType(format!("Struct({})", name))),
+        Type::Command => Err(TirLowerError::UnsupportedType("Command".to_string())),
+        Type::CommandResult => Err(TirLowerError::UnsupportedType("CommandResult".to_string())),
+        Type::Regex => Err(TirLowerError::UnsupportedType("Regex".to_string())),
+        Type::SelfType => Err(TirLowerError::UnsupportedType("Self".to_string())),
+        Type::Associated(_, _) => Err(TirLowerError::UnsupportedType("Associated".to_string())),
+        Type::BuiltinError => Err(TirLowerError::UnsupportedType("BuiltinError".to_string())),
+        Type::Namespace(_) => Err(TirLowerError::UnsupportedType("Namespace".to_string())),
+        Type::Function(_, _) => Err(TirLowerError::UnsupportedType("Function".to_string())),
+        Type::GenericParam { .. } => Err(TirLowerError::UnsupportedType("GenericParam".to_string())),
+        Type::Meta(_) => Err(TirLowerError::UnsupportedType("Meta".to_string())),
+        Type::Projection { .. } => Err(TirLowerError::UnsupportedType("Projection".to_string())),
+        Type::Interface(_) => Err(TirLowerError::UnsupportedType("Interface".to_string())),
+        Type::ArrayIter(_) => Err(TirLowerError::UnsupportedType("ArrayIter".to_string())),
+        Type::SliceIter(_) => Err(TirLowerError::UnsupportedType("SliceIter".to_string())),
+    }
+}
+
+pub fn unmap_type(tir_ty: &TirType) -> Result<Type, TirLowerError> {
+    match tir_ty {
+        TirType::Unit => Ok(Type::Unit),
+        TirType::Bool => Ok(Type::Bool),
+        TirType::Int64 => Ok(Type::Int64),
+        TirType::UInt64 => Ok(Type::UInt64),
+        TirType::Float64 => Ok(Type::Float64),
+        TirType::String => Ok(Type::String),
+        TirType::Never => Ok(Type::Never),
+        TirType::Option(inner) => Ok(Type::Option(Box::new(unmap_type(inner)?))),
+        TirType::Result(ok, err) => Ok(Type::Result(
+            Box::new(unmap_type(ok)?),
+            Box::new(unmap_type(err)?),
+        )),
+        _ => Err(TirLowerError::UnsupportedType(format!("{:?}", tir_ty))),
     }
 }
 
@@ -72,15 +122,13 @@ impl<'a> LowerContext<'a> {
             HirExpression::Bool(_, _) => Ok(Type::Bool),
             HirExpression::String(_, _) => Ok(Type::String),
             HirExpression::Name(span, name) => {
+                if name == "None" {
+                    return Ok(Type::Option(Box::new(Type::Unknown)));
+                }
                 if let Some(info) = self.type_ctx.scopes.lookup(name) {
                     Ok(info.ty.clone())
                 } else if let Some((_, tir_ty, _)) = self.locals.get(name) {
-                    match tir_ty {
-                        TirType::Int64 => Ok(Type::Int64),
-                        TirType::Bool => Ok(Type::Bool),
-                        TirType::String => Ok(Type::String),
-                        _ => Err(TirLowerError::UnsupportedType(format!("{:?}", tir_ty))),
-                    }
+                    unmap_type(tir_ty)
                 } else {
                     Err(TirLowerError::UnknownLocal(name.clone(), *span))
                 }
@@ -135,6 +183,7 @@ impl<'a> LowerContext<'a> {
                     )),
                 }
             }
+            HirExpression::IsPattern(_) => Ok(Type::Bool),
             _ => Err(TirLowerError::UnsupportedExpr(format!("{:?}", expr), expr.span())),
         }
     }
@@ -146,22 +195,150 @@ impl<'a> LowerContext<'a> {
                 Ok(())
             }
             HirStatement::Let(l) => {
-                let val_ty = self.infer_expr_type(&l.value)?;
+                // Use explicit type if available, otherwise infer
+                let val_ty = if let Some(hir_ty) = &l.ty {
+                    // Manual resolution for simple types since we only have &TypeContext
+                    match hir_ty {
+                        HirType::Named(_, name) if name == "Int64" => Type::Int64,
+                        HirType::Named(_, name) if name == "Bool" => Type::Bool,
+                        HirType::Named(_, name) if name == "String" => Type::String,
+                        HirType::Optional(_, inner) => {
+                            if let HirType::Named(_, name) = &**inner {
+                                if name == "Int64" {
+                                    Type::Option(Box::new(Type::Int64))
+                                } else if name == "Bool" {
+                                    Type::Option(Box::new(Type::Bool))
+                                } else if name == "String" {
+                                    Type::Option(Box::new(Type::String))
+                                } else {
+                                    self.infer_expr_type(&l.value)?
+                                }
+                            } else {
+                                self.infer_expr_type(&l.value)?
+                            }
+                        }
+                        HirType::Result(_, ok_hir, err_hir) => {
+                            let ok_ty = if let HirType::Named(_, name) = &**ok_hir {
+                                if name == "Int64" {
+                                    Type::Int64
+                                } else if name == "Bool" {
+                                    Type::Bool
+                                } else if name == "String" {
+                                    Type::String
+                                } else {
+                                    Type::Unknown
+                                }
+                            } else {
+                                Type::Unknown
+                            };
+                            let err_ty = if let HirType::Named(_, name) = &**err_hir {
+                                if name == "Int64" {
+                                    Type::Int64
+                                } else if name == "Bool" {
+                                    Type::Bool
+                                } else if name == "String" {
+                                    Type::String
+                                } else {
+                                    Type::Unknown
+                                }
+                            } else {
+                                Type::Unknown
+                            };
+
+                            if ok_ty != Type::Unknown && err_ty != Type::Unknown {
+                                Type::Result(Box::new(ok_ty), Box::new(err_ty))
+                            } else {
+                                self.infer_expr_type(&l.value)?
+                            }
+                        }
+                        _ => self.infer_expr_type(&l.value)?,
+                    }
+                } else {
+                    self.infer_expr_type(&l.value)?
+                };
                 let tir_ty = map_type(&val_ty)?;
                 let slot = self.builder.build_slot(tir_ty.clone(), Some(&l.name))?;
-                self.locals.insert(l.name.clone(), (slot, tir_ty, false));
-                
-                let val = self.lower_expression(&l.value)?;
+                self.locals.insert(l.name.clone(), (slot, tir_ty.clone(), false));
+
+                let val = match &l.value {
+                    HirExpression::Name(_, name) if name == "None" => {
+                        self.builder.build_make(tir_ty.clone(), Some("None".to_string()), vec![])?
+                    }
+                    _ => self.lower_expression(&l.value)?,
+                };
                 self.builder.build_store(slot, val)?;
                 Ok(())
             }
             HirStatement::Var(v) => {
-                let val_ty = self.infer_expr_type(&v.value)?;
+                let val_ty = if let Some(hir_ty) = &v.ty {
+                    match hir_ty {
+                        HirType::Named(_, name) if name == "Int64" => Type::Int64,
+                        HirType::Named(_, name) if name == "Bool" => Type::Bool,
+                        HirType::Named(_, name) if name == "String" => Type::String,
+                        HirType::Optional(_, inner) => {
+                            if let HirType::Named(_, name) = &**inner {
+                                if name == "Int64" {
+                                    Type::Option(Box::new(Type::Int64))
+                                } else if name == "Bool" {
+                                    Type::Option(Box::new(Type::Bool))
+                                } else if name == "String" {
+                                    Type::Option(Box::new(Type::String))
+                                } else {
+                                    self.infer_expr_type(&v.value)?
+                                }
+                            } else {
+                                self.infer_expr_type(&v.value)?
+                            }
+                        }
+                        HirType::Result(_, ok_hir, err_hir) => {
+                            let ok_ty = if let HirType::Named(_, name) = &**ok_hir {
+                                if name == "Int64" {
+                                    Type::Int64
+                                } else if name == "Bool" {
+                                    Type::Bool
+                                } else if name == "String" {
+                                    Type::String
+                                } else {
+                                    Type::Unknown
+                                }
+                            } else {
+                                Type::Unknown
+                            };
+                            let err_ty = if let HirType::Named(_, name) = &**err_hir {
+                                if name == "Int64" {
+                                    Type::Int64
+                                } else if name == "Bool" {
+                                    Type::Bool
+                                } else if name == "String" {
+                                    Type::String
+                                } else {
+                                    Type::Unknown
+                                }
+                            } else {
+                                Type::Unknown
+                            };
+
+                            if ok_ty != Type::Unknown && err_ty != Type::Unknown {
+                                Type::Result(Box::new(ok_ty), Box::new(err_ty))
+                            } else {
+                                self.infer_expr_type(&v.value)?
+                            }
+                        }
+                        _ => self.infer_expr_type(&v.value)?,
+                    }
+                } else {
+                    self.infer_expr_type(&v.value)?
+                };
                 let tir_ty = map_type(&val_ty)?;
                 let slot = self.builder.build_slot(tir_ty.clone(), Some(&v.name))?;
-                self.locals.insert(v.name.clone(), (slot, tir_ty, true));
-                
-                let val = self.lower_expression(&v.value)?;
+                self.locals.insert(v.name.clone(), (slot, tir_ty.clone(), true));
+
+                let val = match &v.value {
+                    HirExpression::Name(_, name) if name == "None" => {
+                        self.builder.build_make(tir_ty.clone(), Some("None".to_string()), vec![])?
+                    }
+                    _ => self.lower_expression(&v.value)?,
+                };
                 self.builder.build_store(slot, val)?;
                 Ok(())
             }
@@ -192,7 +369,10 @@ impl<'a> LowerContext<'a> {
             }
             HirExpression::Name(span, name) => {
                 if name == "None" {
-                    return Err(TirLowerError::UnsupportedExpr("None requires explicit expected type context which is not fully plumbed in Phase 14.3 lowering".into(), *span));
+                    let ty = self.infer_expr_type(expr)?;
+                    let tir_ty = map_type(&ty)?;
+                    return self.builder.build_make(tir_ty, Some("None".to_string()), vec![])
+                        .map_err(|e| e.into());
                 }
                 if let Some((slot, _ty, _)) = self.locals.get(name) {
                     self.builder.build_load(*slot).map_err(|e| e.into())
@@ -260,6 +440,9 @@ impl<'a> LowerContext<'a> {
                 }
             }
             HirExpression::If(i) => {
+                if let HirExpression::IsPattern(is_pat) = &*i.condition {
+                    return self.lower_narrowing_if(i, is_pat);
+                }
                 let cond = self.lower_expression(&i.condition)?;
                 let t_block = self.builder.new_block();
                 let f_block = self.builder.new_block();
@@ -386,8 +569,167 @@ impl<'a> LowerContext<'a> {
                 // ok_val is the result of the ? expression; ok_block is now current
                 Ok(ok_val)
             }
+            HirExpression::IsPattern(i) => self.lower_is_pattern(i),
             _ => Err(TirLowerError::UnsupportedExpr("Unsupported expression".into(), expr.span())),
         }
+    }
+
+    fn lower_is_pattern(&mut self, i: &HirIsPatternExpr) -> Result<TirValueId, TirLowerError> {
+        let (variant_name, binding_name) = self.extract_simple_pattern(&i.pattern)?;
+        if binding_name.is_some() {
+            return Err(TirLowerError::UnsupportedPattern(
+                "bindings in `is` are only supported in if conditions".into(),
+                i.span,
+            ));
+        }
+
+        let subject_val = self.lower_expression(&i.value)?;
+        let tag_val = self.builder.build_tag(subject_val)?;
+        let wanted_tag = self.builder.build_const(TirConst::String(variant_name))?;
+        self.builder.build_eq(tag_val, wanted_tag).map_err(|e| e.into())
+    }
+
+    fn lower_narrowing_if(&mut self, i: &HirIf, is_pat: &HirIsPatternExpr) -> Result<TirValueId, TirLowerError> {
+        let (variant_name, binding_name) = self.extract_simple_pattern(&is_pat.pattern)?;
+
+        // Subject must be a name for narrowing in this smoke phase
+        if !matches!(&*is_pat.value, HirExpression::Name(_, _)) {
+            return Err(TirLowerError::UnsupportedExpr(
+                "is narrowing subject must be a variable in this phase".into(),
+                is_pat.value.span(),
+            ));
+        };
+
+        let subject_val = self.lower_expression(&is_pat.value)?;
+        let tag_val = self.builder.build_tag(subject_val)?;
+        let wanted_tag = self.builder.build_const(TirConst::String(variant_name.clone()))?;
+        let is_match = self.builder.build_eq(tag_val, wanted_tag)?;
+
+        let t_block = self.builder.new_block();
+        let f_block = self.builder.new_block();
+        self.builder.build_condbr(is_match, t_block, f_block)?;
+
+        // Save locals for scoping
+        let old_locals = self.locals.clone();
+
+        // Then block
+        self.builder.set_current_block(t_block);
+        if let Some(binding) = binding_name {
+            let payload = self.builder.build_unwrap(subject_val, variant_name.clone(), 0)?;
+
+            // Infer type of payload
+            let subject_ty = self.infer_expr_type(&is_pat.value)?;
+            let payload_ty = match subject_ty {
+                Type::Option(inner) => *inner,
+                Type::Result(ok, err) => {
+                    if variant_name == "Ok" {
+                        *ok
+                    } else {
+                        *err
+                    }
+                }
+                _ => Type::Unknown,
+            };
+            let tir_payload_ty = map_type(&payload_ty)?;
+
+            let slot = self.builder.build_slot(tir_payload_ty.clone(), Some(&binding))?;
+            self.builder.build_store(slot, payload)?;
+            self.locals.insert(binding, (slot, tir_payload_ty, false));
+        }
+
+        for stmt in &i.then_block.statements {
+            self.lower_statement(stmt)?;
+        }
+        let t_terminated = self.builder.is_terminated();
+
+        // Restore locals after then block (bindings should not leak)
+        self.locals = old_locals;
+
+        // Else block
+        self.builder.set_current_block(f_block);
+        if let Some(else_expr) = &i.else_branch {
+            if let HirExpression::Block(b) = &**else_expr {
+                for stmt in &b.statements {
+                    self.lower_statement(stmt)?;
+                }
+            } else {
+                return Err(TirLowerError::UnsupportedExpr(
+                    "Else is not a block".into(),
+                    else_expr.span(),
+                ));
+            }
+        }
+        let f_terminated = self.builder.is_terminated();
+
+        if t_terminated && f_terminated {
+            Ok(TirValueId(0))
+        } else {
+            let end_block = self.builder.new_block();
+
+            if !t_terminated {
+                self.builder.set_current_block(t_block);
+                self.builder.build_br(end_block)?;
+            }
+            if !f_terminated {
+                self.builder.set_current_block(f_block);
+                self.builder.build_br(end_block)?;
+            }
+
+            self.builder.set_current_block(end_block);
+            self.builder.build_const(TirConst::Unit).map_err(|e| e.into())
+        }
+    }
+
+    fn extract_simple_pattern(&self, pattern: &HirPattern) -> Result<(String, Option<String>), TirLowerError> {
+        match pattern {
+            HirPattern::EnumCase(_, name, args) => {
+                if args.is_empty() {
+                    Ok((name.clone(), None))
+                } else if args.len() == 1 {
+                    if let HirPattern::Identifier(_, binding) = &args[0] {
+                        Ok((name.clone(), Some(binding.clone())))
+                    } else {
+                        Err(TirLowerError::UnsupportedPattern(
+                            "only identifier bindings are supported in this phase".into(),
+                            pattern.span(),
+                        ))
+                    }
+                } else {
+                    Err(TirLowerError::UnsupportedPattern(
+                        "multi-payload patterns not supported in this phase".into(),
+                        pattern.span(),
+                    ))
+                }
+            }
+            HirPattern::EnumConstructor(e) => {
+                if e.payloads.is_empty() {
+                    Ok((e.variant_name.clone(), None))
+                } else if e.payloads.len() == 1 {
+                    if let HirPattern::Identifier(_, binding) = &e.payloads[0] {
+                        Ok((e.variant_name.clone(), Some(binding.clone())))
+                    } else {
+                        Err(TirLowerError::UnsupportedPattern(
+                            "only identifier bindings are supported in this phase".into(),
+                            pattern.span(),
+                        ))
+                    }
+                } else {
+                    Err(TirLowerError::UnsupportedPattern(
+                        "multi-payload patterns not supported in this phase".into(),
+                        pattern.span(),
+                    ))
+                }
+            }
+            _ => Err(TirLowerError::UnsupportedPattern(
+                format!("Pattern type {:?} not supported", pattern),
+                pattern.span(),
+            )),
+        }
+    }
+
+    pub fn lower_expression_base(&mut self, expr: &HirExpression) -> Result<TirValueId, TirLowerError> {
+        // This is just a marker for where the original code ended
+        self.lower_expression(expr)
     }
 }
 

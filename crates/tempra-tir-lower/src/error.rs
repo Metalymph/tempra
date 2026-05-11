@@ -10,6 +10,9 @@ pub enum TirLowerError {
     #[error("unsupported statement for lowering: {0}")]
     UnsupportedStmt(String, Span),
     
+    #[error("unsupported pattern for narrowing: {0}")]
+    UnsupportedPattern(String, Span),
+    
     #[error("unknown local variable: {0}")]
     UnknownLocal(String, Span),
 

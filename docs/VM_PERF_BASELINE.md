@@ -27,6 +27,13 @@ Measurements are averaged over 20 iterations after 2 warmup runs.
 
 ## Candidates for Optimization
 
+### Phase 15.1 — JIT/VM Integration Hook
+Integrated JIT into the VM dispatch loop.
+- **Opt-in**: JIT is disabled by default, ensuring stability.
+- **Transparent Fallback**: Unsupported functions or compilation failures revert to the interpreter.
+- **Hotness Driven**: JIT triggers based on `hot_call_threshold` and `hot_backedge_threshold`.
+- **Verified**: Integration tests confirm 100% result parity between JIT and interpreter.
+
 ### Phase 15.0 — Cranelift JIT Prototype
 Introduced `tempra-jit-cranelift`, a prototype JIT compiler supporting hot `Int64` functions. 
 

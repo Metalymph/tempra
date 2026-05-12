@@ -4,16 +4,18 @@ use tempra_bytecode::opcode::BYTECODE_OPCODE_COUNT;
 #[derive(Debug, Clone, Copy)]
 pub struct VmOptions {
     pub profiling: bool,
-    pub call_threshold: u64,
-    pub backedge_threshold: u64,
+    pub jit_enabled: bool,
+    pub hot_call_threshold: u64,
+    pub hot_backedge_threshold: u64,
 }
 
 impl Default for VmOptions {
     fn default() -> Self {
         Self {
             profiling: false,
-            call_threshold: 1000,
-            backedge_threshold: 10000,
+            jit_enabled: false,
+            hot_call_threshold: 1000,
+            hot_backedge_threshold: 10000,
         }
     }
 }
@@ -158,5 +160,14 @@ impl ProfilingState {
             global_opcode_counts: vec![0; BYTECODE_OPCODE_COUNT],
             options,
         }
+    }
+
+    pub fn is_hot(&self, function_id: FunctionId) -> bool {
+        let s = &self.stats[function_id.0 as usize];
+        s.call_count >= self.options.hot_call_threshold || s.backedge_count >= self.options.hot_backedge_threshold
+    }
+
+    pub fn should_jit(&self, function_id: FunctionId) -> bool {
+        self.options.jit_enabled && self.is_hot(function_id)
     }
 }

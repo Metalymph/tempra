@@ -32,6 +32,7 @@ impl JitEngine {
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct JitFunctionI64 {
     ptr: *const u8,
     arity: usize,

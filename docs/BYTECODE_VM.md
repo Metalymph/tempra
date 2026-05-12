@@ -152,7 +152,29 @@ The TIR-to-Bytecode lowering phase transforms the high-level Typed IR into a seq
 4. **Safety Verification**: Every optimized function is re-verified by the Bytecode Verifier. If verification fails for any reason (e.g., stack depth mismatch), the VM automatically falls back to the unoptimized version of that function.
 
 
+## Cranelift JIT Integration (Phase 15.x)
+
+The VM integrates a Just-In-Time (JIT) compiler based on [Cranelift](https://cranelift.dev/) to accelerate hot execution paths.
+
+### Opt-in Integration
+JIT is disabled by default and can be enabled via `VmOptions`:
+```rust
+let mut options = VmOptions::default();
+options.jit_enabled = true;
+options.hot_call_threshold = 1000;
+run_function_with_options(module, "main", args, options);
+```
+
+### Promotion Lifecycle
+1. **Interpretation**: Initially, all functions execute via the stack interpreter.
+2. **Hotness Monitoring**: The VM tracks `call_count` and `backedge_count`.
+3. **Compilation**: When a threshold is met, if the function is a candidate (e.g., pure `Int64` arithmetic/loops), it is compiled to native code.
+4. **Execution**: Subsequent calls to the function use the native entry point.
+
+### Fallback Policy
+The JIT maintains a strict fallback policy. If a function uses unsupported features (Strings, Structs, Heap access) or if compilation fails, the VM transparently continues execution via the interpreter.
+
 ## Non-Goals (v0)
 
-- **Performance**: v0 is a naive interpreter. Optimization (JIT, Register VM, etc.) is deferred.
+- **Performance**: v0 is a naive interpreter. Further optimization (Register VM, full JIT coverage) is deferred.
 - **Default Runtime**: The default `tempra run` still uses the HIR interpreter. The VM remains strictly opt-in.

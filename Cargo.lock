@@ -600,7 +600,6 @@ dependencies = [
  "cranelift-native",
  "target-lexicon",
  "tempra-bytecode",
- "tempra-vm",
  "thiserror",
 ]
 
@@ -757,6 +756,7 @@ dependencies = [
  "tempra-bytecode",
  "tempra-bytecode-lower",
  "tempra-hir",
+ "tempra-jit-cranelift",
  "tempra-parser",
  "tempra-tir",
  "tempra-tir-lower",

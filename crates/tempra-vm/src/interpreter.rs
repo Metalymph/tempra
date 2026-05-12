@@ -8,6 +8,11 @@ use crate::value::VmValue;
 use crate::error::VmError;
 use crate::profile::{VmOptions, VmProfile, FunctionProfile, ProfilingState};
 
+#[cfg(feature = "jit-cranelift")]
+use tempra_jit_cranelift::{JitEngine, JitFunctionI64};
+#[cfg(feature = "jit-cranelift")]
+use std::collections::HashMap;
+
 pub struct Frame {
     pub function_id: FunctionId,
     pub ip: usize,
@@ -19,6 +24,11 @@ pub struct Interpreter<'a> {
     pub module: &'a BytecodeModule,
     pub call_stack: Vec<Frame>,
     pub(crate) profiling: Option<ProfilingState>,
+
+    #[cfg(feature = "jit-cranelift")]
+    pub(crate) jit_engine: Option<JitEngine>,
+    #[cfg(feature = "jit-cranelift")]
+    pub(crate) jit_cache: HashMap<FunctionId, JitFunctionI64>,
 }
 
 impl<'a> Interpreter<'a> {
@@ -27,19 +37,35 @@ impl<'a> Interpreter<'a> {
             module,
             call_stack: Vec::with_capacity(32),
             profiling: None,
+            #[cfg(feature = "jit-cranelift")]
+            jit_engine: None,
+            #[cfg(feature = "jit-cranelift")]
+            jit_cache: HashMap::new(),
         }
     }
 
     pub fn with_options(module: &'a BytecodeModule, options: VmOptions) -> Self {
-        let profiling = if options.profiling {
+        let profiling = if options.profiling || options.jit_enabled {
             Some(ProfilingState::new(module.functions.len(), options))
         } else {
             None
         };
+
+        #[cfg(feature = "jit-cranelift")]
+        let (jit_engine, jit_cache) = if options.jit_enabled {
+            (Some(JitEngine::new()), HashMap::new())
+        } else {
+            (None, HashMap::new())
+        };
+
         Self {
             module,
             call_stack: Vec::with_capacity(32),
             profiling,
+            #[cfg(feature = "jit-cranelift")]
+            jit_engine,
+            #[cfg(feature = "jit-cranelift")]
+            jit_cache,
         }
     }
 
@@ -96,7 +122,7 @@ impl<'a> Interpreter<'a> {
         let mut function_stats = Vec::new();
         for (i, s) in stats.stats.iter().enumerate() {
             let func = &self.module.functions[i];
-            let is_hot = s.call_count >= stats.options.call_threshold || s.backedge_count >= stats.options.backedge_threshold;
+            let is_hot = s.call_count >= stats.options.hot_call_threshold || s.backedge_count >= stats.options.hot_backedge_threshold;
             
             let mut top_opcodes: Vec<_> = s.opcode_counts.iter()
                 .enumerate()
@@ -395,7 +421,19 @@ impl<'a> Interpreter<'a> {
                 BytecodeInstr::Jump(offset) => {
                     if let Some(ref mut prof) = self.profiling {
                         if offset.0 <= current_ip {
-                            prof.stats[frame_func_id.0 as usize].backedge_count += 1;
+                            let stats = &mut prof.stats[frame_func_id.0 as usize];
+                            stats.backedge_count += 1;
+                            
+                            #[cfg(feature = "jit-cranelift")]
+                            if prof.should_jit(frame_func_id) && !self.jit_cache.contains_key(&frame_func_id) {
+                                if tempra_jit_cranelift::can_jit_function(self.module, frame_func_id) {
+                                    if let Some(ref mut engine) = self.jit_engine {
+                                        if let Ok(compiled) = tempra_jit_cranelift::compile_function_i64(engine, self.module, frame_func_id) {
+                                            self.jit_cache.insert(frame_func_id, compiled);
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                     self.call_stack.last_mut().ok_or(VmError::MissingReturn)?.ip = offset.0;
@@ -405,7 +443,19 @@ impl<'a> Interpreter<'a> {
                     if !cond {
                         if let Some(ref mut prof) = self.profiling {
                             if offset.0 <= current_ip {
-                                prof.stats[frame_func_id.0 as usize].backedge_count += 1;
+                                let stats = &mut prof.stats[frame_func_id.0 as usize];
+                                stats.backedge_count += 1;
+
+                                #[cfg(feature = "jit-cranelift")]
+                                if prof.should_jit(frame_func_id) && !self.jit_cache.contains_key(&frame_func_id) {
+                                    if tempra_jit_cranelift::can_jit_function(self.module, frame_func_id) {
+                                        if let Some(ref mut engine) = self.jit_engine {
+                                            if let Ok(compiled) = tempra_jit_cranelift::compile_function_i64(engine, self.module, frame_func_id) {
+                                                self.jit_cache.insert(frame_func_id, compiled);
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                         self.call_stack.last_mut().ok_or(VmError::MissingReturn)?.ip = offset.0;
@@ -413,6 +463,49 @@ impl<'a> Interpreter<'a> {
                 }
 
                 BytecodeInstr::Call(target_id, argc) => {
+                    #[cfg(feature = "jit-cranelift")]
+                    if self.profiling.as_ref().map(|p| p.options.jit_enabled).unwrap_or(false) {
+                        if let Some(jit_fn) = self.jit_cache.get(&target_id).copied() {
+                            // Attempt JIT call
+                            let mut args = Vec::with_capacity(argc as usize);
+                            for _ in 0..argc {
+                                args.push(self.pop()?);
+                            }
+                            args.reverse();
+                            
+                            let mut i64_args = Vec::with_capacity(argc as usize);
+                            let mut compatible = true;
+                            for arg in &args {
+                                if let VmValue::Int64(i) = arg {
+                                    i64_args.push(*i);
+                                } else {
+                                    compatible = false;
+                                    break;
+                                }
+                            }
+
+                            if compatible {
+                                if let Ok(res) = jit_fn.call_i64(&i64_args) {
+                                    self.push(VmValue::Int64(res))?;
+                                    continue;
+                                }
+                            }
+                            
+                            // Fallback: put args back on stack
+                            for arg in args {
+                                self.push(arg)?;
+                            }
+                        } else if self.profiling.as_ref().map(|p| p.should_jit(target_id)).unwrap_or(false) {
+                            if tempra_jit_cranelift::can_jit_function(self.module, target_id) {
+                                if let Some(ref mut engine) = self.jit_engine {
+                                    if let Ok(compiled) = tempra_jit_cranelift::compile_function_i64(engine, self.module, target_id) {
+                                        self.jit_cache.insert(target_id, compiled);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     let target_func = self.module.functions.get(target_id.0 as usize)
                         .ok_or_else(|| VmError::UnknownFunction(target_id.to_string()))?;
 
@@ -785,4 +878,11 @@ pub fn run_function_id(module: &BytecodeModule, id: FunctionId, args: Vec<VmValu
 
 pub fn run_function_profiled(module: &BytecodeModule, name: &str, args: Vec<VmValue>, options: VmOptions) -> Result<(VmValue, VmProfile), VmError> {
     Interpreter::run_function_profiled(module, name, args, options)
+}
+
+pub fn run_function_with_options(module: &BytecodeModule, name: &str, args: Vec<VmValue>, options: VmOptions) -> Result<VmValue, VmError> {
+    let id = module.functions.iter().position(|f| f.name == name)
+        .ok_or_else(|| VmError::UnknownFunction(name.to_string()))?;
+    let mut interp = Interpreter::with_options(module, options);
+    interp.run_function_id(FunctionId(id as u32), args)
 }

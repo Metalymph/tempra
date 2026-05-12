@@ -44,12 +44,29 @@ Jump targets are pre-scanned to create Cranelift `Block`s. To ensure valid SSA, 
 ### Architecture Support
 The JIT is configured to support both `x86_64` and `AArch64` (Apple Silicon). On AArch64, the ISA is specifically tuned to avoid PLT requirements for simple JIT usage.
 
-## Future Integration
+## VM Integration (Phase 15.1)
 
-In future phases, the JIT will be integrated directly into the `Interpreter` loop:
-- The VM will monitor function "hotness" via `VmProfile`.
-- Once a threshold is reached, the JIT will compile the function in the background.
-- Subsequent calls to the function will swap the execution path from `Interpreter::execute` to native code.
+The JIT is integrated into the Tempra VM as an opt-in component.
+
+### Usage
+To enable the JIT, use `VmOptions`:
+```rust
+let mut options = VmOptions::default();
+options.jit_enabled = true;
+options.hot_call_threshold = 1000;
+run_function_with_options(module, "main", args, options);
+```
+
+### Fallback Policy
+The VM always maintains the stack-based interpreter as the primary runtime. If:
+1. A function uses unsupported types (Strings, Structs, etc.).
+2. JIT compilation fails.
+3. The function signature is not compatible with the JIT ABI.
+
+Then the VM transparently falls back to interpreting the bytecode, ensuring correctness over performance.
+
+### JIT Cache
+Compiled functions are stored in an in-memory cache (`HashMap<FunctionId, JitFunctionI64>`) within the `Interpreter` instance.
 
 ## Verification
 

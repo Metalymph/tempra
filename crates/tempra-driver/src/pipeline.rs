@@ -21,6 +21,10 @@ pub fn run_source_with_experimental_vm(source: &str, args: &[String]) -> Result<
 }
 
 pub fn run_source_vm(source: &str, args: &[String]) -> Result<VmValue, DriverError> {
+    run_source_vm_with_options(source, args, tempra_vm::profile::VmOptions::default())
+}
+
+pub fn run_source_vm_with_options(source: &str, args: &[String], options: tempra_vm::profile::VmOptions) -> Result<VmValue, DriverError> {
     if !args.is_empty() {
         return Err(DriverError::UnsupportedExperimentalVm("CLI arguments are not yet supported in experimental VM".into()));
     }
@@ -44,7 +48,7 @@ pub fn run_source_vm(source: &str, args: &[String]) -> Result<VmValue, DriverErr
         return Err(DriverError::UnsupportedExperimentalVm("experimental VM currently requires main()".into()));
     }
 
-    tempra_vm::run_function(&module, "main", vec![])
+    tempra_vm::run_function_with_options(&module, "main", vec![], options)
         .map_err(|e| DriverError::VmError(format!("{:?}", e)))
 }
 

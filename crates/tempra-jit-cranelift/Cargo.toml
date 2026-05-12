@@ -5,7 +5,6 @@ edition.workspace = true
 
 [dependencies]
 tempra-bytecode.workspace = true
-tempra-vm.workspace = true
 cranelift = "0.106"
 cranelift-module = "0.106"
 cranelift-jit = "0.106"

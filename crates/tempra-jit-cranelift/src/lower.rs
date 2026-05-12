@@ -49,7 +49,7 @@ pub fn compile_function_i64(
     }
 
     // Create blocks for jump targets
-    for (off, block) in jump_targets.iter_mut() {
+    for (_, block) in jump_targets.iter_mut() {
         *block = Some(builder.create_block());
     }
 

@@ -231,7 +231,7 @@ fn profile_marks_hot_function() {
 
     let options = VmOptions { 
         profiling: true, 
-        call_threshold: 1, 
+        hot_call_threshold: 1, 
         ..Default::default() 
     };
     let (_, profile) = run_function_profiled(&module, "hot", vec![], options).unwrap();

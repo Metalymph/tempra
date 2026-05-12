@@ -25,5 +25,8 @@ tempra-bytecode-lower.workspace = true
 tempra-vm.workspace = true
 anyhow.workspace = true
 
+[features]
+jit-cranelift = ["tempra-vm/jit-cranelift"]
+
 [dev-dependencies]
 tempra-repl.workspace = true

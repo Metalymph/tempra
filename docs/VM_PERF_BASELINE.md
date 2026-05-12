@@ -27,6 +27,14 @@ Measurements are averaged over 20 iterations after 2 warmup runs.
 
 ## Candidates for Optimization
 
+### Phase 14.19 — Hot Function Counters
+Added opt-in profiling infrastructure to track call counts, instruction counts, and loop backedges. This allows the VM to identify "hot" functions and loops based on configurable thresholds.
+
+**Observations:**
+- Minimal overhead when disabled (verified via performance baseline).
+- Provides actionable metrics for future JIT/Cranelift integration.
+- Correctness verified via dedicated profiling tests.
+
 ### Phase 14.18 — Superinstructions v1
 Introduced conservative superinstructions `AddI64LL` (Local + Local) and `AddI64LC` (Local + Constant) to reduce dispatch overhead.
 

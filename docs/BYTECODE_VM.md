@@ -16,6 +16,7 @@ The Bytecode VM (v0) employs several runtime optimizations:
 3. **Direct Local Initialization**: Function calls pop arguments directly into the callee's local slots, bypassing intermediate vector allocations.
 4. **Efficient Dispatch**: The instruction loop minimizes redundant call stack lookups and employs inlined stack helpers.
 5. **Superinstructions**: High-frequency instruction sequences (like `LoadLocal` + `AddI64`) are fused into single opcodes to reduce dispatch overhead.
+6. **Profiling & Hotness Detection**: Opt-in infrastructure to track function calls, instructions, and loop backedges, enabling identification of candidates for future JIT optimization.
 
 ### Frames
 
@@ -109,6 +110,19 @@ The experimental VM pipeline works as follows:
 - **Match Expressions**: Sequential arm checking for literals, wildcards, and variants.
 - **Bytecode Cache**: Persistent storage in `.tempra/cache/`.
 - **Peephole Optimization**: Conservative post-pass to eliminate redundant `StoreLocal/LoadLocal` pairs for intermediate temporary values.
+- **Profiling infrastructure**: Opt-in counters for calls, instructions, and loop backedges to identify hot code paths with minimal overhead when disabled.
+
+## Profiling & Hotness Detection (v0.x)
+
+The VM includes optional profiling capabilities to identify "hot" functions and loops. This infrastructure is disabled by default and can be enabled via `VmOptions`.
+
+### Counters
+- **Call Count**: Incremented every time a function is entered.
+- **Instruction Count**: Incremented for every bytecode instruction executed.
+- **Backedge Count**: Incremented when a backward jump (loop) is executed.
+
+### Hotness Model
+A function is considered **hot** if its `call_count` or `backedge_count` exceeds a configurable threshold. This metadata is intended to drive future Just-In-Time (JIT) compilation decisions.
 
 ## Bytecode Lowering & Optimizations
 

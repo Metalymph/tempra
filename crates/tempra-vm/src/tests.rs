@@ -147,3 +147,108 @@ fn vm_unreachable_error() {
     let result = run_function(&module, "test", vec![]);
     assert_eq!(result, Err(VmError::UnreachableExecuted));
 }
+
+#[test]
+fn profile_counts_function_call() {
+    let mut module = BytecodeModule::new();
+    let mut func = BytecodeFunction::new("test".into(), vec![], BytecodeType::Unit);
+    func.code.push(BytecodeInstr::Return);
+    module.add_function(func);
+
+    let options = VmOptions { profiling: true, ..Default::default() };
+    let (_, profile) = run_function_profiled(&module, "test", vec![], options).unwrap();
+    
+    let stats = profile.function_stats.iter().find(|s| s.function_name == "test").unwrap();
+    assert_eq!(stats.call_count, 1);
+    assert_eq!(stats.instruction_count, 1);
+}
+
+#[test]
+fn profile_counts_loop_backedge() {
+    let mut module = BytecodeModule::new();
+    let mut func = BytecodeFunction::new("loop".into(), vec![], BytecodeType::Unit);
+    
+    // 0: ConstUnit
+    // 1: Jump 0 (Backedge)
+    // 2: Return
+    func.code.push(BytecodeInstr::ConstUnit);
+    func.code.push(BytecodeInstr::Jump(tempra_bytecode::opcode::InstrOffset(0)));
+    func.code.push(BytecodeInstr::Return);
+    func.max_stack = 1;
+    module.add_function(func);
+
+    // We only run a few iterations to verify the counter
+    // But how to stop? We can't easily stop a VM loop in a test without a condition.
+    // Let's use a condition.
+}
+
+#[test]
+fn profile_counts_loop_with_cond() {
+    let mut module = BytecodeModule::new();
+    let c0 = module.add_constant(BytecodeConstant::Int64(0));
+    let c1 = module.add_constant(BytecodeConstant::Int64(1));
+    let c5 = module.add_constant(BytecodeConstant::Int64(5));
+
+    let mut func = BytecodeFunction::new("loop".into(), vec![], BytecodeType::Int64);
+    func.locals = vec![BytecodeType::Int64]; // i
+    
+    // 0: Const 0, Store 0
+    func.code.push(BytecodeInstr::ConstI64(c0));
+    func.code.push(BytecodeInstr::StoreLocal(LocalId(0)));
+    // 2: Load 0, Const 5, Lt, JumpIfFalse 10
+    func.code.push(BytecodeInstr::LoadLocal(LocalId(0)));
+    func.code.push(BytecodeInstr::ConstI64(c5));
+    func.code.push(BytecodeInstr::LtI64);
+    func.code.push(BytecodeInstr::JumpIfFalse(tempra_bytecode::opcode::InstrOffset(11)));
+    // 6: Load 0, Const 1, Add, Store 0
+    func.code.push(BytecodeInstr::LoadLocal(LocalId(0)));
+    func.code.push(BytecodeInstr::ConstI64(c1));
+    func.code.push(BytecodeInstr::AddI64);
+    func.code.push(BytecodeInstr::StoreLocal(LocalId(0)));
+    // 10: Jump 2 (Backedge)
+    func.code.push(BytecodeInstr::Jump(tempra_bytecode::opcode::InstrOffset(2)));
+    // 11: Load 0, Return
+    func.code.push(BytecodeInstr::LoadLocal(LocalId(0)));
+    func.code.push(BytecodeInstr::Return);
+    func.max_stack = 2;
+    module.add_function(func);
+
+    let options = VmOptions { profiling: true, ..Default::default() };
+    let (res, profile) = run_function_profiled(&module, "loop", vec![], options).unwrap();
+    assert_eq!(res, VmValue::Int64(5));
+
+    let stats = profile.function_stats.iter().find(|s| s.function_name == "loop").unwrap();
+    assert_eq!(stats.call_count, 1);
+    assert_eq!(stats.backedge_count, 5);
+}
+
+#[test]
+fn profile_marks_hot_function() {
+    let mut module = BytecodeModule::new();
+    let mut func = BytecodeFunction::new("hot".into(), vec![], BytecodeType::Unit);
+    func.code.push(BytecodeInstr::Return);
+    module.add_function(func);
+
+    let options = VmOptions { 
+        profiling: true, 
+        call_threshold: 1, 
+        ..Default::default() 
+    };
+    let (_, profile) = run_function_profiled(&module, "hot", vec![], options).unwrap();
+    
+    let stats = profile.function_stats.iter().find(|s| s.function_name == "hot").unwrap();
+    assert!(stats.is_hot);
+}
+
+#[test]
+fn profile_disabled_default_behavior() {
+    let mut module = BytecodeModule::new();
+    let mut func = BytecodeFunction::new("test".into(), vec![], BytecodeType::Unit);
+    func.code.push(BytecodeInstr::Return);
+    module.add_function(func);
+
+    let options = VmOptions { profiling: false, ..Default::default() };
+    let (_, profile) = run_function_profiled(&module, "test", vec![], options).unwrap();
+    
+    assert!(profile.function_stats.is_empty());
+}

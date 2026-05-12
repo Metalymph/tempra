@@ -6,6 +6,7 @@ use tempra_bytecode::constant::BytecodeConstant;
 use tempra_bytecode::verify::verify_module;
 use crate::value::VmValue;
 use crate::error::VmError;
+use crate::profile::{VmOptions, VmProfile, FunctionProfile, ProfilingState};
 
 pub struct Frame {
     pub function_id: FunctionId,
@@ -17,6 +18,7 @@ pub struct Frame {
 pub struct Interpreter<'a> {
     pub module: &'a BytecodeModule,
     pub call_stack: Vec<Frame>,
+    pub(crate) profiling: Option<ProfilingState>,
 }
 
 impl<'a> Interpreter<'a> {
@@ -24,6 +26,20 @@ impl<'a> Interpreter<'a> {
         Self {
             module,
             call_stack: Vec::with_capacity(32),
+            profiling: None,
+        }
+    }
+
+    pub fn with_options(module: &'a BytecodeModule, options: VmOptions) -> Self {
+        let profiling = if options.profiling {
+            Some(ProfilingState::new(module.functions.len(), options))
+        } else {
+            None
+        };
+        Self {
+            module,
+            call_stack: Vec::with_capacity(32),
+            profiling,
         }
     }
 
@@ -53,7 +69,45 @@ impl<'a> Interpreter<'a> {
 
         self.call_stack.push(initial_frame);
 
+        if let Some(ref mut prof) = self.profiling {
+            prof.stats[function_id.0 as usize].call_count += 1;
+        }
+
         self.execute()
+    }
+
+    pub fn run_function_profiled(module: &'a BytecodeModule, name: &str, args: Vec<VmValue>, options: VmOptions) -> Result<(VmValue, VmProfile), VmError> {
+        let id = module.functions.iter().position(|f| f.name == name)
+            .map(|i| FunctionId(i as u32))
+            .ok_or_else(|| VmError::UnknownFunction(name.to_string()))?;
+
+        let mut interpreter = Interpreter::with_options(module, options);
+        let res = interpreter.run_function_id(id, args)?;
+        let profile = interpreter.build_profile();
+        Ok((res, profile))
+    }
+
+    fn build_profile(&self) -> VmProfile {
+        let stats = match &self.profiling {
+            Some(s) => s,
+            None => return VmProfile { function_stats: vec![] },
+        };
+
+        let mut function_stats = Vec::new();
+        for (i, s) in stats.stats.iter().enumerate() {
+            let func = &self.module.functions[i];
+            let is_hot = s.call_count >= stats.options.call_threshold || s.backedge_count >= stats.options.backedge_threshold;
+            function_stats.push(FunctionProfile {
+                function_id: FunctionId(i as u32),
+                function_name: func.name.clone(),
+                call_count: s.call_count,
+                instruction_count: s.instruction_count,
+                backedge_count: s.backedge_count,
+                is_hot,
+            });
+        }
+
+        VmProfile { function_stats }
     }
 
     fn execute(&mut self) -> Result<VmValue, VmError> {
@@ -68,9 +122,16 @@ impl<'a> Interpreter<'a> {
             };
 
             // Increment IP before execution
-            {
+            let (frame_func_id, current_ip) = {
                 let frame = self.call_stack.last_mut().unwrap();
+                let func_id = frame.function_id;
+                let ip = frame.ip;
                 frame.ip += 1;
+                (func_id, ip)
+            };
+
+            if let Some(ref mut prof) = self.profiling {
+                prof.stats[frame_func_id.0 as usize].instruction_count += 1;
             }
 
             match instr {
@@ -250,11 +311,21 @@ impl<'a> Interpreter<'a> {
                 }
 
                 BytecodeInstr::Jump(offset) => {
+                    if let Some(ref mut prof) = self.profiling {
+                        if offset.0 <= current_ip {
+                            prof.stats[frame_func_id.0 as usize].backedge_count += 1;
+                        }
+                    }
                     self.call_stack.last_mut().ok_or(VmError::MissingReturn)?.ip = offset.0;
                 }
                 BytecodeInstr::JumpIfFalse(offset) => {
                     let cond = self.pop_bool()?;
                     if !cond {
+                        if let Some(ref mut prof) = self.profiling {
+                            if offset.0 <= current_ip {
+                                prof.stats[frame_func_id.0 as usize].backedge_count += 1;
+                            }
+                        }
                         self.call_stack.last_mut().ok_or(VmError::MissingReturn)?.ip = offset.0;
                     }
                 }
@@ -267,6 +338,10 @@ impl<'a> Interpreter<'a> {
                     // Pop arguments directly into locals in reverse order (right-to-left)
                     for i in (0..argc).rev() {
                         locals[i as usize] = Some(self.pop()?);
+                    }
+
+                    if let Some(ref mut prof) = self.profiling {
+                        prof.stats[target_id.0 as usize].call_count += 1;
                     }
 
                     let new_frame = Frame {
@@ -624,4 +699,8 @@ pub fn run_function(module: &BytecodeModule, name: &str, args: Vec<VmValue>) -> 
 pub fn run_function_id(module: &BytecodeModule, id: FunctionId, args: Vec<VmValue>) -> Result<VmValue, VmError> {
     let mut interp = Interpreter::new(module);
     interp.run_function_id(id, args)
+}
+
+pub fn run_function_profiled(module: &BytecodeModule, name: &str, args: Vec<VmValue>, options: VmOptions) -> Result<(VmValue, VmProfile), VmError> {
+    Interpreter::run_function_profiled(module, name, args, options)
 }

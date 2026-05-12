@@ -13,9 +13,24 @@ fn run_source(source: &str, entry: &str, args: Vec<VmValue>) -> VmValue {
     
     let mut tir_builder = ModuleBuilder::new();
     for item in &hir.items {
-        if let HirItem::Function(func) = item {
-            let tir_func = lower_tir_function(func, &type_ctx, &mut tir_builder).expect("TIR lower error");
-            tir_builder.add_function(tir_func);
+        match item {
+            HirItem::Function(func) => {
+                let tir_func = lower_tir_function(func, &type_ctx, &mut tir_builder, None).expect("TIR lower error");
+                tir_builder.add_function(tir_func);
+            }
+            HirItem::Extend(extend) => {
+                let (target_name, target_ty) = match &extend.target {
+                    tempra_hir::HirType::Named(_, name) => (name.clone(), tempra_typeck::types::resolve_named_type(name)),
+                    _ => continue,
+                };
+                for method in &extend.methods {
+                    let mut method_clone = method.clone();
+                    method_clone.name = format!("{}.{}", target_name, method.name);
+                    let tir_func = lower_tir_function(&method_clone, &type_ctx, &mut tir_builder, Some(target_ty.clone())).expect("TIR lower error");
+                    tir_builder.add_function(tir_func);
+                }
+            }
+            _ => {}
         }
     }
     
@@ -358,4 +373,58 @@ fn test_experimental_vm_struct_field_set_value_semantics() {
         }
     "#;
     assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(120));
+}
+
+#[test]
+fn test_experimental_vm_method_basic() {
+    let source = r#"
+        struct User {
+            age: Int64
+            fn get_age(self) -> Int64 {
+                return self.age
+            }
+        }
+        fn main() -> Int64 {
+            let u = User { age: 42 }
+            return u.get_age()
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(42));
+}
+
+#[test]
+fn test_experimental_vm_method_with_args() {
+    let source = r#"
+        struct User {
+            age: Int64
+            fn plus(self, n: Int64) -> Int64 {
+                return self.age + n
+            }
+        }
+        fn main() -> Int64 {
+            let u = User { age: 42 }
+            return u.plus(1)
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(43));
+}
+
+#[test]
+fn test_experimental_vm_extend_method() {
+    let source = r#"
+        struct Point {
+            x: Int64
+            y: Int64
+        }
+        extend Point {
+            fn sum(self) -> Int64 {
+                return self.x + self.y
+            }
+        }
+        fn main() -> Int64 {
+            let p = Point { x: 2, y: 3 }
+            return p.sum()
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(5));
 }

@@ -49,11 +49,31 @@ fn compile_and_cache_module(source: &str, hash: &[u8; 32], cache_path: &std::pat
     let mut module_builder = tempra_tir::builder::ModuleBuilder::new();
     let mut errors = Vec::new();
     for item in &hir.items {
-        if let tempra_hir::HirItem::Function(func) = item {
-            match tempra_tir_lower::lower::lower_function(func, &type_ctx, &mut module_builder) {
-                Ok(tir_func) => { module_builder.add_function(tir_func); }
-                Err(e) => { errors.push(format!("unsupported in fn '{}': {}", func.name, e)); }
+        match item {
+            tempra_hir::HirItem::Function(func) => {
+                match tempra_tir_lower::lower::lower_function(func, &type_ctx, &mut module_builder, None) {
+                    Ok(tir_func) => { module_builder.add_function(tir_func); }
+                    Err(e) => { errors.push(format!("unsupported in fn '{}': {}", func.name, e)); }
+                }
             }
+            tempra_hir::HirItem::Extend(extend) => {
+                let (target_name, target_ty) = match &extend.target {
+                    tempra_hir::HirType::Named(_, name) => (name.clone(), tempra_typeck::types::resolve_named_type(name)),
+                    _ => {
+                        errors.push(format!("unsupported extend target: {:?}", extend.target));
+                        continue;
+                    }
+                };
+                for method in &extend.methods {
+                    let mut method_clone = method.clone();
+                    method_clone.name = format!("{}.{}", target_name, method.name);
+                    match tempra_tir_lower::lower::lower_function(&method_clone, &type_ctx, &mut module_builder, Some(target_ty.clone())) {
+                        Ok(tir_func) => { module_builder.add_function(tir_func); }
+                        Err(e) => { errors.push(format!("unsupported in method '{}': {}", method_clone.name, e)); }
+                    }
+                }
+            }
+            _ => {}
         }
     }
     if !errors.is_empty() {

@@ -80,7 +80,7 @@ pub fn unmap_type(tir_ty: &TirType) -> Result<Type, TirLowerError> {
 }
 
 /// Resolve an HirType to a semantic Type. Minimal — only handles what Phase 14.4 needs.
-fn resolve_hir_type(hir_ty: &HirType, _type_ctx: &TypeContext) -> Result<Type, TirLowerError> {
+fn resolve_hir_type(hir_ty: &HirType, _type_ctx: &TypeContext, self_ty: Option<&Type>) -> Result<Type, TirLowerError> {
     match hir_ty {
         HirType::Named(_, name) => {
             let ty = tempra_typeck::types::resolve_named_type(name);
@@ -91,30 +91,37 @@ fn resolve_hir_type(hir_ty: &HirType, _type_ctx: &TypeContext) -> Result<Type, T
             }
         }
         HirType::Result(_, ok_hir, err_hir) => {
-            let ok_ty = resolve_hir_type(ok_hir, _type_ctx)?;
-            let err_ty = resolve_hir_type(err_hir, _type_ctx)?;
+            let ok_ty = resolve_hir_type(ok_hir, _type_ctx, self_ty)?;
+            let err_ty = resolve_hir_type(err_hir, _type_ctx, self_ty)?;
             Ok(Type::Result(Box::new(ok_ty), Box::new(err_ty)))
         }
         HirType::Optional(_, inner_hir) => {
-            let inner_ty = resolve_hir_type(inner_hir, _type_ctx)?;
+            let inner_ty = resolve_hir_type(inner_hir, _type_ctx, self_ty)?;
             Ok(Type::Option(Box::new(inner_ty)))
         }
         HirType::Array(_, inner_hir) => {
-            let inner_ty = resolve_hir_type(inner_hir, _type_ctx)?;
+            let inner_ty = resolve_hir_type(inner_hir, _type_ctx, self_ty)?;
             Ok(Type::Array(Box::new(inner_ty)))
         }
         HirType::Apply(_, callee, args) => {
             if let HirType::Named(_, name) = &**callee {
                 if name == "Slice" && args.len() == 1 {
-                    let inner_ty = resolve_hir_type(&args[0], _type_ctx)?;
+                    let inner_ty = resolve_hir_type(&args[0], _type_ctx, self_ty)?;
                     return Ok(Type::Slice(Box::new(inner_ty)));
                 }
                 if name == "Array" && args.len() == 1 {
-                    let inner_ty = resolve_hir_type(&args[0], _type_ctx)?;
+                    let inner_ty = resolve_hir_type(&args[0], _type_ctx, self_ty)?;
                     return Ok(Type::Array(Box::new(inner_ty)));
                 }
             }
             Err(TirLowerError::UnsupportedType(format!("Cannot resolve HirType::Apply: {:?}", hir_ty)))
+        }
+        HirType::SelfType(_) => {
+            if let Some(sty) = self_ty {
+                Ok(sty.clone())
+            } else {
+                Err(TirLowerError::UnsupportedType("Self type used outside of method".to_string()))
+            }
         }
         _ => Err(TirLowerError::UnsupportedType(format!("Cannot resolve HirType: {:?}", hir_ty))),
     }
@@ -209,6 +216,11 @@ impl<'a> LowerContext<'a> {
                     }
                     if m.field == "bytes" {
                         return Ok(Type::Slice(Box::new(Type::UInt8)));
+                    }
+
+                    let obj_ty = self.infer_expr_type(&m.object)?;
+                    if let Some(sig) = self.type_ctx.lookup_direct_method_signature(&obj_ty, &m.field) {
+                        return Ok(sig.return_type.clone());
                     }
                 }
                 if let HirExpression::Name(_, name) = &*c.callee {
@@ -563,8 +575,8 @@ impl<'a> LowerContext<'a> {
             HirExpression::Call(c) => {
                 // Handle .len() method call
                 if let HirExpression::Member(m) = &*c.callee {
+                    let obj_ty = self.infer_expr_type(&m.object)?;
                     if c.args.is_empty() {
-                        let obj_ty = self.infer_expr_type(&m.object)?;
                         if m.field == "len" {
                             if matches!(obj_ty, Type::Array(_) | Type::Slice(_) | Type::String) {
                                 let obj = self.lower_expression(&m.object)?;
@@ -581,6 +593,31 @@ impl<'a> LowerContext<'a> {
                                 return self.builder.build_bytes(obj).map_err(|e| e.into());
                             }
                         }
+                    }
+
+                    // Static method call resolution
+                    if let Some(sig) = self.type_ctx.lookup_direct_method_signature(&obj_ty, &m.field) {
+                        let full_name = format!("{}.{}", obj_ty.get_name(), m.field);
+                        let mut arg_values = Vec::new();
+                        
+                        // 1. First argument is the receiver
+                        arg_values.push(self.lower_expression(&m.object)?);
+                        
+                        // 2. Following arguments
+                        for arg in &c.args {
+                            let arg_expr = match arg {
+                                HirCallArgument::Positional(e) => e,
+                                HirCallArgument::Named(n) => &n.value,
+                            };
+                            arg_values.push(self.lower_expression(arg_expr)?);
+                        }
+
+                        if sig.params.len() != arg_values.len() {
+                            return Err(TirLowerError::UnsupportedExpr(format!("wrong arity for method {}: expected {}, found {}", full_name, sig.params.len(), arg_values.len()), c.span));
+                        }
+
+                        let func_id = self.module_builder.declare_function(&full_name);
+                        return self.builder.build_call(func_id, arg_values).map_err(|e| e.into());
                     }
                 }
 
@@ -889,7 +926,7 @@ impl<'a> LowerContext<'a> {
     }
 }
 
-pub fn lower_function(func: &HirFunction, type_ctx: &TypeContext, module_builder: &mut ModuleBuilder) -> Result<TirFunction, TirLowerError> {
+pub fn lower_function(func: &HirFunction, type_ctx: &TypeContext, module_builder: &mut ModuleBuilder, self_ty: Option<Type>) -> Result<TirFunction, TirLowerError> {
     let ret_ty = if let Some(rt) = &func.return_type {
         match rt {
             HirType::Named(_, n) => {
@@ -897,7 +934,7 @@ pub fn lower_function(func: &HirFunction, type_ctx: &TypeContext, module_builder
                 map_type(&ty)?
             }
             _ => {
-                let ty = resolve_hir_type(rt, type_ctx)?;
+                let ty = resolve_hir_type(rt, type_ctx, self_ty.as_ref())?;
                 map_type(&ty)?
             }
         }
@@ -915,7 +952,7 @@ pub fn lower_function(func: &HirFunction, type_ctx: &TypeContext, module_builder
     for p in &func.parameters {
         let ty = match &p.ty {
             HirType::Named(_, n) => tempra_typeck::types::resolve_named_type(n),
-            _ => resolve_hir_type(&p.ty, type_ctx)?,
+            _ => resolve_hir_type(&p.ty, type_ctx, self_ty.as_ref())?,
         };
         let tir_ty = map_type(&ty)?;
         let val_id = ctx.builder.add_param(tir_ty.clone());

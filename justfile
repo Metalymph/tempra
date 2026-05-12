@@ -161,3 +161,10 @@ install-tools:
     cargo install cargo-sweep
     cargo install cargo-cache
     cargo install cargo-bloat
+# --------------------------------------------------
+# PERFORMANCE
+# --------------------------------------------------
+
+# Run VM performance baseline
+perf-vm:
+    cargo test -p tempra-driver --test perf_baseline -- --ignored --nocapture

@@ -123,6 +123,14 @@ fn compile_and_cache_module(source: &str, hash: &[u8; 32], cache_path: &std::pat
     Ok(bc_module)
 }
 
+/// Internal helper for benchmarking and testing the experimental VM pipeline.
+/// This is not a stable API and may change or be removed in future versions.
+pub fn compile_to_bytecode(source: &str, cache_path: &Path) -> Result<tempra_bytecode::BytecodeModule, DriverError> {
+    let hash = crate::cache::compute_source_hash(source);
+    let fingerprint = format!("tempra-{}", env!("CARGO_PKG_VERSION"));
+    compile_and_cache_module(source, &hash, cache_path, &fingerprint)
+}
+
 pub fn run_source_with_args(source: &str, args: &[String]) -> Result<(), DriverError> {
     match run_source_hir(source, args) {
         Ok(_) => Ok(()),

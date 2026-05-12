@@ -90,13 +90,25 @@ impl<'a> Interpreter<'a> {
     fn build_profile(&self) -> VmProfile {
         let stats = match &self.profiling {
             Some(s) => s,
-            None => return VmProfile { function_stats: vec![] },
+            None => return VmProfile { function_stats: vec![], global_opcode_counts: vec![] },
         };
 
         let mut function_stats = Vec::new();
         for (i, s) in stats.stats.iter().enumerate() {
             let func = &self.module.functions[i];
             let is_hot = s.call_count >= stats.options.call_threshold || s.backedge_count >= stats.options.backedge_threshold;
+            
+            let mut top_opcodes: Vec<_> = s.opcode_counts.iter()
+                .enumerate()
+                .filter(|(_, &count)| count > 0)
+                .collect();
+            top_opcodes.sort_by_key(|(_, &count)| std::cmp::Reverse(count));
+            
+            let top_opcodes_named = top_opcodes.iter()
+                .take(5)
+                .map(|&(id, count)| (self.get_opcode_name(id), *count))
+                .collect();
+
             function_stats.push(FunctionProfile {
                 function_id: FunctionId(i as u32),
                 function_name: func.name.clone(),
@@ -104,10 +116,72 @@ impl<'a> Interpreter<'a> {
                 instruction_count: s.instruction_count,
                 backedge_count: s.backedge_count,
                 is_hot,
+                top_opcodes: top_opcodes_named,
             });
         }
 
-        VmProfile { function_stats }
+        VmProfile { 
+            function_stats,
+            global_opcode_counts: stats.global_opcode_counts.clone(),
+        }
+    }
+
+    fn get_opcode_name(&self, id: usize) -> &'static str {
+        match id {
+            0 => "ConstUnit",
+            1 => "ConstBool",
+            2 => "ConstI64",
+            3 => "ConstU64",
+            4 => "ConstF64",
+            5 => "ConstString",
+            6 => "LoadLocal",
+            7 => "StoreLocal",
+            8 => "Pop",
+            9 => "Dup",
+            10 => "AddI64",
+            11 => "SubI64",
+            12 => "MulI64",
+            13 => "DivI64",
+            14 => "AddU64",
+            15 => "SubU64",
+            16 => "MulU64",
+            17 => "DivU64",
+            18 => "AddF64",
+            19 => "SubF64",
+            20 => "MulF64",
+            21 => "DivF64",
+            22 => "Eq",
+            23 => "LtI64",
+            24 => "GtI64",
+            25 => "LtU64",
+            26 => "GtU64",
+            27 => "LtF64",
+            28 => "GtF64",
+            29 => "Not",
+            30 => "And",
+            31 => "Or",
+            32 => "Jump",
+            33 => "JumpIfFalse",
+            34 => "Return",
+            35 => "Unreachable",
+            36 => "Call",
+            37 => "MakeEnum",
+            38 => "Tag",
+            39 => "Unwrap",
+            40 => "MakeArray",
+            41 => "GetIndex",
+            42 => "Slice",
+            43 => "Len",
+            44 => "Size",
+            45 => "Bytes",
+            46 => "MakeStruct",
+            47 => "GetField",
+            48 => "SetField",
+            49 => "ArrayPush",
+            50 => "AddI64LL",
+            51 => "AddI64LC",
+            _ => "Unknown",
+        }
     }
 
     fn execute(&mut self) -> Result<VmValue, VmError> {
@@ -131,7 +205,15 @@ impl<'a> Interpreter<'a> {
             };
 
             if let Some(ref mut prof) = self.profiling {
-                prof.stats[frame_func_id.0 as usize].instruction_count += 1;
+                let stats = &mut prof.stats[frame_func_id.0 as usize];
+                stats.instruction_count += 1;
+                let op_id = instr.opcode_id();
+                if op_id < stats.opcode_counts.len() {
+                    stats.opcode_counts[op_id] += 1;
+                }
+                if op_id < prof.global_opcode_counts.len() {
+                    prof.global_opcode_counts[op_id] += 1;
+                }
             }
 
             match instr {

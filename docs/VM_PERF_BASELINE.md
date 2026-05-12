@@ -27,6 +27,14 @@ Measurements are averaged over 20 iterations after 2 warmup runs.
 
 ## Candidates for Optimization
 
+### Phase 14.20 — VM Profiling & Trace Visibility
+Extended profiling to include global and per-function opcode execution counts. Added `VmProfile::summary()` for human-readable execution reports.
+
+**Observations:**
+- Opcode distribution reveals high density of `LoadLocal/StoreLocal`, suggesting further stack-to-register optimization potential.
+- Superinstructions like `AddI64LC` are clearly visible in the trace, confirming the effectiveness of the peephole optimizer.
+- Minimal overhead confirmed for the disabled path.
+
 ### Phase 14.19 — Hot Function Counters
 Added opt-in profiling infrastructure to track call counts, instruction counts, and loop backedges. This allows the VM to identify "hot" functions and loops based on configurable thresholds.
 

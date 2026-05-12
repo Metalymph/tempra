@@ -124,6 +124,16 @@ fn run_benchmark(name: &str, source: &str) -> PerfMetrics {
     }
     let vm_exec_avg = start_exec.elapsed() / ITERATIONS;
 
+    // 6. Profiling Summary (Run once)
+    let options = tempra_vm::VmOptions {
+        profiling: true,
+        call_threshold: 1, // Capture everything for small benchmarks
+        backedge_threshold: 1,
+    };
+    let (_, profile) = tempra_vm::run_function_profiled(&module, "main", vec![], options).unwrap();
+    println!("\n--- Profiling Summary: {} ---", name);
+    println!("{}", profile.summary());
+
     PerfMetrics {
         case_name: name.to_string(),
         hir_avg,

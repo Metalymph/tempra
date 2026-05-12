@@ -124,6 +124,24 @@ The VM includes optional profiling capabilities to identify "hot" functions and 
 ### Hotness Model
 A function is considered **hot** if its `call_count` or `backedge_count` exceeds a configurable threshold. This metadata is intended to drive future Just-In-Time (JIT) compilation decisions.
 
+## VM Profiling & Trace Visibility (v0.x)
+
+The VM provides detailed execution traces when profiling is enabled:
+- **Opcode Histogram**: Global and per-function execution counts for all 52 opcodes.
+- **Superinstruction Visibility**: Tracks how many times fused instructions (like `AddI64LL`) were executed, helping validate optimizer effectiveness.
+- **Summary Report**: `VmProfile::summary()` generates a human-readable report of hot functions and top instructions.
+
+Example Trace:
+```text
+Hot Functions:
+  main calls=1 instrs=35022 backedges=1000 hot=true
+Global Top Opcodes:
+  LoadLocal: 14007
+  StoreLocal: 12007
+  Jump: 2001
+  AddI64LC: 1000
+```
+
 ## Bytecode Lowering & Optimizations
 
 The TIR-to-Bytecode lowering phase transforms the high-level Typed IR into a sequence of stack operations. To improve execution speed and reduce binary size, the lowerer includes a **Peephole Optimizer**:

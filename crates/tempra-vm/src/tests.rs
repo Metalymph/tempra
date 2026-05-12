@@ -1,7 +1,7 @@
 use super::*;
 use tempra_bytecode::bytecode::BytecodeModule;
-use tempra_bytecode::function::{BytecodeFunction, BytecodeType, LocalId};
-use tempra_bytecode::opcode::BytecodeInstr;
+use tempra_bytecode::function::{BytecodeFunction, BytecodeType, LocalId, FunctionId};
+use tempra_bytecode::opcode::{BytecodeInstr, BYTECODE_OPCODE_COUNT};
 use tempra_bytecode::constant::BytecodeConstant;
 
 #[test]
@@ -251,4 +251,144 @@ fn profile_disabled_default_behavior() {
     let (_, profile) = run_function_profiled(&module, "test", vec![], options).unwrap();
     
     assert!(profile.function_stats.is_empty());
+}
+
+#[test]
+fn opcode_counter_increments() {
+    let mut module = BytecodeModule::new();
+    let c1 = module.add_constant(BytecodeConstant::Int64(1));
+    let mut func = BytecodeFunction::new("test".into(), vec![], BytecodeType::Int64);
+    func.code.push(BytecodeInstr::ConstI64(c1));
+    func.code.push(BytecodeInstr::Return);
+    func.max_stack = 1;
+    module.add_function(func);
+
+    let options = VmOptions { profiling: true, ..Default::default() };
+    let (_, profile) = run_function_profiled(&module, "test", vec![], options).unwrap();
+    
+    let stats = profile.function_stats.iter().find(|s| s.function_name == "test").unwrap();
+    assert_eq!(stats.instruction_count, 2);
+    
+    // ConstI64 id is 2
+    assert_eq!(profile.global_opcode_counts[2], 1);
+    // Return id is 34
+    assert_eq!(profile.global_opcode_counts[34], 1);
+}
+
+#[test]
+fn superinstruction_counter_visible() {
+    let mut module = BytecodeModule::new();
+    let mut func = BytecodeFunction::new("test".into(), vec![BytecodeType::Int64, BytecodeType::Int64], BytecodeType::Int64);
+    func.locals = vec![BytecodeType::Int64, BytecodeType::Int64];
+    // AddI64LL(0, 1)
+    func.code.push(BytecodeInstr::AddI64LL(LocalId(0), LocalId(1)));
+    func.code.push(BytecodeInstr::Return);
+    func.max_stack = 1;
+    module.add_function(func);
+
+    let options = VmOptions { profiling: true, ..Default::default() };
+    let args = vec![VmValue::Int64(10), VmValue::Int64(20)];
+    let (_, profile) = run_function_profiled(&module, "test", args, options).unwrap();
+    
+    // AddI64LL id is 50
+    assert_eq!(profile.global_opcode_counts[50], 1);
+}
+
+#[test]
+fn profile_summary_contains_hot_function() {
+    let mut module = BytecodeModule::new();
+    let mut func = BytecodeFunction::new("hot_loop".into(), vec![], BytecodeType::Unit);
+    func.code.push(BytecodeInstr::Jump(tempra_bytecode::opcode::InstrOffset(0)));
+    module.add_function(func);
+
+    // Manual profile construction to test summary()
+    let profile = VmProfile {
+        function_stats: vec![
+            FunctionProfile {
+                function_id: FunctionId(0),
+                function_name: "hot_loop".to_string(),
+                call_count: 1,
+                instruction_count: 10000,
+                backedge_count: 9999,
+                is_hot: true,
+                top_opcodes: vec![("Jump", 9999)],
+            }
+        ],
+        global_opcode_counts: vec![0; BYTECODE_OPCODE_COUNT],
+    };
+
+    let summary = profile.summary();
+    assert!(summary.contains("hot_loop"));
+    assert!(summary.contains("calls=1 instrs=10000 backedges=9999 hot=true"));
+}
+
+#[test]
+fn opcode_ids_are_unique_and_within_bounds() {
+    use std::collections::HashSet;
+    let mut ids = HashSet::new();
+    
+    // We manually list a representative instance of each opcode
+    // to verify that opcode_id() and BYTECODE_OPCODE_COUNT are in sync.
+    let samples = vec![
+        BytecodeInstr::ConstUnit,
+        BytecodeInstr::ConstBool(true),
+        BytecodeInstr::ConstI64(tempra_bytecode::constant::ConstId(0)),
+        BytecodeInstr::ConstU64(tempra_bytecode::constant::ConstId(0)),
+        BytecodeInstr::ConstF64(tempra_bytecode::constant::ConstId(0)),
+        BytecodeInstr::ConstString(tempra_bytecode::constant::ConstId(0)),
+        BytecodeInstr::LoadLocal(tempra_bytecode::function::LocalId(0)),
+        BytecodeInstr::StoreLocal(tempra_bytecode::function::LocalId(0)),
+        BytecodeInstr::Pop,
+        BytecodeInstr::Dup,
+        BytecodeInstr::AddI64,
+        BytecodeInstr::SubI64,
+        BytecodeInstr::MulI64,
+        BytecodeInstr::DivI64,
+        BytecodeInstr::AddU64,
+        BytecodeInstr::SubU64,
+        BytecodeInstr::MulU64,
+        BytecodeInstr::DivU64,
+        BytecodeInstr::AddF64,
+        BytecodeInstr::SubF64,
+        BytecodeInstr::MulF64,
+        BytecodeInstr::DivF64,
+        BytecodeInstr::Eq,
+        BytecodeInstr::LtI64,
+        BytecodeInstr::GtI64,
+        BytecodeInstr::LtU64,
+        BytecodeInstr::GtU64,
+        BytecodeInstr::LtF64,
+        BytecodeInstr::GtF64,
+        BytecodeInstr::Not,
+        BytecodeInstr::And,
+        BytecodeInstr::Or,
+        BytecodeInstr::Jump(tempra_bytecode::opcode::InstrOffset(0)),
+        BytecodeInstr::JumpIfFalse(tempra_bytecode::opcode::InstrOffset(0)),
+        BytecodeInstr::Return,
+        BytecodeInstr::Unreachable,
+        BytecodeInstr::Call(tempra_bytecode::function::FunctionId(0), 0),
+        BytecodeInstr::MakeEnum(tempra_bytecode::constant::ConstId(0), tempra_bytecode::constant::ConstId(0), 0),
+        BytecodeInstr::Tag,
+        BytecodeInstr::Unwrap(tempra_bytecode::constant::ConstId(0), 0),
+        BytecodeInstr::MakeArray(0),
+        BytecodeInstr::GetIndex,
+        BytecodeInstr::Slice,
+        BytecodeInstr::Len,
+        BytecodeInstr::Size,
+        BytecodeInstr::Bytes,
+        BytecodeInstr::MakeStruct(tempra_bytecode::constant::ConstId(0), tempra_bytecode::constant::ConstId(0), 0),
+        BytecodeInstr::GetField(tempra_bytecode::constant::ConstId(0)),
+        BytecodeInstr::SetField(tempra_bytecode::constant::ConstId(0)),
+        BytecodeInstr::ArrayPush,
+        BytecodeInstr::AddI64LL(tempra_bytecode::function::LocalId(0), tempra_bytecode::function::LocalId(0)),
+        BytecodeInstr::AddI64LC(tempra_bytecode::function::LocalId(0), tempra_bytecode::constant::ConstId(0)),
+    ];
+
+    for instr in samples {
+        let id = instr.opcode_id();
+        assert!(id < BYTECODE_OPCODE_COUNT, "Opcode {:?} id {} out of bounds (max {})", instr, id, BYTECODE_OPCODE_COUNT);
+        assert!(ids.insert(id), "Duplicate opcode id {} for {:?}", id, instr);
+    }
+    
+    assert_eq!(ids.len(), BYTECODE_OPCODE_COUNT, "HashSet size mismatch with BYTECODE_OPCODE_COUNT");
 }

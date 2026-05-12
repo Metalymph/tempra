@@ -27,6 +27,14 @@ Measurements are averaged over 20 iterations after 2 warmup runs.
 
 ## Candidates for Optimization
 
+### Phase 15.0 — Cranelift JIT Prototype
+Introduced `tempra-jit-cranelift`, a prototype JIT compiler supporting hot `Int64` functions. 
+
+**Observations:**
+- Preliminary tests show native execution of simple arithmetic loops is significantly faster than interpreted execution.
+- Successful lowering of stack-based bytecode to Cranelift SSA.
+- Ready for future integration with VM hot function profiling.
+
 ### Phase 14.20 — VM Profiling & Trace Visibility
 Extended profiling to include global and per-function opcode execution counts. Added `VmProfile::summary()` for human-readable execution reports.
 

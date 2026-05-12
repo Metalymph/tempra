@@ -1,0 +1,16 @@
+[package]
+name = "tempra-jit-cranelift"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tempra-bytecode.workspace = true
+tempra-vm.workspace = true
+cranelift = "0.106"
+cranelift-module = "0.106"
+cranelift-jit = "0.106"
+cranelift-frontend = "0.106"
+cranelift-native = "0.106"
+target-lexicon = "0.12"
+anyhow.workspace = true
+thiserror.workspace = true

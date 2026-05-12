@@ -28,7 +28,9 @@ pub enum BytecodeType {
     UInt8,
     Float64,
     String,
-    /// Verifier-only escape hatch for dynamic enum payloads.
+    /// Verifier-only escape hatch for dynamic types (Enums, Structs, Arrays, Slices).
+    /// Used when the bytecode verifier doesn't have enough metadata to perform full static type checking
+    /// for complex user-defined types.
     Any,
 }
 

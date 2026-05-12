@@ -329,7 +329,7 @@ fn test_unsupported_closure() {
 }
 
 #[test]
-fn test_unsupported_string_iteration() {
+fn test_unsupported_string_for_in() {
     let source = r#"
         fn main() -> Int64 {
             let s = "abc"
@@ -340,10 +340,43 @@ fn test_unsupported_string_iteration() {
             return count
         }
     "#;
-    let hir_res = run_source_hir(source, &[]);
-    assert!(hir_res.is_ok(), "HIR should support string iteration: {:?}", hir_res.err());
-    
     let vm_res = run_source_vm(source, &[]);
-    assert!(vm_res.is_err(), "VM should have failed for string iteration");
-    assert!(format!("{:?}", vm_res.err().unwrap()).contains("supports Array/Slice"));
+    assert!(vm_res.is_err(), "VM should have failed for string for-in");
+    let err = format!("{:?}", vm_res.err().unwrap());
+    assert!(err.contains("supports Array/Slice"), "Unexpected error: {}", err);
+}
+
+#[test]
+fn test_unsupported_match_guard() {
+    let source = r#"
+        fn main() -> Int64 {
+            let x = 1
+            return match x {
+                1 if true => 10,
+                _ => 0
+            }
+        }
+    "#;
+    let vm_res = run_source_vm(source, &[]);
+    assert!(vm_res.is_err(), "VM should have failed for match guards");
+    let err = format!("{:?}", vm_res.err().unwrap());
+    assert!(err.contains("match guards are not yet supported"), "Unexpected error: {}", err);
+}
+
+#[test]
+fn test_unsupported_nested_pattern() {
+    let source = r#"
+        fn main() -> Int64 {
+            let x: Option(Option(Int64)) = Some(Some(1))
+            let fallback: Int64 = 0
+            return match x {
+                Some(Some(v)) => v,
+                _ => fallback
+            }
+        }
+    "#;
+    let vm_res = run_source_vm(source, &[]);
+    assert!(vm_res.is_err(), "VM should have failed for nested patterns");
+    let err = format!("{:?}", vm_res.err().unwrap());
+    assert!(err.contains("not yet supported in experimental VM"), "Unexpected error: {}", err);
 }

@@ -54,6 +54,8 @@ The VM uses the `VmValue` enum for all runtime values:
 - `Enum(String, String, Vec<VmValue>)`: Enum variants, represented as `(EnumName, VariantName, Payloads)`. Used for `Option` and `Result`.
 - `Array(Rc<Vec<VmValue>>)`: Reference-counted collection of values.
 - `Slice { parent, start, end }`: A read-only view into a portion of an array or another slice.
+- `Struct { name, fields }`: A named struct with field-value pairs.
+- `Any`: An internal "escape hatch" type used for complex types (Enums, Structs, etc.) during verification.
 
 ## Error Handling
 
@@ -95,6 +97,7 @@ The experimental VM pipeline works as follows:
     - Slicing: `xs[a..b]` creates a view without copying data.
     - Length: `xs.len()` or `xs.len` retrieves the element count.
     - Iteration: `for x in xs` is supported via index-based lowering.
+- **Match Expressions**: Sequential arm checking for literals, wildcards, and variants.
 - **Bytecode Cache**: Persistent storage in `.tempra/cache/`.
 
 

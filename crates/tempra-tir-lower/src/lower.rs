@@ -427,7 +427,10 @@ impl<'a> LowerContext<'a> {
 
         let element_ty = match &iterable_ty {
             Type::Array(inner) | Type::Slice(inner) => inner.as_ref().clone(),
-            _ => unreachable!(),
+            _ => return Err(TirLowerError::UnsupportedExpr(
+                format!("for-in currently only supports Array/Slice in experimental VM, found {}", iterable_ty),
+                f.iterable.span(),
+            )),
         };
 
         // 1. Lower iterable and store in a hidden slot
@@ -534,7 +537,10 @@ impl<'a> LowerContext<'a> {
 
         let element_ty = match &iterable_ty {
             Type::Array(inner) | Type::Slice(inner) => inner.as_ref().clone(),
-            _ => unreachable!(),
+            _ => return Err(TirLowerError::UnsupportedExpr(
+                format!("for-expr currently only supports Array/Slice in experimental VM, found {}", iterable_ty),
+                f.iterable.span(),
+            )),
         };
         
         let tir_element_ty = map_type(&element_ty)?;
@@ -995,7 +1001,7 @@ impl<'a> LowerContext<'a> {
             HirExpression::Block(b) => self.lower_block_expr(b),
             HirExpression::For(f) => self.lower_for_expr(f),
             HirExpression::Match(m) => self.lower_match(m),
-            _ => Err(TirLowerError::UnsupportedExpr(format!("Unsupported expression: {:?}", expr), expr.span())),
+            _ => Err(TirLowerError::UnsupportedExpr(format!("Expression of type {:?} is not yet supported in experimental VM lowering", expr), expr.span())),
         }
     }
 
@@ -1164,6 +1170,10 @@ impl<'a> LowerContext<'a> {
         // 1. Infer and verify result type from arms
         let mut match_ty = Type::Unknown;
         for arm in &m.arms {
+            if arm.guard.is_some() {
+                return Err(TirLowerError::UnsupportedExpr("match guards are not yet supported in experimental VM".into(), arm.value.span()));
+            }
+
             // Temporary bindings for inference
             let old_locals_inf = self.locals.clone();
             self.bind_pattern_for_inference(&arm.pattern, &scrutinee_ty)?;
@@ -1235,7 +1245,7 @@ impl<'a> LowerContext<'a> {
                     self.builder.build_condbr(cond, then_block, next_arm_block)?;
                     seen_variants.insert(name.clone());
                 }
-                _ => return Err(TirLowerError::UnsupportedPattern(format!("{:?}", arm.pattern), arm.pattern.span())),
+                _ => return Err(TirLowerError::UnsupportedPattern(format!("Pattern {:?} is not yet supported in experimental VM", arm.pattern), arm.pattern.span())),
             }
 
             // Body
@@ -1399,7 +1409,7 @@ impl<'a> LowerContext<'a> {
                             self.locals.insert(name.clone(), (TirSlotId(0), tir_payload_ty, false));
                         }
                         HirPattern::Wildcard(_) => {}
-                        _ => return Err(TirLowerError::UnsupportedPattern("Nested patterns not supported in inference".into(), payload_pat.span())),
+                        _ => return Err(TirLowerError::UnsupportedPattern("Nested patterns are not yet supported in experimental VM".into(), payload_pat.span())),
                     }
                 }
             }
@@ -1412,7 +1422,7 @@ impl<'a> LowerContext<'a> {
                             self.locals.insert(name.clone(), (TirSlotId(0), tir_payload_ty, false));
                         }
                         HirPattern::Wildcard(_) => {}
-                        _ => return Err(TirLowerError::UnsupportedPattern("Nested patterns not supported in inference".into(), payload_pat.span())),
+                        _ => return Err(TirLowerError::UnsupportedPattern("Nested patterns are not yet supported in experimental VM".into(), payload_pat.span())),
                     }
                 }
             }

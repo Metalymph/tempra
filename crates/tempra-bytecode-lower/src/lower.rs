@@ -101,7 +101,9 @@ impl<'a> FunctionLowerer<'a> {
 
         // Map slot types
         for (slot_id, local) in &self.slot_to_local {
-            local_types[local.0 as usize] = *self.slot_types.get(slot_id).unwrap();
+            let ty = self.slot_types.get(slot_id)
+                .ok_or_else(|| BytecodeLowerError::UnknownSlot(format!("${}", slot_id.0)))?;
+            local_types[local.0 as usize] = *ty;
         }
 
         // Map SSA values types

@@ -53,6 +53,16 @@ struct VerificationState {
     locals_init: Vec<bool>,
 }
 
+impl VerificationState {
+    fn pop_ty(&mut self) -> Result<BytecodeType, BytecodeVerifyError> {
+        self.stack.pop().ok_or(BytecodeVerifyError::StackUnderflow)
+    }
+
+    fn peek_ty(&self) -> Result<BytecodeType, BytecodeVerifyError> {
+        self.stack.last().cloned().ok_or(BytecodeVerifyError::StackUnderflow)
+    }
+}
+
 pub fn verify_module(module: &BytecodeModule) -> Result<(), BytecodeVerifyError> {
     for i in 0..module.functions.len() {
         verify_function(module, FunctionId(i as u32))?;
@@ -88,7 +98,7 @@ pub fn verify_function(module: &BytecodeModule, func_id: FunctionId) -> Result<(
     let mut observed_max_stack = 0;
 
     while let Some(pc) = worklist.pop_front() {
-        let mut state = states.get(&pc).unwrap().clone();
+        let mut state = states.get(&pc).ok_or(BytecodeVerifyError::InvalidJumpTarget(pc))?.clone();
         
         // Process instructions starting from pc until a terminator or branch
         let mut current_pc = pc;
@@ -133,16 +143,16 @@ pub fn verify_function(module: &BytecodeModule, func_id: FunctionId) -> Result<(
                     if id.0 >= func.locals.len() as u32 {
                         return Err(BytecodeVerifyError::InvalidLocalId(*id));
                     }
-                    let val_ty = state.stack.pop().unwrap();
+                    let val_ty = state.pop_ty()?;
                     let local_ty = func.locals[id.0 as usize];
                     if val_ty != local_ty && val_ty != BytecodeType::Any && local_ty != BytecodeType::Any {
                         return Err(BytecodeVerifyError::StackTypeMismatch { expected: local_ty, found: val_ty });
                     }
                     state.locals_init[id.0 as usize] = true;
                 }
-                BytecodeInstr::Pop => { state.stack.pop(); }
+                BytecodeInstr::Pop => { state.pop_ty()?; }
                 BytecodeInstr::Dup => {
-                    let ty = *state.stack.last().unwrap();
+                    let ty = state.peek_ty()?;
                     state.stack.push(ty);
                 }
                 BytecodeInstr::AddI64 | BytecodeInstr::SubI64 | BytecodeInstr::MulI64 | BytecodeInstr::DivI64 => {
@@ -155,8 +165,8 @@ pub fn verify_function(module: &BytecodeModule, func_id: FunctionId) -> Result<(
                     check_stack_binary(&mut state.stack, BytecodeType::Float64, BytecodeType::Float64)?;
                 }
                 BytecodeInstr::Eq => {
-                    let rhs = state.stack.pop().unwrap();
-                    let lhs = state.stack.pop().unwrap();
+                    let rhs = state.pop_ty()?;
+                    let lhs = state.pop_ty()?;
                     if lhs != rhs && lhs != BytecodeType::Any && rhs != BytecodeType::Any {
                         return Err(BytecodeVerifyError::StackTypeMismatch { expected: lhs, found: rhs });
                     }
@@ -172,7 +182,7 @@ pub fn verify_function(module: &BytecodeModule, func_id: FunctionId) -> Result<(
                     check_stack_binary(&mut state.stack, BytecodeType::Float64, BytecodeType::Bool)?;
                 }
                 BytecodeInstr::Not => {
-                    let ty = state.stack.pop().unwrap();
+                    let ty = state.pop_ty()?;
                     if ty != BytecodeType::Bool && ty != BytecodeType::Any {
                         return Err(BytecodeVerifyError::StackTypeMismatch { expected: BytecodeType::Bool, found: ty });
                     }
@@ -186,7 +196,7 @@ pub fn verify_function(module: &BytecodeModule, func_id: FunctionId) -> Result<(
                     break; // End of block
                 }
                 BytecodeInstr::JumpIfFalse(target) => {
-                    let ty = state.stack.pop().unwrap();
+                    let ty = state.pop_ty()?;
                     if ty != BytecodeType::Bool && ty != BytecodeType::Any {
                         return Err(BytecodeVerifyError::StackTypeMismatch { expected: BytecodeType::Bool, found: ty });
                     }
@@ -198,13 +208,13 @@ pub fn verify_function(module: &BytecodeModule, func_id: FunctionId) -> Result<(
                 BytecodeInstr::Return => {
                     if func.ret == BytecodeType::Unit {
                         if !state.stack.is_empty() {
-                            return Err(BytecodeVerifyError::ReturnTypeMismatch { expected: BytecodeType::Unit, found: Some(*state.stack.last().unwrap()) });
+                            return Err(BytecodeVerifyError::ReturnTypeMismatch { expected: BytecodeType::Unit, found: Some(state.peek_ty()?) });
                         }
                     } else {
                         if state.stack.len() != 1 {
                              return Err(BytecodeVerifyError::ReturnTypeMismatch { expected: func.ret, found: state.stack.last().cloned() });
                         }
-                        let found = state.stack.pop().unwrap();
+                        let found = state.pop_ty()?;
                         if found != func.ret && found != BytecodeType::Any && func.ret != BytecodeType::Any {
                             return Err(BytecodeVerifyError::ReturnTypeMismatch { expected: func.ret, found: Some(found) });
                         }
@@ -222,7 +232,7 @@ pub fn verify_function(module: &BytecodeModule, func_id: FunctionId) -> Result<(
                     }
                     // Check argument types
                     for expected in target.params.iter().rev() {
-                        let found = state.stack.pop().unwrap();
+                        let found = state.pop_ty()?;
                         if found != *expected && *expected != BytecodeType::Any && found != BytecodeType::Any {
                             return Err(BytecodeVerifyError::StackTypeMismatch { expected: *expected, found });
                         }
@@ -233,19 +243,19 @@ pub fn verify_function(module: &BytecodeModule, func_id: FunctionId) -> Result<(
                 }
                 BytecodeInstr::MakeEnum(_, _, count) => {
                     for _ in 0..*count {
-                        state.stack.pop().unwrap(); // pop payloads
+                        state.pop_ty()?; // pop payloads
                     }
                     state.stack.push(BytecodeType::Any); // pushes Any or Enum
                 }
                 BytecodeInstr::Tag => {
-                    let found = state.stack.pop().unwrap();
+                    let found = state.pop_ty()?;
                     if found != BytecodeType::Any {
                         return Err(BytecodeVerifyError::StackTypeMismatch { expected: BytecodeType::Any, found });
                     }
                     state.stack.push(BytecodeType::String);
                 }
                 BytecodeInstr::Unwrap(_, _) => {
-                    let found = state.stack.pop().unwrap();
+                    let found = state.pop_ty()?;
                     if found != BytecodeType::Any {
                         return Err(BytecodeVerifyError::StackTypeMismatch { expected: BytecodeType::Any, found });
                     }
@@ -253,47 +263,47 @@ pub fn verify_function(module: &BytecodeModule, func_id: FunctionId) -> Result<(
                 }
                 BytecodeInstr::MakeArray(count) => {
                     for _ in 0..*count {
-                        state.stack.pop().unwrap();
+                        state.pop_ty()?;
                     }
                     state.stack.push(BytecodeType::Any);
                 }
                 BytecodeInstr::GetIndex => {
-                    state.stack.pop().unwrap(); // pop index
-                    state.stack.pop().unwrap(); // pop object
+                    state.pop_ty()?; // pop index
+                    state.pop_ty()?; // pop object
                     state.stack.push(BytecodeType::Any);
                 }
                 BytecodeInstr::Slice => {
-                    state.stack.pop().unwrap(); // pop end
-                    state.stack.pop().unwrap(); // pop start
-                    state.stack.pop().unwrap(); // pop object
+                    state.pop_ty()?; // pop end
+                    state.pop_ty()?; // pop start
+                    state.pop_ty()?; // pop object
                     state.stack.push(BytecodeType::Any);
                 }
                 BytecodeInstr::Len | BytecodeInstr::Size => {
-                    state.stack.pop().unwrap(); // pop object
+                    state.pop_ty()?; // pop object
                     state.stack.push(BytecodeType::Int64);
                 }
                 BytecodeInstr::Bytes => {
-                    state.stack.pop().unwrap(); // pop object
+                    state.pop_ty()?; // pop object
                     state.stack.push(BytecodeType::Any);
                 }
                 BytecodeInstr::MakeStruct(_, _, count) => {
                     for _ in 0..*count {
-                        state.stack.pop().unwrap();
+                        state.pop_ty()?;
                     }
                     state.stack.push(BytecodeType::Any);
                 }
                 BytecodeInstr::GetField(_) => {
-                    state.stack.pop().unwrap(); // pop object
+                    state.pop_ty()?; // pop object
                     state.stack.push(BytecodeType::Any);
                 }
                 BytecodeInstr::SetField(_) => {
-                    state.stack.pop().unwrap(); // pop value
-                    state.stack.pop().unwrap(); // pop object
+                    state.pop_ty()?; // pop value
+                    state.pop_ty()?; // pop object
                     state.stack.push(BytecodeType::Any);
                 }
                 BytecodeInstr::ArrayPush => {
-                    state.stack.pop().unwrap(); // pop value
-                    state.stack.pop().unwrap(); // pop array
+                    state.pop_ty()?; // pop value
+                    state.pop_ty()?; // pop array
                     state.stack.push(BytecodeType::Any);
                 }
             }

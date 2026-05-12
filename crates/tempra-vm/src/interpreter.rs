@@ -68,43 +68,43 @@ impl<'a> Interpreter<'a> {
             };
 
             // Increment IP before execution (jumps will override this)
-            self.call_stack.last_mut().unwrap().ip += 1;
+            self.call_stack.last_mut().ok_or(VmError::MissingReturn)?.ip += 1;
 
             match instr {
                 BytecodeInstr::ConstUnit => self.push(VmValue::Unit)?,
                 BytecodeInstr::ConstBool(b) => self.push(VmValue::Bool(b))?,
                 BytecodeInstr::ConstI64(id) => {
-                    let val = match &self.module.constants[id.0 as usize] {
-                        BytecodeConstant::Int64(i) => VmValue::Int64(*i),
-                        _ => unreachable!("Verifier should ensure type safety"),
+                    let val = match self.module.constants.get(id.0 as usize) {
+                        Some(BytecodeConstant::Int64(i)) => VmValue::Int64(*i),
+                        _ => return Err(VmError::InvalidConstant(id.0)),
                     };
                     self.push(val)?;
                 }
                 BytecodeInstr::ConstU64(id) => {
-                    let val = match &self.module.constants[id.0 as usize] {
-                        BytecodeConstant::UInt64(u) => VmValue::UInt64(*u),
-                        _ => unreachable!("Verifier should ensure type safety"),
+                    let val = match self.module.constants.get(id.0 as usize) {
+                        Some(BytecodeConstant::UInt64(u)) => VmValue::UInt64(*u),
+                        _ => return Err(VmError::InvalidConstant(id.0)),
                     };
                     self.push(val)?;
                 }
                 BytecodeInstr::ConstF64(id) => {
-                    let val = match &self.module.constants[id.0 as usize] {
-                        BytecodeConstant::Float64(f) => VmValue::Float64(*f),
-                        _ => unreachable!("Verifier should ensure type safety"),
+                    let val = match self.module.constants.get(id.0 as usize) {
+                        Some(BytecodeConstant::Float64(f)) => VmValue::Float64(*f),
+                        _ => return Err(VmError::InvalidConstant(id.0)),
                     };
                     self.push(val)?;
                 }
                 BytecodeInstr::ConstString(id) => {
-                    let val = match &self.module.constants[id.0 as usize] {
-                        BytecodeConstant::String(s) => VmValue::String(s.clone()),
-                        _ => unreachable!("Verifier should ensure type safety"),
+                    let val = match self.module.constants.get(id.0 as usize) {
+                        Some(BytecodeConstant::String(s)) => VmValue::String(s.clone()),
+                        _ => return Err(VmError::InvalidConstant(id.0)),
                     };
                     self.push(val)?;
                 }
 
                 BytecodeInstr::LoadLocal(id) => {
                     let val = {
-                        let frame = self.call_stack.last().unwrap();
+                        let frame = self.call_stack.last().ok_or(VmError::MissingReturn)?;
                         frame.locals.get(id.0 as usize)
                             .ok_or(VmError::LocalOutOfBounds(id.0))?
                             .clone()
@@ -114,7 +114,7 @@ impl<'a> Interpreter<'a> {
                 }
                 BytecodeInstr::StoreLocal(id) => {
                     let val = self.pop()?;
-                    let frame = self.call_stack.last_mut().unwrap();
+                    let frame = self.call_stack.last_mut().ok_or(VmError::MissingReturn)?;
                     if id.0 as usize >= frame.locals.len() {
                         return Err(VmError::LocalOutOfBounds(id.0));
                     }
@@ -246,12 +246,12 @@ impl<'a> Interpreter<'a> {
                 }
 
                 BytecodeInstr::Jump(offset) => {
-                    self.call_stack.last_mut().unwrap().ip = offset.0;
+                    self.call_stack.last_mut().ok_or(VmError::MissingReturn)?.ip = offset.0;
                 }
                 BytecodeInstr::JumpIfFalse(offset) => {
                     let cond = self.pop_bool()?;
                     if !cond {
-                        self.call_stack.last_mut().unwrap().ip = offset.0;
+                        self.call_stack.last_mut().ok_or(VmError::MissingReturn)?.ip = offset.0;
                     }
                 }
 

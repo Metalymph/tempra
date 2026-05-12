@@ -352,6 +352,9 @@ pub fn decode_artifact(bytes: &[u8]) -> Result<BytecodeCacheArtifact, BytecodeSe
     // Module
     let mut module = BytecodeModule::new();
     module.version = read_u32(&mut cursor)?;
+    if module.version != 1 {
+        return Err(BytecodeSerializeError::UnsupportedVersion);
+    }
     
     // Constants
     let const_len = read_u32(&mut cursor)?;

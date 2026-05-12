@@ -14,17 +14,18 @@ The following features are verified via differential testing (`differential_test
 - **Fallible Operations**: `Result<T, E>` and `Option<T>` support, including the `?` propagation operator.
 - **Standard Methods**: `.len()` on Arrays/Slices/Strings, `.size()` and `.bytes()` on Strings.
 - **Type Narrowing**: `if x is Some(val)` style narrowing and payload unwrapping.
-- **Caching**: Bytecode caching is implemented and verified for integrity and invalidation.
+- **`match` expressions**: Support for sequential arm matching on literals, wildcards, and core enum variants (`Option`/`Result`).
+- **Caching**: Bytecode caching is implemented and verified for integrity, versioning, and invalidation.
 
 ## Known Limitations (VM)
 
 The following features are currently **unsupported** or have known issues in the experimental VM:
 
-- **`match` expressions**: Not yet supported in TIR lowering. Use `if x is Variant` as a temporary workaround.
 - **Closures**: Basic closures might work, but recursive closures or complex captures are largely untested or known to fail in the driver's TIR lowerer.
+- **Match Guards**: `match x { 1 if cond => ... }` is not yet supported in VM.
+- **Nested Patterns**: `match x { Some(Some(v)) => ... }` is not yet supported.
 - **String Iteration**: `for ch in string` is not yet supported in VM.
 - **Generic Methods**: Only simple methods on concrete or fully resolved struct types are supported.
-- **Complex Pattern Matching**: Multi-payload variants or nested patterns are not yet supported.
 - **CLI Arguments**: The VM runner does not yet pass CLI arguments to `main`.
 
 ## Known Issues (Reference/HIR)
@@ -33,4 +34,4 @@ The following features are currently **unsupported** or have known issues in the
 
 ## Verification Status
 
-All 14 differential tests and cache lifecycle tests are passing as of May 12, 2026.
+All 19 differential tests and cache lifecycle tests are passing as of May 12, 2026.

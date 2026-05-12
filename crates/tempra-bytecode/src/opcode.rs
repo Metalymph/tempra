@@ -6,7 +6,7 @@ use crate::error::BytecodeError;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InstrOffset(pub usize);
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum BytecodeInstr {
     // Constants
     ConstUnit,

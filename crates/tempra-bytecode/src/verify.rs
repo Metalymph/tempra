@@ -2,7 +2,7 @@ use std::collections::{HashMap, VecDeque};
 use thiserror::Error;
 use crate::bytecode::BytecodeModule;
 use crate::constant::ConstId;
-use crate::function::{FunctionId, LocalId, BytecodeType};
+use crate::function::{FunctionId, LocalId, BytecodeFunction, BytecodeType};
 use crate::opcode::{BytecodeInstr, stack_effect};
 
 #[derive(Debug, Error, PartialEq, Clone)]
@@ -73,7 +73,11 @@ pub fn verify_module(module: &BytecodeModule) -> Result<(), BytecodeVerifyError>
 pub fn verify_function(module: &BytecodeModule, func_id: FunctionId) -> Result<(), BytecodeVerifyError> {
     let func = module.functions.get(func_id.0 as usize)
         .ok_or(BytecodeVerifyError::InvalidFunctionId(func_id))?;
+    
+    verify_function_direct(module, func)
+}
 
+pub fn verify_function_direct(module: &BytecodeModule, func: &BytecodeFunction) -> Result<(), BytecodeVerifyError> {
     if func.code.is_empty() {
         return Ok(());
     }
@@ -114,13 +118,13 @@ pub fn verify_function(module: &BytecodeModule, func_id: FunctionId) -> Result<(
             }
 
             // Perform instruction-specific checks and update stack types
-            match instr {
+            match *instr {
                 BytecodeInstr::ConstUnit => state.stack.push(BytecodeType::Unit),
                 BytecodeInstr::ConstBool(_) => state.stack.push(BytecodeType::Bool),
                 BytecodeInstr::ConstI64(id) | BytecodeInstr::ConstU64(id) | 
                 BytecodeInstr::ConstF64(id) | BytecodeInstr::ConstString(id) => {
                     let constant = module.constants.get(id.0 as usize)
-                        .ok_or(BytecodeVerifyError::InvalidConstId(*id))?;
+                        .ok_or(BytecodeVerifyError::InvalidConstId(id))?;
                     let ty = match constant {
                         crate::constant::BytecodeConstant::Int64(_) => BytecodeType::Int64,
                         crate::constant::BytecodeConstant::UInt64(_) => BytecodeType::UInt64,
@@ -132,16 +136,16 @@ pub fn verify_function(module: &BytecodeModule, func_id: FunctionId) -> Result<(
                 }
                 BytecodeInstr::LoadLocal(id) => {
                     if id.0 >= func.locals.len() as u32 {
-                        return Err(BytecodeVerifyError::InvalidLocalId(*id));
+                        return Err(BytecodeVerifyError::InvalidLocalId(id));
                     }
                     if !state.locals_init[id.0 as usize] {
-                        return Err(BytecodeVerifyError::LocalNotInitialized(*id));
+                        return Err(BytecodeVerifyError::LocalNotInitialized(id));
                     }
                     state.stack.push(func.locals[id.0 as usize]);
                 }
                 BytecodeInstr::StoreLocal(id) => {
                     if id.0 >= func.locals.len() as u32 {
-                        return Err(BytecodeVerifyError::InvalidLocalId(*id));
+                        return Err(BytecodeVerifyError::InvalidLocalId(id));
                     }
                     let val_ty = state.pop_ty()?;
                     let local_ty = func.locals[id.0 as usize];
@@ -226,15 +230,16 @@ pub fn verify_function(module: &BytecodeModule, func_id: FunctionId) -> Result<(
                 }
                 BytecodeInstr::Call(id, argc) => {
                     let target = module.functions.get(id.0 as usize)
-                        .ok_or(BytecodeVerifyError::InvalidFunctionId(*id))?;
-                    if target.params.len() != *argc as usize {
-                        return Err(BytecodeVerifyError::CallArityMismatch { id: *id, expected: target.params.len() as u16, found: *argc });
+                        .ok_or(BytecodeVerifyError::InvalidFunctionId(id))?;
+                    if target.params.len() != argc as usize {
+                        return Err(BytecodeVerifyError::CallArityMismatch { id: id, expected: target.params.len() as u16, found: argc });
                     }
                     // Check argument types
-                    for expected in target.params.iter().rev() {
+                    for expected_ref in target.params.iter().rev() {
+                        let expected = *expected_ref;
                         let found = state.pop_ty()?;
-                        if found != *expected && *expected != BytecodeType::Any && found != BytecodeType::Any {
-                            return Err(BytecodeVerifyError::StackTypeMismatch { expected: *expected, found });
+                        if found != expected && expected != BytecodeType::Any && found != BytecodeType::Any {
+                            return Err(BytecodeVerifyError::StackTypeMismatch { expected, found });
                         }
                     }
                     if target.ret != BytecodeType::Unit {
@@ -242,7 +247,7 @@ pub fn verify_function(module: &BytecodeModule, func_id: FunctionId) -> Result<(
                     }
                 }
                 BytecodeInstr::MakeEnum(_, _, count) => {
-                    for _ in 0..*count {
+                    for _ in 0..count {
                         state.pop_ty()?; // pop payloads
                     }
                     state.stack.push(BytecodeType::Any); // pushes Any or Enum
@@ -262,7 +267,7 @@ pub fn verify_function(module: &BytecodeModule, func_id: FunctionId) -> Result<(
                     state.stack.push(BytecodeType::Any); // pushes payload
                 }
                 BytecodeInstr::MakeArray(count) => {
-                    for _ in 0..*count {
+                    for _ in 0..count {
                         state.pop_ty()?;
                     }
                     state.stack.push(BytecodeType::Any);
@@ -287,7 +292,7 @@ pub fn verify_function(module: &BytecodeModule, func_id: FunctionId) -> Result<(
                     state.stack.push(BytecodeType::Any);
                 }
                 BytecodeInstr::MakeStruct(_, _, count) => {
-                    for _ in 0..*count {
+                    for _ in 0..count {
                         state.pop_ty()?;
                     }
                     state.stack.push(BytecodeType::Any);

@@ -99,6 +99,16 @@ The experimental VM pipeline works as follows:
     - Iteration: `for x in xs` is supported via index-based lowering.
 - **Match Expressions**: Sequential arm checking for literals, wildcards, and variants.
 - **Bytecode Cache**: Persistent storage in `.tempra/cache/`.
+- **Peephole Optimization**: Conservative post-pass to eliminate redundant `StoreLocal/LoadLocal` pairs for intermediate temporary values.
+
+## Bytecode Lowering & Optimizations
+
+The TIR-to-Bytecode lowering phase transforms the high-level Typed IR into a sequence of stack operations. To improve execution speed and reduce binary size, the lowerer includes a **Peephole Optimizer**:
+
+1. **Pattern Matching**: The optimizer scans for adjacent instruction sequences like `StoreLocal(tmp) -> LoadLocal(tmp)`.
+2. **Temp Local Analysis**: It only optimizes "temporary" locals (those generated for intermediate computations). User-defined variables and parameters are never removed to preserve debugging fidelity and program semantics.
+3. **Control Flow Integrity**: The optimizer identifies jump targets and only applies transformations within safe instruction ranges. It automatically fixes up all jump offsets when instructions are removed.
+4. **Safety Verification**: Every optimized function is re-verified by the Bytecode Verifier. If verification fails for any reason (e.g., stack depth mismatch), the VM automatically falls back to the unoptimized version of that function.
 
 
 ## Non-Goals (v0)

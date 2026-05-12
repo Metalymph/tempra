@@ -35,8 +35,8 @@ fn test_lower_const_return_i64() {
     let disasm = disassemble_module(&bc_module);
     
     assert!(disasm.contains("ConstI64 #0"));
-    assert!(disasm.contains("StoreLocal $0"));
-    assert!(disasm.contains("LoadLocal $0"));
+    assert!(!disasm.contains("StoreLocal $0")); // Optimized away
+    assert!(!disasm.contains("LoadLocal $0"));  // Optimized away
     assert!(disasm.contains("Return"));
 }
 
@@ -76,8 +76,8 @@ fn test_lower_add_i64() {
     assert!(disasm.contains("LoadLocal $0"));
     assert!(disasm.contains("LoadLocal $1"));
     assert!(disasm.contains("AddI64"));
-    assert!(disasm.contains("StoreLocal $2"));
-    assert!(disasm.contains("LoadLocal $2"));
+    assert!(!disasm.contains("StoreLocal $2")); // Optimized away
+    assert!(!disasm.contains("LoadLocal $2"));  // Optimized away
     assert!(disasm.contains("Return"));
 }
 
@@ -159,4 +159,43 @@ fn test_unsupported_make_error() {
 
     let result = lower_tir_module(&module);
     assert!(result.is_err());
+}
+
+#[test]
+fn test_peephole_preserves_user_slots() {
+    let mut module = TirModule::default();
+    let mut func = TirFunction {
+        id: TirFunctionId(0),
+        name: "test".into(),
+        params: vec![],
+        return_type: TirType::Unit,
+        blocks: vec![],
+        next_value_id: 3,
+        next_block_id: 1,
+        next_slot_id: 1,
+        debug_slots: Default::default(),
+    };
+    
+    let s0 = TirSlotId(0);
+    let v0 = TirValueId(0);
+    let v1 = TirValueId(1);
+    
+    func.blocks.push(TirBlock {
+        id: TirBlockId(0),
+        instrs: vec![
+            TirInstr::Slot(s0, TirType::Int64),
+            TirInstr::Const(v0, TirConst::Int64(10)),
+            TirInstr::Store(s0, v0),
+            TirInstr::Load(v1, s0),
+        ],
+        terminator: Some(TirTerminator::Ret(None)),
+    });
+    module.functions.push(func);
+
+    let bc_module = lower_tir_module(&module).unwrap();
+    let disasm = disassemble_module(&bc_module);
+    
+    // Slots are NOT optimized away because they are user-visible
+    assert!(disasm.contains("StoreLocal $0"));
+    assert!(disasm.contains("LoadLocal $0"));
 }

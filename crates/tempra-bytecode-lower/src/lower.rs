@@ -40,10 +40,17 @@ fn lower_function(tir_func: &TirFunction, bc_module: &mut BytecodeModule) -> Res
         jump_fixups: Vec::new(),
         current_stack: 0,
         max_stack: 0,
+        first_temp_local: 0,
     };
 
     lowerer.lower()?;
-    Ok(lowerer.bc_func)
+    let first_temp_local = lowerer.first_temp_local;
+    
+    let mut bc_func = lowerer.bc_func;
+    // Call peephole optimizer
+    crate::peephole::optimize_function(&mut bc_func, bc_module, first_temp_local);
+    
+    Ok(bc_func)
 }
 
 struct FunctionLowerer<'a> {
@@ -57,6 +64,7 @@ struct FunctionLowerer<'a> {
     jump_fixups: Vec<(usize, TirBlockId)>, 
     current_stack: u32,
     max_stack: u32,
+    first_temp_local: u32,
 }
 
 impl<'a> FunctionLowerer<'a> {
@@ -79,6 +87,7 @@ impl<'a> FunctionLowerer<'a> {
         }
 
         // 3. Map all other TirValueId to temporary locals
+        self.first_temp_local = next_local;
         for block in &self.tir_func.blocks {
             for instr in &block.instrs {
                 if let Some(id) = get_instr_res_id(instr) {

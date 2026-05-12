@@ -442,6 +442,79 @@ impl<'a> Interpreter<'a> {
                         return Err(VmError::Message("Expected String for .bytes()".into()));
                     }
                 }
+                BytecodeInstr::MakeStruct(name_id, fields_id, count) => {
+                    let mut fields = Vec::with_capacity(count as usize);
+                    for _ in 0..count {
+                        fields.push(self.pop()?);
+                    }
+                    fields.reverse();
+                    
+                    let name = match self.module.constants.get(name_id.0 as usize) {
+                        Some(tempra_bytecode::constant::BytecodeConstant::String(s)) => s,
+                        _ => return Err(VmError::InvalidConstant(name_id.0)),
+                    };
+                        
+                    let field_names = match self.module.constants.get(fields_id.0 as usize) {
+                        Some(tempra_bytecode::constant::BytecodeConstant::FieldList(fs)) => fs,
+                        _ => return Err(VmError::InvalidConstant(fields_id.0)),
+                    };
+                    
+                    if field_names.len() != count as usize {
+                        return Err(VmError::Message("MakeStruct field count mismatch".into()));
+                    }
+                    
+                    let mut named_fields = Vec::with_capacity(count as usize);
+                    for (i, name) in field_names.iter().enumerate() {
+                        named_fields.push((name.clone(), fields[i].clone()));
+                    }
+                    
+                    self.push(VmValue::Struct {
+                        name: name.to_string(),
+                        fields: named_fields,
+                    })?;
+                }
+                BytecodeInstr::GetField(name_id) => {
+                    let field_name = match self.module.constants.get(name_id.0 as usize) {
+                        Some(tempra_bytecode::constant::BytecodeConstant::String(s)) => s,
+                        _ => return Err(VmError::InvalidConstant(name_id.0)),
+                    };
+                    let object = self.pop()?;
+                    
+                    if let VmValue::Struct { name: _, fields } = object {
+                        if let Some((_, val)) = fields.iter().find(|(k, _)| k == field_name) {
+                            self.push(val.clone())?;
+                        } else {
+                            return Err(VmError::Message(format!("Unknown field: {}", field_name)));
+                        }
+                    } else {
+                        return Err(VmError::Message("Expected Struct for field access".into()));
+                    }
+                }
+                BytecodeInstr::SetField(name_id) => {
+                    let field_name = match self.module.constants.get(name_id.0 as usize) {
+                        Some(tempra_bytecode::constant::BytecodeConstant::String(s)) => s,
+                        _ => return Err(VmError::InvalidConstant(name_id.0)),
+                    };
+                    let new_val = self.pop()?;
+                    let object = self.pop()?;
+                    
+                    if let VmValue::Struct { name, mut fields } = object {
+                        let mut found = false;
+                        for (k, v) in fields.iter_mut() {
+                            if k == field_name {
+                                *v = new_val.clone();
+                                found = true;
+                                break;
+                            }
+                        }
+                        if !found {
+                            return Err(VmError::Message(format!("Unknown field: {}", field_name)));
+                        }
+                        self.push(VmValue::Struct { name, fields })?;
+                    } else {
+                        return Err(VmError::Message("Expected Struct for field set".into()));
+                    }
+                }
                 BytecodeInstr::Unreachable => return Err(VmError::UnreachableExecuted),
             }
         }

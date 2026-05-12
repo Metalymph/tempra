@@ -17,6 +17,7 @@ pub enum BytecodeConstant {
     UInt64(u64),
     Float64(f64),
     String(String),
+    FieldList(Vec<String>),
 }
 
 impl fmt::Display for BytecodeConstant {
@@ -28,6 +29,7 @@ impl fmt::Display for BytecodeConstant {
             BytecodeConstant::UInt64(u) => write!(f, "{}", u),
             BytecodeConstant::Float64(v) => write!(f, "{}", v),
             BytecodeConstant::String(s) => write!(f, "{:?}", s),
+            BytecodeConstant::FieldList(fs) => write!(f, "fields {:?}", fs),
         }
     }
 }

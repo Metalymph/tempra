@@ -140,6 +140,13 @@ pub fn encode_artifact(artifact: &BytecodeCacheArtifact) -> Result<Vec<u8>, Byte
                 buf.write_all(&[5])?;
                 write_string(&mut buf, s)?;
             }
+            BytecodeConstant::FieldList(fs) => {
+                buf.write_all(&[6])?;
+                write_u32(&mut buf, fs.len() as u32)?;
+                for f in fs {
+                    write_string(&mut buf, f)?;
+                }
+            }
         }
     }
     
@@ -293,6 +300,20 @@ fn write_instr(w: &mut impl Write, instr: &BytecodeInstr) -> io::Result<()> {
         BytecodeInstr::Len => w.write_all(&[43]),
         BytecodeInstr::Size => w.write_all(&[44]),
         BytecodeInstr::Bytes => w.write_all(&[45]),
+        BytecodeInstr::MakeStruct(name, fields, count) => {
+            w.write_all(&[46])?;
+            write_u32(w, name.0)?;
+            write_u32(w, fields.0)?;
+            w.write_all(&count.to_le_bytes())
+        }
+        BytecodeInstr::GetField(name) => {
+            w.write_all(&[47])?;
+            write_u32(w, name.0)
+        }
+        BytecodeInstr::SetField(name) => {
+            w.write_all(&[48])?;
+            write_u32(w, name.0)
+        }
     }
 }
 
@@ -347,6 +368,14 @@ pub fn decode_artifact(bytes: &[u8]) -> Result<BytecodeCacheArtifact, BytecodeSe
             3 => BytecodeConstant::UInt64(read_u64(&mut cursor)?),
             4 => BytecodeConstant::Float64(f64::from_bits(read_u64(&mut cursor)?)),
             5 => BytecodeConstant::String(read_string(&mut cursor)?),
+            6 => {
+                let count = read_u32(&mut cursor)?;
+                let mut fs = Vec::with_capacity(count as usize);
+                for _ in 0..count {
+                    fs.push(read_string(&mut cursor)?);
+                }
+                BytecodeConstant::FieldList(fs)
+            }
             _ => return Err(BytecodeSerializeError::InvalidTag),
         };
         module.constants.push(c);
@@ -515,6 +544,16 @@ fn read_instr(r: &mut impl Read) -> Result<BytecodeInstr, BytecodeSerializeError
         43 => Ok(BytecodeInstr::Len),
         44 => Ok(BytecodeInstr::Size),
         45 => Ok(BytecodeInstr::Bytes),
+        46 => {
+            let name = ConstId(read_u32(r)?);
+            let fields = ConstId(read_u32(r)?);
+            let mut count_bytes = [0u8; 2];
+            r.read_exact(&mut count_bytes)?;
+            let count = u16::from_le_bytes(count_bytes);
+            Ok(BytecodeInstr::MakeStruct(name, fields, count))
+        }
+        47 => Ok(BytecodeInstr::GetField(ConstId(read_u32(r)?))),
+        48 => Ok(BytecodeInstr::SetField(ConstId(read_u32(r)?))),
         _ => Err(BytecodeSerializeError::InvalidTag),
     }
 }

@@ -151,7 +151,7 @@ fn test_unsupported_make_error() {
         id: TirBlockId(0),
         instrs: vec![
             TirInstr::Make(TirValueId(0), TirType::Enum("Foo".into()), Some("Bar".into()), vec![]),
-            TirInstr::Get(TirValueId(1), TirValueId(0), TirKey::Field("x".into())),
+            TirInstr::Get(TirValueId(1), TirValueId(0), TirKey::Index(0)),
         ],
         terminator: Some(TirTerminator::Ret(None)),
     });

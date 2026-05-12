@@ -351,7 +351,7 @@ mod tests {
     fn test_emit_tir_unsupported_for_error() {
         let source = "
         fn main() {
-            for i in [1, 2, 3] {
+            for i in \"string_not_supported\" {
                 print(i)
             }
         }
@@ -436,7 +436,7 @@ mod tests {
     fn test_tir_interp_source_unsupported_for_error() {
         let source = "
         fn main() {
-            for i in [1, 2, 3] {}
+            for i in \"string_iteration_unsupported\" {}
         }
         ";
         let result = interpret_tir_source(source, "main", vec![]);

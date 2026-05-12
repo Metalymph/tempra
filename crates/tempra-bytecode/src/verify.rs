@@ -276,6 +276,21 @@ pub fn verify_function(module: &BytecodeModule, func_id: FunctionId) -> Result<(
                     state.stack.pop().unwrap(); // pop object
                     state.stack.push(BytecodeType::Any);
                 }
+                BytecodeInstr::MakeStruct(_, _, count) => {
+                    for _ in 0..*count {
+                        state.stack.pop().unwrap();
+                    }
+                    state.stack.push(BytecodeType::Any);
+                }
+                BytecodeInstr::GetField(_) => {
+                    state.stack.pop().unwrap(); // pop object
+                    state.stack.push(BytecodeType::Any);
+                }
+                BytecodeInstr::SetField(_) => {
+                    state.stack.pop().unwrap(); // pop value
+                    state.stack.pop().unwrap(); // pop object
+                    state.stack.push(BytecodeType::Any);
+                }
             }
 
             if state.stack.len() > observed_max_stack {

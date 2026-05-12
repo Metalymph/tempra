@@ -271,6 +271,38 @@ impl<'a> FunctionLowerer<'a> {
                 }
                 self.store_res(*res)?;
             }
+            TirInstr::MakeStruct(res, name, fields) => {
+                let name_id = self.bc_module.add_constant(BytecodeConstant::String(name.clone()));
+                let mut field_names = Vec::new();
+                for (fname, val) in fields {
+                    self.load_val(*val)?;
+                    field_names.push(fname.clone());
+                }
+                let fields_id = self.bc_module.add_constant(BytecodeConstant::FieldList(field_names));
+                self.emit(BytecodeInstr::MakeStruct(name_id, fields_id, fields.len() as u16));
+                self.store_res(*res)?;
+            }
+            TirInstr::Get(res, target, key) => {
+                self.load_val(*target)?;
+                if let tempra_tir::ir::TirKey::Field(f) = key {
+                    let field_id = self.bc_module.add_constant(BytecodeConstant::String(f.clone()));
+                    self.emit(BytecodeInstr::GetField(field_id));
+                } else {
+                    return Err(BytecodeLowerError::UnsupportedInstr("Get with non-field key".into()));
+                }
+                self.store_res(*res)?;
+            }
+            TirInstr::Set(res, target, key, val) => {
+                self.load_val(*target)?;
+                self.load_val(*val)?;
+                if let tempra_tir::ir::TirKey::Field(f) = key {
+                    let field_id = self.bc_module.add_constant(BytecodeConstant::String(f.clone()));
+                    self.emit(BytecodeInstr::SetField(field_id));
+                } else {
+                    return Err(BytecodeLowerError::UnsupportedInstr("Set with non-field key".into()));
+                }
+                self.store_res(*res)?;
+            }
             TirInstr::Tag(res, target) => {
                 self.load_val(*target)?;
                 self.emit(BytecodeInstr::Tag);
@@ -309,9 +341,6 @@ impl<'a> FunctionLowerer<'a> {
                 self.load_val(*obj)?;
                 self.emit(BytecodeInstr::Bytes);
                 self.store_res(*res)?;
-            }
-            TirInstr::Get(_, _, _) | TirInstr::Set(_, _, _) => {
-                return Err(BytecodeLowerError::UnsupportedInstr(format!("{:?}", instr)));
             }
         }
 
@@ -396,6 +425,9 @@ impl<'a> FunctionLowerer<'a> {
                 Ok(target.ret)
             }
             TirInstr::Make(_, _, _, _) => Ok(BytecodeType::Any),
+            TirInstr::MakeStruct(_, _, _) => Ok(BytecodeType::Any),
+            TirInstr::Get(_, _, _) => Ok(BytecodeType::Any),
+            TirInstr::Set(_, _, _, _) => Ok(BytecodeType::Any),
             TirInstr::Tag(_, _) => Ok(BytecodeType::String),
             TirInstr::Unwrap(_, _, _, _) => Ok(BytecodeType::Any),
             TirInstr::GetIndex(_, _, _) => Ok(BytecodeType::Any),
@@ -417,7 +449,8 @@ fn get_instr_res_id(instr: &TirInstr) -> Option<TirValueId> {
         TirInstr::Eq(id, _, _) | TirInstr::Lt(id, _, _) | TirInstr::Gt(id, _, _) |
         TirInstr::And(id, _, _) | TirInstr::Or(id, _, _) | TirInstr::Not(id, _) |
         TirInstr::Call(id, _, _) => Some(*id),
-        TirInstr::Make(id, _, _, _) | TirInstr::Get(id, _, _) | TirInstr::Set(id, _, _) |
+        TirInstr::Make(id, _, _, _) | TirInstr::MakeStruct(id, _, _) |
+        TirInstr::Get(id, _, _) | TirInstr::Set(id, _, _, _) |
         TirInstr::Tag(id, _) | TirInstr::Unwrap(id, _, _, _) |
         TirInstr::GetIndex(id, _, _) | TirInstr::Slice(id, _, _, _) |
         TirInstr::Len(id, _) | TirInstr::Size(id, _) | TirInstr::Bytes(id, _) => Some(*id),

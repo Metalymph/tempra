@@ -78,6 +78,14 @@ pub fn verify_function(func: &TirFunction, functions: &HashMap<TirFunctionId, &T
                     }
                     value_types.insert(*res, Some(ty.clone()));
                 }
+                TirInstr::MakeStruct(res, _name, fields) => {
+                    for (_name, val) in fields {
+                        if !value_types.contains_key(val) {
+                            errors.push(VerifierError::UndeclaredValue(*val));
+                        }
+                    }
+                    value_types.insert(*res, None); // TODO: Track actual struct type
+                }
                 TirInstr::Get(res, target, _key) => {
                     if !value_types.contains_key(target) {
                         errors.push(VerifierError::UndeclaredValue(*target));
@@ -85,10 +93,14 @@ pub fn verify_function(func: &TirFunction, functions: &HashMap<TirFunctionId, &T
                     // Type is unknown without full layout
                     value_types.insert(*res, None); 
                 }
-                TirInstr::Set(_target, _key, val) => {
+                TirInstr::Set(res, target, _key, val) => {
+                    if !value_types.contains_key(target) {
+                        errors.push(VerifierError::UndeclaredValue(*target));
+                    }
                     if !value_types.contains_key(val) {
                         errors.push(VerifierError::UndeclaredValue(*val));
                     }
+                    value_types.insert(*res, None);
                 }
                 TirInstr::Tag(res, target) => {
                     if !value_types.contains_key(target) {

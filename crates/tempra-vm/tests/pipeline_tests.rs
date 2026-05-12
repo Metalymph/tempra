@@ -313,3 +313,49 @@ fn test_pipeline_string_unsupported() {
     });
     assert!(res.is_err());
 }
+
+#[test]
+fn test_experimental_vm_struct_literal_field_get() {
+    let source = r#"
+        struct User {
+            name: String
+            age: Int64
+        }
+        fn main() -> Int64 {
+            let u = User { name: "Ada", age: 42 }
+            return u.age
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(42));
+}
+
+#[test]
+fn test_experimental_vm_struct_multiple_fields() {
+    let source = r#"
+        struct Point {
+            x: Int64
+            y: Int64
+        }
+        fn main() -> Int64 {
+            let p = Point { x: 10, y: 20 }
+            return p.x + p.y
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(30));
+}
+
+#[test]
+fn test_experimental_vm_struct_field_set_value_semantics() {
+    let source = r#"
+        struct Point {
+            x: Int64
+            y: Int64
+        }
+        fn main() -> Int64 {
+            let mut p = Point { x: 10, y: 20 }
+            p.x = 100
+            return p.x + p.y
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(120));
+}

@@ -449,8 +449,26 @@ impl<'a> LowerContext<'a> {
                         let val = self.lower_expression(&b.right)?;
                         self.builder.build_store(slot, val)?;
                         return self.builder.build_const(TirConst::Unit).map_err(|e| e.into());
+                    } else if let HirExpression::Member(m) = &*b.left {
+                        if let HirExpression::Name(span, name) = &*m.object {
+                            let (slot, _ty, mutable) = if let Some(info) = self.locals.get(name) {
+                                info.clone()
+                            } else {
+                                return Err(TirLowerError::UnknownLocal(name.clone(), *span));
+                            };
+                            if !mutable {
+                                return Err(TirLowerError::UnsupportedStmt("cannot assign to let binding".into(), *span));
+                            }
+                            let val = self.lower_expression(&b.right)?;
+                            let obj = self.lower_expression(&m.object)?;
+                            let new_obj = self.builder.build_set(obj, tempra_tir::ir::TirKey::Field(m.field.clone()), val)?;
+                            self.builder.build_store(slot, new_obj)?;
+                            return self.builder.build_const(TirConst::Unit).map_err(|e| e.into());
+                        } else {
+                            return Err(TirLowerError::UnsupportedStmt("nested struct assignment not supported in v0".into(), b.span));
+                        }
                     } else {
-                        return Err(TirLowerError::UnsupportedStmt("non-local assignment not supported in Phase 12.2".into(), b.span));
+                        return Err(TirLowerError::UnsupportedStmt("non-local/non-member assignment not supported".into(), b.span));
                     }
                 }
                 
@@ -645,6 +663,18 @@ impl<'a> LowerContext<'a> {
                 // ok_val is the result of the ? expression; ok_block is now current
                 Ok(ok_val)
             }
+            HirExpression::StructLiteral(s) => {
+                let mut field_vals = Vec::new();
+                for (name, expr) in &s.fields {
+                    let val = self.lower_expression(expr)?;
+                    field_vals.push((name.clone(), val));
+                }
+                let struct_name = match &s.ty {
+                    tempra_hir::hir::HirType::Named(_, n) => n.clone(),
+                    _ => return Err(TirLowerError::UnsupportedExpr("StructLiteral with non-struct type".into(), s.span)),
+                };
+                self.builder.build_make_struct(struct_name, field_vals).map_err(|e| e.into())
+            }
             HirExpression::IsPattern(i) => self.lower_is_pattern(i),
             HirExpression::Array(_, elements) => {
                 let mut vals = Vec::new();
@@ -687,6 +717,13 @@ impl<'a> LowerContext<'a> {
                         return self.builder.build_size(obj).map_err(|e| e.into());
                     }
                 }
+                
+                // If it's a struct field access
+                if let tempra_hir::types::Type::Struct(_, _) = obj_ty {
+                    let obj = self.lower_expression(&m.object)?;
+                    return self.builder.build_get(obj, tempra_tir::ir::TirKey::Field(m.field.clone())).map_err(|e| e.into());
+                }
+                
                 Err(TirLowerError::UnsupportedExpr(format!("Member access: {}", m.field), m.span))
             }
             _ => Err(TirLowerError::UnsupportedExpr(format!("Unsupported expression: {:?}", expr), expr.span())),

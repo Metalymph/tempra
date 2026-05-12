@@ -22,6 +22,7 @@ pub enum VmError {
     IndexOutOfBounds(usize),
     InvalidSliceRange { start: usize, end: usize, len: usize },
     ExpectedIntIndex,
+    InvalidConstant(u32),
 }
 
 impl fmt::Display for VmError {
@@ -46,6 +47,7 @@ impl fmt::Display for VmError {
             VmError::IndexOutOfBounds(i) => write!(f, "Index out of bounds: {}", i),
             VmError::InvalidSliceRange { start, end, len } => write!(f, "Invalid slice range: {}..{} for length {}", start, end, len),
             VmError::ExpectedIntIndex => write!(f, "Expected integer index"),
+            VmError::InvalidConstant(id) => write!(f, "Invalid constant ID: {}", id),
         }
     }
 }

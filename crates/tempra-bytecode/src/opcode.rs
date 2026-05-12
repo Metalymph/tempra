@@ -59,6 +59,11 @@ pub enum BytecodeInstr {
     Len,
     Size,
     Bytes,
+
+    // Structs
+    MakeStruct(ConstId, ConstId, u16), // name_id, field_list_id, field_count
+    GetField(ConstId),               // field_name_id
+    SetField(ConstId),               // field_name_id
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,19 +104,19 @@ pub fn stack_effect(
             let pops = if func.ret == BytecodeType::Unit { 0 } else { 1 };
             StackEffect { pops, pushes: 0 }
         }
-        BytecodeInstr::Call(func_id, argc) => {
-            let target = module.functions.get(func_id.0 as usize)
-                .ok_or_else(|| BytecodeError::InvalidFunctionId(*func_id))?;
-            let pushes = if target.ret == BytecodeType::Unit { 0 } else { 1 };
-            StackEffect { pops: *argc, pushes }
-        }
-        BytecodeInstr::MakeEnum(_, _, count) => StackEffect { pops: *count, pushes: 1 },
+        BytecodeInstr::Call(_id, argc) => StackEffect { pops: *argc, pushes: if module.functions[_id.0 as usize].ret == BytecodeType::Unit { 0 } else { 1 } },
+        BytecodeInstr::MakeEnum(_name, _variant, argc) => StackEffect { pops: *argc, pushes: 1 },
         BytecodeInstr::Tag => StackEffect { pops: 1, pushes: 1 },
-        BytecodeInstr::Unwrap(_, _) => StackEffect { pops: 1, pushes: 1 },
+        BytecodeInstr::Unwrap(_variant, _idx) => StackEffect { pops: 1, pushes: 1 },
         BytecodeInstr::MakeArray(count) => StackEffect { pops: *count, pushes: 1 },
         BytecodeInstr::GetIndex => StackEffect { pops: 2, pushes: 1 },
         BytecodeInstr::Slice => StackEffect { pops: 3, pushes: 1 },
-        BytecodeInstr::Len | BytecodeInstr::Size | BytecodeInstr::Bytes => StackEffect { pops: 1, pushes: 1 },
+        BytecodeInstr::Len => StackEffect { pops: 1, pushes: 1 },
+        BytecodeInstr::Size => StackEffect { pops: 1, pushes: 1 },
+        BytecodeInstr::Bytes => StackEffect { pops: 1, pushes: 1 },
+        BytecodeInstr::MakeStruct(_name, _fields, count) => StackEffect { pops: *count, pushes: 1 },
+        BytecodeInstr::GetField(_) => StackEffect { pops: 1, pushes: 1 },
+        BytecodeInstr::SetField(_) => StackEffect { pops: 2, pushes: 1 },
     };
     Ok(effect)
 }

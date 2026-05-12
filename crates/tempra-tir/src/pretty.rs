@@ -68,8 +68,9 @@ pub fn format_instr(instr: &TirInstr) -> String {
     match instr {
         TirInstr::Const(res, val) => format!("%{} = const {}", res.0, format_const(val)),
         TirInstr::Make(res, ty, variant, args) => format!("%{} = make {}::{:?} ({})", res.0, format_type(ty), variant, format_args(args)),
+        TirInstr::MakeStruct(res, name, fields) => format!("%{} = make struct {} {{ {} }}", res.0, name, fields.iter().map(|(n, v)| format!("{}: %{}", n, v.0)).collect::<Vec<_>>().join(", ")),
         TirInstr::Get(res, target, key) => format!("%{} = get %{}, {}", res.0, target.0, format_key(key)),
-        TirInstr::Set(target, key, val) => format!("set %{}, {}, %{}", target.0, format_key(key), val.0),
+        TirInstr::Set(res, target, key, val) => format!("%{} = set %{}, {}, %{}", res.0, target.0, format_key(key), val.0),
         TirInstr::Tag(res, target) => format!("%{} = tag %{}", res.0, target.0),
         TirInstr::Unwrap(res, target, variant, idx) => format!("%{} = unwrap %{} as {}.{}", res.0, target.0, variant, idx),
         TirInstr::Slot(slot, ty) => format!("slot ${}: {}", slot.0, format_type(ty)),

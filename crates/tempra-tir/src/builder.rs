@@ -224,9 +224,24 @@ impl FunctionBuilder {
         Ok(id)
     }
 
-    pub fn build_make(&mut self, ty: TirType, variant: Option<String>, args: Vec<TirValueId>) -> Result<TirValueId, TirBuildError> {
+    pub fn build_make(
+        &mut self,
+        ty: TirType,
+        variant: Option<String>,
+        args: Vec<TirValueId>,
+    ) -> Result<TirValueId, TirBuildError> {
         let id = self.next_value();
         self.push_instr(TirInstr::Make(id, ty, variant, args))?;
+        Ok(id)
+    }
+
+    pub fn build_make_struct(
+        &mut self,
+        name: String,
+        fields: Vec<(String, TirValueId)>,
+    ) -> Result<TirValueId, TirBuildError> {
+        let id = self.next_value();
+        self.push_instr(TirInstr::MakeStruct(id, name, fields))?;
         Ok(id)
     }
 
@@ -236,9 +251,15 @@ impl FunctionBuilder {
         Ok(id)
     }
 
-    pub fn build_set(&mut self, target: TirValueId, key: TirKey, val: TirValueId) -> Result<(), TirBuildError> {
-        self.push_instr(TirInstr::Set(target, key, val))?;
-        Ok(())
+    pub fn build_set(
+        &mut self,
+        target: TirValueId,
+        key: TirKey,
+        val: TirValueId,
+    ) -> Result<TirValueId, TirBuildError> {
+        let id = self.next_value();
+        self.push_instr(TirInstr::Set(id, target, key, val))?;
+        Ok(id)
     }
 
     pub fn build_tag(&mut self, target: TirValueId) -> Result<TirValueId, TirBuildError> {

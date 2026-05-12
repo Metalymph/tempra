@@ -53,8 +53,9 @@ pub enum TirKey {
 pub enum TirInstr {
     Const(TirValueId, TirConst),
     Make(TirValueId, TirType, Option<String>, Vec<TirValueId>),
+    MakeStruct(TirValueId, String, Vec<(String, TirValueId)>), // dest, struct_name, fields
     Get(TirValueId, TirValueId, TirKey),
-    Set(TirValueId, TirKey, TirValueId),
+    Set(TirValueId, TirValueId, TirKey, TirValueId),         // dest, object, key, value
     Tag(TirValueId, TirValueId),
     Unwrap(TirValueId, TirValueId, String, u16),
 

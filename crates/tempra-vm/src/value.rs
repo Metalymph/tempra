@@ -17,6 +17,10 @@ pub enum VmValue {
         start: usize,
         end: usize,
     },
+    Struct {
+        name: String,
+        fields: Vec<(String, VmValue)>,
+    },
 }
 
 impl VmValue {
@@ -32,6 +36,7 @@ impl VmValue {
             VmValue::Enum(_, _, _) => "Enum",
             VmValue::Array(_) => "Array",
             VmValue::Slice { .. } => "Slice",
+            VmValue::Struct { name, .. } => "Struct", // We could return the actual name, but matching the signature is simpler for now
         }
     }
 }
@@ -73,6 +78,14 @@ impl fmt::Display for VmValue {
                     write!(f, "{}", parent[i])?;
                 }
                 write!(f, "]")
+            }
+            VmValue::Struct { name, fields } => {
+                write!(f, "{} {{ ", name)?;
+                for (i, (fname, fval)) in fields.iter().enumerate() {
+                    if i > 0 { write!(f, ", ")?; }
+                    write!(f, "{}: {}", fname, fval)?;
+                }
+                write!(f, " }}")
             }
         }
     }

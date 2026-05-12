@@ -23,7 +23,7 @@ impl<'a> Interpreter<'a> {
     pub fn new(module: &'a BytecodeModule) -> Self {
         Self {
             module,
-            call_stack: Vec::new(),
+            call_stack: Vec::with_capacity(32),
         }
     }
 
@@ -64,11 +64,14 @@ impl<'a> Interpreter<'a> {
                 if frame.ip >= func.code.len() {
                     return Err(VmError::InvalidInstructionPointer(frame.ip));
                 }
-                (func.code[frame.ip].clone(), func.ret)
+                (func.code[frame.ip], func.ret)
             };
 
-            // Increment IP before execution (jumps will override this)
-            self.call_stack.last_mut().ok_or(VmError::MissingReturn)?.ip += 1;
+            // Increment IP before execution
+            {
+                let frame = self.call_stack.last_mut().unwrap();
+                frame.ip += 1;
+            }
 
             match instr {
                 BytecodeInstr::ConstUnit => self.push(VmValue::Unit)?,
@@ -101,14 +104,15 @@ impl<'a> Interpreter<'a> {
                     };
                     self.push(val)?;
                 }
-
+ 
                 BytecodeInstr::LoadLocal(id) => {
                     let val = {
                         let frame = self.call_stack.last().ok_or(VmError::MissingReturn)?;
                         frame.locals.get(id.0 as usize)
                             .ok_or(VmError::LocalOutOfBounds(id.0))?
-                            .clone()
+                            .as_ref()
                             .ok_or(VmError::LocalNotInitialized(id.0))?
+                            .clone()
                     };
                     self.push(val)?;
                 }
@@ -120,7 +124,7 @@ impl<'a> Interpreter<'a> {
                     }
                     frame.locals[id.0 as usize] = Some(val);
                 }
-
+ 
                 BytecodeInstr::Pop => { self.pop()?; }
                 BytecodeInstr::Dup => {
                     let val = self.pop()?;
@@ -256,18 +260,13 @@ impl<'a> Interpreter<'a> {
                 }
 
                 BytecodeInstr::Call(target_id, argc) => {
-                    let mut args = Vec::with_capacity(argc as usize);
-                    for _ in 0..argc {
-                        args.push(self.pop()?);
-                    }
-                    args.reverse(); // Args are pushed left-to-right, so popped in reverse
-
                     let target_func = self.module.functions.get(target_id.0 as usize)
                         .ok_or_else(|| VmError::UnknownFunction(target_id.to_string()))?;
 
                     let mut locals = vec![None; target_func.locals.len()];
-                    for (i, arg) in args.into_iter().enumerate() {
-                        locals[i] = Some(arg);
+                    // Pop arguments directly into locals in reverse order (right-to-left)
+                    for i in (0..argc).rev() {
+                        locals[i as usize] = Some(self.pop()?);
                     }
 
                     let new_frame = Frame {
@@ -288,12 +287,12 @@ impl<'a> Interpreter<'a> {
 
                     self.call_stack.pop();
 
-                    if self.call_stack.is_empty() {
-                        return Ok(ret_val.unwrap_or(VmValue::Unit));
-                    } else {
+                    if let Some(prev_frame) = self.call_stack.last_mut() {
                         if let Some(val) = ret_val {
-                            self.push(val)?;
+                            prev_frame.stack.push(val);
                         }
+                    } else {
+                        return Ok(ret_val.unwrap_or(VmValue::Unit));
                     }
                 }
 
@@ -532,41 +531,47 @@ impl<'a> Interpreter<'a> {
         }
     }
 
+    #[inline(always)]
     fn push(&mut self, val: VmValue) -> Result<(), VmError> {
         self.call_stack.last_mut().unwrap().stack.push(val);
         Ok(())
     }
-
+ 
+    #[inline(always)]
     fn pop(&mut self) -> Result<VmValue, VmError> {
         self.call_stack.last_mut().unwrap().stack.pop()
             .ok_or(VmError::StackUnderflow)
     }
-
+ 
+    #[inline(always)]
     fn pop_i64(&mut self) -> Result<i64, VmError> {
         match self.pop()? {
             VmValue::Int64(i) => Ok(i),
-            other => Err(VmError::TypeMismatch { expected: "Int64".into(), found: format!("{:?}", other) }),
+            other => Err(VmError::TypeMismatch { expected: "Int64".into(), found: other.type_name().into() }),
         }
     }
-
+ 
+    #[inline(always)]
     fn pop_u64(&mut self) -> Result<u64, VmError> {
         match self.pop()? {
             VmValue::UInt64(u) => Ok(u),
-            other => Err(VmError::TypeMismatch { expected: "UInt64".into(), found: format!("{:?}", other) }),
+            other => Err(VmError::TypeMismatch { expected: "UInt64".into(), found: other.type_name().into() }),
         }
     }
-
+ 
+    #[inline(always)]
     fn pop_f64(&mut self) -> Result<f64, VmError> {
         match self.pop()? {
             VmValue::Float64(f) => Ok(f),
-            other => Err(VmError::TypeMismatch { expected: "Float64".into(), found: format!("{:?}", other) }),
+            other => Err(VmError::TypeMismatch { expected: "Float64".into(), found: other.type_name().into() }),
         }
     }
-
+ 
+    #[inline(always)]
     fn pop_bool(&mut self) -> Result<bool, VmError> {
         match self.pop()? {
             VmValue::Bool(b) => Ok(b),
-            other => Err(VmError::TypeMismatch { expected: "Bool".into(), found: format!("{:?}", other) }),
+            other => Err(VmError::TypeMismatch { expected: "Bool".into(), found: other.type_name().into() }),
         }
     }
 }

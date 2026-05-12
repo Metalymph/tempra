@@ -80,6 +80,38 @@ impl<'a> Interpreter<'a> {
             return Err(VmError::WrongArity { expected: func.params.len() as u16, found: args.len() as u16 });
         }
 
+        #[cfg(feature = "jit-cranelift")]
+        if self.profiling.as_ref().map(|p| p.options.jit_enabled).unwrap_or(false) {
+            if let Some(jit_fn) = self.jit_cache.get(&function_id).copied() {
+                let mut i64_args = Vec::with_capacity(args.len());
+                let mut compatible = true;
+                for arg in &args {
+                    if let VmValue::Int64(i) = arg {
+                        i64_args.push(*i);
+                    } else {
+                        compatible = false;
+                        break;
+                    }
+                }
+
+                let mut success = false;
+                if compatible {
+                    if let Ok(res) = jit_fn.call_i64(&i64_args) {
+                        if let Some(ref mut prof) = self.profiling {
+                            prof.stats[function_id.0 as usize].jit_runtime_calls += 1;
+                        }
+                        return Ok(VmValue::Int64(res));
+                    }
+                }
+
+                if !success {
+                    if let Some(ref mut prof) = self.profiling {
+                        prof.stats[function_id.0 as usize].jit_fallback_calls += 1;
+                    }
+                }
+            }
+        }
+
         // Initialize locals
         let mut locals = vec![None; func.locals.len()];
         for (i, arg) in args.into_iter().enumerate() {
@@ -97,6 +129,9 @@ impl<'a> Interpreter<'a> {
 
         if let Some(ref mut prof) = self.profiling {
             prof.stats[function_id.0 as usize].call_count += 1;
+            
+            #[cfg(feature = "jit-cranelift")]
+            self.maybe_compile_jit(function_id);
         }
 
         self.execute()
@@ -113,7 +148,7 @@ impl<'a> Interpreter<'a> {
         Ok((res, profile))
     }
 
-    fn build_profile(&self) -> VmProfile {
+    pub fn build_profile(&self) -> VmProfile {
         let stats = match &self.profiling {
             Some(s) => s,
             None => return VmProfile { function_stats: vec![], global_opcode_counts: vec![] },
@@ -143,6 +178,12 @@ impl<'a> Interpreter<'a> {
                 backedge_count: s.backedge_count,
                 is_hot,
                 top_opcodes: top_opcodes_named,
+                jit_compile_attempts: s.jit_compile_attempts,
+                jit_compile_successes: s.jit_compile_successes,
+                jit_compile_failures: s.jit_compile_failures,
+                jit_runtime_calls: s.jit_runtime_calls,
+                jit_fallback_calls: s.jit_fallback_calls,
+                jit_rejection_reason: s.jit_rejection_reason.clone(),
             });
         }
 
@@ -207,6 +248,56 @@ impl<'a> Interpreter<'a> {
             50 => "AddI64LL",
             51 => "AddI64LC",
             _ => "Unknown",
+        }
+    }
+
+    #[cfg(feature = "jit-cranelift")]
+    fn maybe_compile_jit(&mut self, function_id: FunctionId) {
+        if self.jit_cache.contains_key(&function_id) {
+            return;
+        }
+
+        let mut attempt_needed = false;
+        if let Some(ref prof) = self.profiling {
+            let stats = &prof.stats[function_id.0 as usize];
+            if stats.jit_rejection_reason.is_none() && prof.options.jit_enabled && prof.is_hot(function_id) {
+                attempt_needed = true;
+            }
+        }
+
+        if !attempt_needed {
+            return;
+        }
+
+        let eligibility = tempra_jit_cranelift::explain_jit_eligibility(self.module, function_id);
+        if let Some(ref mut prof) = self.profiling {
+            prof.stats[function_id.0 as usize].jit_compile_attempts += 1;
+            if !matches!(eligibility, tempra_jit_cranelift::JitEligibility::Eligible) {
+                prof.stats[function_id.0 as usize].jit_rejection_reason = Some(eligibility.to_string());
+                return;
+            }
+        }
+
+        if let Some(ref mut engine) = self.jit_engine {
+            match tempra_jit_cranelift::compile_function_i64(engine, self.module, function_id) {
+                Ok(compiled) => {
+                    self.jit_cache.insert(function_id, compiled);
+                    if let Some(ref mut prof) = self.profiling {
+                        prof.stats[function_id.0 as usize].jit_compile_successes += 1;
+                    }
+                }
+                Err(e) => {
+                    if let Some(ref mut prof) = self.profiling {
+                        prof.stats[function_id.0 as usize].jit_compile_failures += 1;
+                        prof.stats[function_id.0 as usize].jit_rejection_reason = Some(format!("Compilation failed: {:?}", e));
+                    }
+                }
+            }
+        } else {
+            if let Some(ref mut prof) = self.profiling {
+                prof.stats[function_id.0 as usize].jit_compile_failures += 1;
+                prof.stats[function_id.0 as usize].jit_rejection_reason = Some("JIT engine not available".into());
+            }
         }
     }
 
@@ -425,15 +516,7 @@ impl<'a> Interpreter<'a> {
                             stats.backedge_count += 1;
                             
                             #[cfg(feature = "jit-cranelift")]
-                            if prof.should_jit(frame_func_id) && !self.jit_cache.contains_key(&frame_func_id) {
-                                if tempra_jit_cranelift::can_jit_function(self.module, frame_func_id) {
-                                    if let Some(ref mut engine) = self.jit_engine {
-                                        if let Ok(compiled) = tempra_jit_cranelift::compile_function_i64(engine, self.module, frame_func_id) {
-                                            self.jit_cache.insert(frame_func_id, compiled);
-                                        }
-                                    }
-                                }
-                            }
+                            self.maybe_compile_jit(frame_func_id);
                         }
                     }
                     self.call_stack.last_mut().ok_or(VmError::MissingReturn)?.ip = offset.0;
@@ -447,15 +530,7 @@ impl<'a> Interpreter<'a> {
                                 stats.backedge_count += 1;
 
                                 #[cfg(feature = "jit-cranelift")]
-                                if prof.should_jit(frame_func_id) && !self.jit_cache.contains_key(&frame_func_id) {
-                                    if tempra_jit_cranelift::can_jit_function(self.module, frame_func_id) {
-                                        if let Some(ref mut engine) = self.jit_engine {
-                                            if let Ok(compiled) = tempra_jit_cranelift::compile_function_i64(engine, self.module, frame_func_id) {
-                                                self.jit_cache.insert(frame_func_id, compiled);
-                                            }
-                                        }
-                                    }
-                                }
+                                self.maybe_compile_jit(frame_func_id);
                             }
                         }
                         self.call_stack.last_mut().ok_or(VmError::MissingReturn)?.ip = offset.0;
@@ -484,25 +559,32 @@ impl<'a> Interpreter<'a> {
                                 }
                             }
 
+                            let mut success = false;
                             if compatible {
                                 if let Ok(res) = jit_fn.call_i64(&i64_args) {
                                     self.push(VmValue::Int64(res))?;
-                                    continue;
+                                    success = true;
                                 }
+                            }
+
+                            if let Some(ref mut prof) = self.profiling {
+                                if success {
+                                    prof.stats[target_id.0 as usize].jit_runtime_calls += 1;
+                                } else {
+                                    prof.stats[target_id.0 as usize].jit_fallback_calls += 1;
+                                }
+                            }
+
+                            if success {
+                                continue;
                             }
                             
                             // Fallback: put args back on stack
                             for arg in args {
                                 self.push(arg)?;
                             }
-                        } else if self.profiling.as_ref().map(|p| p.should_jit(target_id)).unwrap_or(false) {
-                            if tempra_jit_cranelift::can_jit_function(self.module, target_id) {
-                                if let Some(ref mut engine) = self.jit_engine {
-                                    if let Ok(compiled) = tempra_jit_cranelift::compile_function_i64(engine, self.module, target_id) {
-                                        self.jit_cache.insert(target_id, compiled);
-                                    }
-                                }
-                            }
+                        } else {
+                            self.maybe_compile_jit(target_id);
                         }
                     }
 

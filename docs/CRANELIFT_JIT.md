@@ -68,6 +68,20 @@ Then the VM transparently falls back to interpreting the bytecode, ensuring corr
 ### JIT Cache
 Compiled functions are stored in an in-memory cache (`HashMap<FunctionId, JitFunctionI64>`) within the `Interpreter` instance.
 
+## JIT Observability (Phase 15.2)
+
+To ensure JIT behavior is transparent and safe, the VM includes detailed observability metrics in its profiling output:
+
+### Profiling Metrics
+When `VmOptions::profiling` and `jit_enabled` are true, `VmProfile` tracks:
+- **Compile Attempts/Successes/Failures**: How often the VM tried to compile a function and the result.
+- **Runtime Calls**: How many times the native compiled code was executed.
+- **Fallback Calls**: How many times a function with a compiled version fell back to the interpreter (e.g., due to incompatible arguments).
+
+### Eligibility Diagnostics and Rejection Caching
+Not all functions can be compiled to native code. The JIT provides diagnostics (`JitEligibility`) explaining *why* a function is rejected (e.g., `UnsupportedType("String")`).
+When a compilation fails or is rejected, the VM records the reason in the function's profile and **caches the rejection**. This prevents the VM from repeatedly attempting to compile an unsupported function, maintaining performance.
+
 ## Verification
 
 The JIT is verified via differential tests comparing VM results with native execution:

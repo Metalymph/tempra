@@ -29,6 +29,14 @@ pub struct FunctionProfile {
     pub backedge_count: u64,
     pub is_hot: bool,
     pub top_opcodes: Vec<(&'static str, u64)>,
+    
+    // JIT Stats
+    pub jit_compile_attempts: u64,
+    pub jit_compile_successes: u64,
+    pub jit_compile_failures: u64,
+    pub jit_runtime_calls: u64,
+    pub jit_fallback_calls: u64,
+    pub jit_rejection_reason: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -61,6 +69,32 @@ impl VmProfile {
         for (id, &count) in opcodes.into_iter().take(10) {
             let name = self.get_opcode_name(id);
             writeln!(s, "  {}: {}", name, count).unwrap();
+        }
+
+        let total_attempts: u64 = self.function_stats.iter().map(|f| f.jit_compile_attempts).sum();
+        if total_attempts > 0 {
+            writeln!(s, "\nJIT Summary:").unwrap();
+            let total_successes: u64 = self.function_stats.iter().map(|f| f.jit_compile_successes).sum();
+            let total_failures: u64 = self.function_stats.iter().map(|f| f.jit_compile_failures).sum();
+            let total_runtime: u64 = self.function_stats.iter().map(|f| f.jit_runtime_calls).sum();
+            let total_fallback: u64 = self.function_stats.iter().map(|f| f.jit_fallback_calls).sum();
+
+            writeln!(s, "  Compile attempts: {}", total_attempts).unwrap();
+            writeln!(s, "  Successes:        {}", total_successes).unwrap();
+            writeln!(s, "  Failures:         {}", total_failures).unwrap();
+            writeln!(s, "  Runtime calls:    {}", total_runtime).unwrap();
+            writeln!(s, "  Fallback calls:   {}", total_fallback).unwrap();
+
+            let rejected: Vec<_> = self.function_stats.iter()
+                .filter(|f| f.jit_rejection_reason.is_some())
+                .collect();
+            
+            if !rejected.is_empty() {
+                writeln!(s, "\nJIT Rejections:").unwrap();
+                for f in rejected {
+                    writeln!(s, "  function {}: {}", f.function_name, f.jit_rejection_reason.as_ref().unwrap()).unwrap();
+                }
+            }
         }
 
         s
@@ -134,6 +168,14 @@ pub(crate) struct FunctionStats {
     pub instruction_count: u64,
     pub backedge_count: u64,
     pub opcode_counts: Vec<u64>,
+    
+    // JIT Stats
+    pub jit_compile_attempts: u64,
+    pub jit_compile_successes: u64,
+    pub jit_compile_failures: u64,
+    pub jit_runtime_calls: u64,
+    pub jit_fallback_calls: u64,
+    pub jit_rejection_reason: Option<String>,
 }
 
 impl Default for FunctionStats {
@@ -143,6 +185,12 @@ impl Default for FunctionStats {
             instruction_count: 0,
             backedge_count: 0,
             opcode_counts: vec![0; BYTECODE_OPCODE_COUNT],
+            jit_compile_attempts: 0,
+            jit_compile_successes: 0,
+            jit_compile_failures: 0,
+            jit_runtime_calls: 0,
+            jit_fallback_calls: 0,
+            jit_rejection_reason: None,
         }
     }
 }
@@ -165,9 +213,5 @@ impl ProfilingState {
     pub fn is_hot(&self, function_id: FunctionId) -> bool {
         let s = &self.stats[function_id.0 as usize];
         s.call_count >= self.options.hot_call_threshold || s.backedge_count >= self.options.hot_backedge_threshold
-    }
-
-    pub fn should_jit(&self, function_id: FunctionId) -> bool {
-        self.options.jit_enabled && self.is_hot(function_id)
     }
 }

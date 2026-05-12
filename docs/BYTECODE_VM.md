@@ -174,6 +174,15 @@ run_function_with_options(module, "main", args, options);
 ### Fallback Policy
 The JIT maintains a strict fallback policy. If a function uses unsupported features (Strings, Structs, Heap access) or if compilation fails, the VM transparently continues execution via the interpreter.
 
+### Observability and Guardrails
+The VM profile includes a `JIT Summary` detailing:
+- **Compile attempts**: How many times compilation was triggered.
+- **Successes/Failures**: Results of the compilation attempts.
+- **Runtime calls**: Executions of the native compiled code.
+- **Fallback calls**: Reversions to the interpreter due to runtime incompatibilities (e.g., unsupported argument types).
+
+Additionally, functions rejected by the JIT are recorded in `JIT Rejections` with clear reasons (e.g., `Unsupported type: String`) and are cached to avoid redundant compilation attempts.
+
 ## Non-Goals (v0)
 
 - **Performance**: v0 is a naive interpreter. Further optimization (Register VM, full JIT coverage) is deferred.

@@ -8,4 +8,5 @@ pub use pipeline::{
     run_file, run_file_with_args, run_source, run_source_with_args,
     run_file_with_experimental_vm, run_source_with_experimental_vm,
     run_source_hir, run_source_vm, run_source_vm_with_options, compile_to_bytecode,
+    run_source_vm_profiled,
 };

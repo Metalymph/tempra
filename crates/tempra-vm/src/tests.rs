@@ -312,6 +312,12 @@ fn profile_summary_contains_hot_function() {
                 backedge_count: 9999,
                 is_hot: true,
                 top_opcodes: vec![("Jump", 9999)],
+                jit_compile_attempts: 0,
+                jit_compile_successes: 0,
+                jit_compile_failures: 0,
+                jit_runtime_calls: 0,
+                jit_fallback_calls: 0,
+                jit_rejection_reason: None,
             }
         ],
         global_opcode_counts: vec![0; BYTECODE_OPCODE_COUNT],

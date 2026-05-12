@@ -27,6 +27,13 @@ Measurements are averaged over 20 iterations after 2 warmup runs.
 
 ## Candidates for Optimization
 
+### Phase 15.2 — JIT Observability & Guardrails
+Added performance tracking and safe fallbacks for the JIT integration.
+- **Metrics**: `VmProfile` now tracks `jit_compile_attempts`, `jit_compile_successes`, `jit_runtime_calls`, and `jit_fallback_calls`.
+- **Diagnostics**: `JitEligibility` provides clear reasons when a function cannot be compiled natively.
+- **Rejection Caching**: The VM caches rejection reasons to avoid redundant compilation attempts of unsupported functions.
+- **Verification**: Fully tested via driver integration to ensure accurate JIT statistics without semantic changes.
+
 ### Phase 15.1 — JIT/VM Integration Hook
 Integrated JIT into the VM dispatch loop.
 - **Opt-in**: JIT is disabled by default, ensuring stability.

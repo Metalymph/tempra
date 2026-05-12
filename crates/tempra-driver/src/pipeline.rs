@@ -52,6 +52,31 @@ pub fn run_source_vm_with_options(source: &str, args: &[String], options: tempra
         .map_err(|e| DriverError::VmError(format!("{:?}", e)))
 }
 
+pub fn run_source_vm_profiled(source: &str, options: tempra_vm::VmOptions) -> Result<(tempra_vm::VmValue, tempra_vm::VmProfile), DriverError> {
+
+    let hash = crate::cache::compute_source_hash(source);
+    let cache_path = crate::cache::get_cache_path(&hash);
+    let fingerprint = format!("tempra-{}", env!("CARGO_PKG_VERSION"));
+
+    let module = if let Ok(artifact) = crate::cache::read_cache_artifact(&cache_path) {
+        if artifact.header.compiler_fingerprint == fingerprint && artifact.header.source_hash == hash {
+            artifact.module
+        } else {
+            compile_and_cache_module(source, &hash, &cache_path, &fingerprint)?
+        }
+    } else {
+        compile_and_cache_module(source, &hash, &cache_path, &fingerprint)?
+    };
+
+    let has_main = module.functions.iter().any(|f| f.name == "main");
+    if !has_main {
+        return Err(DriverError::UnsupportedExperimentalVm("experimental VM currently requires main()".into()));
+    }
+
+    tempra_vm::run_function_profiled(&module, "main", vec![], options)
+        .map_err(|e| DriverError::VmError(format!("{:?}", e)))
+}
+
 fn compile_and_cache_module(source: &str, hash: &[u8; 32], cache_path: &std::path::Path, fingerprint: &str) -> Result<tempra_bytecode::BytecodeModule, DriverError> {
     let ast = tempra_parser::parse_source(source).map_err(|e| DriverError::ParseError(format!("{:?}", e)))?;
     let mut hir = tempra_hir::lower_file(source, &ast);

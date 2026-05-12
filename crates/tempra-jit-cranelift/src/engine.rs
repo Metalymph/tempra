@@ -68,31 +68,58 @@ impl JitFunctionI64 {
     }
 }
 
-pub fn can_jit_function(module: &BytecodeModule, function_id: FunctionId) -> bool {
+#[derive(Debug, Clone, PartialEq)]
+pub enum JitEligibility {
+    Eligible,
+    UnsupportedSignature(String),
+    UnsupportedInstr { offset: usize, instr: String },
+    UnsupportedType(String),
+}
+
+impl std::fmt::Display for JitEligibility {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Eligible => write!(f, "Eligible"),
+            Self::UnsupportedSignature(s) => write!(f, "Unsupported signature: {}", s),
+            Self::UnsupportedInstr { offset, instr } => write!(f, "Unsupported instruction '{}' at offset {}", instr, offset),
+            Self::UnsupportedType(t) => write!(f, "Unsupported type: {}", t),
+        }
+    }
+}
+
+pub fn explain_jit_eligibility(module: &BytecodeModule, function_id: FunctionId) -> JitEligibility {
     let func = match module.functions.get(function_id.0 as usize) {
         Some(f) => f,
-        None => return false,
+        None => return JitEligibility::UnsupportedSignature("Function not found".into()),
     };
 
     // Params must be Int64
-    if !func.params.iter().all(|p| *p == BytecodeType::Int64) {
-        return false;
+    for (i, p) in func.params.iter().enumerate() {
+        if *p != BytecodeType::Int64 {
+            return JitEligibility::UnsupportedType(format!("Parameter {} has unsupported type {:?}", i, p));
+        }
     }
     // Return must be Int64
     if func.ret != BytecodeType::Int64 {
-        return false;
+        return JitEligibility::UnsupportedType(format!("Return has unsupported type {:?}", func.ret));
     }
     // Locals must be Int64
-    if !func.locals.iter().all(|l| *l == BytecodeType::Int64) {
-        return false;
-    }
-
-    // Instructions must be supported
-    for instr in &func.code {
-        if !crate::lower::is_instr_supported(instr) {
-            return false;
+    for (i, l) in func.locals.iter().enumerate() {
+        if *l != BytecodeType::Int64 {
+            return JitEligibility::UnsupportedType(format!("Local {} has unsupported type {:?}", i, l));
         }
     }
 
-    true
+    // Instructions must be supported
+    for (offset, instr) in func.code.iter().enumerate() {
+        if !crate::lower::is_instr_supported(instr) {
+            return JitEligibility::UnsupportedInstr { offset, instr: format!("{:?}", instr) };
+        }
+    }
+
+    JitEligibility::Eligible
+}
+
+pub fn can_jit_function(module: &BytecodeModule, function_id: FunctionId) -> bool {
+    matches!(explain_jit_eligibility(module, function_id), JitEligibility::Eligible)
 }

@@ -225,27 +225,92 @@ fn test_diff_is_narrowing() {
 }
 
 #[test]
-fn test_unsupported_match() {
+fn test_diff_match_bool() {
     let source = r#"
         fn main() -> Int64 {
-            let x: Option(Int64) = Some(1)
+            let x = true
+            return match x {
+                true => 1
+                false => 0
+            }
+        }
+    "#;
+    assert_differential(source);
+}
+
+#[test]
+fn test_diff_match_int() {
+    let source = r#"
+        fn main() -> Int64 {
+            let x = 2
+            return match x {
+                1 => 10
+                2 => 20
+                _ => 0
+            }
+        }
+    "#;
+    assert_differential(source);
+}
+
+#[test]
+fn test_diff_match_option() {
+    let source = r#"
+        fn main() -> Int64 {
+            let x: Option(Int64) = Some(41)
             let zero: Int64 = 0
             return match x {
-                Some(v) => v
+                Some(v) => v + 1
                 None => zero
             }
         }
     "#;
-    let hir_res = run_source_hir(source, &[]);
-    if let Err(e) = hir_res {
-        panic!("HIR failed for match source:\n{}\nError: {:?}", source, e);
-    }
-    
+    assert_differential(source);
+}
+
+#[test]
+fn test_diff_match_result() {
+    let source = r#"
+        fn main() -> Int64 {
+            let r: Result(Int64, String) = Err("bad")
+            let zero: Int64 = 0
+            return match r {
+                Ok(v) => v
+                Err(e) => zero
+            }
+        }
+    "#;
+    assert_differential(source);
+}
+
+#[test]
+fn test_diff_match_wildcard_binding() {
+    let source = r#"
+        fn main() -> Int64 {
+            let x = 100
+            return match x {
+                1 => 1
+                other => other
+            }
+        }
+    "#;
+    assert_differential(source);
+}
+
+#[test]
+fn test_match_non_exhaustive_error() {
+    let source = r#"
+        fn main() -> Int64 {
+            let x = 1
+            return match x {
+                1 => 10
+            }
+        }
+    "#;
     let vm_res = run_source_vm(source, &[]);
-    assert!(vm_res.is_err(), "VM should have failed for match");
-    // Should be an unsupported error
-    let err = format!("{:?}", vm_res.err().unwrap()).to_lowercase();
-    assert!(err.contains("unsupported"), "Unexpected VM error: {}", err);
+    assert!(vm_res.is_err());
+    let err = format!("{:?}", vm_res.err().unwrap());
+    assert!(err.contains("non-exhaustive match"), "Unexpected error: {}", err);
 }
 
 #[test]

@@ -670,7 +670,8 @@ impl<'a> LowerContext<'a> {
                 if let Some((slot, _ty, _)) = self.locals.get(name) {
                     self.builder.build_load(*slot).map_err(|e| e.into())
                 } else {
-                    Err(TirLowerError::UnknownLocal(name.clone(), *span))
+                    let keys: Vec<_> = self.locals.keys().cloned().collect();
+                    Err(TirLowerError::UnsupportedExpr(format!("Unknown local: {}. Available: {:?}", name, keys), *span))
                 }
             }
             HirExpression::Binary(b) => {
@@ -993,6 +994,7 @@ impl<'a> LowerContext<'a> {
             }
             HirExpression::Block(b) => self.lower_block_expr(b),
             HirExpression::For(f) => self.lower_for_expr(f),
+            HirExpression::Match(m) => self.lower_match(m),
             _ => Err(TirLowerError::UnsupportedExpr(format!("Unsupported expression: {:?}", expr), expr.span())),
         }
     }
@@ -1153,6 +1155,270 @@ impl<'a> LowerContext<'a> {
     pub fn lower_expression_base(&mut self, expr: &HirExpression) -> Result<TirValueId, TirLowerError> {
         // This is just a marker for where the original code ended
         self.lower_expression(expr)
+    }
+
+    fn lower_match(&mut self, m: &HirMatch) -> Result<TirValueId, TirLowerError> {
+        let scrutinee_val = self.lower_expression(&m.value)?;
+        let scrutinee_ty = self.infer_expr_type(&m.value)?;
+
+        // 1. Infer and verify result type from arms
+        let mut match_ty = Type::Unknown;
+        for arm in &m.arms {
+            // Temporary bindings for inference
+            let old_locals_inf = self.locals.clone();
+            self.bind_pattern_for_inference(&arm.pattern, &scrutinee_ty)?;
+            
+            let arm_body_ty = self.infer_expr_type(&arm.value)?;
+            self.locals = old_locals_inf;
+
+            if match_ty == Type::Unknown {
+                match_ty = arm_body_ty;
+            } else if arm_body_ty != match_ty && arm_body_ty != Type::Never && match_ty != Type::Never {
+                return Err(TirLowerError::TypeMismatch {
+                    expected: match_ty.to_string(),
+                    found: arm_body_ty.to_string(),
+                    span: arm.value.span(),
+                });
+            } else if match_ty == Type::Never && arm_body_ty != Type::Never {
+                match_ty = arm_body_ty;
+            }
+        }
+        
+        if match_ty == Type::Unknown {
+             return Err(TirLowerError::UnsupportedExpr("Match must have at least one arm".into(), m.span));
+        }
+
+        let tir_match_ty = map_type(&match_ty)?;
+        let res_slot = self.builder.build_slot(tir_match_ty.clone(), Some("__match_result"))?;
+        let exit_block = self.builder.new_block();
+
+        // 2. Track exhaustiveness
+        let mut seen_variants = std::collections::HashSet::new();
+        let mut has_wildcard = false;
+
+        // 3. Sequential checks
+        for arm in &m.arms {
+            if has_wildcard { break; }
+
+            let then_block = self.builder.new_block();
+            let next_arm_block = self.builder.new_block();
+
+            match &arm.pattern {
+                HirPattern::Wildcard(_) => {
+                    has_wildcard = true;
+                    self.builder.build_br(then_block)?;
+                }
+                HirPattern::Identifier(_span, _name) => {
+                    has_wildcard = true;
+                    self.builder.build_br(then_block)?;
+                }
+                HirPattern::Literal(_, lit_expr) => {
+                    let lit_val = self.lower_expression(lit_expr)?;
+                    let cond = self.builder.build_eq(scrutinee_val, lit_val)?;
+                    self.builder.build_condbr(cond, then_block, next_arm_block)?;
+                    
+                    if let HirExpression::Bool(_, b) = &**lit_expr {
+                        seen_variants.insert(b.to_string());
+                    }
+                }
+                HirPattern::EnumConstructor(e) => {
+                    let tag = self.builder.build_tag(scrutinee_val)?;
+                    let wanted = self.builder.build_const(TirConst::String(e.variant_name.clone()))?;
+                    let cond = self.builder.build_eq(tag, wanted)?;
+                    self.builder.build_condbr(cond, then_block, next_arm_block)?;
+                    seen_variants.insert(e.variant_name.clone());
+                }
+                HirPattern::EnumCase(_, name, _) => {
+                    let tag = self.builder.build_tag(scrutinee_val)?;
+                    let wanted = self.builder.build_const(TirConst::String(name.clone()))?;
+                    let cond = self.builder.build_eq(tag, wanted)?;
+                    self.builder.build_condbr(cond, then_block, next_arm_block)?;
+                    seen_variants.insert(name.clone());
+                }
+                _ => return Err(TirLowerError::UnsupportedPattern(format!("{:?}", arm.pattern), arm.pattern.span())),
+            }
+
+            // Body
+            self.builder.set_current_block(then_block);
+            let old_locals = self.locals.clone();
+
+            // Bindings
+            match &arm.pattern {
+                HirPattern::Identifier(_span, name) => {
+                    let tir_scrutinee_ty = map_type(&scrutinee_ty)?;
+                    let slot = self.builder.build_slot(tir_scrutinee_ty.clone(), Some(name))?;
+                    self.builder.build_store(slot, scrutinee_val)?;
+                    self.locals.insert(name.clone(), (slot, tir_scrutinee_ty, false));
+                }
+                HirPattern::EnumConstructor(e) => {
+                    for (i, payload_pat) in e.payloads.iter().enumerate() {
+                        match payload_pat {
+                            HirPattern::Identifier(_span, name) => {
+                                let payload_val = self.builder.build_unwrap(scrutinee_val, e.variant_name.clone(), i as u16)?;
+                                let payload_ty = self.infer_payload_type(&scrutinee_ty, &e.variant_name, i)?;
+                                let tir_payload_ty = map_type(&payload_ty)?;
+                                
+                                let slot = self.builder.build_slot(tir_payload_ty.clone(), Some(name))?;
+                                self.builder.build_store(slot, payload_val)?;
+                                self.locals.insert(name.clone(), (slot, tir_payload_ty, false));
+                            }
+                            HirPattern::Wildcard(_) => {}
+                            _ => return Err(TirLowerError::UnsupportedPattern(format!("Only simple bindings are supported in enum patterns for now, found {:?}", payload_pat), payload_pat.span())),
+                        }
+                    }
+                }
+                HirPattern::EnumCase(_, variant_name, payloads) => {
+                    for (i, payload_pat) in payloads.iter().enumerate() {
+                        match payload_pat {
+                            HirPattern::Identifier(_span, name) => {
+                                let payload_val = self.builder.build_unwrap(scrutinee_val, variant_name.clone(), i as u16)?;
+                                let payload_ty = self.infer_payload_type(&scrutinee_ty, variant_name, i)?;
+                                let tir_payload_ty = map_type(&payload_ty)?;
+                                
+                                let slot = self.builder.build_slot(tir_payload_ty.clone(), Some(name))?;
+                                self.builder.build_store(slot, payload_val)?;
+                                self.locals.insert(name.clone(), (slot, tir_payload_ty, false));
+                            }
+                            HirPattern::Wildcard(_) => {}
+                            _ => return Err(TirLowerError::UnsupportedPattern(format!("Only simple bindings are supported in enum patterns for now, found {:?}", payload_pat), payload_pat.span())),
+                        }
+                    }
+                }
+                _ => {}
+            }
+
+            let arm_val = self.lower_expression(&arm.value)?;
+            if !self.builder.is_terminated() {
+                if match_ty != Type::Never {
+                    self.builder.build_store(res_slot, arm_val)?;
+                }
+                self.builder.build_br(exit_block)?;
+            }
+            self.locals = old_locals;
+
+            self.builder.set_current_block(next_arm_block);
+        }
+
+        // 4. Exhaustiveness check
+        self.check_match_exhaustiveness(&scrutinee_ty, &seen_variants, has_wildcard, m.span)?;
+
+        if !self.builder.is_terminated() {
+            self.builder.build_unreachable()?;
+        }
+
+        self.builder.set_current_block(exit_block);
+        self.builder.build_load(res_slot).map_err(|e| e.into())
+    }
+
+    fn infer_payload_type(&self, enum_ty: &Type, variant_name: &str, index: usize) -> Result<Type, TirLowerError> {
+        match enum_ty {
+            Type::Option(inner) => {
+                if variant_name == "Some" && index == 0 {
+                    return Ok(inner.as_ref().clone());
+                }
+            }
+            Type::Result(ok, err) => {
+                if variant_name == "Ok" && index == 0 {
+                    return Ok(ok.as_ref().clone());
+                }
+                if variant_name == "Err" && index == 0 {
+                    return Ok(err.as_ref().clone());
+                }
+            }
+            Type::Enum(name, args) => {
+                if name == "Option" && args.len() == 1 {
+                    if variant_name == "Some" && index == 0 {
+                        return Ok(args[0].clone());
+                    }
+                    if variant_name == "None" {
+                         return Ok(Type::Unit);
+                    }
+                }
+                if name == "Result" && args.len() == 2 {
+                    if variant_name == "Ok" && index == 0 {
+                        return Ok(args[0].clone());
+                    }
+                    if variant_name == "Err" && index == 0 {
+                        return Ok(args[1].clone());
+                    }
+                }
+
+                if let Some(info) = self.type_ctx.enums.get(name) {
+                    if let Some(payloads) = info.variants.get(variant_name) {
+                        if index < payloads.len() {
+                            return Ok(payloads[index].clone());
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        Err(TirLowerError::UnsupportedType(format!("cannot infer payload type for {}::{} at index {}", enum_ty, variant_name, index)))
+    }
+
+    fn check_match_exhaustiveness(&self, ty: &Type, seen: &std::collections::HashSet<String>, has_wildcard: bool, span: tempra_span::Span) -> Result<(), TirLowerError> {
+        if has_wildcard { return Ok(()); }
+
+        match ty {
+            Type::Bool => {
+                if seen.contains("true") && seen.contains("false") {
+                    return Ok(());
+                }
+                Err(TirLowerError::UnsupportedExpr("Match on Bool must be exhaustive (true AND false, or wildcard)".into(), span))
+            }
+            Type::Option(_) => {
+                if seen.contains("Some") && seen.contains("None") {
+                    return Ok(());
+                }
+                Err(TirLowerError::UnsupportedExpr("Match on Option must be exhaustive (Some AND None, or wildcard)".into(), span))
+            }
+            Type::Result(_, _) => {
+                if seen.contains("Ok") && seen.contains("Err") {
+                    return Ok(());
+                }
+                Err(TirLowerError::UnsupportedExpr("Match on Result must be exhaustive (Ok AND Err, or wildcard)".into(), span))
+            }
+            _ => {
+                Err(TirLowerError::UnsupportedExpr(format!("Non-exhaustive match for type {}; wildcard '_' is required", ty), span))
+            }
+        }
+    }
+
+    fn bind_pattern_for_inference(&mut self, pattern: &HirPattern, scrutinee_ty: &Type) -> Result<(), TirLowerError> {
+        match pattern {
+            HirPattern::Identifier(_, name) => {
+                let tir_ty = map_type(scrutinee_ty)?;
+                self.locals.insert(name.clone(), (TirSlotId(0), tir_ty, false));
+            }
+            HirPattern::EnumConstructor(e) => {
+                for (i, payload_pat) in e.payloads.iter().enumerate() {
+                    match payload_pat {
+                        HirPattern::Identifier(_, name) => {
+                            let payload_ty = self.infer_payload_type(scrutinee_ty, &e.variant_name, i)?;
+                            let tir_payload_ty = map_type(&payload_ty)?;
+                            self.locals.insert(name.clone(), (TirSlotId(0), tir_payload_ty, false));
+                        }
+                        HirPattern::Wildcard(_) => {}
+                        _ => return Err(TirLowerError::UnsupportedPattern("Nested patterns not supported in inference".into(), payload_pat.span())),
+                    }
+                }
+            }
+            HirPattern::EnumCase(_, variant_name, payloads) => {
+                for (i, payload_pat) in payloads.iter().enumerate() {
+                    match payload_pat {
+                        HirPattern::Identifier(_, name) => {
+                            let payload_ty = self.infer_payload_type(scrutinee_ty, variant_name, i)?;
+                            let tir_payload_ty = map_type(&payload_ty)?;
+                            self.locals.insert(name.clone(), (TirSlotId(0), tir_payload_ty, false));
+                        }
+                        HirPattern::Wildcard(_) => {}
+                        _ => return Err(TirLowerError::UnsupportedPattern("Nested patterns not supported in inference".into(), payload_pat.span())),
+                    }
+                }
+            }
+            _ => return Ok(()),
+        }
+        Ok(())
     }
 }
 

@@ -36,7 +36,7 @@ impl VmValue {
             VmValue::Enum(_, _, _) => "Enum",
             VmValue::Array(_) => "Array",
             VmValue::Slice { .. } => "Slice",
-            VmValue::Struct { name, .. } => "Struct", // We could return the actual name, but matching the signature is simpler for now
+            VmValue::Struct { name: _, .. } => "Struct", // We could return the actual name, but matching the signature is simpler for now
         }
     }
 }

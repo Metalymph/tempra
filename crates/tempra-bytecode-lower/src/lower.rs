@@ -470,6 +470,8 @@ fn map_type(ty: &TirType) -> Result<BytecodeType, BytecodeLowerError> {
         TirType::Option(_) => Ok(BytecodeType::Any),
         TirType::Array(_) => Ok(BytecodeType::Any),
         TirType::Slice(_) => Ok(BytecodeType::Any),
+        TirType::Struct(_) => Ok(BytecodeType::Any),
+        TirType::Enum(_) => Ok(BytecodeType::Any),
         TirType::UInt8 => Ok(BytecodeType::UInt8),
         _ => Err(BytecodeLowerError::UnsupportedType(format!("{:?}", ty))),
     }

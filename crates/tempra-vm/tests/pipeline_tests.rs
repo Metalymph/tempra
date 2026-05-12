@@ -20,7 +20,14 @@ fn run_source(source: &str, entry: &str, args: Vec<VmValue>) -> VmValue {
             }
             HirItem::Extend(extend) => {
                 let (target_name, target_ty) = match &extend.target {
-                    tempra_hir::HirType::Named(_, name) => (name.clone(), tempra_typeck::types::resolve_named_type(name)),
+                    tempra_hir::HirType::Named(_, name) => {
+                        let ty = if type_ctx.structs.contains_key(name) {
+                            tempra_hir::Type::Struct(name.clone(), vec![])
+                        } else {
+                            tempra_typeck::types::resolve_named_type(name)
+                        };
+                        (name.clone(), ty)
+                    }
                     _ => continue,
                 };
                 for method in &extend.methods {
@@ -363,11 +370,11 @@ fn test_experimental_vm_struct_multiple_fields() {
 fn test_experimental_vm_struct_field_set_value_semantics() {
     let source = r#"
         struct Point {
-            x: Int64
-            y: Int64
+            var x: Int64
+            var y: Int64
         }
         fn main() -> Int64 {
-            let mut p = Point { x: 10, y: 20 }
+            var p = Point { x: 10, y: 20 }
             p.x = 100
             return p.x + p.y
         }
@@ -380,6 +387,8 @@ fn test_experimental_vm_method_basic() {
     let source = r#"
         struct User {
             age: Int64
+        }
+        extend User {
             fn get_age(self) -> Int64 {
                 return self.age
             }
@@ -397,6 +406,8 @@ fn test_experimental_vm_method_with_args() {
     let source = r#"
         struct User {
             age: Int64
+        }
+        extend User {
             fn plus(self, n: Int64) -> Int64 {
                 return self.age + n
             }

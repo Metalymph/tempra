@@ -171,7 +171,7 @@ pub fn emit_tir_source(source: &str) -> Result<String, DriverError> {
 
     for item in &hir.items {
         if let HirItem::Function(func) = item {
-            match tempra_tir_lower::lower::lower_function(func, &type_ctx, &mut module_builder) {
+            match tempra_tir_lower::lower::lower_function(func, &type_ctx, &mut module_builder, None) {
                 Ok(tir_func) => {
                     module_builder.add_function(tir_func);
                 }
@@ -215,7 +215,7 @@ pub fn interpret_tir_source(
 
     for item in &hir.items {
         if let HirItem::Function(func) = item {
-            match tempra_tir_lower::lower::lower_function(func, &type_ctx, &mut module_builder) {
+            match tempra_tir_lower::lower::lower_function(func, &type_ctx, &mut module_builder, None) {
                 Ok(tir_func) => {
                     module_builder.add_function(tir_func);
                 }

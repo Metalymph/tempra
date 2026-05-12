@@ -39,7 +39,7 @@ pub fn map_type(ty: &Type) -> Result<TirType, TirLowerError> {
         Type::Array(inner) => Ok(TirType::Array(Box::new(map_type(inner)?))),
         Type::Slice(inner) => Ok(TirType::Slice(Box::new(map_type(inner)?))),
         Type::Tuple(_) => Err(TirLowerError::UnsupportedType("Tuple".to_string())),
-        Type::Struct(name, _) => Err(TirLowerError::UnsupportedType(format!("Struct({})", name))),
+        Type::Struct(name, _) => Ok(TirType::Struct(name.clone())),
         Type::Command => Err(TirLowerError::UnsupportedType("Command".to_string())),
         Type::CommandResult => Err(TirLowerError::UnsupportedType("CommandResult".to_string())),
         Type::Regex => Err(TirLowerError::UnsupportedType("Regex".to_string())),
@@ -75,6 +75,7 @@ pub fn unmap_type(tir_ty: &TirType) -> Result<Type, TirLowerError> {
         TirType::Tag => Ok(Type::String),
         TirType::Array(inner) => Ok(Type::Array(Box::new(unmap_type(inner)?))),
         TirType::Slice(inner) => Ok(Type::Slice(Box::new(unmap_type(inner)?))),
+        TirType::Struct(name) => Ok(Type::Struct(name.clone(), vec![])),
         _ => Err(TirLowerError::UnsupportedType(format!("{:?}", tir_ty))),
     }
 }
@@ -85,7 +86,13 @@ fn resolve_hir_type(hir_ty: &HirType, _type_ctx: &TypeContext, self_ty: Option<&
         HirType::Named(_, name) => {
             let ty = tempra_typeck::types::resolve_named_type(name);
             if ty == Type::Unknown {
-                Err(TirLowerError::UnsupportedType(format!("Unknown type name: {}", name)))
+                if let Some(info) = _type_ctx.structs.get(name) {
+                    Ok(Type::Struct(name.clone(), info.generic_params.iter().map(|p| Type::GenericParam { id: p.id, name: p.name.clone(), constraint: p.constraint.clone() }).collect()))
+                } else if let Some(info) = _type_ctx.enums.get(name) {
+                    Ok(Type::Enum(name.clone(), info.generic_params.iter().map(|p| Type::GenericParam { id: p.id, name: p.name.clone(), constraint: p.constraint.clone() }).collect()))
+                } else {
+                    Err(TirLowerError::UnsupportedType(format!("Unknown type name: {}", name)))
+                }
             } else {
                 Ok(ty)
             }
@@ -131,16 +138,18 @@ pub struct LowerContext<'a> {
     pub builder: FunctionBuilder,
     pub type_ctx: &'a TypeContext,
     pub module_builder: &'a mut ModuleBuilder,
+    pub self_ty: Option<Type>,
     /// (SlotId, Type, is_mutable)
     pub locals: HashMap<String, (TirSlotId, TirType, bool)>,
 }
 
 impl<'a> LowerContext<'a> {
-    pub fn new(builder: FunctionBuilder, type_ctx: &'a TypeContext, module_builder: &'a mut ModuleBuilder) -> Self {
+    pub fn new(builder: FunctionBuilder, type_ctx: &'a TypeContext, module_builder: &'a mut ModuleBuilder, self_ty: Option<Type>) -> Self {
         Self {
             builder,
             type_ctx,
             module_builder,
+            self_ty,
             locals: HashMap::new(),
         }
     }
@@ -202,12 +211,25 @@ impl<'a> LowerContext<'a> {
                     if matches!(obj_ty, Type::Array(_) | Type::Slice(_) | Type::String) {
                         return Ok(Type::Int64);
                     }
-                } else if m.field == "size" {
+                } else if m.field == "bytes" {
                     if matches!(obj_ty, Type::String) {
-                        return Ok(Type::Int64);
+                        return Ok(Type::Slice(Box::new(Type::UInt8)));
+                    }
+                }
+
+                // If it's a struct field access
+                if let Type::Struct(name, _) = &obj_ty {
+                    if let Some(info) = self.type_ctx.structs.get(name) {
+                        if let Some(field_info) = info.fields.get(&m.field) {
+                            return Ok(field_info.ty.clone());
+                        }
                     }
                 }
                 Err(TirLowerError::UnsupportedExpr(format!("Member access: {}", m.field), m.span))
+            }
+            HirExpression::StructLiteral(s) => {
+                let ty = resolve_hir_type(&s.ty, self.type_ctx, self.self_ty.as_ref())?;
+                Ok(ty)
             }
             HirExpression::Call(c) => {
                 if let HirExpression::Member(m) = &*c.callee {
@@ -272,7 +294,7 @@ impl<'a> LowerContext<'a> {
             HirStatement::Let(l) => {
                 // Use explicit type if available, otherwise infer
                 let val_ty = if let Some(hir_ty) = &l.ty {
-                    resolve_hir_type(hir_ty, self.type_ctx)?
+                    resolve_hir_type(hir_ty, self.type_ctx, self.self_ty.as_ref())?
                 } else {
                     self.infer_expr_type(&l.value)?
                 };
@@ -294,7 +316,7 @@ impl<'a> LowerContext<'a> {
             }
             HirStatement::Var(v) => {
                 let val_ty = if let Some(hir_ty) = &v.ty {
-                    resolve_hir_type(hir_ty, self.type_ctx)?
+                    resolve_hir_type(hir_ty, self.type_ctx, self.self_ty.as_ref())?
                 } else {
                     self.infer_expr_type(&v.value)?
                 };
@@ -943,7 +965,7 @@ pub fn lower_function(func: &HirFunction, type_ctx: &TypeContext, module_builder
     };
 
     let builder = module_builder.new_function(&func.name, ret_ty);
-    let mut ctx = LowerContext::new(builder, type_ctx, module_builder);
+    let mut ctx = LowerContext::new(builder, type_ctx, module_builder, self_ty.clone());
     
     // Create entry block
     let entry_block = ctx.builder.new_block();

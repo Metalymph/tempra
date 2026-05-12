@@ -97,6 +97,7 @@ pub fn disassemble_function(module: &BytecodeModule, func_id: FunctionId) -> Res
             BytecodeInstr::Len => out.push_str("Len\n"),
             BytecodeInstr::Size => out.push_str("Size\n"),
             BytecodeInstr::Bytes => out.push_str("Bytes\n"),
+            BytecodeInstr::ArrayPush => out.push_str("ArrayPush\n"),
             BytecodeInstr::MakeStruct(name, fields, count) => {
                 out.push_str(&format!("MakeStruct #{} #{} count={}\n", name.0, fields.0, count));
             }

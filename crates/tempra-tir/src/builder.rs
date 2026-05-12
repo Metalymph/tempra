@@ -346,4 +346,10 @@ impl FunctionBuilder {
         self.push_instr(TirInstr::Bytes(id, object))?;
         Ok(id)
     }
+
+    pub fn build_array_push(&mut self, array: TirValueId, value: TirValueId) -> Result<TirValueId, TirBuildError> {
+        let id = self.next_value();
+        self.push_instr(TirInstr::ArrayPush(id, array, value))?;
+        Ok(id)
+    }
 }

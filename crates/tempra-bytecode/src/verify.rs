@@ -291,6 +291,11 @@ pub fn verify_function(module: &BytecodeModule, func_id: FunctionId) -> Result<(
                     state.stack.pop().unwrap(); // pop object
                     state.stack.push(BytecodeType::Any);
                 }
+                BytecodeInstr::ArrayPush => {
+                    state.stack.pop().unwrap(); // pop value
+                    state.stack.pop().unwrap(); // pop array
+                    state.stack.push(BytecodeType::Any);
+                }
             }
 
             if state.stack.len() > observed_max_stack {

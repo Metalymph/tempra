@@ -314,6 +314,7 @@ fn write_instr(w: &mut impl Write, instr: &BytecodeInstr) -> io::Result<()> {
             w.write_all(&[48])?;
             write_u32(w, name.0)
         }
+        BytecodeInstr::ArrayPush => w.write_all(&[49]),
     }
 }
 
@@ -554,6 +555,7 @@ fn read_instr(r: &mut impl Read) -> Result<BytecodeInstr, BytecodeSerializeError
         }
         47 => Ok(BytecodeInstr::GetField(ConstId(read_u32(r)?))),
         48 => Ok(BytecodeInstr::SetField(ConstId(read_u32(r)?))),
+        49 => Ok(BytecodeInstr::ArrayPush),
         _ => Err(BytecodeSerializeError::InvalidTag),
     }
 }

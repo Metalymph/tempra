@@ -59,6 +59,7 @@ pub enum BytecodeInstr {
     Len,
     Size,
     Bytes,
+    ArrayPush,
 
     // Structs
     MakeStruct(ConstId, ConstId, u16), // name_id, field_list_id, field_count
@@ -114,6 +115,7 @@ pub fn stack_effect(
         BytecodeInstr::Len => StackEffect { pops: 1, pushes: 1 },
         BytecodeInstr::Size => StackEffect { pops: 1, pushes: 1 },
         BytecodeInstr::Bytes => StackEffect { pops: 1, pushes: 1 },
+        BytecodeInstr::ArrayPush => StackEffect { pops: 2, pushes: 1 },
         BytecodeInstr::MakeStruct(_name, _fields, count) => StackEffect { pops: *count, pushes: 1 },
         BytecodeInstr::GetField(_) => StackEffect { pops: 1, pushes: 1 },
         BytecodeInstr::SetField(_) => StackEffect { pops: 2, pushes: 1 },

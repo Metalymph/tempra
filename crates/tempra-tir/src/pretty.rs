@@ -92,6 +92,7 @@ pub fn format_instr(instr: &TirInstr) -> String {
         TirInstr::Len(res, obj) => format!("%{} = len %{}", res.0, obj.0),
         TirInstr::Size(res, obj) => format!("%{} = size %{}", res.0, obj.0),
         TirInstr::Bytes(res, obj) => format!("%{} = bytes %{}", res.0, obj.0),
+        TirInstr::ArrayPush(res, arr, val) => format!("%{} = array_push %{}, %{}", res.0, arr.0, val.0),
     }
 }
 

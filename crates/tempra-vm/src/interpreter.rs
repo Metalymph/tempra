@@ -442,6 +442,18 @@ impl<'a> Interpreter<'a> {
                         return Err(VmError::Message("Expected String for .bytes()".into()));
                     }
                 }
+                BytecodeInstr::ArrayPush => {
+                    let value = self.pop()?;
+                    let array_val = self.pop()?;
+                    match array_val {
+                        VmValue::Array(arr) => {
+                            let mut new_arr = (*arr).clone();
+                            new_arr.push(value);
+                            self.push(VmValue::Array(Rc::new(new_arr)))?;
+                        }
+                        _ => return Err(VmError::ExpectedArray),
+                    }
+                }
                 BytecodeInstr::MakeStruct(name_id, fields_id, count) => {
                     let mut fields = Vec::with_capacity(count as usize);
                     for _ in 0..count {

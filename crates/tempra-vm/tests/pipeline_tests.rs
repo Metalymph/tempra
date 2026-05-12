@@ -439,3 +439,61 @@ fn test_experimental_vm_extend_method() {
     "#;
     assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(5));
 }
+
+#[test]
+fn test_experimental_vm_for_expr_map() {
+    let source = r#"
+        fn main() -> Int64 {
+            let xs = [1, 2, 3]
+            let ys = for x in xs {
+                x + 10
+            }
+            return ys[1]
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(12));
+}
+
+#[test]
+fn test_experimental_vm_for_expr_slice() {
+    let source = r#"
+        fn main() -> Int64 {
+            let xs = [1, 2, 3, 4]
+            let s = xs[1..3]
+            let ys = for x in s {
+                x * 2
+            }
+            return ys[1]
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(6));
+}
+
+#[test]
+fn test_experimental_vm_for_expr_empty() {
+    let source = r#"
+        fn main() -> Int64 {
+            let xs: [Int64] = []
+            let ys = for x in xs {
+                x + 1
+            }
+            return ys.len()
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(0));
+}
+
+#[test]
+fn test_experimental_vm_for_expr_complex_body() {
+    let source = r#"
+        fn main() -> Int64 {
+            let xs = [1, 2, 3]
+            let ys = for x in xs {
+                let y = x * 2
+                y + 5
+            }
+            return ys[2]
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(11));
+}

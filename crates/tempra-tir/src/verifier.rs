@@ -273,6 +273,17 @@ pub fn verify_function(func: &TirFunction, functions: &HashMap<TirFunctionId, &T
                     }
                     value_types.insert(*res, Some(TirType::Slice(Box::new(TirType::UInt8))));
                 }
+                TirInstr::ArrayPush(res, array, value) => {
+                    if !value_types.contains_key(array) {
+                        errors.push(VerifierError::UndeclaredValue(*array));
+                    }
+                    if !value_types.contains_key(value) {
+                        errors.push(VerifierError::UndeclaredValue(*value));
+                    }
+                    // The result has the same type as the input array
+                    let array_ty = value_types.get(array).cloned().flatten();
+                    value_types.insert(*res, array_ty);
+                }
             }
         }
 

@@ -82,6 +82,7 @@ pub enum TirInstr {
     Len(TirValueId, TirValueId),                       // dest, object
     Size(TirValueId, TirValueId),                      // dest, object
     Bytes(TirValueId, TirValueId),                     // dest, object
+    ArrayPush(TirValueId, TirValueId, TirValueId),     // dest, array, value — produces new array with value appended
 }
 
 #[derive(Debug, Clone)]

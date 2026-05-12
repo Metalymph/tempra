@@ -342,6 +342,12 @@ impl<'a> FunctionLowerer<'a> {
                 self.emit(BytecodeInstr::Bytes);
                 self.store_res(*res)?;
             }
+            TirInstr::ArrayPush(res, arr, val) => {
+                self.load_val(*arr)?;
+                self.load_val(*val)?;
+                self.emit(BytecodeInstr::ArrayPush);
+                self.store_res(*res)?;
+            }
         }
 
         Ok(())
@@ -435,6 +441,7 @@ impl<'a> FunctionLowerer<'a> {
             TirInstr::Len(_, _) => Ok(BytecodeType::Int64),
             TirInstr::Size(_, _) => Ok(BytecodeType::Int64),
             TirInstr::Bytes(_, _) => Ok(BytecodeType::Any),
+            TirInstr::ArrayPush(_, _, _) => Ok(BytecodeType::Any),
             _ => Err(BytecodeLowerError::UnsupportedInstr(format!("Cannot infer type for {:?}", instr))),
         }
     }
@@ -453,7 +460,8 @@ fn get_instr_res_id(instr: &TirInstr) -> Option<TirValueId> {
         TirInstr::Get(id, _, _) | TirInstr::Set(id, _, _, _) |
         TirInstr::Tag(id, _) | TirInstr::Unwrap(id, _, _, _) |
         TirInstr::GetIndex(id, _, _) | TirInstr::Slice(id, _, _, _) |
-        TirInstr::Len(id, _) | TirInstr::Size(id, _) | TirInstr::Bytes(id, _) => Some(*id),
+        TirInstr::Len(id, _) | TirInstr::Size(id, _) | TirInstr::Bytes(id, _) |
+        TirInstr::ArrayPush(id, _, _) => Some(*id),
         _ => None,
     }
 }

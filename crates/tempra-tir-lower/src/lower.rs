@@ -120,6 +120,15 @@ fn resolve_hir_type(hir_ty: &HirType, _type_ctx: &TypeContext, self_ty: Option<&
                     let inner_ty = resolve_hir_type(&args[0], _type_ctx, self_ty)?;
                     return Ok(Type::Array(Box::new(inner_ty)));
                 }
+                if name == "Option" && args.len() == 1 {
+                    let inner_ty = resolve_hir_type(&args[0], _type_ctx, self_ty)?;
+                    return Ok(Type::Option(Box::new(inner_ty)));
+                }
+                if name == "Result" && args.len() == 2 {
+                    let ok_ty = resolve_hir_type(&args[0], _type_ctx, self_ty)?;
+                    let err_ty = resolve_hir_type(&args[1], _type_ctx, self_ty)?;
+                    return Ok(Type::Result(Box::new(ok_ty), Box::new(err_ty)));
+                }
             }
             Err(TirLowerError::UnsupportedType(format!("Cannot resolve HirType::Apply: {:?}", hir_ty)))
         }

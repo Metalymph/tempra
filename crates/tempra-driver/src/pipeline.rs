@@ -6,12 +6,21 @@ use tempra_hir::HirItem;
 use tempra_interpreter::run;
 use tempra_parser::parse_source;
 use tempra_typeck::check_file as typeck_check_file;
+use tempra_interpreter::value::Value;
+use tempra_vm::value::VmValue;
 
 pub fn run_source(source: &str) -> Result<(), DriverError> {
     run_source_with_args(source, &[])
 }
 
 pub fn run_source_with_experimental_vm(source: &str, args: &[String]) -> Result<(), DriverError> {
+    match run_source_vm(source, args) {
+        Ok(_) => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+pub fn run_source_vm(source: &str, args: &[String]) -> Result<VmValue, DriverError> {
     if !args.is_empty() {
         return Err(DriverError::UnsupportedExperimentalVm("CLI arguments are not yet supported in experimental VM".into()));
     }
@@ -35,10 +44,8 @@ pub fn run_source_with_experimental_vm(source: &str, args: &[String]) -> Result<
         return Err(DriverError::UnsupportedExperimentalVm("experimental VM currently requires main()".into()));
     }
 
-    match tempra_vm::run_function(&module, "main", vec![]) {
-        Ok(_) => Ok(()),
-        Err(e) => Err(DriverError::VmError(format!("{:?}", e))),
-    }
+    tempra_vm::run_function(&module, "main", vec![])
+        .map_err(|e| DriverError::VmError(format!("{:?}", e)))
 }
 
 fn compile_and_cache_module(source: &str, hash: &[u8; 32], cache_path: &std::path::Path, fingerprint: &str) -> Result<tempra_bytecode::BytecodeModule, DriverError> {
@@ -58,7 +65,21 @@ fn compile_and_cache_module(source: &str, hash: &[u8; 32], cache_path: &std::pat
             }
             tempra_hir::HirItem::Extend(extend) => {
                 let (target_name, target_ty) = match &extend.target {
-                    tempra_hir::HirType::Named(_, name) => (name.clone(), tempra_typeck::types::resolve_named_type(name)),
+                    tempra_hir::HirType::Named(_, name) => {
+                        let ty = tempra_typeck::types::resolve_named_type(name);
+                        if ty == tempra_hir::Type::Unknown {
+                            if type_ctx.structs.contains_key(name) {
+                                (name.clone(), tempra_hir::Type::Struct(name.clone(), vec![]))
+                            } else if type_ctx.enums.contains_key(name) {
+                                (name.clone(), tempra_hir::Type::Enum(name.clone(), vec![]))
+                            } else {
+                                errors.push(format!("unknown extend target: {}", name));
+                                continue;
+                            }
+                        } else {
+                            (name.clone(), ty)
+                        }
+                    }
                     _ => {
                         errors.push(format!("unsupported extend target: {:?}", extend.target));
                         continue;
@@ -103,6 +124,13 @@ fn compile_and_cache_module(source: &str, hash: &[u8; 32], cache_path: &std::pat
 }
 
 pub fn run_source_with_args(source: &str, args: &[String]) -> Result<(), DriverError> {
+    match run_source_hir(source, args) {
+        Ok(_) => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+pub fn run_source_hir(source: &str, args: &[String]) -> Result<Value, DriverError> {
     let ast = parse_source(source).map_err(|e| DriverError::ParseError(format!("{:?}", e)))?;
 
     let mut hir = lower_file(source, &ast);
@@ -117,16 +145,7 @@ pub fn run_source_with_args(source: &str, args: &[String]) -> Result<(), DriverE
         tempra_interpreter::RuntimeError::Message(s) => DriverError::RuntimeError(s),
     })?;
 
-    if let tempra_interpreter::value::Value::Result(res) = value {
-        if let tempra_interpreter::value::ValueResult::Err(err_val) = *res {
-            return Err(DriverError::RuntimeError(format!(
-                "Uncaught error: {}",
-                err_val
-            )));
-        }
-    }
-
-    Ok(())
+    Ok(value)
 }
 
 pub fn run_file(path: &Path) -> Result<(), DriverError> {

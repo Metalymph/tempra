@@ -527,6 +527,44 @@ impl<'a> Interpreter<'a> {
                     }
                 }
                 BytecodeInstr::Unreachable => return Err(VmError::UnreachableExecuted),
+
+                BytecodeInstr::AddI64LL(a, b) => {
+                    let frame = self.call_stack.last().ok_or(VmError::MissingReturn)?;
+                    let val_a = frame.locals.get(a.0 as usize)
+                        .ok_or(VmError::LocalOutOfBounds(a.0))?
+                        .as_ref()
+                        .ok_or(VmError::LocalNotInitialized(a.0))?;
+                    let val_b = frame.locals.get(b.0 as usize)
+                        .ok_or(VmError::LocalOutOfBounds(b.0))?
+                        .as_ref()
+                        .ok_or(VmError::LocalNotInitialized(b.0))?;
+                    
+                    if let (VmValue::Int64(ia), VmValue::Int64(ib)) = (val_a, val_b) {
+                        let res = VmValue::Int64(ia + ib);
+                        self.push(res)?;
+                    } else {
+                        return Err(VmError::Message("Type mismatch in AddI64LL".into()));
+                    }
+                }
+                BytecodeInstr::AddI64LC(a, id) => {
+                    let frame = self.call_stack.last().ok_or(VmError::MissingReturn)?;
+                    let val_a = frame.locals.get(a.0 as usize)
+                        .ok_or(VmError::LocalOutOfBounds(a.0))?
+                        .as_ref()
+                        .ok_or(VmError::LocalNotInitialized(a.0))?;
+                    
+                    let constant = match self.module.constants.get(id.0 as usize) {
+                        Some(BytecodeConstant::Int64(i)) => *i,
+                        _ => return Err(VmError::InvalidConstant(id.0)),
+                    };
+                    
+                    if let VmValue::Int64(ia) = val_a {
+                        let res = VmValue::Int64(ia + constant);
+                        self.push(res)?;
+                    } else {
+                        return Err(VmError::Message("Type mismatch in AddI64LC".into()));
+                    }
+                }
             }
         }
     }

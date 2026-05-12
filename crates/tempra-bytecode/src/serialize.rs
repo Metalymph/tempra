@@ -315,6 +315,16 @@ fn write_instr(w: &mut impl Write, instr: &BytecodeInstr) -> io::Result<()> {
             write_u32(w, name.0)
         }
         BytecodeInstr::ArrayPush => w.write_all(&[49]),
+        BytecodeInstr::AddI64LL(a, b) => {
+            w.write_all(&[50])?;
+            write_u32(w, a.0)?;
+            write_u32(w, b.0)
+        }
+        BytecodeInstr::AddI64LC(a, id) => {
+            w.write_all(&[51])?;
+            write_u32(w, a.0)?;
+            write_u32(w, id.0)
+        }
     }
 }
 
@@ -559,6 +569,16 @@ fn read_instr(r: &mut impl Read) -> Result<BytecodeInstr, BytecodeSerializeError
         47 => Ok(BytecodeInstr::GetField(ConstId(read_u32(r)?))),
         48 => Ok(BytecodeInstr::SetField(ConstId(read_u32(r)?))),
         49 => Ok(BytecodeInstr::ArrayPush),
+        50 => {
+            let a = LocalId(read_u32(r)?);
+            let b = LocalId(read_u32(r)?);
+            Ok(BytecodeInstr::AddI64LL(a, b))
+        }
+        51 => {
+            let a = LocalId(read_u32(r)?);
+            let id = ConstId(read_u32(r)?);
+            Ok(BytecodeInstr::AddI64LC(a, id))
+        }
         _ => Err(BytecodeSerializeError::InvalidTag),
     }
 }

@@ -15,6 +15,7 @@ The Bytecode VM (v0) employs several runtime optimizations:
 2. **Call Stack Pre-allocation**: The interpreter initializes its call stack with a baseline capacity to avoid reallocations during typical call nesting.
 3. **Direct Local Initialization**: Function calls pop arguments directly into the callee's local slots, bypassing intermediate vector allocations.
 4. **Efficient Dispatch**: The instruction loop minimizes redundant call stack lookups and employs inlined stack helpers.
+5. **Superinstructions**: High-frequency instruction sequences (like `LoadLocal` + `AddI64`) are fused into single opcodes to reduce dispatch overhead.
 
 ### Frames
 

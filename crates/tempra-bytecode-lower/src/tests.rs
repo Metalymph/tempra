@@ -199,3 +199,55 @@ fn test_peephole_preserves_user_slots() {
     assert!(disasm.contains("StoreLocal $0"));
     assert!(disasm.contains("LoadLocal $0"));
 }
+
+#[test]
+fn test_peephole_fuses_superinstructions() {
+    use tempra_tir::*;
+    use crate::lower_tir_module;
+    use tempra_bytecode::verify::verify_module;
+    use tempra_bytecode::disasm::disassemble_module;
+
+    let mut module = TirModule::default();
+    let mut func = TirFunction {
+        id: TirFunctionId(0),
+        name: "test_fusion".into(),
+        params: vec![(TirValueId(0), TirType::Int64), (TirValueId(1), TirType::Int64)],
+        return_type: TirType::Int64,
+        blocks: vec![],
+        next_value_id: 3,
+        next_block_id: 1,
+        next_slot_id: 0,
+        debug_slots: Default::default(),
+    };
+
+    // v2 = v0 + v1
+    // v3 = 10
+    // v4 = v2 + v3
+    let v0 = TirValueId(0);
+    let v1 = TirValueId(1);
+    let v2 = TirValueId(2);
+    let v3 = TirValueId(3);
+    let v4 = TirValueId(4);
+    
+    func.blocks.push(TirBlock {
+        id: TirBlockId(0),
+        instrs: vec![
+            TirInstr::Add(v2, v0, v1),
+            TirInstr::Const(v3, TirConst::Int64(10)),
+            TirInstr::Add(v4, v2, v3),
+        ],
+        terminator: Some(TirTerminator::Ret(Some(v4))),
+    });
+    func.next_value_id = 5;
+
+    module.functions.push(func);
+    let bc_module = lower_tir_module(&module).unwrap();
+    verify_module(&bc_module).unwrap();
+    let disasm = disassemble_module(&bc_module);
+    
+    println!("{}", disasm);
+
+    // Should contain superinstructions
+    assert!(disasm.contains("AddI64LL"));
+    assert!(disasm.contains("AddI64LC"));
+}

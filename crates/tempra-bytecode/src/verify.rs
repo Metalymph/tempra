@@ -311,6 +311,32 @@ pub fn verify_function_direct(module: &BytecodeModule, func: &BytecodeFunction) 
                     state.pop_ty()?; // pop array
                     state.stack.push(BytecodeType::Any);
                 }
+                BytecodeInstr::AddI64LL(a, b) => {
+                    if a.0 >= func.locals.len() as u32 { return Err(BytecodeVerifyError::InvalidLocalId(a)); }
+                    if !state.locals_init[a.0 as usize] { return Err(BytecodeVerifyError::LocalNotInitialized(a)); }
+                    if func.locals[a.0 as usize] != BytecodeType::Int64 && func.locals[a.0 as usize] != BytecodeType::Any {
+                        return Err(BytecodeVerifyError::StackTypeMismatch { expected: BytecodeType::Int64, found: func.locals[a.0 as usize] });
+                    }
+                    if b.0 >= func.locals.len() as u32 { return Err(BytecodeVerifyError::InvalidLocalId(b)); }
+                    if !state.locals_init[b.0 as usize] { return Err(BytecodeVerifyError::LocalNotInitialized(b)); }
+                    if func.locals[b.0 as usize] != BytecodeType::Int64 && func.locals[b.0 as usize] != BytecodeType::Any {
+                        return Err(BytecodeVerifyError::StackTypeMismatch { expected: BytecodeType::Int64, found: func.locals[b.0 as usize] });
+                    }
+                    state.stack.push(BytecodeType::Int64);
+                }
+                BytecodeInstr::AddI64LC(a, id) => {
+                    if a.0 >= func.locals.len() as u32 { return Err(BytecodeVerifyError::InvalidLocalId(a)); }
+                    if !state.locals_init[a.0 as usize] { return Err(BytecodeVerifyError::LocalNotInitialized(a)); }
+                    if func.locals[a.0 as usize] != BytecodeType::Int64 && func.locals[a.0 as usize] != BytecodeType::Any {
+                        return Err(BytecodeVerifyError::StackTypeMismatch { expected: BytecodeType::Int64, found: func.locals[a.0 as usize] });
+                    }
+                    let constant = module.constants.get(id.0 as usize)
+                        .ok_or(BytecodeVerifyError::InvalidConstId(id))?;
+                    if !matches!(constant, crate::constant::BytecodeConstant::Int64(_)) {
+                        return Err(BytecodeVerifyError::Message("Expected Int64 constant".into()));
+                    }
+                    state.stack.push(BytecodeType::Int64);
+                }
             }
 
             if state.stack.len() > observed_max_stack {

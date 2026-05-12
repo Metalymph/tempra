@@ -107,6 +107,12 @@ pub fn disassemble_function(module: &BytecodeModule, func_id: FunctionId) -> Res
             BytecodeInstr::SetField(name) => {
                 out.push_str(&format!("SetField #{}\n", name.0));
             }
+            BytecodeInstr::AddI64LL(a, b) => {
+                out.push_str(&format!("AddI64LL ${} ${}\n", a.0, b.0));
+            }
+            BytecodeInstr::AddI64LC(a, id) => {
+                out.push_str(&format!("AddI64LC ${} #{}\n", a.0, id.0));
+            }
         }
     }
     Ok(out)

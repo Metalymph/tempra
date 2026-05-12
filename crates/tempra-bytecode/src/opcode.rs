@@ -65,6 +65,10 @@ pub enum BytecodeInstr {
     MakeStruct(ConstId, ConstId, u16), // name_id, field_list_id, field_count
     GetField(ConstId),               // field_name_id
     SetField(ConstId),               // field_name_id
+
+    // Superinstructions
+    AddI64LL(LocalId, LocalId),       // LoadLocal a; LoadLocal b; AddI64
+    AddI64LC(LocalId, ConstId),       // LoadLocal a; ConstI64 b; AddI64
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -119,6 +123,7 @@ pub fn stack_effect(
         BytecodeInstr::MakeStruct(_name, _fields, count) => StackEffect { pops: *count, pushes: 1 },
         BytecodeInstr::GetField(_) => StackEffect { pops: 1, pushes: 1 },
         BytecodeInstr::SetField(_) => StackEffect { pops: 2, pushes: 1 },
+        BytecodeInstr::AddI64LL(_, _) | BytecodeInstr::AddI64LC(_, _) => StackEffect { pops: 0, pushes: 1 },
     };
     Ok(effect)
 }

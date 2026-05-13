@@ -60,6 +60,16 @@ options.hot_call_threshold = 1000;
 run_function_with_options(module, "main", args, options);
 ```
 
+## Performance Tracking (Phase 15.4)
+
+The prototype exposes precise timings through `VmProfile` to evaluate Time-To-Profitability. The metrics include:
+- `jit_compile_time_ns`: Total time spent translating and emitting machine code (aggregate for dependencies in v0 policy).
+- `jit_total_native_time_ns`: Total duration executing inside the JIT wrapper (only active when profiling is enabled).
+- `jit_rejected_count`: Explicit occurrences where the Engine attempts compilation but actively refuses.
+
+**Cold vs Warm Benchmarks:**
+The performance harness in `tempra-driver/tests/perf_baseline.rs` introduces isolated benchmarks to distinguish between a "Cold Run" (where compilation latency masks native speedup) and a "Warm Run" (where functions are pulled directly from the compiled memory cache). This facilitates exact Time-To-Profitability configurations.
+
 ### Fallback Policy
 The VM always maintains the stack-based interpreter as the primary runtime. If:
 1. A function uses unsupported types (Strings, Structs, etc.).

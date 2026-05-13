@@ -318,6 +318,9 @@ fn profile_summary_contains_hot_function() {
                 jit_runtime_calls: 0,
                 jit_fallback_calls: 0,
                 jit_rejection_reason: None,
+                jit_compile_time_ns: 0,
+                jit_total_native_time_ns: 0,
+                jit_rejected_count: 0,
             }
         ],
         global_opcode_counts: vec![0; BYTECODE_OPCODE_COUNT],

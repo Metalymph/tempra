@@ -130,3 +130,119 @@ fn test_driver_jit_fallback() {
     assert!(summary.contains("JIT Rejections:"));
     assert!(summary.contains("Unsupported type"));
 }
+
+#[test]
+#[cfg(feature = "jit-cranelift")]
+fn test_jit_profile_records_compile_time() {
+    let source = r#"
+        fn add(a: Int64, b: Int64) -> Int64 { return a + b }
+        fn main() -> Int64 { return add(10, 20) }
+    "#;
+    let mut options = VmOptions::default();
+    options.jit_enabled = true;
+    options.profiling = true;
+    options.hot_call_threshold = 0;
+    
+    let (_, profile) = tempra_driver::run_source_vm_profiled(source, options).unwrap();
+    let main_stats = profile.function_stats.iter().find(|f| f.function_name == "main").unwrap();
+    let add_stats = profile.function_stats.iter().find(|f| f.function_name == "add").unwrap();
+    
+    assert!(main_stats.jit_compile_time_ns > 0);
+    // Add is compiled as a dependency, its compile time is aggregated into main's compile time for v0 policy
+    assert_eq!(add_stats.jit_compile_time_ns, 0);
+}
+
+#[test]
+#[cfg(feature = "jit-cranelift")]
+fn test_jit_profile_runtime_calls_increase() {
+    let source = r#"
+        fn add(a: Int64, b: Int64) -> Int64 { return a + b }
+        fn main() -> Int64 {
+            let s1 = add(1, 2)
+            let s2 = add(s1, 3)
+            return s2
+        }
+    "#;
+    let mut options = VmOptions::default();
+    options.jit_enabled = true;
+    options.profiling = true;
+    options.hot_call_threshold = 0; // main is hot immediately
+    
+    let hash = tempra_driver::cache::compute_source_hash(source);
+    let cache_path = tempra_driver::cache::get_cache_path(&hash);
+    let module = tempra_driver::compile_to_bytecode(source, &cache_path).unwrap();
+    
+    let mut interpreter = tempra_vm::Interpreter::with_options(&module, options);
+    let main_id = tempra_bytecode::function::FunctionId(module.functions.iter().position(|f| f.name == "main").unwrap() as u32);
+    
+    // Cold run (compiles)
+    interpreter.run_function_id(main_id, vec![]).unwrap();
+    // Warm run (executes natively)
+    interpreter.run_function_id(main_id, vec![]).unwrap();
+    // Warm run (executes natively)
+    interpreter.run_function_id(main_id, vec![]).unwrap();
+    
+    let profile = interpreter.build_profile();
+    let main_stats = profile.function_stats.iter().find(|f| f.function_name == "main").unwrap();
+    
+    // main is called natively 2 times 
+    assert_eq!(main_stats.jit_runtime_calls, 2);
+    // On Mac/Linux, measuring Instant::now() might be 0ns if super fast.
+    // So we just check that it compiles correctly and metrics aren't broken.
+}
+
+#[test]
+#[cfg(feature = "jit-cranelift")]
+fn test_jit_warm_run_uses_existing_compiled_function() {
+    let source = r#"
+        fn add(a: Int64, b: Int64) -> Int64 { return a + b }
+        fn main() -> Int64 { return add(1, 2) }
+    "#;
+    let mut options = VmOptions::default();
+    options.jit_enabled = true;
+    options.profiling = true;
+    options.hot_call_threshold = 0;
+    
+    let hash = tempra_driver::cache::compute_source_hash(source);
+    let cache_path = tempra_driver::cache::get_cache_path(&hash);
+    let module = tempra_driver::compile_to_bytecode(source, &cache_path).unwrap();
+    
+    let mut interpreter = tempra_vm::Interpreter::with_options(&module, options);
+    let main_id = tempra_bytecode::function::FunctionId(module.functions.iter().position(|f| f.name == "main").unwrap() as u32);
+    
+    // Cold run
+    let _ = interpreter.run_function_id(main_id, vec![]).unwrap();
+    let cold_profile = interpreter.build_profile();
+    let cold_main = cold_profile.function_stats.iter().find(|f| f.function_name == "main").unwrap();
+    assert_eq!(cold_main.jit_compile_attempts, 1);
+    
+    // Warm run
+    let _ = interpreter.run_function_id(main_id, vec![]).unwrap();
+    let warm_profile = interpreter.build_profile();
+    let warm_main = warm_profile.function_stats.iter().find(|f| f.function_name == "main").unwrap();
+    
+    // Attempt count should remain exactly 1, no new compilation attempt
+    assert_eq!(warm_main.jit_compile_attempts, 1);
+    // It should have executed as a runtime call during the warm run
+    assert_eq!(warm_main.jit_runtime_calls, 1);
+}
+
+#[test]
+#[cfg(feature = "jit-cranelift")]
+fn test_jit_threshold_prevents_early_compile() {
+    let source = r#"
+        fn add(a: Int64, b: Int64) -> Int64 { return a + b }
+        fn main() -> Int64 { return add(1, 2) }
+    "#;
+    let mut options = VmOptions::default();
+    options.jit_enabled = true;
+    options.profiling = true;
+    options.hot_call_threshold = 5; // higher than the 1 call to main
+    
+    let (_, profile) = tempra_driver::run_source_vm_profiled(source, options).unwrap();
+    let main_stats = profile.function_stats.iter().find(|f| f.function_name == "main").unwrap();
+    
+    assert_eq!(main_stats.jit_compile_attempts, 0);
+    assert_eq!(main_stats.jit_compile_successes, 0);
+    assert_eq!(main_stats.jit_compile_time_ns, 0);
+}

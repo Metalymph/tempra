@@ -96,9 +96,12 @@ impl<'a> Interpreter<'a> {
 
                 let success = false;
                 if compatible {
+                    let start_native = std::time::Instant::now();
                     if let Ok(res) = jit_fn.call_i64(&i64_args) {
+                        let elapsed = start_native.elapsed().as_nanos() as u64;
                         if let Some(ref mut prof) = self.profiling {
                             prof.stats[function_id.0 as usize].jit_runtime_calls += 1;
+                            prof.stats[function_id.0 as usize].jit_total_native_time_ns += elapsed;
                         }
                         return Ok(VmValue::Int64(res));
                     }
@@ -184,6 +187,9 @@ impl<'a> Interpreter<'a> {
                 jit_runtime_calls: s.jit_runtime_calls,
                 jit_fallback_calls: s.jit_fallback_calls,
                 jit_rejection_reason: s.jit_rejection_reason.clone(),
+                jit_compile_time_ns: s.jit_compile_time_ns,
+                jit_total_native_time_ns: s.jit_total_native_time_ns,
+                jit_rejected_count: s.jit_rejected_count,
             });
         }
 
@@ -269,11 +275,16 @@ impl<'a> Interpreter<'a> {
             return;
         }
 
+        let start_time = std::time::Instant::now();
+
         let eligibility = tempra_jit_cranelift::explain_jit_eligibility(self.module, function_id);
         if let Some(ref mut prof) = self.profiling {
             prof.stats[function_id.0 as usize].jit_compile_attempts += 1;
             if !matches!(eligibility, tempra_jit_cranelift::JitEligibility::Eligible) {
                 prof.stats[function_id.0 as usize].jit_rejection_reason = Some(eligibility.to_string());
+                prof.stats[function_id.0 as usize].jit_rejected_count += 1;
+                let elapsed = start_time.elapsed().as_nanos() as u64;
+                prof.stats[function_id.0 as usize].jit_compile_time_ns += elapsed;
                 return;
             }
         }
@@ -284,6 +295,7 @@ impl<'a> Interpreter<'a> {
             match tempra_jit_cranelift::compile_function_i64(engine, self.module, function_id, &mut self.jit_cache, &mut compiling) {
                 Ok(compiled) => {
                     self.jit_cache.insert(function_id, compiled);
+                    let elapsed = start_time.elapsed().as_nanos() as u64;
                     if let Some(ref mut prof) = self.profiling {
                         for new_key in self.jit_cache.keys() {
                             if !old_keys.contains(new_key) && *new_key != function_id {
@@ -292,12 +304,15 @@ impl<'a> Interpreter<'a> {
                             }
                         }
                         prof.stats[function_id.0 as usize].jit_compile_successes += 1;
+                        prof.stats[function_id.0 as usize].jit_compile_time_ns += elapsed;
                     }
                 }
                 Err(e) => {
+                    let elapsed = start_time.elapsed().as_nanos() as u64;
                     if let Some(ref mut prof) = self.profiling {
                         prof.stats[function_id.0 as usize].jit_compile_failures += 1;
                         prof.stats[function_id.0 as usize].jit_rejection_reason = Some(format!("Compilation failed: {:?}", e));
+                        prof.stats[function_id.0 as usize].jit_compile_time_ns += elapsed;
                     }
                 }
             }

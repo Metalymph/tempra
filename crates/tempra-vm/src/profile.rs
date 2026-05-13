@@ -37,6 +37,9 @@ pub struct FunctionProfile {
     pub jit_runtime_calls: u64,
     pub jit_fallback_calls: u64,
     pub jit_rejection_reason: Option<String>,
+    pub jit_compile_time_ns: u64,
+    pub jit_total_native_time_ns: u64,
+    pub jit_rejected_count: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -78,12 +81,18 @@ impl VmProfile {
             let total_failures: u64 = self.function_stats.iter().map(|f| f.jit_compile_failures).sum();
             let total_runtime: u64 = self.function_stats.iter().map(|f| f.jit_runtime_calls).sum();
             let total_fallback: u64 = self.function_stats.iter().map(|f| f.jit_fallback_calls).sum();
+            let total_compile_time_ns: u64 = self.function_stats.iter().map(|f| f.jit_compile_time_ns).sum();
+            let total_native_time_ns: u64 = self.function_stats.iter().map(|f| f.jit_total_native_time_ns).sum();
+            let total_rejected_count: u64 = self.function_stats.iter().map(|f| f.jit_rejected_count).sum();
 
             writeln!(s, "  Compile attempts: {}", total_attempts).unwrap();
             writeln!(s, "  Successes:        {}", total_successes).unwrap();
             writeln!(s, "  Failures:         {}", total_failures).unwrap();
             writeln!(s, "  Runtime calls:    {}", total_runtime).unwrap();
             writeln!(s, "  Fallback calls:   {}", total_fallback).unwrap();
+            writeln!(s, "  Rejected count:   {}", total_rejected_count).unwrap();
+            writeln!(s, "  Compile time:     {} ns", total_compile_time_ns).unwrap();
+            writeln!(s, "  Native runtime:   {} ns", total_native_time_ns).unwrap();
 
             let rejected: Vec<_> = self.function_stats.iter()
                 .filter(|f| f.jit_rejection_reason.is_some())
@@ -176,6 +185,9 @@ pub(crate) struct FunctionStats {
     pub jit_runtime_calls: u64,
     pub jit_fallback_calls: u64,
     pub jit_rejection_reason: Option<String>,
+    pub jit_compile_time_ns: u64,
+    pub jit_total_native_time_ns: u64,
+    pub jit_rejected_count: u64,
 }
 
 impl Default for FunctionStats {
@@ -191,6 +203,9 @@ impl Default for FunctionStats {
             jit_runtime_calls: 0,
             jit_fallback_calls: 0,
             jit_rejection_reason: None,
+            jit_compile_time_ns: 0,
+            jit_total_native_time_ns: 0,
+            jit_rejected_count: 0,
         }
     }
 }

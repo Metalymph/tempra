@@ -27,6 +27,13 @@ Measurements are averaged over 20 iterations after 2 warmup runs.
 
 ## Candidates for Optimization
 
+### Phase 15.4 — JIT Trace & Performance Validation
+Added precise timing metrics to evaluate JIT compilation overhead versus native execution speedups.
+- **Timing Metrics**: `VmProfile` now tracks `jit_compile_time_ns` and `jit_total_native_time_ns`.
+- **Benchmarking**: Upgraded `perf_baseline.rs` to evaluate performance across HIR, cold VM JIT, and warm VM JIT execution modes.
+- **Profitability**: Built automated "Time-to-profitability" estimates measuring compile costs against per-call native speedups.
+- **Guardrails**: Rejection limits verified and accurately tracked as explicit fallbacks.
+
 ### Phase 15.3 — JIT Int64 Calls v1
 Expanded JIT support to allow static calls between eligible Int64 functions.
 - **Dependency Compilation**: The VM automatically resolves and pre-compiles `Call` instruction targets, maintaining the JIT-cache without VM-to-JIT callbacks.

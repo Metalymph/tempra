@@ -127,8 +127,9 @@ fn run_benchmark(name: &str, source: &str) -> PerfMetrics {
     // 6. Profiling Summary (Run once)
     let options = tempra_vm::VmOptions {
         profiling: true,
-        call_threshold: 1, // Capture everything for small benchmarks
-        backedge_threshold: 1,
+        hot_call_threshold: 1, // Capture everything for small benchmarks
+        hot_backedge_threshold: 1,
+        jit_enabled: false,
     };
     let (_, profile) = tempra_vm::run_function_profiled(&module, "main", vec![], options).unwrap();
     println!("\n--- Profiling Summary: {} ---", name);
@@ -153,6 +154,248 @@ fn print_table(results: &[PerfMetrics]) {
     for r in results {
         println!("| {:<20} | {:>9?} | {:>11?} | {:>10?} | {:>7?} | {:>7} B | {:>6} | {:>3} | {:>10} B |",
             r.case_name, r.hir_avg, r.vm_miss_avg, r.vm_hit_avg, r.vm_exec_avg, r.bytecode_bytes, r.instr_count, r.fn_count, r.cache_artifact_bytes);
+    }
+    println!();
+}
+
+#[derive(Debug)]
+struct JitPerfRow {
+    case: String,
+    mode: String,
+    threshold: u64,
+    duration_ns: u64,
+    jit_compile_time_ns: u64,
+    jit_runtime_calls: u64,
+    jit_fallback_calls: u64,
+    jit_rejected: u64,
+    bytecode_instr_count: usize,
+}
+
+fn print_jit_table(rows: &[JitPerfRow]) {
+    println!("\n| Case | Mode | Thresh | Duration (ns) | Compile (ns) | RT Calls | FB Calls | Reject | Instrs |");
+    println!("|------|------|--------|---------------|--------------|----------|----------|--------|--------|");
+    for r in rows {
+        println!("| {:<20} | {:<10} | {:>6} | {:>13} | {:>12} | {:>8} | {:>8} | {:>6} | {:>6} |",
+            r.case, r.mode, r.threshold, r.duration_ns, r.jit_compile_time_ns, r.jit_runtime_calls, r.jit_fallback_calls, r.jit_rejected, r.bytecode_instr_count);
+    }
+    println!();
+}
+
+#[cfg(feature = "jit-cranelift")]
+fn run_jit_benchmark(name: &str, source: &str, threshold: u64) -> Vec<JitPerfRow> {
+    let mut rows = Vec::new();
+    let hash = tempra_driver::cache::compute_source_hash(source);
+    let cache_path = tempra_driver::cache::get_cache_path(&hash);
+    let module = compile_to_bytecode(source, &cache_path).unwrap();
+    let (_, instr_count) = get_bytecode_metrics(&module);
+
+    // 1. HIR
+    let start_hir = Instant::now();
+    for _ in 0..ITERATIONS {
+        let _ = tempra_driver::run_source_hir(source, &[]).unwrap();
+    }
+    let hir_avg = start_hir.elapsed().as_nanos() as u64 / (ITERATIONS as u64);
+    rows.push(JitPerfRow {
+        case: name.to_string(), mode: "HIR".into(), threshold, duration_ns: hir_avg,
+        jit_compile_time_ns: 0, jit_runtime_calls: 0, jit_fallback_calls: 0, jit_rejected: 0, bytecode_instr_count: instr_count,
+    });
+
+    // 2. VM No JIT
+    let mut options = tempra_vm::VmOptions { profiling: true, jit_enabled: false, hot_call_threshold: threshold, hot_backedge_threshold: threshold };
+    let start_vm = Instant::now();
+    for _ in 0..ITERATIONS {
+        let _ = tempra_vm::run_function_profiled(&module, "main", vec![], options).unwrap();
+    }
+    let vm_avg = start_vm.elapsed().as_nanos() as u64 / (ITERATIONS as u64);
+    rows.push(JitPerfRow {
+        case: name.to_string(), mode: "VM".into(), threshold, duration_ns: vm_avg,
+        jit_compile_time_ns: 0, jit_runtime_calls: 0, jit_fallback_calls: 0, jit_rejected: 0, bytecode_instr_count: instr_count,
+    });
+
+    // 3. VM JIT Cold (we run it once per iteration to capture compilation overhead each time)
+    options.jit_enabled = true;
+    let start_cold = Instant::now();
+    let mut cold_compile = 0;
+    let mut cold_rt = 0;
+    let mut cold_fb = 0;
+    let mut cold_rej = 0;
+    for _ in 0..ITERATIONS {
+        let (_, profile) = tempra_vm::run_function_profiled(&module, "main", vec![], options).unwrap();
+        cold_compile += profile.function_stats.iter().map(|f| f.jit_compile_time_ns).sum::<u64>();
+        cold_rt += profile.function_stats.iter().map(|f| f.jit_runtime_calls).sum::<u64>();
+        cold_fb += profile.function_stats.iter().map(|f| f.jit_fallback_calls).sum::<u64>();
+        cold_rej += profile.function_stats.iter().map(|f| f.jit_rejected_count).sum::<u64>();
+    }
+    let cold_avg = start_cold.elapsed().as_nanos() as u64 / (ITERATIONS as u64);
+    rows.push(JitPerfRow {
+        case: name.to_string(), mode: "JIT-Cold".into(), threshold, duration_ns: cold_avg,
+        jit_compile_time_ns: cold_compile / (ITERATIONS as u64),
+        jit_runtime_calls: cold_rt / (ITERATIONS as u64),
+        jit_fallback_calls: cold_fb / (ITERATIONS as u64),
+        jit_rejected: cold_rej / (ITERATIONS as u64),
+        bytecode_instr_count: instr_count,
+    });
+
+    // 4. VM JIT Warm (use the same interpreter instance across iterations so it stays compiled)
+    let start_warm = Instant::now();
+    let mut interpreter = tempra_vm::Interpreter::with_options(&module, options);
+    let mut warm_compile = 0;
+    let mut warm_rt = 0;
+    let mut warm_fb = 0;
+    let mut warm_rej = 0;
+    
+    // Warmup
+    let main_id = tempra_bytecode::function::FunctionId(module.functions.iter().position(|f| f.name == "main").unwrap() as u32);
+    let _ = interpreter.run_function_id(main_id, vec![]).unwrap();
+    
+    for _ in 0..ITERATIONS {
+        let _ = interpreter.run_function_id(main_id, vec![]).unwrap();
+        let profile = interpreter.build_profile();
+        warm_compile += profile.function_stats.iter().map(|f| f.jit_compile_time_ns).sum::<u64>();
+        warm_rt += profile.function_stats.iter().map(|f| f.jit_runtime_calls).sum::<u64>();
+        warm_fb += profile.function_stats.iter().map(|f| f.jit_fallback_calls).sum::<u64>();
+        warm_rej += profile.function_stats.iter().map(|f| f.jit_rejected_count).sum::<u64>();
+    }
+    let warm_avg = start_warm.elapsed().as_nanos() as u64 / (ITERATIONS as u64);
+    rows.push(JitPerfRow {
+        case: name.to_string(), mode: "JIT-Warm".into(), threshold, duration_ns: warm_avg,
+        jit_compile_time_ns: warm_compile / (ITERATIONS as u64),
+        jit_runtime_calls: warm_rt / (ITERATIONS as u64),
+        jit_fallback_calls: warm_fb / (ITERATIONS as u64),
+        jit_rejected: warm_rej / (ITERATIONS as u64),
+        bytecode_instr_count: instr_count,
+    });
+
+    rows
+}
+
+#[test]
+#[ignore]
+#[cfg(feature = "jit-cranelift")]
+fn benchmark_jit_performance() {
+    let mut all_rows = Vec::new();
+
+    // Case 1: int64_call_chain
+    let call_chain = r#"
+        fn a(x: Int64) -> Int64 { return x + 1 }
+        fn b(x: Int64) -> Int64 { return a(x) * 2 }
+        fn c(x: Int64) -> Int64 { return b(x) - 3 }
+        fn main() -> Int64 {
+            var sum = 0
+            let xs = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+            for i in xs {
+                for j in xs {
+                    sum = sum + c(i)
+                }
+            }
+            return sum
+        }
+    "#;
+    all_rows.extend(run_jit_benchmark("int64_call_chain", call_chain, 10));
+
+    // Case 2: int64_nested_loop_sum
+    let nested_loop = r#"
+        fn add(a: Int64, b: Int64) -> Int64 { return a + b }
+        fn main() -> Int64 {
+            var sum = 0
+            let xs = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+            for i in xs {
+                for j in xs {
+                    sum = add(sum, add(i, j))
+                }
+            }
+            return sum
+        }
+    "#;
+    all_rows.extend(run_jit_benchmark("int64_nested_loop_sum_1", nested_loop, 1));
+    all_rows.extend(run_jit_benchmark("int64_nested_loop_sum_10", nested_loop, 10));
+    all_rows.extend(run_jit_benchmark("int64_nested_loop_sum_100", nested_loop, 100));
+
+    // Case 3: int64_arithmetic_hot_function
+    let arithmetic_hot = r#"
+        fn compute(x: Int64) -> Int64 {
+            return (x * 3 + 14) / 2 - x
+        }
+        fn main() -> Int64 {
+            var sum = 0
+            let xs = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+            for i in xs {
+                for j in xs {
+                    sum = sum + compute(i)
+                }
+            }
+            return sum
+        }
+    "#;
+    all_rows.extend(run_jit_benchmark("int64_arithm_hot", arithmetic_hot, 10));
+
+    // Case 4: mixed_supported_and_unsupported_fallback
+    let mixed_fallback = r#"
+        fn compute(x: Int64) -> Int64 {
+            return x * 2
+        }
+        fn get_string_len(s: String) -> Int64 {
+            return s.len()
+        }
+        fn main() -> Int64 {
+            var sum = 0
+            let xs = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+            for i in xs {
+                for j in xs {
+                    if i < 5 {
+                        sum = sum + compute(i)
+                    } else {
+                        sum = sum + get_string_len("test")
+                    }
+                }
+            }
+            return sum
+        }
+    "#;
+    all_rows.extend(run_jit_benchmark("mixed_fallback", mixed_fallback, 10));
+
+    print_jit_table(&all_rows);
+
+    // Calculate time-to-profitability
+    println!("### Time-To-Profitability Estimates\n");
+    println!("| Case | Compile Cost (ns) | VM Exec (ns) | Warm JIT Exec (ns) | Speedup/Call (ns) | Est. Calls to Profit |");
+    println!("|------|-------------------|--------------|--------------------|-------------------|----------------------|");
+    
+    // Group by case name
+    let mut cases = std::collections::HashSet::new();
+    for row in &all_rows {
+        cases.insert(row.case.clone());
+    }
+
+    let mut sorted_cases: Vec<_> = cases.into_iter().collect();
+    sorted_cases.sort();
+
+    for case in sorted_cases {
+        let vm_row = all_rows.iter().find(|r| r.case == case && r.mode == "VM").unwrap();
+        let cold_row = all_rows.iter().find(|r| r.case == case && r.mode == "JIT-Cold").unwrap();
+        let warm_row = all_rows.iter().find(|r| r.case == case && r.mode == "JIT-Warm").unwrap();
+
+        let compile_cost = cold_row.jit_compile_time_ns;
+        // Approximation: total duration divided by iteration loop count (1000 for most cases)
+        // Since we don't have exactly "per call", we use the difference in total duration
+        let speedup_total = if vm_row.duration_ns > warm_row.duration_ns {
+            vm_row.duration_ns - warm_row.duration_ns
+        } else {
+            0
+        };
+        
+        // Let's assume inner loop is roughly 1000 calls. Actually nested loop is 100x100 = 10000.
+        // We will just do full run profitability.
+        let calls_to_profit = if speedup_total > 0 {
+            let speedup_per_run = speedup_total; // Speedup per one test function run
+            let runs_to_profit = compile_cost as f64 / speedup_per_run as f64;
+            format!("{:.2} full runs", runs_to_profit)
+        } else {
+            "Never".to_string()
+        };
+
+        println!("| {:<20} | {:>17} | {:>12} | {:>18} | {:>17} | {:>20} |",
+            case, compile_cost, vm_row.duration_ns, warm_row.duration_ns, speedup_total, calls_to_profit);
     }
     println!();
 }

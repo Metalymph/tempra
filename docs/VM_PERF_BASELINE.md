@@ -27,6 +27,12 @@ Measurements are averaged over 20 iterations after 2 warmup runs.
 
 ## Candidates for Optimization
 
+### Phase 15.3 — JIT Int64 Calls v1
+Expanded JIT support to allow static calls between eligible Int64 functions.
+- **Dependency Compilation**: The VM automatically resolves and pre-compiles `Call` instruction targets, maintaining the JIT-cache without VM-to-JIT callbacks.
+- **Recursive Safety**: Cleanly rejects cyclical call graphs to prevent compilation loops.
+- **Diagnostics**: Rejection reasons (e.g. nested calls to string functions) correctly propagate up the call chain for full profile visibility.
+
 ### Phase 15.2 — JIT Observability & Guardrails
 Added performance tracking and safe fallbacks for the JIT integration.
 - **Metrics**: `VmProfile` now tracks `jit_compile_attempts`, `jit_compile_successes`, `jit_runtime_calls`, and `jit_fallback_calls`.

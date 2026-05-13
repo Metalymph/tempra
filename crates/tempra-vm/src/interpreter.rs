@@ -94,7 +94,7 @@ impl<'a> Interpreter<'a> {
                     }
                 }
 
-                let mut success = false;
+                let success = false;
                 if compatible {
                     if let Ok(res) = jit_fn.call_i64(&i64_args) {
                         if let Some(ref mut prof) = self.profiling {
@@ -279,10 +279,18 @@ impl<'a> Interpreter<'a> {
         }
 
         if let Some(ref mut engine) = self.jit_engine {
-            match tempra_jit_cranelift::compile_function_i64(engine, self.module, function_id) {
+            let old_keys: Vec<tempra_bytecode::function::FunctionId> = self.jit_cache.keys().copied().collect();
+            let mut compiling = std::collections::HashSet::new();
+            match tempra_jit_cranelift::compile_function_i64(engine, self.module, function_id, &mut self.jit_cache, &mut compiling) {
                 Ok(compiled) => {
                     self.jit_cache.insert(function_id, compiled);
                     if let Some(ref mut prof) = self.profiling {
+                        for new_key in self.jit_cache.keys() {
+                            if !old_keys.contains(new_key) && *new_key != function_id {
+                                prof.stats[new_key.0 as usize].jit_compile_attempts += 1;
+                                prof.stats[new_key.0 as usize].jit_compile_successes += 1;
+                            }
+                        }
                         prof.stats[function_id.0 as usize].jit_compile_successes += 1;
                     }
                 }

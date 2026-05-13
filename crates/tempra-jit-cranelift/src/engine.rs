@@ -88,35 +88,68 @@ impl std::fmt::Display for JitEligibility {
 }
 
 pub fn explain_jit_eligibility(module: &BytecodeModule, function_id: FunctionId) -> JitEligibility {
+    let mut visited = std::collections::HashSet::new();
+    explain_jit_eligibility_internal(module, function_id, &mut visited)
+}
+
+fn explain_jit_eligibility_internal(
+    module: &BytecodeModule, 
+    function_id: FunctionId,
+    visited: &mut std::collections::HashSet<FunctionId>
+) -> JitEligibility {
+    if visited.contains(&function_id) {
+        return JitEligibility::UnsupportedInstr { offset: 0, instr: "Call target not JIT eligible (recursion)".into() };
+    }
+    visited.insert(function_id);
+
     let func = match module.functions.get(function_id.0 as usize) {
         Some(f) => f,
-        None => return JitEligibility::UnsupportedSignature("Function not found".into()),
+        None => {
+            visited.remove(&function_id);
+            return JitEligibility::UnsupportedSignature("Function not found".into());
+        }
     };
 
     // Params must be Int64
     for (i, p) in func.params.iter().enumerate() {
         if *p != BytecodeType::Int64 {
+            visited.remove(&function_id);
             return JitEligibility::UnsupportedType(format!("Parameter {} has unsupported type {:?}", i, p));
         }
     }
     // Return must be Int64
     if func.ret != BytecodeType::Int64 {
+        visited.remove(&function_id);
         return JitEligibility::UnsupportedType(format!("Return has unsupported type {:?}", func.ret));
     }
     // Locals must be Int64
     for (i, l) in func.locals.iter().enumerate() {
         if *l != BytecodeType::Int64 {
+            visited.remove(&function_id);
             return JitEligibility::UnsupportedType(format!("Local {} has unsupported type {:?}", i, l));
         }
     }
 
     // Instructions must be supported
     for (offset, instr) in func.code.iter().enumerate() {
-        if !crate::lower::is_instr_supported(instr) {
+        if let tempra_bytecode::opcode::BytecodeInstr::Call(target_id, _) = instr {
+            let target_eligibility = explain_jit_eligibility_internal(module, *target_id, visited);
+            if target_eligibility != JitEligibility::Eligible {
+                visited.remove(&function_id);
+                if let JitEligibility::UnsupportedInstr { instr: ref target_instr, .. } = target_eligibility {
+                    if target_instr.contains("recursion") {
+                        return JitEligibility::UnsupportedInstr { offset, instr: "Call target not JIT eligible (recursion)".into() };
+                    }
+                }
+                return JitEligibility::UnsupportedInstr { offset, instr: format!("Call target not JIT eligible: {}", target_eligibility) };
+            }
+        } else if !crate::lower::is_instr_supported(instr) {
+            visited.remove(&function_id);
             return JitEligibility::UnsupportedInstr { offset, instr: format!("{:?}", instr) };
         }
     }
 
+    visited.remove(&function_id);
     JitEligibility::Eligible
 }
 

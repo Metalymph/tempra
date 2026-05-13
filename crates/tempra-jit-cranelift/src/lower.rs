@@ -26,11 +26,35 @@ pub fn compile_function_i64(
     engine: &mut JitEngine,
     module: &BytecodeModule,
     function_id: FunctionId,
+    jit_cache: &mut HashMap<FunctionId, JitFunctionI64>,
+    compiling: &mut std::collections::HashSet<FunctionId>,
 ) -> Result<JitFunctionI64, JitCompileError> {
+    if compiling.contains(&function_id) {
+        return Err(JitCompileError::CraneliftError("Call target not JIT eligible (recursion)".into()));
+    }
+    compiling.insert(function_id);
+
     let func = module.functions.get(function_id.0 as usize)
         .ok_or_else(|| JitCompileError::CraneliftError("Function not found".into()))?;
 
+    // Pre-compile dependencies
+    let mut dependencies = Vec::new();
+    for instr in &func.code {
+        if let BytecodeInstr::Call(target_id, _) = instr {
+            if !jit_cache.contains_key(target_id) && !dependencies.contains(target_id) {
+                dependencies.push(*target_id);
+            }
+        }
+    }
+
+    for dep in dependencies {
+        let compiled = compile_function_i64(engine, module, dep, jit_cache, compiling)?;
+        jit_cache.insert(dep, compiled);
+    }
+    compiling.remove(&function_id);
+
     engine.ctx.clear();
+    engine.ctx.func.signature = engine.module.make_signature();
     engine.ctx.func.signature.returns.push(AbiParam::new(types::I64));
     for _ in 0..func.params.len() {
         engine.ctx.func.signature.params.push(AbiParam::new(types::I64));
@@ -38,6 +62,7 @@ pub fn compile_function_i64(
 
     let mut builder = FunctionBuilder::new(&mut engine.ctx.func, &mut engine.builder_context);
     
+
     // 1. Identify jump targets
     let mut jump_targets = HashMap::new();
     for instr in &func.code {
@@ -182,6 +207,28 @@ pub fn compile_function_i64(
                 };
                 let b = builder.ins().iconst(types::I64, c_val);
                 stack.push(builder.ins().iadd(a, b));
+            }
+            BytecodeInstr::Call(target_id, argc) => {
+                let mut args = Vec::new();
+                for _ in 0..*argc {
+                    args.push(stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?);
+                }
+                args.reverse();
+
+                let mut sig = engine.module.make_signature();
+                sig.returns.push(AbiParam::new(types::I64));
+                for _ in 0..*argc {
+                    sig.params.push(AbiParam::new(types::I64));
+                }
+
+                let target_name = format!("jit_fn_{}", target_id.0);
+                let callee_id = engine.module.declare_function(&target_name, Linkage::Export, &sig)
+                    .map_err(|e| JitCompileError::CraneliftError(e.to_string()))?;
+                
+                let local_callee = engine.module.declare_func_in_func(callee_id, &mut builder.func);
+                let call_inst = builder.ins().call(local_callee, &args);
+                let res = builder.inst_results(call_inst)[0];
+                stack.push(res);
             }
             _ => return Err(JitCompileError::UnsupportedInstr(*instr)),
         }

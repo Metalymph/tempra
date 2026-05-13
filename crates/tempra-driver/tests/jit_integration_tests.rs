@@ -67,6 +67,39 @@ fn test_driver_jit_observability() {
 
 #[test]
 #[cfg(feature = "jit-cranelift")]
+fn test_driver_jit_native_calls() {
+    let source = r#"
+        fn add(a: Int64, b: Int64) -> Int64 {
+            return a + b
+        }
+        fn main() -> Int64 {
+            let s1 = add(10, 20)
+            let s2 = add(s1, 30)
+            let s3 = add(s2, 40)
+            return s3
+        }
+    "#;
+    
+    let mut options = VmOptions::default();
+    options.jit_enabled = true;
+    options.profiling = true;
+    options.hot_call_threshold = 0; // Compile immediately on first call
+    options.hot_backedge_threshold = 100;
+    
+    let (res, profile) = tempra_driver::run_source_vm_profiled(source, options).unwrap();
+    assert_eq!(res, VmValue::Int64(100)); // 10+20+30+40 = 100
+
+    
+    let summary = profile.summary();
+    // main is hot because of backedges. It calls add.
+    // add gets pre-compiled as a dependency of main.
+    // So both should be compiled successfully!
+    assert!(summary.contains("Successes:        2"));
+    assert!(!summary.contains("JIT Rejections:"));
+}
+
+#[test]
+#[cfg(feature = "jit-cranelift")]
 fn test_driver_jit_fallback() {
     let source = r#"
         fn process_string(s: String) -> Int64 {

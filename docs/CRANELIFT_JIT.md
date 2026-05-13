@@ -20,6 +20,9 @@ The prototype currently supports only `Int64` pure functions:
     - Conditional branches (`JumpIfFalse`).
     - Unconditional jumps (`Jump`).
     - Recursive and iterative loops.
+- **Function Calls (v1)**: 
+    - Static `Call` to other JIT-eligible Int64 functions.
+    - Automatic pre-compilation of dependencies.
 - **Superinstructions**:
     - `AddI64LL` (Fused local-local add).
     - `AddI64LC` (Fused local-constant add).
@@ -29,7 +32,7 @@ Any function using the following features is currently rejected by the JIT and w
 - Strings, Arrays, Slices.
 - Structs, Enums.
 - Option, Result.
-- Function calls (static or dynamic).
+- Recursion (recursive function calls are currently rejected to prevent compilation loops).
 - Closures and methods.
 - Floating point or unsigned arithmetic.
 

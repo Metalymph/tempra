@@ -1051,3 +1051,83 @@ fn jit_helper_array_get_i64_type_error_on_non_i64() {
     let res = native_fn(ctx_ptr as u64, handle.0, 0);
     assert_eq!(res.status, crate::abi::JIT_STATUS_ERROR_TYPE);
 }
+
+#[test]
+fn jit_helper_status_consumed_array_get_ok() {
+    use crate::helpers::{JitRuntimeContext, JitHeapScalar, tmpr_jit_array_get_i64};
+    use cranelift::prelude::*;
+    use cranelift_module::Module;
+
+    let mut engine = JitEngine::new();
+    let mut ctx = JitRuntimeContext::new();
+    let handle = ctx.alloc_array(vec![
+        JitHeapScalar::Int64(42),
+    ]);
+    let ctx_ptr = &mut ctx as *mut JitRuntimeContext;
+
+    engine.ctx.clear();
+    let mut sig = engine.module.make_signature();
+    sig.params.push(AbiParam::new(types::I64)); // ctx
+    sig.params.push(AbiParam::new(types::I64)); // handle
+    sig.params.push(AbiParam::new(types::I64)); // index
+    sig.returns.push(AbiParam::new(types::I64)); // result (value if OK, else -1)
+    engine.ctx.func.signature = sig.clone();
+
+    // Helper signature
+    let mut helper_sig = engine.module.make_signature();
+    helper_sig.params.push(AbiParam::new(types::I64));
+    helper_sig.params.push(AbiParam::new(types::I64));
+    helper_sig.params.push(AbiParam::new(types::I64));
+    helper_sig.returns.push(AbiParam::new(types::I64)); // value
+    helper_sig.returns.push(AbiParam::new(types::I64)); // status
+
+    let mut builder = FunctionBuilder::new(&mut engine.ctx.func, &mut engine.builder_context);
+    let block = builder.create_block();
+    builder.append_block_params_for_function_params(block);
+    builder.switch_to_block(block);
+    builder.seal_block(block);
+
+    let args = builder.block_params(block).to_vec();
+    let helper_sig_ref = builder.import_signature(helper_sig);
+    let helper_addr = builder.ins().iconst(types::I64, tmpr_jit_array_get_i64 as i64);
+    let call = builder.ins().call_indirect(helper_sig_ref, helper_addr, &args);
+    let results = builder.inst_results(call).to_vec();
+    let val = results[0];
+    let status = results[1];
+
+    let success_block = builder.create_block();
+    let error_block = builder.create_block();
+
+    let is_ok = builder.ins().icmp_imm(IntCC::Equal, status, 0); // JIT_STATUS_SUCCESS = 0
+    builder.ins().brif(is_ok, success_block, &[], error_block, &[]);
+
+    builder.switch_to_block(success_block);
+    builder.seal_block(success_block);
+    builder.ins().return_(&[val]);
+
+    builder.switch_to_block(error_block);
+    builder.seal_block(error_block);
+    let sentinel = builder.ins().iconst(types::I64, -1);
+    builder.ins().return_(&[sentinel]);
+
+    builder.finalize();
+
+    let func_id = engine.module.declare_function("test_status_check", cranelift_module::Linkage::Export, &engine.ctx.func.signature).unwrap();
+    engine.module.define_function(func_id, &mut engine.ctx).unwrap();
+    engine.module.finalize_definitions().unwrap();
+
+    let code = engine.module.get_finalized_function(func_id);
+    let native_fn: extern "C" fn(u64, u64, i64) -> i64 = unsafe { std::mem::transmute(code) };
+    
+    // 1. Success case
+    assert_eq!(native_fn(ctx_ptr as u64, handle.0, 0), 42);
+
+    // 2. OOB case -> -1
+    assert_eq!(native_fn(ctx_ptr as u64, handle.0, 1), -1);
+
+    // 3. Null context -> -1
+    assert_eq!(native_fn(0, handle.0, 0), -1);
+
+    // 4. Invalid handle -> -1
+    assert_eq!(native_fn(ctx_ptr as u64, 9999, 0), -1);
+}

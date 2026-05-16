@@ -68,10 +68,10 @@ Helpers that can fail (e.g., due to bounds checks or type mismatches) follow a d
 - **Phase 16.3**: JIT Helper Probe: String.size + Status Handling. [COMPLETE]
 - **Phase 16.4**: JIT Helper Probe: Array.len. [COMPLETE]
 - **Phase 16.5**: JIT Helper Probe: Array.get Int64. [COMPLETE]
-    - **Safe Indexing**: Verified `OUT_OF_BOUNDS` status for invalid indices.
-    - **Type Safety**: Verified `TypeError` for non-Int64 elements (e.g. Bool).
-    - **Negative i64**: Confirmed bit-preserving roundtrip (e.g. -7).
-    - **Boundary Safety**: Reports failures through status codes instead of panicking.
-- **Phase 16.6**: Implement Struct field access and Enum tag probes. [PLANNED]
+- **Phase 16.6**: Heap Helper Status Consumption Probe. [COMPLETE]
+    - **Native Branching**: Verified that Cranelift-emitted code can branch on `JitHelperResult.status`.
+    - **Control Flow**: Implemented native probe: `if status == SUCCESS return value else return -1`.
+    - **Full Coverage**: Validated success, OOB, TypeError, and invalid context paths via native branching.
+- **Phase 16.7**: Implement Struct field access and Enum tag probes. [PLANNED]
 - **Phase 16.3**: Implement Struct field access.
 - **Phase 16.4**: Finalize Enum/Option support via Tag/Unwrap helpers.

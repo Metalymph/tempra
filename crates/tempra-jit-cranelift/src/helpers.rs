@@ -31,6 +31,8 @@ pub enum JitHelperSignature {
     StructGet,
     /// (ctx: *mut JitRuntimeContext, HeapHandle) -> JitHelperResult (value=tag, status)
     EnumTag,
+    /// (ctx: *mut JitRuntimeContext, HeapHandle, expected_tag: u64, payload_index: u64) -> JitHelperResult (value=i64_bits, status)
+    EnumUnwrap,
 }
 
 impl JitHelperRegistry {
@@ -71,6 +73,12 @@ impl JitHelperRegistry {
             name: "tmpr_jit_enum_tag",
             signature: JitHelperSignature::EnumTag,
             ptr: tmpr_jit_enum_tag as *const (),
+        });
+
+        helpers.insert("tmpr_jit_enum_unwrap_i64", JitHelperInfo {
+            name: "tmpr_jit_enum_unwrap_i64",
+            signature: JitHelperSignature::EnumUnwrap,
+            ptr: tmpr_jit_enum_unwrap_i64 as *const (),
         });
 
         Self { helpers }
@@ -273,6 +281,32 @@ pub extern "C" fn tmpr_jit_struct_get_i64(ctx: *mut JitRuntimeContext, handle: u
 pub extern "C" fn tmpr_jit_enum_tag(ctx: *mut JitRuntimeContext, handle: u64) -> JitHelperResult {
     with_handle(ctx, handle, |obj| match obj {
         JitHeapObject::Enum(e) => Ok(e.tag),
+        _ => Err(crate::abi::JIT_STATUS_ERROR_TYPE),
+    })
+}
+
+/// Helper implementation for Enum.unwrap_i64
+/// 
+/// ABI: (ctx: *mut JitRuntimeContext, handle: u64, expected_tag: u64, payload_index: u64) -> JitHelperResult
+pub extern "C" fn tmpr_jit_enum_unwrap_i64(
+    ctx: *mut JitRuntimeContext,
+    handle: u64,
+    expected_tag: u64,
+    payload_index: u64,
+) -> JitHelperResult {
+    with_handle(ctx, handle, |obj| match obj {
+        JitHeapObject::Enum(e) => {
+            if e.tag != expected_tag {
+                return Err(crate::abi::JIT_STATUS_ERROR_WRONG_VARIANT);
+            }
+            if payload_index >= e.payloads.len() as u64 {
+                return Err(crate::abi::JIT_STATUS_ERROR_OUT_OF_BOUNDS);
+            }
+            match &e.payloads[payload_index as usize] {
+                JitHeapScalar::Int64(val) => Ok(*val as u64),
+                _ => Err(crate::abi::JIT_STATUS_ERROR_TYPE),
+            }
+        }
         _ => Err(crate::abi::JIT_STATUS_ERROR_TYPE),
     })
 }

@@ -73,10 +73,11 @@ Helpers that can fail (e.g., due to bounds checks or type mismatches) follow a d
 - **Phase 16.8**: JIT Heap Helper Wrapper API. [COMPLETE]
 - **Phase 16.9**: JIT Helper Probe: Struct.get Int64. [COMPLETE]
 - **Phase 16.10**: JIT Helper Probe: Enum.tag. [COMPLETE]
-    - **Enum Arena Support**: Added `JitHeapEnum` and `alloc_enum`.
-    - **Tag Retrieval**: Verified `tmpr_jit_enum_tag` for `Option` and `Result` prototypes.
-    - **Type Safety**: Confirmed `TypeError` when calling enum helpers on non-enum objects (e.g. Array).
-    - **Boundary Hardening**: Verified `to_result()` wrapper integration for enum tags.
-- **Phase 16.11**: JIT Helper Probe: Enum.unwrap payload. [PLANNED]
+- **Phase 16.11**: JIT Helper Probe: Enum.unwrap Int64. [COMPLETE]
+    - **Safe Unwrapping**: Implemented `tmpr_jit_enum_unwrap_i64` with `expected_tag` validation.
+    - **WrongVariant Status**: Introduced `JIT_STATUS_ERROR_WRONG_VARIANT` for mismatched tags.
+    - **Full Coverage**: Verified `Option::Some(42)`, `Result::Ok(-7)`, and `WrongVariant` (Err as Ok).
+    - **Type Safety**: Confirmed `TypeError` for non-enum handles or non-integer payloads.
+- **Phase 16.12**: Implement JIT Helper Probe: String.concat (First mutation probe). [PLANNED]
 - **Phase 16.3**: Implement Struct field access.
 - **Phase 16.4**: Finalize Enum/Option support via Tag/Unwrap helpers.

@@ -22,6 +22,7 @@ pub const JIT_STATUS_ERROR_INVALID_HANDLE: JitStatus = 4;
 pub const JIT_STATUS_ERROR_MISSING_HELPER: JitStatus = 5;
 pub const JIT_STATUS_ERROR_INVALID_CONTEXT: JitStatus = 6;
 pub const JIT_STATUS_ERROR_OUT_OF_BOUNDS: JitStatus = 7;
+pub const JIT_STATUS_ERROR_WRONG_VARIANT: JitStatus = 8;
 
 /// A representation of a value passed across the JIT/VM boundary.
 #[derive(Debug, Clone, Copy)]

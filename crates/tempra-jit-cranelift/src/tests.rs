@@ -1345,3 +1345,82 @@ fn jit_helper_enum_tag_errors_and_wrapper() {
     // 4. Null context
     assert_eq!(tmpr_jit_enum_tag(std::ptr::null_mut(), e_handle.0).to_result(), Err(JitRuntimeError::InvalidContext));
 }
+
+#[test]
+fn jit_helper_enum_unwrap_i64_option_some() {
+    use crate::helpers::{JitRuntimeContext, JitHeapScalar, tmpr_jit_enum_unwrap_i64};
+    use cranelift::prelude::*;
+    use cranelift_module::Module;
+
+    let mut engine = JitEngine::new();
+    let mut ctx = JitRuntimeContext::new();
+    let handle = ctx.alloc_enum("Option", "Some", 1, vec![JitHeapScalar::Int64(42)]);
+    let ctx_ptr = &mut ctx as *mut JitRuntimeContext;
+
+    engine.ctx.clear();
+    let mut sig = engine.module.make_signature();
+    sig.params.push(AbiParam::new(types::I64)); // ctx
+    sig.params.push(AbiParam::new(types::I64)); // handle
+    sig.params.push(AbiParam::new(types::I64)); // expected_tag
+    sig.params.push(AbiParam::new(types::I64)); // payload_index
+    sig.returns.push(AbiParam::new(types::I64)); // value
+    sig.returns.push(AbiParam::new(types::I64)); // status
+    engine.ctx.func.signature = sig.clone();
+
+    let mut builder = FunctionBuilder::new(&mut engine.ctx.func, &mut engine.builder_context);
+    let block = builder.create_block();
+    builder.append_block_params_for_function_params(block);
+    builder.switch_to_block(block);
+    builder.seal_block(block);
+
+    let args = builder.block_params(block).to_vec();
+    let helper_sig_ref = builder.import_signature(sig);
+    let helper_addr = builder.ins().iconst(types::I64, tmpr_jit_enum_unwrap_i64 as i64);
+    let call = builder.ins().call_indirect(helper_sig_ref, helper_addr, &args);
+    let results = builder.inst_results(call).to_vec();
+    
+    builder.ins().return_(&[results[0], results[1]]);
+    builder.finalize();
+
+    let func_id = engine.module.declare_function("test_enum_unwrap", cranelift_module::Linkage::Export, &engine.ctx.func.signature).unwrap();
+    engine.module.define_function(func_id, &mut engine.ctx).unwrap();
+    engine.module.finalize_definitions().unwrap();
+
+    let code = engine.module.get_finalized_function(func_id);
+    let native_fn: extern "C" fn(u64, u64, u64, u64) -> crate::abi::JitHelperResult = unsafe { std::mem::transmute(code) };
+    
+    // Tag 1 (Some), Index 0 -> 42
+    let res = native_fn(ctx_ptr as u64, handle.0, 1, 0);
+    assert_eq!(res.value, 42);
+    assert_eq!(res.status, crate::abi::JIT_STATUS_SUCCESS);
+}
+
+#[test]
+fn jit_helper_enum_unwrap_i64_result_and_negative() {
+    use crate::helpers::{JitRuntimeContext, JitHeapScalar, tmpr_jit_enum_unwrap_i64};
+    use crate::error::JitRuntimeError;
+    
+    let mut ctx = JitRuntimeContext::new();
+    // Result::Ok(-7) -> Tag 0, Payload [-7]
+    let ok_handle = ctx.alloc_enum("Result", "Ok", 0, vec![JitHeapScalar::Int64(-7)]);
+    // Result::Err(404) -> Tag 1, Payload [404]
+    let err_handle = ctx.alloc_enum("Result", "Err", 1, vec![JitHeapScalar::Int64(404)]);
+    let ctx_ptr = &mut ctx as *mut JitRuntimeContext;
+    
+    // 1. Result::Ok(-7) success
+    let res = tmpr_jit_enum_unwrap_i64(ctx_ptr, ok_handle.0, 0, 0);
+    assert_eq!(res.to_i64_result(), Ok(-7));
+    
+    // 2. Wrong variant (unwrap Err as Ok)
+    let res = tmpr_jit_enum_unwrap_i64(ctx_ptr, err_handle.0, 0, 0);
+    assert_eq!(res.to_i64_result(), Err(JitRuntimeError::WrongVariant));
+    
+    // 3. OOB payload index
+    let res = tmpr_jit_enum_unwrap_i64(ctx_ptr, ok_handle.0, 0, 1);
+    assert_eq!(res.to_i64_result(), Err(JitRuntimeError::OutOfBounds));
+    
+    // 4. Type error (non-enum)
+    let a_handle = ctx.alloc_array(vec![]);
+    let res = tmpr_jit_enum_unwrap_i64(ctx_ptr, a_handle.0, 0, 0);
+    assert_eq!(res.to_i64_result(), Err(JitRuntimeError::TypeError));
+}

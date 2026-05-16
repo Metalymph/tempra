@@ -101,3 +101,49 @@ The JIT is verified via differential tests comparing VM results with native exec
 ```bash
 cargo test -p tempra-jit-cranelift
 ```
+
+## JIT Policy v1 (Phase 15.5)
+
+### VmOptions Reference
+
+| Field | Default | Description |
+|---|---|---|
+| `jit_enabled` | `false` | Master switch. JIT is opt-in only. |
+| `hot_call_threshold` | `100` | Minimum call count before a function is considered hot. |
+| `hot_backedge_threshold` | `1000` | Minimum backedge count (loop iterations) to declare hotness. |
+| `jit_min_instruction_count` | `8` | Functions with fewer bytecode instructions are never JIT-compiled. Tiny functions (e.g. single-expression wrappers) pay more in Cranelift overhead than they save. |
+| `jit_retry_limit` | `1` | Maximum Cranelift compilation failures allowed before a function is permanently rejected. Set to 1 means: one attempt; if it fails, never try again. |
+
+### Compilation Decision (per call-site)
+
+The guard in `maybe_compile_jit` evaluates in this order:
+
+1. `jit_enabled` is false → return immediately, no stats recorded.
+2. `jit_is_permanently_rejected` is set → return immediately (zero-cost cache hit).
+3. `call_count < hot_call_threshold && backedge_count < hot_backedge_threshold` → `jit_skipped_below_threshold++` and return.
+4. `bytecode_len < jit_min_instruction_count` → `jit_skipped_too_small++` and return.
+5. `jit_compile_failures >= jit_retry_limit` → `jit_skipped_retry_limit++` and return.
+6. Proceed to eligibility check (`explain_jit_eligibility`):
+   - Ineligible → `jit_is_permanently_rejected = true`, `jit_permanent_rejections++`.
+7. Invoke Cranelift:
+   - Success → store in cache, record `jit_compile_time_ns`.
+   - Failure → `jit_compile_failures++`. If failures now `>= retry_limit`: mark permanently rejected. Otherwise: `jit_retryable_failures++`.
+
+> **Note:** `jit_skipped_below_threshold` is a *decision-check counter*, not a unique-functions counter. It increments every time a non-hot function is encountered at the call-site. For long-running programs with many cold calls, this number can be large and is diagnostic only.
+
+### Policy Stats in VmProfile::summary()
+
+```
+JIT Policy:
+  skipped below threshold: N   (decision checks where function was not yet hot)
+  skipped too small:       N   (bytecode len < jit_min_instruction_count)
+  retry-limit skips:       N   (permanently failed functions bypassed)
+  permanent rejections:    N   (unsupported types or exhausted retries)
+```
+
+### Current Recommendation (v1)
+
+- **JIT opt-in only**: leave `jit_enabled = false` in production until threshold tuning is complete.
+- **High thresholds**: default `hot_call_threshold = 100` is conservative. For compute-heavy workloads that run thousands of calls, lower to 20–50.
+- **No JIT for tiny functions**: `jit_min_instruction_count = 8` is a safe floor. Micro-functions (simple getters, one-expression helpers) cost more to compile than they save.
+- **Retry limit = 1**: a single transient Cranelift failure on a given function is treated as permanent. Raise to 2 only if you observe false transient failures in practice.

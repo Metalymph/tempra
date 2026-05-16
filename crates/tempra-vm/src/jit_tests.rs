@@ -41,6 +41,7 @@ fn test_jit_integration_add() {
     let mut options = VmOptions::default();
     options.jit_enabled = true;
     options.hot_call_threshold = 3; // Trigger JIT after 3 calls
+    options.jit_min_instruction_count = 0; // unit test uses tiny hand-crafted bytecode
     
     let mut interp = Interpreter::with_options(&module, options);
     let res = interp.run_function_id(main_id, vec![]).unwrap();
@@ -119,6 +120,7 @@ fn test_jit_observability_stats() {
     options.jit_enabled = true;
     options.hot_call_threshold = 2;
     options.profiling = true;
+    options.jit_min_instruction_count = 0; // unit test uses tiny hand-crafted bytecode
     
     let mut interp = Interpreter::with_options(&module, options);
     
@@ -152,6 +154,7 @@ fn test_jit_rejection_reason() {
     options.jit_enabled = true;
     options.hot_call_threshold = 1;
     options.profiling = true;
+    options.jit_min_instruction_count = 0; // unit test uses tiny hand-crafted bytecode
     
     let mut interp = Interpreter::with_options(&module, options);
     

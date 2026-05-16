@@ -27,6 +27,15 @@ Measurements are averaged over 20 iterations after 2 warmup runs.
 
 ## Candidates for Optimization
 
+### Phase 15.5 — JIT Threshold Tuning & Policy
+Introduced a stable, measurable compilation policy to prevent compile storms and eliminate wasted Cranelift invocations.
+- **New `VmOptions` fields**: `jit_min_instruction_count` (default 8) and `jit_retry_limit` (default 1).
+- **Updated defaults**: `hot_call_threshold` lowered from 1000 → 100; `hot_backedge_threshold` from 10 000 → 1000.
+- **Compile-storm guard**: a permanently-rejected function is never re-attempted, costing only a boolean check on every call.
+- **Policy stats**: `VmProfile` now exposes `jit_skipped_below_threshold` (decision-check counter), `jit_skipped_too_small`, `jit_skipped_retry_limit`, `jit_permanent_rejections`, and `jit_retryable_failures`.
+- **Summary section**: `VmProfile::summary()` prints a `JIT Policy:` block when any of those counters is non-zero.
+- **Verified**: 14 integration tests + 4 low-level unit tests all pass.
+
 ### Phase 15.4 — JIT Trace & Performance Validation
 Added precise timing metrics to evaluate JIT compilation overhead versus native execution speedups.
 - **Timing Metrics**: `VmProfile` now tracks `jit_compile_time_ns` and `jit_total_native_time_ns`.

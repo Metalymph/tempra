@@ -245,4 +245,172 @@ fn test_jit_threshold_prevents_early_compile() {
     assert_eq!(main_stats.jit_compile_attempts, 0);
     assert_eq!(main_stats.jit_compile_successes, 0);
     assert_eq!(main_stats.jit_compile_time_ns, 0);
+    // The call was counted as a "below threshold" skip
+    assert!(main_stats.jit_skipped_below_threshold > 0);
+}
+
+// ============================================================
+// Phase 15.5 — JIT Policy tests
+// ============================================================
+
+#[test]
+#[cfg(feature = "jit-cranelift")]
+fn test_jit_policy_skips_below_threshold() {
+    // hot_call_threshold = 100; function called once → skip, not compile
+    let source = r#"
+        fn add(a: Int64, b: Int64) -> Int64 { return a + b }
+        fn main() -> Int64 { return add(1, 2) }
+    "#;
+    let mut options = VmOptions::default(); // hot_call_threshold = 100
+    options.jit_enabled = true;
+    options.profiling  = true;
+
+    let (_, profile) = tempra_driver::run_source_vm_profiled(source, options).unwrap();
+    let main = profile.function_stats.iter().find(|f| f.function_name == "main").unwrap();
+
+    assert_eq!(main.jit_compile_attempts, 0, "must not attempt compilation below threshold");
+    assert!(main.jit_skipped_below_threshold > 0, "skip counter must be non-zero");
+    assert_eq!(main.jit_compile_successes, 0);
+}
+
+#[test]
+#[cfg(feature = "jit-cranelift")]
+fn test_jit_policy_skips_too_small_function() {
+    // Function body: just `return 42` → 1-2 instructions < jit_min_instruction_count=8
+    let source = r#"
+        fn tiny() -> Int64 { return 42 }
+        fn main() -> Int64 { return tiny() }
+    "#;
+    let mut options = VmOptions::default();
+    options.jit_enabled = true;
+    options.profiling  = true;
+    options.hot_call_threshold = 0; // force hot
+    options.jit_min_instruction_count = 8;
+
+    let (_, profile) = tempra_driver::run_source_vm_profiled(source, options).unwrap();
+    let tiny = profile.function_stats.iter().find(|f| f.function_name == "tiny").unwrap();
+
+    // tiny() has very few instructions, so it should be skipped as too small
+    assert_eq!(tiny.jit_compile_attempts, 0, "tiny function must not be compiled");
+    assert!(tiny.jit_skipped_too_small > 0, "skipped_too_small counter must be non-zero");
+}
+
+#[test]
+#[cfg(feature = "jit-cranelift")]
+fn test_jit_policy_rejects_unsupported_permanently() {
+    // Function uses a String parameter → unsupported, must be permanently rejected
+    let source = r#"
+        fn greet(s: String) -> Int64 { return s.len() }
+        fn main() -> Int64 { return greet("hello") }
+    "#;
+    let mut options = VmOptions::default();
+    options.jit_enabled = true;
+    options.profiling  = true;
+    options.hot_call_threshold = 0;
+    options.jit_min_instruction_count = 0;
+
+    let (_, profile) = tempra_driver::run_source_vm_profiled(source, options).unwrap();
+    let greet = profile.function_stats.iter().find(|f| f.function_name == "greet").unwrap();
+
+    assert!(greet.jit_is_permanently_rejected, "string function must be permanently rejected");
+    assert!(greet.jit_rejection_reason.is_some(), "rejection reason must be set");
+    assert_eq!(greet.jit_permanent_rejections, 1);
+}
+
+#[test]
+#[cfg(feature = "jit-cranelift")]
+fn test_jit_policy_does_not_recompile_rejected_function() {
+    // Call the unsupported function multiple times; compile must only be attempted once
+    let source = r#"
+        fn greet(s: String) -> Int64 { return s.len() }
+        fn main() -> Int64 {
+            var sum = 0
+            let strs = ["a", "bb", "ccc"]
+            for s in strs {
+                sum = sum + greet(s)
+            }
+            return sum
+        }
+    "#;
+    let mut options = VmOptions::default();
+    options.jit_enabled = true;
+    options.profiling  = true;
+    options.hot_call_threshold = 0;
+    options.jit_min_instruction_count = 0;
+
+    let (_, profile) = tempra_driver::run_source_vm_profiled(source, options).unwrap();
+    let greet = profile.function_stats.iter().find(|f| f.function_name == "greet").unwrap();
+
+    // Attempted once, then permanently rejected → never attempted again
+    assert_eq!(greet.jit_compile_attempts, 1, "must only attempt once");
+    assert_eq!(greet.jit_permanent_rejections, 1);
+    assert!(greet.jit_is_permanently_rejected);
+}
+
+#[test]
+#[cfg(feature = "jit-cranelift")]
+fn test_jit_policy_compiles_after_threshold() {
+    // Run main many times until it crosses hot_call_threshold
+    let source = r#"
+        fn add(a: Int64, b: Int64) -> Int64 { return a + b + a - b + a }
+        fn main() -> Int64 { return add(10, 20) }
+    "#;
+    let mut options = VmOptions::default();
+    options.jit_enabled = true;
+    options.profiling  = true;
+    options.hot_call_threshold = 3;
+    options.jit_min_instruction_count = 0;
+
+    let hash = tempra_driver::cache::compute_source_hash(source);
+    let cache_path = tempra_driver::cache::get_cache_path(&hash);
+    let module = tempra_driver::compile_to_bytecode(source, &cache_path).unwrap();
+    let mut interp = tempra_vm::Interpreter::with_options(&module, options);
+    let main_id = tempra_bytecode::function::FunctionId(
+        module.functions.iter().position(|f| f.name == "main").unwrap() as u32
+    );
+
+    // Run 4 times: after 3 calls main becomes hot and is compiled on the 4th
+    for _ in 0..4 {
+        interp.run_function_id(main_id, vec![]).unwrap();
+    }
+    let profile = interp.build_profile();
+    let main = profile.function_stats.iter().find(|f| f.function_name == "main").unwrap();
+
+    assert!(main.jit_compile_attempts > 0, "compilation must be attempted after crossing threshold");
+    assert_eq!(main.jit_compile_successes, 1);
+    // calls 1 and 2 are below threshold (call_count < 3); call 3 hits the threshold and compiles
+    assert_eq!(main.jit_skipped_below_threshold, 2, "first 2 calls skipped (not yet hot)");
+}
+
+#[test]
+#[cfg(feature = "jit-cranelift")]
+fn test_jit_policy_retry_limit_respected() {
+    // With jit_retry_limit = 1, after one Cranelift failure the function must be skipped forever.
+    // We cannot easily force a Cranelift internal error, but we CAN verify that unsupported
+    // eligibility sets is_permanently_rejected so subsequent calls are zero-cost no-ops.
+    let source = r#"
+        fn unsupported(s: String) -> Int64 { return s.len() }
+        fn main() -> Int64 {
+            var n = 0
+            let xs = ["a", "b", "c", "d", "e"]
+            for x in xs {
+                n = n + unsupported(x)
+            }
+            return n
+        }
+    "#;
+    let mut options = VmOptions::default();
+    options.jit_enabled = true;
+    options.profiling  = true;
+    options.hot_call_threshold = 0;
+    options.jit_min_instruction_count = 0;
+    options.jit_retry_limit = 1;
+
+    let (_, profile) = tempra_driver::run_source_vm_profiled(source, options).unwrap();
+    let unsup = profile.function_stats.iter().find(|f| f.function_name == "unsupported").unwrap();
+
+    // Must never exceed 1 attempt regardless of how many times the function is dispatched
+    assert_eq!(unsup.jit_compile_attempts, 1, "only one attempt allowed by retry_limit=1");
+    assert!(unsup.jit_is_permanently_rejected);
+    assert!(unsup.jit_skipped_below_threshold == 0, "threshold was 0, should not be in threshold-skip bucket");
 }

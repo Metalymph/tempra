@@ -190,6 +190,12 @@ impl<'a> Interpreter<'a> {
                 jit_compile_time_ns: s.jit_compile_time_ns,
                 jit_total_native_time_ns: s.jit_total_native_time_ns,
                 jit_rejected_count: s.jit_rejected_count,
+                jit_skipped_below_threshold: s.jit_skipped_below_threshold,
+                jit_skipped_too_small: s.jit_skipped_too_small,
+                jit_skipped_retry_limit: s.jit_skipped_retry_limit,
+                jit_permanent_rejections: s.jit_permanent_rejections,
+                jit_retryable_failures: s.jit_retryable_failures,
+                jit_is_permanently_rejected: s.jit_is_permanently_rejected,
             });
         }
 
@@ -264,11 +270,35 @@ impl<'a> Interpreter<'a> {
         }
 
         let mut attempt_needed = false;
-        if let Some(ref prof) = self.profiling {
-            let stats = &prof.stats[function_id.0 as usize];
-            if stats.jit_rejection_reason.is_none() && prof.options.jit_enabled && prof.is_hot(function_id) {
-                attempt_needed = true;
+        if let Some(ref mut prof) = self.profiling {
+            let stats = &mut prof.stats[function_id.0 as usize];
+            
+            if !prof.options.jit_enabled {
+                return;
             }
+            
+            if stats.jit_is_permanently_rejected {
+                return; // Guardrail: permanent rejection cache
+            }
+            
+            let is_hot = stats.call_count >= prof.options.hot_call_threshold || stats.backedge_count >= prof.options.hot_backedge_threshold;
+            if !is_hot {
+                stats.jit_skipped_below_threshold += 1;
+                return;
+            }
+            
+            let func_len = self.module.functions[function_id.0 as usize].code.len() as u64;
+            if func_len < prof.options.jit_min_instruction_count {
+                stats.jit_skipped_too_small += 1;
+                return;
+            }
+            
+            if stats.jit_compile_failures >= prof.options.jit_retry_limit as u64 {
+                stats.jit_skipped_retry_limit += 1;
+                return;
+            }
+            
+            attempt_needed = true;
         }
 
         if !attempt_needed {
@@ -283,6 +313,8 @@ impl<'a> Interpreter<'a> {
             if !matches!(eligibility, tempra_jit_cranelift::JitEligibility::Eligible) {
                 prof.stats[function_id.0 as usize].jit_rejection_reason = Some(eligibility.to_string());
                 prof.stats[function_id.0 as usize].jit_rejected_count += 1;
+                prof.stats[function_id.0 as usize].jit_permanent_rejections += 1;
+                prof.stats[function_id.0 as usize].jit_is_permanently_rejected = true;
                 let elapsed = start_time.elapsed().as_nanos() as u64;
                 prof.stats[function_id.0 as usize].jit_compile_time_ns += elapsed;
                 return;
@@ -313,6 +345,14 @@ impl<'a> Interpreter<'a> {
                         prof.stats[function_id.0 as usize].jit_compile_failures += 1;
                         prof.stats[function_id.0 as usize].jit_rejection_reason = Some(format!("Compilation failed: {:?}", e));
                         prof.stats[function_id.0 as usize].jit_compile_time_ns += elapsed;
+                        
+                        let failures = prof.stats[function_id.0 as usize].jit_compile_failures;
+                        if failures >= prof.options.jit_retry_limit as u64 {
+                            prof.stats[function_id.0 as usize].jit_is_permanently_rejected = true;
+                            prof.stats[function_id.0 as usize].jit_permanent_rejections += 1;
+                        } else {
+                            prof.stats[function_id.0 as usize].jit_retryable_failures += 1;
+                        }
                     }
                 }
             }

@@ -7,6 +7,8 @@ pub struct VmOptions {
     pub jit_enabled: bool,
     pub hot_call_threshold: u64,
     pub hot_backedge_threshold: u64,
+    pub jit_min_instruction_count: u64,
+    pub jit_retry_limit: u8,
 }
 
 impl Default for VmOptions {
@@ -14,8 +16,10 @@ impl Default for VmOptions {
         Self {
             profiling: false,
             jit_enabled: false,
-            hot_call_threshold: 1000,
-            hot_backedge_threshold: 10000,
+            hot_call_threshold: 100,
+            hot_backedge_threshold: 1000,
+            jit_min_instruction_count: 8,
+            jit_retry_limit: 1,
         }
     }
 }
@@ -40,6 +44,14 @@ pub struct FunctionProfile {
     pub jit_compile_time_ns: u64,
     pub jit_total_native_time_ns: u64,
     pub jit_rejected_count: u64,
+    
+    // JIT Policy Stats
+    pub jit_skipped_below_threshold: u64,
+    pub jit_skipped_too_small: u64,
+    pub jit_skipped_retry_limit: u64,
+    pub jit_permanent_rejections: u64,
+    pub jit_retryable_failures: u64,
+    pub jit_is_permanently_rejected: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -104,6 +116,19 @@ impl VmProfile {
                     writeln!(s, "  function {}: {}", f.function_name, f.jit_rejection_reason.as_ref().unwrap()).unwrap();
                 }
             }
+        }
+        
+        let total_skipped_threshold: u64 = self.function_stats.iter().map(|f| f.jit_skipped_below_threshold).sum();
+        let total_skipped_small: u64 = self.function_stats.iter().map(|f| f.jit_skipped_too_small).sum();
+        let total_skipped_retry: u64 = self.function_stats.iter().map(|f| f.jit_skipped_retry_limit).sum();
+        let total_permanent_rejections: u64 = self.function_stats.iter().map(|f| f.jit_permanent_rejections).sum();
+        
+        if total_skipped_threshold > 0 || total_skipped_small > 0 || total_skipped_retry > 0 || total_permanent_rejections > 0 {
+            writeln!(s, "\nJIT Policy:").unwrap();
+            writeln!(s, "  skipped below threshold: {}", total_skipped_threshold).unwrap();
+            writeln!(s, "  skipped too small:       {}", total_skipped_small).unwrap();
+            writeln!(s, "  retry-limit skips:       {}", total_skipped_retry).unwrap();
+            writeln!(s, "  permanent rejections:    {}", total_permanent_rejections).unwrap();
         }
 
         s
@@ -188,6 +213,14 @@ pub(crate) struct FunctionStats {
     pub jit_compile_time_ns: u64,
     pub jit_total_native_time_ns: u64,
     pub jit_rejected_count: u64,
+    
+    // JIT Policy Stats
+    pub jit_skipped_below_threshold: u64,
+    pub jit_skipped_too_small: u64,
+    pub jit_skipped_retry_limit: u64,
+    pub jit_permanent_rejections: u64,
+    pub jit_retryable_failures: u64,
+    pub jit_is_permanently_rejected: bool,
 }
 
 impl Default for FunctionStats {
@@ -206,6 +239,12 @@ impl Default for FunctionStats {
             jit_compile_time_ns: 0,
             jit_total_native_time_ns: 0,
             jit_rejected_count: 0,
+            jit_skipped_below_threshold: 0,
+            jit_skipped_too_small: 0,
+            jit_skipped_retry_limit: 0,
+            jit_permanent_rejections: 0,
+            jit_retryable_failures: 0,
+            jit_is_permanently_rejected: false,
         }
     }
 }

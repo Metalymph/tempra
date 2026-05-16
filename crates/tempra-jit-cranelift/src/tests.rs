@@ -135,6 +135,128 @@ fn jit_loop_sum() {
 }
 
 #[test]
+fn jit_bool_local_lt_branch() {
+    let mut module = BytecodeModule::new();
+    let c1 = module.add_constant(BytecodeConstant::Int64(1));
+    let c2 = module.add_constant(BytecodeConstant::Int64(2));
+    
+    let mut func = BytecodeFunction::new("test".into(), vec![BytecodeType::Int64, BytecodeType::Int64], BytecodeType::Int64);
+    func.locals = vec![BytecodeType::Int64, BytecodeType::Int64, BytecodeType::Bool];
+    
+    // 0: Load x
+    func.code.push(BytecodeInstr::LoadLocal(LocalId(0)));
+    // 1: Load y
+    func.code.push(BytecodeInstr::LoadLocal(LocalId(1)));
+    // 2: Lt
+    func.code.push(BytecodeInstr::LtI64);
+    // 3: Store b
+    func.code.push(BytecodeInstr::StoreLocal(LocalId(2)));
+    
+    // 4: Load b
+    func.code.push(BytecodeInstr::LoadLocal(LocalId(2)));
+    // 5: JumpIfFalse to offset 8
+    func.code.push(BytecodeInstr::JumpIfFalse(InstrOffset(8)));
+    // 6: return 1
+    func.code.push(BytecodeInstr::ConstI64(c1));
+    // 7: return
+    func.code.push(BytecodeInstr::Return);
+    // 8: return 2
+    func.code.push(BytecodeInstr::ConstI64(c2));
+    // 9: return
+    func.code.push(BytecodeInstr::Return);
+    
+    func.max_stack = 2;
+    let id = module.add_function(func);
+
+    let mut engine = JitEngine::new();
+    let mut jit_cache = std::collections::HashMap::new();
+    let mut compiling = std::collections::HashSet::new();
+    let jit_fn = compile_function_i64(&mut engine, &module, id, &mut jit_cache, &mut compiling).unwrap();
+    
+    assert_eq!(jit_fn.call_i64(&[10, 20]).unwrap(), 1);
+    assert_eq!(jit_fn.call_i64(&[20, 10]).unwrap(), 2);
+}
+
+#[test]
+fn jit_rejects_bool_param() {
+    let mut module = BytecodeModule::new();
+    let func = BytecodeFunction::new("test".into(), vec![BytecodeType::Bool], BytecodeType::Int64);
+    let id = module.add_function(func);
+    
+    assert!(!can_jit_function(&module, id));
+    let eligibility = crate::engine::explain_jit_eligibility(&module, id);
+    assert!(eligibility.to_string().contains("Bool signatures are not supported"));
+}
+
+#[test]
+fn jit_rejects_bool_return() {
+    let mut module = BytecodeModule::new();
+    let func = BytecodeFunction::new("test".into(), vec![BytecodeType::Int64], BytecodeType::Bool);
+    let id = module.add_function(func);
+    
+    assert!(!can_jit_function(&module, id));
+    let eligibility = crate::engine::explain_jit_eligibility(&module, id);
+    assert!(eligibility.to_string().contains("Bool signatures are not supported"));
+}
+
+#[test]
+fn jit_nested_if_else() {
+    let mut module = BytecodeModule::new();
+    let c1 = module.add_constant(BytecodeConstant::Int64(1));
+    let c2 = module.add_constant(BytecodeConstant::Int64(2));
+    let c3 = module.add_constant(BytecodeConstant::Int64(3));
+    let c0 = module.add_constant(BytecodeConstant::Int64(0));
+    let c10 = module.add_constant(BytecodeConstant::Int64(10));
+    
+    let mut func = BytecodeFunction::new("test".into(), vec![BytecodeType::Int64], BytecodeType::Int64);
+    func.locals = vec![BytecodeType::Int64];
+    
+    // 0: Load x
+    func.code.push(BytecodeInstr::LoadLocal(LocalId(0)));
+    // 1: Load 0
+    func.code.push(BytecodeInstr::ConstI64(c0));
+    // 2: Gt
+    func.code.push(BytecodeInstr::GtI64);
+    // 3: JumpIfFalse to offset 12 (Outer Else)
+    func.code.push(BytecodeInstr::JumpIfFalse(InstrOffset(12)));
+    
+    // 4: Load x
+    func.code.push(BytecodeInstr::LoadLocal(LocalId(0)));
+    // 5: Load 10
+    func.code.push(BytecodeInstr::ConstI64(c10));
+    // 6: Gt
+    func.code.push(BytecodeInstr::GtI64);
+    // 7: JumpIfFalse to offset 10 (Inner Else)
+    func.code.push(BytecodeInstr::JumpIfFalse(InstrOffset(10)));
+    // 8: return 3
+    func.code.push(BytecodeInstr::ConstI64(c3));
+    // 9: return
+    func.code.push(BytecodeInstr::Return);
+    // 10: return 2
+    func.code.push(BytecodeInstr::ConstI64(c2));
+    // 11: return
+    func.code.push(BytecodeInstr::Return);
+    
+    // Outer Else:
+    // 12: return 1
+    func.code.push(BytecodeInstr::ConstI64(c1));
+    // 13: return
+    func.code.push(BytecodeInstr::Return);
+    
+    func.max_stack = 2;
+    let id = module.add_function(func);
+
+    let mut engine = JitEngine::new();
+    let mut jit_cache = std::collections::HashMap::new();
+    let mut compiling = std::collections::HashSet::new();
+    let jit_fn = compile_function_i64(&mut engine, &module, id, &mut jit_cache, &mut compiling).unwrap();
+    
+    assert_eq!(jit_fn.call_i64(&[-5]).unwrap(), 1);
+    assert_eq!(jit_fn.call_i64(&[5]).unwrap(), 2);
+    assert_eq!(jit_fn.call_i64(&[15]).unwrap(), 3);
+}
+
+#[test]
 fn jit_rejects_string_function() {
     let mut module = BytecodeModule::new();
     let mut func = BytecodeFunction::new("test".into(), vec![BytecodeType::String], BytecodeType::Int64);

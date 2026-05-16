@@ -1,6 +1,6 @@
 # Cranelift JIT Prototype
 
-This document describes the Phase 15.0 prototype of a Just-In-Time (JIT) compiler for the Tempra VM using [Cranelift](https://cranelift.dev/).
+This document describes the Phase 15.8 prototype of a Just-In-Time (JIT) compiler for the Tempra VM using [Cranelift](https://cranelift.dev/).
 
 ## Objective
 
@@ -12,14 +12,16 @@ The goal of this prototype is to demonstrate the ability to compile hot bytecode
 
 ## Supported Scope (v0.1)
 
-The prototype currently supports only `Int64` pure functions:
-- **Types**: `Int64` parameters, return values, and locals.
+The prototype currently supports an `Int64 + internal Bool` subset:
+- **Types**: `Int64` parameters, return values, and locals. `Bool` local variables (internal only).
 - **Arithmetic**: `Add`, `Sub`, `Mul`, `Div` (signed).
 - **Comparisons**: `Eq`, `Lt`, `Gt`.
+- **Boolean Logic**: `Not`, `And`, `Or` (logical/bitwise).
 - **Control Flow**: 
     - Conditional branches (`JumpIfFalse`).
     - Unconditional jumps (`Jump`).
     - Recursive and iterative loops.
+    - Deeply nested `if-else` and `else-if` chains.
 - **Function Calls (v1)**: 
     - Static `Call` to other JIT-eligible Int64 functions.
     - Automatic pre-compilation of dependencies.
@@ -29,6 +31,7 @@ The prototype currently supports only `Int64` pure functions:
 
 ### Unsupported Features (Fallback to VM)
 Any function using the following features is currently rejected by the JIT and will execute via the standard stack interpreter:
+- **Bool in ABI**: Boolean parameters or return types are rejected (ABI mismatch). Bools are only supported as internal locals.
 - Strings, Arrays, Slices.
 - Structs, Enums.
 - Option, Result.

@@ -87,11 +87,6 @@ impl std::fmt::Display for JitEligibility {
     }
 }
 
-pub fn explain_jit_eligibility(module: &BytecodeModule, function_id: FunctionId) -> JitEligibility {
-    let mut visited = std::collections::HashSet::new();
-    explain_jit_eligibility_internal(module, function_id, &mut visited)
-}
-
 fn explain_jit_eligibility_internal(
     module: &BytecodeModule, 
     function_id: FunctionId,
@@ -110,23 +105,29 @@ fn explain_jit_eligibility_internal(
         }
     };
 
-    // Params must be Int64
+    // Params must be Int64 (Bool ABI not yet supported)
     for (i, p) in func.params.iter().enumerate() {
         if *p != BytecodeType::Int64 {
             visited.remove(&function_id);
+            if *p == BytecodeType::Bool {
+                return JitEligibility::UnsupportedType("Bool signatures are not supported by JIT v1".into());
+            }
             return JitEligibility::UnsupportedType(format!("Parameter {} has unsupported type {:?}", i, p));
         }
     }
     // Return must be Int64
     if func.ret != BytecodeType::Int64 {
         visited.remove(&function_id);
+        if func.ret == BytecodeType::Bool {
+            return JitEligibility::UnsupportedType("Bool signatures are not supported by JIT v1".into());
+        }
         return JitEligibility::UnsupportedType(format!("Return has unsupported type {:?}", func.ret));
     }
-    // Locals must be Int64 or Bool (for comparisons)
+    // Locals must be Int64 or Bool (for internal control flow)
     for (i, l) in func.locals.iter().enumerate() {
         if *l != BytecodeType::Int64 && *l != BytecodeType::Bool {
             visited.remove(&function_id);
-            return JitEligibility::UnsupportedType(format!("Local {} has unsupported type {:?}", i, l));
+            return JitEligibility::UnsupportedType(format!("Local {} has unsupported type {:?}. JIT v1 only supports Int64 and internal Bool locals.", i, l));
         }
     }
 
@@ -151,6 +152,11 @@ fn explain_jit_eligibility_internal(
 
     visited.remove(&function_id);
     JitEligibility::Eligible
+}
+
+pub fn explain_jit_eligibility(module: &BytecodeModule, function_id: FunctionId) -> JitEligibility {
+    let mut visited = std::collections::HashSet::new();
+    explain_jit_eligibility_internal(module, function_id, &mut visited)
 }
 
 pub fn can_jit_function(module: &BytecodeModule, function_id: FunctionId) -> bool {

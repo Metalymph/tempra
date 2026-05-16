@@ -762,8 +762,8 @@ impl<'a> LowerContext<'a> {
                     return self.lower_narrowing_if(i, is_pat);
                 }
                 let cond = self.lower_expression(&i.condition)?;
-                let t_block = self.builder.new_block();
-                let f_block = self.builder.new_block();
+                let mut t_block = self.builder.new_block();
+                let mut f_block = self.builder.new_block();
                 
                 self.builder.build_condbr(cond, t_block, f_block)?;
                 
@@ -772,6 +772,7 @@ impl<'a> LowerContext<'a> {
                 for stmt in &i.then_block.statements {
                     self.lower_statement(stmt)?;
                 }
+                t_block = self.builder.get_current_block().unwrap();
                 let t_terminated = self.builder.is_terminated();
 
                 // Else block
@@ -787,11 +788,15 @@ impl<'a> LowerContext<'a> {
                         return Err(TirLowerError::UnsupportedExpr("Else is not a block or if".into(), else_expr.span()));
                     }
                 }
+                f_block = self.builder.get_current_block().unwrap();
                 let f_terminated = self.builder.is_terminated();
 
                 if t_terminated && f_terminated {
-                    // Both branches terminate, no need for join block
-                    // We return a dummy value since this path is unreachable anyway
+                    // Both branches terminate. We still create a join block so that
+                    // subsequent instructions (which are unreachable) can be appended
+                    // without causing a "block already terminated" error.
+                    let end_block = self.builder.new_block();
+                    self.builder.set_current_block(end_block);
                     Ok(TirValueId(0))
                 } else {
                     let end_block = self.builder.new_block();
@@ -1038,8 +1043,8 @@ impl<'a> LowerContext<'a> {
         let wanted_tag = self.builder.build_const(TirConst::String(variant_name.clone()))?;
         let is_match = self.builder.build_eq(tag_val, wanted_tag)?;
 
-        let t_block = self.builder.new_block();
-        let f_block = self.builder.new_block();
+        let mut t_block = self.builder.new_block();
+        let mut f_block = self.builder.new_block();
         self.builder.build_condbr(is_match, t_block, f_block)?;
 
         // Save locals for scoping
@@ -1073,6 +1078,7 @@ impl<'a> LowerContext<'a> {
         for stmt in &i.then_block.statements {
             self.lower_statement(stmt)?;
         }
+        t_block = self.builder.get_current_block().unwrap();
         let t_terminated = self.builder.is_terminated();
 
         // Restore locals after then block (bindings should not leak)
@@ -1092,9 +1098,15 @@ impl<'a> LowerContext<'a> {
                 ));
             }
         }
+        f_block = self.builder.get_current_block().unwrap();
         let f_terminated = self.builder.is_terminated();
 
         if t_terminated && f_terminated {
+            // Both branches terminate. We still create a join block so that
+            // subsequent instructions (which are unreachable) can be appended
+            // without causing a "block already terminated" error.
+            let end_block = self.builder.new_block();
+            self.builder.set_current_block(end_block);
             Ok(TirValueId(0))
         } else {
             let end_block = self.builder.new_block();
@@ -1468,7 +1480,16 @@ pub fn lower_function(func: &HirFunction, type_ctx: &TypeContext, module_builder
         if ctx.builder.func.return_type == TirType::Unit {
             ctx.builder.build_ret(None)?;
         } else {
-            return Err(TirLowerError::MissingReturn(func.body.span));
+            // If the current block is not the entry block and has no predecessors,
+            // it's an unreachable block created by a fully terminating branch (e.g. if with both returns).
+            // We must still terminate it for the verifier, so we use unreachable.
+            let current_block_id = ctx.builder.get_current_block().unwrap();
+            if current_block_id.0 == 0 || ctx.builder.has_predecessors(current_block_id) {
+                return Err(TirLowerError::MissingReturn(func.body.span));
+            } else {
+                // Unreachable join block, terminate it
+                ctx.builder.build_unreachable()?;
+            }
         }
     }
     

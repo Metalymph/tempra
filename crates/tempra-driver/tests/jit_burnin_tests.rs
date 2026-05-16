@@ -67,6 +67,81 @@ fn jit_burnin_mixed_fallback() {
 
 #[test]
 #[cfg(feature = "jit-cranelift")]
+fn jit_burnin_deep_nested_branches() {
+    let source = r#"
+fn deeply_nested(x: Int64, y: Int64) -> Int64 {
+    if x > 0 {
+        if y > 0 {
+            if x > y { return 1 } else { return 2 }
+        } else {
+            if x + y > 0 { return 3 } else { return 4 }
+        }
+    } else {
+        if y > 0 {
+            if x + y > 0 { return 5 } else { return 6 }
+        } else {
+            if x < y { return 7 } else { return 8 }
+        }
+    }
+}
+
+fn main() -> Int64 {
+    var total = 0
+    total = total + deeply_nested(10, 5)   // 1
+    total = total + deeply_nested(5, 10)   // 2
+    total = total + deeply_nested(10, -5)  // 3
+    total = total + deeply_nested(5, -10) // 4
+    total = total + deeply_nested(-5, 10) // 5
+    total = total + deeply_nested(-10, 5) // 6
+    total = total + deeply_nested(-10, -5) // 7
+    total = total + deeply_nested(-5, -10) // 8
+    return total
+}
+"#;
+    let mut options = VmOptions::default();
+    options.jit_enabled = true;
+    options.hot_call_threshold = 2;
+    let (res, profile) = tempra_driver::run_source_vm_profiled(source, options).unwrap();
+    assert_eq!(res, VmValue::Int64(36));
+    let successes: u64 = profile.function_stats.iter().map(|f| f.jit_compile_successes).sum();
+    assert!(successes > 0);
+}
+
+#[test]
+#[cfg(feature = "jit-cranelift")]
+fn jit_burnin_bool_logic_chain() {
+    let source = r#"
+fn logic_chain(a: Int64, b: Int64, c: Int64) -> Int64 {
+    var res = 0
+    if a > 0 && b > 0 && c > 0 {
+        res = 1
+    } else {
+        if a < 0 || b < 0 || c < 0 {
+            res = 2
+        } else {
+            res = 3
+        }
+    }
+    return res
+}
+
+fn main() -> Int64 {
+    var total = 0
+    total = total + logic_chain(1, 1, 1)   // 1
+    total = total + logic_chain(-1, 0, 0)  // 2
+    total = total + logic_chain(0, 0, 0)   // 3
+    return total
+}
+"#;
+    let mut options = VmOptions::default();
+    options.jit_enabled = true;
+    options.hot_call_threshold = 1;
+    let (res, _) = tempra_driver::run_source_vm_profiled(source, options).unwrap();
+    assert_eq!(res, VmValue::Int64(1+2+3)); // 6
+}
+
+#[test]
+#[cfg(feature = "jit-cranelift")]
 fn jit_burnin_rejection_struct() {
     run_burnin_test("int64_rejection_struct.tmpr", 300, false);
 }

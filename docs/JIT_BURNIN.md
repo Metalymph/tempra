@@ -15,6 +15,8 @@ The following scripts are located in `examples/jit_burnin/`:
 | `int64_call_chain.tmpr` | Deep function calls | All levels JIT-compiled |
 | `int64_nested_loops.tmpr` | Multi-level loops | Efficient native backedge handling |
 | `int64_branch_heavy.tmpr` | Complex `if/else` | Correct SSA branch translation |
+| `jit_burnin_bool_logic_chain` | `&&`, `||`, `!` | Correct short-circuiting-like behavior |
+| `jit_burnin_deep_nested_branches` | 4+ levels of `if/else` | Stable block termination and join |
 | `int64_mixed_fallback.tmpr` | Strings in eligible fn | Caller rejected, executes via VM |
 | `int64_rejection_struct.tmpr` | Struct usage | Explicit rejection (eligibility check) |
 | `int64_rejection_string.tmpr` | String usage | Explicit rejection (eligibility check) |

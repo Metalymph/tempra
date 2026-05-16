@@ -105,6 +105,10 @@ impl FunctionBuilder {
         self.current_block = Some(id);
     }
 
+    pub fn get_current_block(&self) -> Option<TirBlockId> {
+        self.current_block
+    }
+
     pub fn next_value(&mut self) -> TirValueId {
         let id = TirValueId(self.func.next_value_id);
         self.func.next_value_id += 1;
@@ -151,6 +155,27 @@ impl FunctionBuilder {
     
     pub fn current_block_terminated(&self) -> bool {
         self.is_terminated()
+    }
+
+    pub fn has_predecessors(&self, block_id: TirBlockId) -> bool {
+        for block in &self.func.blocks {
+            if let Some(term) = &block.terminator {
+                match term {
+                    TirTerminator::Br(target) => {
+                        if *target == block_id {
+                            return true;
+                        }
+                    }
+                    TirTerminator::CondBr(_, t, f) => {
+                        if *t == block_id || *f == block_id {
+                            return true;
+                        }
+                    }
+                    TirTerminator::Ret(_) | TirTerminator::Unreachable => {}
+                }
+            }
+        }
+        false
     }
 
     pub fn build(self) -> TirFunction {

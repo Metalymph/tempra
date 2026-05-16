@@ -18,6 +18,7 @@ pub fn is_instr_supported(instr: &BytecodeInstr) -> bool {
         BytecodeInstr::Jump(_) | BytecodeInstr::JumpIfFalse(_) => true,
         BytecodeInstr::Return => true,
         BytecodeInstr::AddI64LL(_, _) | BytecodeInstr::AddI64LC(_, _) => true,
+        BytecodeInstr::ConstBool(_) | BytecodeInstr::Not | BytecodeInstr::And | BytecodeInstr::Or => true,
         _ => false,
     }
 }
@@ -171,6 +172,27 @@ pub fn compile_function_i64(
                 let a = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
                 let cmp = builder.ins().icmp(IntCC::SignedGreaterThan, a, b);
                 stack.push(builder.ins().uextend(types::I64, cmp));
+            }
+            BytecodeInstr::ConstBool(b) => {
+                let val = if *b { 1 } else { 0 };
+                stack.push(builder.ins().iconst(types::I64, val));
+            }
+            BytecodeInstr::Not => {
+                let a = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                // Boolean in Tempra is 0 or 1. !a is 1 - a.
+                // Or use icmp_imm(Equal, a, 0)
+                let cmp = builder.ins().icmp_imm(IntCC::Equal, a, 0);
+                stack.push(builder.ins().uextend(types::I64, cmp));
+            }
+            BytecodeInstr::And => {
+                let b = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                let a = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                stack.push(builder.ins().band(a, b));
+            }
+            BytecodeInstr::Or => {
+                let b = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                let a = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                stack.push(builder.ins().bor(a, b));
             }
             BytecodeInstr::Jump(off) => {
                 let target = jump_targets.get(&off.0).unwrap().unwrap();

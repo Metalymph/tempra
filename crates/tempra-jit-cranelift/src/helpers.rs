@@ -51,6 +51,12 @@ impl JitHelperRegistry {
             ptr: tmpr_jit_array_len as *const (),
         });
 
+        helpers.insert("tmpr_jit_array_get_i64", JitHelperInfo {
+            name: "tmpr_jit_array_get_i64",
+            signature: JitHelperSignature::ArrayGet,
+            ptr: tmpr_jit_array_get_i64 as *const (),
+        });
+
         Self { helpers }
     }
 }
@@ -158,6 +164,24 @@ pub extern "C" fn tmpr_jit_string_size(ctx: *mut JitRuntimeContext, handle: u64)
 pub extern "C" fn tmpr_jit_array_len(ctx: *mut JitRuntimeContext, handle: u64) -> JitHelperResult {
     with_handle(ctx, handle, |obj| match obj {
         JitHeapObject::Array(arr) => Ok(arr.len() as u64),
+        _ => Err(crate::abi::JIT_STATUS_ERROR_TYPE),
+    })
+}
+
+/// Helper implementation for Array.get(Int64)
+/// 
+/// ABI: (ctx: *mut JitRuntimeContext, handle: u64, index: i64) -> JitHelperResult
+pub extern "C" fn tmpr_jit_array_get_i64(ctx: *mut JitRuntimeContext, handle: u64, index: i64) -> JitHelperResult {
+    with_handle(ctx, handle, |obj| match obj {
+        JitHeapObject::Array(arr) => {
+            if index < 0 || index as usize >= arr.len() {
+                return Err(crate::abi::JIT_STATUS_ERROR_OUT_OF_BOUNDS);
+            }
+            match &arr[index as usize] {
+                JitHeapScalar::Int64(val) => Ok(*val as u64),
+                _ => Err(crate::abi::JIT_STATUS_ERROR_TYPE),
+            }
+        }
         _ => Err(crate::abi::JIT_STATUS_ERROR_TYPE),
     })
 }

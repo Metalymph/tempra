@@ -855,3 +855,199 @@ fn jit_helper_string_len_type_error_on_array() {
     let res = native_fn(ctx_ptr as u64, handle.0);
     assert_eq!(res.status, crate::abi::JIT_STATUS_ERROR_TYPE);
 }
+
+#[test]
+fn jit_helper_array_get_i64_first() {
+    use crate::helpers::{JitRuntimeContext, JitHeapScalar, tmpr_jit_array_get_i64};
+    use cranelift::prelude::*;
+    use cranelift_module::Module;
+
+    let mut engine = JitEngine::new();
+    let mut ctx = JitRuntimeContext::new();
+    let handle = ctx.alloc_array(vec![
+        JitHeapScalar::Int64(42),
+        JitHeapScalar::Int64(84),
+    ]);
+    let ctx_ptr = &mut ctx as *mut JitRuntimeContext;
+
+    engine.ctx.clear();
+    let mut sig = engine.module.make_signature();
+    sig.params.push(AbiParam::new(types::I64)); // ctx
+    sig.params.push(AbiParam::new(types::I64)); // handle
+    sig.params.push(AbiParam::new(types::I64)); // index
+    sig.returns.push(AbiParam::new(types::I64)); // value
+    sig.returns.push(AbiParam::new(types::I64)); // status
+    engine.ctx.func.signature = sig.clone();
+
+    let mut builder = FunctionBuilder::new(&mut engine.ctx.func, &mut engine.builder_context);
+    let block = builder.create_block();
+    builder.append_block_params_for_function_params(block);
+    builder.switch_to_block(block);
+    builder.seal_block(block);
+
+    let args = builder.block_params(block).to_vec();
+    let helper_sig_ref = builder.import_signature(sig);
+    let helper_addr = builder.ins().iconst(types::I64, tmpr_jit_array_get_i64 as i64);
+    let call = builder.ins().call_indirect(helper_sig_ref, helper_addr, &args);
+    let results = builder.inst_results(call).to_vec();
+    
+    builder.ins().return_(&[results[0], results[1]]);
+    builder.finalize();
+
+    let func_id = engine.module.declare_function("test_get_first", cranelift_module::Linkage::Export, &engine.ctx.func.signature).unwrap();
+    engine.module.define_function(func_id, &mut engine.ctx).unwrap();
+    engine.module.finalize_definitions().unwrap();
+
+    let code = engine.module.get_finalized_function(func_id);
+    let native_fn: extern "C" fn(u64, u64, i64) -> crate::abi::JitHelperResult = unsafe { std::mem::transmute(code) };
+    
+    let res = native_fn(ctx_ptr as u64, handle.0, 0);
+    assert_eq!(res.value, 42);
+    assert_eq!(res.status, crate::abi::JIT_STATUS_SUCCESS);
+}
+
+#[test]
+fn jit_helper_array_get_i64_negative_value() {
+    use crate::helpers::{JitRuntimeContext, JitHeapScalar, tmpr_jit_array_get_i64};
+    use cranelift::prelude::*;
+    use cranelift_module::Module;
+
+    let mut engine = JitEngine::new();
+    let mut ctx = JitRuntimeContext::new();
+    let handle = ctx.alloc_array(vec![
+        JitHeapScalar::Int64(-7),
+    ]);
+    let ctx_ptr = &mut ctx as *mut JitRuntimeContext;
+
+    engine.ctx.clear();
+    let mut sig = engine.module.make_signature();
+    sig.params.push(AbiParam::new(types::I64)); // ctx
+    sig.params.push(AbiParam::new(types::I64)); // handle
+    sig.params.push(AbiParam::new(types::I64)); // index
+    sig.returns.push(AbiParam::new(types::I64)); // value
+    sig.returns.push(AbiParam::new(types::I64)); // status
+    engine.ctx.func.signature = sig.clone();
+
+    let mut builder = FunctionBuilder::new(&mut engine.ctx.func, &mut engine.builder_context);
+    let block = builder.create_block();
+    builder.append_block_params_for_function_params(block);
+    builder.switch_to_block(block);
+    builder.seal_block(block);
+
+    let args = builder.block_params(block).to_vec();
+    let helper_sig_ref = builder.import_signature(sig);
+    let helper_addr = builder.ins().iconst(types::I64, tmpr_jit_array_get_i64 as i64);
+    let call = builder.ins().call_indirect(helper_sig_ref, helper_addr, &args);
+    let results = builder.inst_results(call).to_vec();
+    
+    builder.ins().return_(&[results[0], results[1]]);
+    builder.finalize();
+
+    let func_id = engine.module.declare_function("test_get_neg", cranelift_module::Linkage::Export, &engine.ctx.func.signature).unwrap();
+    engine.module.define_function(func_id, &mut engine.ctx).unwrap();
+    engine.module.finalize_definitions().unwrap();
+
+    let code = engine.module.get_finalized_function(func_id);
+    let native_fn: extern "C" fn(u64, u64, i64) -> crate::abi::JitHelperResult = unsafe { std::mem::transmute(code) };
+    
+    let res = native_fn(ctx_ptr as u64, handle.0, 0);
+    assert_eq!(res.value as i64, -7); // Bit-preserving roundtrip
+    assert_eq!(res.status, crate::abi::JIT_STATUS_SUCCESS);
+}
+
+#[test]
+fn jit_helper_array_get_i64_out_of_bounds() {
+    use crate::helpers::{JitRuntimeContext, JitHeapScalar, tmpr_jit_array_get_i64};
+    use cranelift::prelude::*;
+    use cranelift_module::Module;
+
+    let mut engine = JitEngine::new();
+    let mut ctx = JitRuntimeContext::new();
+    let handle = ctx.alloc_array(vec![JitHeapScalar::Int64(10)]);
+    let ctx_ptr = &mut ctx as *mut JitRuntimeContext;
+
+    engine.ctx.clear();
+    let mut sig = engine.module.make_signature();
+    sig.params.push(AbiParam::new(types::I64)); // ctx
+    sig.params.push(AbiParam::new(types::I64)); // handle
+    sig.params.push(AbiParam::new(types::I64)); // index
+    sig.returns.push(AbiParam::new(types::I64)); // value
+    sig.returns.push(AbiParam::new(types::I64)); // status
+    engine.ctx.func.signature = sig.clone();
+
+    let mut builder = FunctionBuilder::new(&mut engine.ctx.func, &mut engine.builder_context);
+    let block = builder.create_block();
+    builder.append_block_params_for_function_params(block);
+    builder.switch_to_block(block);
+    builder.seal_block(block);
+
+    let args = builder.block_params(block).to_vec();
+    let helper_sig_ref = builder.import_signature(sig);
+    let helper_addr = builder.ins().iconst(types::I64, tmpr_jit_array_get_i64 as i64);
+    let call = builder.ins().call_indirect(helper_sig_ref, helper_addr, &args);
+    let results = builder.inst_results(call).to_vec();
+    
+    builder.ins().return_(&[results[0], results[1]]);
+    builder.finalize();
+
+    let func_id = engine.module.declare_function("test_get_oob", cranelift_module::Linkage::Export, &engine.ctx.func.signature).unwrap();
+    engine.module.define_function(func_id, &mut engine.ctx).unwrap();
+    engine.module.finalize_definitions().unwrap();
+
+    let code = engine.module.get_finalized_function(func_id);
+    let native_fn: extern "C" fn(u64, u64, i64) -> crate::abi::JitHelperResult = unsafe { std::mem::transmute(code) };
+    
+    // Test index 1 (OOB for length 1)
+    let res = native_fn(ctx_ptr as u64, handle.0, 1);
+    assert_eq!(res.status, crate::abi::JIT_STATUS_ERROR_OUT_OF_BOUNDS);
+
+    // Test index -1 (OOB)
+    let res = native_fn(ctx_ptr as u64, handle.0, -1);
+    assert_eq!(res.status, crate::abi::JIT_STATUS_ERROR_OUT_OF_BOUNDS);
+}
+
+#[test]
+fn jit_helper_array_get_i64_type_error_on_non_i64() {
+    use crate::helpers::{JitRuntimeContext, JitHeapScalar, tmpr_jit_array_get_i64};
+    use cranelift::prelude::*;
+    use cranelift_module::Module;
+
+    let mut engine = JitEngine::new();
+    let mut ctx = JitRuntimeContext::new();
+    let handle = ctx.alloc_array(vec![JitHeapScalar::Bool(true)]);
+    let ctx_ptr = &mut ctx as *mut JitRuntimeContext;
+
+    engine.ctx.clear();
+    let mut sig = engine.module.make_signature();
+    sig.params.push(AbiParam::new(types::I64)); // ctx
+    sig.params.push(AbiParam::new(types::I64)); // handle
+    sig.params.push(AbiParam::new(types::I64)); // index
+    sig.returns.push(AbiParam::new(types::I64)); // value
+    sig.returns.push(AbiParam::new(types::I64)); // status
+    engine.ctx.func.signature = sig.clone();
+
+    let mut builder = FunctionBuilder::new(&mut engine.ctx.func, &mut engine.builder_context);
+    let block = builder.create_block();
+    builder.append_block_params_for_function_params(block);
+    builder.switch_to_block(block);
+    builder.seal_block(block);
+
+    let args = builder.block_params(block).to_vec();
+    let helper_sig_ref = builder.import_signature(sig);
+    let helper_addr = builder.ins().iconst(types::I64, tmpr_jit_array_get_i64 as i64);
+    let call = builder.ins().call_indirect(helper_sig_ref, helper_addr, &args);
+    let results = builder.inst_results(call).to_vec();
+    
+    builder.ins().return_(&[results[0], results[1]]);
+    builder.finalize();
+
+    let func_id = engine.module.declare_function("test_get_type_bad", cranelift_module::Linkage::Export, &engine.ctx.func.signature).unwrap();
+    engine.module.define_function(func_id, &mut engine.ctx).unwrap();
+    engine.module.finalize_definitions().unwrap();
+
+    let code = engine.module.get_finalized_function(func_id);
+    let native_fn: extern "C" fn(u64, u64, i64) -> crate::abi::JitHelperResult = unsafe { std::mem::transmute(code) };
+    
+    let res = native_fn(ctx_ptr as u64, handle.0, 0);
+    assert_eq!(res.status, crate::abi::JIT_STATUS_ERROR_TYPE);
+}

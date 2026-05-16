@@ -67,9 +67,11 @@ Helpers that can fail (e.g., due to bounds checks or type mismatches) follow a d
 - **Phase 16.2**: VM-owned JIT handle arena prototype. [COMPLETE]
 - **Phase 16.3**: JIT Helper Probe: String.size + Status Handling. [COMPLETE]
 - **Phase 16.4**: JIT Helper Probe: Array.len. [COMPLETE]
-    - **Multi-Kind Arena**: Supported `String` and `Array` objects.
-    - **Type Safety**: Verified `TypeError` when calling array helpers on strings (and vice-versa).
-    - **Probe Result**: Successfully verified `tmpr_jit_array_len` calling from JIT.
-- **Phase 16.5**: Implement Struct field access and Enum tag probes. [PLANNED]
+- **Phase 16.5**: JIT Helper Probe: Array.get Int64. [COMPLETE]
+    - **Safe Indexing**: Verified `OUT_OF_BOUNDS` status for invalid indices.
+    - **Type Safety**: Verified `TypeError` for non-Int64 elements (e.g. Bool).
+    - **Negative i64**: Confirmed bit-preserving roundtrip (e.g. -7).
+    - **Boundary Safety**: Reports failures through status codes instead of panicking.
+- **Phase 16.6**: Implement Struct field access and Enum tag probes. [PLANNED]
 - **Phase 16.3**: Implement Struct field access.
 - **Phase 16.4**: Finalize Enum/Option support via Tag/Unwrap helpers.

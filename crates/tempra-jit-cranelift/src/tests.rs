@@ -609,5 +609,103 @@ fn jit_helper_string_len_null_context() {
     let native_fn: extern "C" fn(u64, u64) -> crate::abi::JitHelperResult = unsafe { std::mem::transmute(code) };
     
     let res = native_fn(0, 1001); // Null context
-    assert_eq!(res.status, crate::abi::JIT_STATUS_ERROR_INVALID_HANDLE);
+    assert_eq!(res.status, crate::abi::JIT_STATUS_ERROR_INVALID_CONTEXT);
+}
+
+#[test]
+fn jit_helper_string_size_ascii() {
+    use crate::helpers::{JitRuntimeContext, tmpr_jit_string_size};
+    use cranelift::prelude::*;
+    use cranelift_module::Module;
+
+    let mut engine = JitEngine::new();
+    let mut ctx = JitRuntimeContext::new();
+    let handle = ctx.alloc_string("hello".to_string());
+    let ctx_ptr = &mut ctx as *mut JitRuntimeContext;
+
+    engine.ctx.clear();
+    let mut sig = engine.module.make_signature();
+    sig.params.push(AbiParam::new(types::I64)); // ctx
+    sig.params.push(AbiParam::new(types::I64)); // handle
+    sig.returns.push(AbiParam::new(types::I64)); // value
+    sig.returns.push(AbiParam::new(types::I64)); // status
+    engine.ctx.func.signature = sig.clone();
+
+    let mut builder = FunctionBuilder::new(&mut engine.ctx.func, &mut engine.builder_context);
+    let block = builder.create_block();
+    builder.append_block_params_for_function_params(block);
+    builder.switch_to_block(block);
+    builder.seal_block(block);
+
+    let arg_ctx = builder.block_params(block)[0];
+    let arg_handle = builder.block_params(block)[1];
+
+    let helper_sig_ref = builder.import_signature(sig);
+    let helper_addr = builder.ins().iconst(types::I64, tmpr_jit_string_size as i64);
+    let call = builder.ins().call_indirect(helper_sig_ref, helper_addr, &[arg_ctx, arg_handle]);
+    let results = builder.inst_results(call).to_vec();
+    
+    builder.ins().return_(&[results[0], results[1]]);
+    builder.finalize();
+
+    let func_id = engine.module.declare_function("test_size_ascii", cranelift_module::Linkage::Export, &engine.ctx.func.signature).unwrap();
+    engine.module.define_function(func_id, &mut engine.ctx).unwrap();
+    engine.module.finalize_definitions().unwrap();
+
+    let code = engine.module.get_finalized_function(func_id);
+    let native_fn: extern "C" fn(u64, u64) -> crate::abi::JitHelperResult = unsafe { std::mem::transmute(code) };
+    
+    let res = native_fn(ctx_ptr as u64, handle.0);
+    assert_eq!(res.value, 5); // "hello" bytes
+    assert_eq!(res.status, crate::abi::JIT_STATUS_SUCCESS);
+}
+
+#[test]
+fn jit_helper_string_size_unicode() {
+    use crate::helpers::{JitRuntimeContext, tmpr_jit_string_size};
+    use cranelift::prelude::*;
+    use cranelift_module::Module;
+
+    let mut engine = JitEngine::new();
+    let mut ctx = JitRuntimeContext::new();
+    
+    // "👋" is 1 scalar, but 4 bytes in UTF-8
+    let handle = ctx.alloc_string("👋".to_string());
+    let ctx_ptr = &mut ctx as *mut JitRuntimeContext;
+
+    engine.ctx.clear();
+    let mut sig = engine.module.make_signature();
+    sig.params.push(AbiParam::new(types::I64)); // ctx
+    sig.params.push(AbiParam::new(types::I64)); // handle
+    sig.returns.push(AbiParam::new(types::I64)); // value
+    sig.returns.push(AbiParam::new(types::I64)); // status
+    engine.ctx.func.signature = sig.clone();
+
+    let mut builder = FunctionBuilder::new(&mut engine.ctx.func, &mut engine.builder_context);
+    let block = builder.create_block();
+    builder.append_block_params_for_function_params(block);
+    builder.switch_to_block(block);
+    builder.seal_block(block);
+
+    let arg_ctx = builder.block_params(block)[0];
+    let arg_handle = builder.block_params(block)[1];
+
+    let helper_sig_ref = builder.import_signature(sig);
+    let helper_addr = builder.ins().iconst(types::I64, tmpr_jit_string_size as i64);
+    let call = builder.ins().call_indirect(helper_sig_ref, helper_addr, &[arg_ctx, arg_handle]);
+    let results = builder.inst_results(call).to_vec();
+    
+    builder.ins().return_(&[results[0], results[1]]);
+    builder.finalize();
+
+    let func_id = engine.module.declare_function("test_size_unicode", cranelift_module::Linkage::Export, &engine.ctx.func.signature).unwrap();
+    engine.module.define_function(func_id, &mut engine.ctx).unwrap();
+    engine.module.finalize_definitions().unwrap();
+
+    let code = engine.module.get_finalized_function(func_id);
+    let native_fn: extern "C" fn(u64, u64) -> crate::abi::JitHelperResult = unsafe { std::mem::transmute(code) };
+    
+    let res = native_fn(ctx_ptr as u64, handle.0);
+    assert_eq!(res.value, 4); // "👋" bytes
+    assert_eq!(res.status, crate::abi::JIT_STATUS_SUCCESS);
 }

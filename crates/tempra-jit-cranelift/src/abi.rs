@@ -20,6 +20,7 @@ pub const JIT_STATUS_ERROR_TYPE: JitStatus = 2;
 pub const JIT_STATUS_ERROR_NULL: JitStatus = 3;
 pub const JIT_STATUS_ERROR_INVALID_HANDLE: JitStatus = 4;
 pub const JIT_STATUS_ERROR_MISSING_HELPER: JitStatus = 5;
+pub const JIT_STATUS_ERROR_INVALID_CONTEXT: JitStatus = 6;
 
 /// A representation of a value passed across the JIT/VM boundary.
 #[derive(Debug, Clone, Copy)]

@@ -4,7 +4,7 @@
 //! JIT-compiled code for heap operations.
 
 use std::collections::HashMap;
-use crate::abi::{HeapHandle, JitHelperResult, JIT_STATUS_SUCCESS, JIT_STATUS_ERROR_INVALID_HANDLE};
+use crate::abi::{HeapHandle, JitHelperResult};
 
 /// Registry of available runtime helpers.
 pub struct JitHelperRegistry {
@@ -21,6 +21,8 @@ pub struct JitHelperInfo {
 pub enum JitHelperSignature {
     /// (ctx: *mut JitRuntimeContext, HeapHandle) -> JitHelperResult (value=len, status)
     StringLen,
+    /// (ctx: *mut JitRuntimeContext, HeapHandle) -> JitHelperResult (value=byte_count, status)
+    StringSize,
     /// (ctx: *mut JitRuntimeContext, HeapHandle, i64) -> JitHelperResult (value=handle, status)
     ArrayGet,
 }
@@ -33,6 +35,12 @@ impl JitHelperRegistry {
             name: "tmpr_jit_string_len",
             signature: JitHelperSignature::StringLen,
             ptr: tmpr_jit_string_len as *const (),
+        });
+
+        helpers.insert("tmpr_jit_string_size", JitHelperInfo {
+            name: "tmpr_jit_string_size",
+            signature: JitHelperSignature::StringSize,
+            ptr: tmpr_jit_string_size as *const (),
         });
 
         Self { helpers }
@@ -71,27 +79,43 @@ impl JitRuntimeContext {
     }
 }
 
-/// Helper implementation for String.len()
-/// 
-/// ABI: (ctx: *mut JitRuntimeContext, handle: u64) -> JitHelperResult
-pub extern "C" fn tmpr_jit_string_len(ctx: *mut JitRuntimeContext, handle: u64) -> JitHelperResult {
+/// Internal utility to safely resolve a string handle within a context.
+fn with_string_handle(
+    ctx: *mut JitRuntimeContext,
+    handle: u64,
+    f: impl FnOnce(&str) -> u64,
+) -> JitHelperResult {
     if ctx.is_null() {
         return JitHelperResult {
             value: 0,
-            status: JIT_STATUS_ERROR_INVALID_HANDLE,
+            status: crate::abi::JIT_STATUS_ERROR_INVALID_CONTEXT,
         };
     }
 
     let ctx_ref = unsafe { &*ctx };
     if let Some(s) = ctx_ref.heap_handles.get(&handle) {
         JitHelperResult {
-            value: s.chars().count() as u64,
-            status: JIT_STATUS_SUCCESS,
+            value: f(s),
+            status: crate::abi::JIT_STATUS_SUCCESS,
         }
     } else {
         JitHelperResult {
             value: 0,
-            status: JIT_STATUS_ERROR_INVALID_HANDLE,
+            status: crate::abi::JIT_STATUS_ERROR_INVALID_HANDLE,
         }
     }
+}
+
+/// Helper implementation for String.len() (Unicode scalar count)
+/// 
+/// ABI: (ctx: *mut JitRuntimeContext, handle: u64) -> JitHelperResult
+pub extern "C" fn tmpr_jit_string_len(ctx: *mut JitRuntimeContext, handle: u64) -> JitHelperResult {
+    with_string_handle(ctx, handle, |s| s.chars().count() as u64)
+}
+
+/// Helper implementation for String.size() (UTF-8 byte count)
+/// 
+/// ABI: (ctx: *mut JitRuntimeContext, handle: u64) -> JitHelperResult
+pub extern "C" fn tmpr_jit_string_size(ctx: *mut JitRuntimeContext, handle: u64) -> JitHelperResult {
+    with_string_handle(ctx, handle, |s| s.len() as u64)
 }

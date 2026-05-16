@@ -65,9 +65,11 @@ Helpers that can fail (e.g., due to bounds checks or type mismatches) follow a d
 - **Phase 16.0**: Define the boundary, ABI, and diagnostics. [COMPLETE]
 - **Phase 16.1**: Implement String length and basic handle passing. [COMPLETE]
 - **Phase 16.2**: VM-owned JIT handle arena prototype. [COMPLETE]
-    - **Prototype Context**: Introduced `JitRuntimeContext` for handle-to-value resolution.
-    - **Context-First ABI**: Verified `extern "C" fn(ctx, handle) -> (value, status)`.
-    - **Safety Verified**: Safe failures for `null` context and invalid handles.
-- **Phase 16.3**: Implement Array indexing and bounds-check helpers. [PLANNED]
+- **Phase 16.3**: JIT Helper Probe: String.size + Status Handling. [COMPLETE]
+    - **Reusable Boundary**: Successfully added `tmpr_jit_string_size`.
+    - **Semantic Parity**: Verified `len` (char count) vs `size` (UTF-8 bytes).
+    - **Error Handling**: Hardened status codes for invalid context/handles.
+    - **Eligibility**: String functions remain probe-only (non-eligible by default).
+- **Phase 16.4**: Implement Array indexing and bounds-check helpers. [PLANNED]
 - **Phase 16.3**: Implement Struct field access.
 - **Phase 16.4**: Finalize Enum/Option support via Tag/Unwrap helpers.

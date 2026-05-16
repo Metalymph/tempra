@@ -72,10 +72,11 @@ Helpers that can fail (e.g., due to bounds checks or type mismatches) follow a d
 - **Phase 16.7**: Heap Helper Error Policy Design. [COMPLETE]
 - **Phase 16.8**: JIT Heap Helper Wrapper API. [COMPLETE]
 - **Phase 16.9**: JIT Helper Probe: Struct.get Int64. [COMPLETE]
-    - **Struct Arena Support**: Added `JitHeapStruct` and `alloc_struct`.
-    - **Index-Based Access**: Verified `tmpr_jit_struct_get_i64` using prototype-only index IDs.
-    - **Type Safety**: Confirmed `TypeError` for mismatched handle types or non-Int64 fields.
-    - **Wrapper Integration**: Verified `to_i64_result()` for struct field retrieval.
-- **Phase 16.10**: Implement Enum tag and Option/Result unwrapping probes. [PLANNED]
+- **Phase 16.10**: JIT Helper Probe: Enum.tag. [COMPLETE]
+    - **Enum Arena Support**: Added `JitHeapEnum` and `alloc_enum`.
+    - **Tag Retrieval**: Verified `tmpr_jit_enum_tag` for `Option` and `Result` prototypes.
+    - **Type Safety**: Confirmed `TypeError` when calling enum helpers on non-enum objects (e.g. Array).
+    - **Boundary Hardening**: Verified `to_result()` wrapper integration for enum tags.
+- **Phase 16.11**: JIT Helper Probe: Enum.unwrap payload. [PLANNED]
 - **Phase 16.3**: Implement Struct field access.
 - **Phase 16.4**: Finalize Enum/Option support via Tag/Unwrap helpers.

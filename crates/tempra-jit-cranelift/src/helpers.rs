@@ -29,6 +29,8 @@ pub enum JitHelperSignature {
     ArrayGet,
     /// (ctx: *mut JitRuntimeContext, HeapHandle, u64) -> JitHelperResult (value=i64_bits, status)
     StructGet,
+    /// (ctx: *mut JitRuntimeContext, HeapHandle) -> JitHelperResult (value=tag, status)
+    EnumTag,
 }
 
 impl JitHelperRegistry {
@@ -65,6 +67,12 @@ impl JitHelperRegistry {
             ptr: tmpr_jit_struct_get_i64 as *const (),
         });
 
+        helpers.insert("tmpr_jit_enum_tag", JitHelperInfo {
+            name: "tmpr_jit_enum_tag",
+            signature: JitHelperSignature::EnumTag,
+            ptr: tmpr_jit_enum_tag as *const (),
+        });
+
         Self { helpers }
     }
 }
@@ -80,12 +88,21 @@ pub enum JitHeapObject {
     String(String),
     Array(Vec<JitHeapScalar>),
     Struct(JitHeapStruct),
+    Enum(JitHeapEnum),
 }
 
 /// Prototype struct object.
 pub struct JitHeapStruct {
     pub type_name: String,
     pub fields: Vec<(String, JitHeapScalar)>,
+}
+
+/// Prototype enum object.
+pub struct JitHeapEnum {
+    pub type_name: String,
+    pub variant_name: String,
+    pub tag: u64,
+    pub payloads: Vec<JitHeapScalar>,
 }
 
 /// Prototype scalar values within heap objects.
@@ -123,6 +140,24 @@ impl JitRuntimeContext {
         self.heap_handles.insert(handle, JitHeapObject::Struct(JitHeapStruct {
             type_name: type_name.into(),
             fields,
+        }));
+        self.next_handle += 1;
+        HeapHandle(handle)
+    }
+
+    pub fn alloc_enum(
+        &mut self,
+        type_name: impl Into<String>,
+        variant_name: impl Into<String>,
+        tag: u64,
+        payloads: Vec<JitHeapScalar>,
+    ) -> HeapHandle {
+        let handle = self.next_handle;
+        self.heap_handles.insert(handle, JitHeapObject::Enum(JitHeapEnum {
+            type_name: type_name.into(),
+            variant_name: variant_name.into(),
+            tag,
+            payloads,
         }));
         self.next_handle += 1;
         HeapHandle(handle)
@@ -228,6 +263,16 @@ pub extern "C" fn tmpr_jit_struct_get_i64(ctx: *mut JitRuntimeContext, handle: u
                 _ => Err(crate::abi::JIT_STATUS_ERROR_TYPE),
             }
         }
+        _ => Err(crate::abi::JIT_STATUS_ERROR_TYPE),
+    })
+}
+
+/// Helper implementation for Enum.tag
+/// 
+/// ABI: (ctx: *mut JitRuntimeContext, handle: u64) -> JitHelperResult
+pub extern "C" fn tmpr_jit_enum_tag(ctx: *mut JitRuntimeContext, handle: u64) -> JitHelperResult {
+    with_handle(ctx, handle, |obj| match obj {
+        JitHeapObject::Enum(e) => Ok(e.tag),
         _ => Err(crate::abi::JIT_STATUS_ERROR_TYPE),
     })
 }

@@ -1275,3 +1275,73 @@ fn jit_helper_struct_get_i64_errors() {
     // 5. Null context
     assert_eq!(tmpr_jit_struct_get_i64(std::ptr::null_mut(), s_handle.0, 0).to_i64_result(), Err(JitRuntimeError::InvalidContext));
 }
+
+#[test]
+fn jit_helper_enum_tag_option_some() {
+    use crate::helpers::{JitRuntimeContext, JitHeapScalar, tmpr_jit_enum_tag};
+    use cranelift::prelude::*;
+    use cranelift_module::Module;
+
+    let mut engine = JitEngine::new();
+    let mut ctx = JitRuntimeContext::new();
+    let handle = ctx.alloc_enum("Option", "Some", 1, vec![JitHeapScalar::Int64(42)]);
+    let ctx_ptr = &mut ctx as *mut JitRuntimeContext;
+
+    engine.ctx.clear();
+    let mut sig = engine.module.make_signature();
+    sig.params.push(AbiParam::new(types::I64)); // ctx
+    sig.params.push(AbiParam::new(types::I64)); // handle
+    sig.returns.push(AbiParam::new(types::I64)); // tag
+    sig.returns.push(AbiParam::new(types::I64)); // status
+    engine.ctx.func.signature = sig.clone();
+
+    let mut builder = FunctionBuilder::new(&mut engine.ctx.func, &mut engine.builder_context);
+    let block = builder.create_block();
+    builder.append_block_params_for_function_params(block);
+    builder.switch_to_block(block);
+    builder.seal_block(block);
+
+    let args = builder.block_params(block).to_vec();
+    let helper_sig_ref = builder.import_signature(sig);
+    let helper_addr = builder.ins().iconst(types::I64, tmpr_jit_enum_tag as i64);
+    let call = builder.ins().call_indirect(helper_sig_ref, helper_addr, &args);
+    let results = builder.inst_results(call).to_vec();
+    
+    builder.ins().return_(&[results[0], results[1]]);
+    builder.finalize();
+
+    let func_id = engine.module.declare_function("test_enum_tag", cranelift_module::Linkage::Export, &engine.ctx.func.signature).unwrap();
+    engine.module.define_function(func_id, &mut engine.ctx).unwrap();
+    engine.module.finalize_definitions().unwrap();
+
+    let code = engine.module.get_finalized_function(func_id);
+    let native_fn: extern "C" fn(u64, u64) -> crate::abi::JitHelperResult = unsafe { std::mem::transmute(code) };
+    
+    let res = native_fn(ctx_ptr as u64, handle.0);
+    assert_eq!(res.value, 1);
+    assert_eq!(res.status, crate::abi::JIT_STATUS_SUCCESS);
+}
+
+#[test]
+fn jit_helper_enum_tag_errors_and_wrapper() {
+    use crate::helpers::{JitRuntimeContext, JitHeapScalar, tmpr_jit_enum_tag};
+    use crate::error::JitRuntimeError;
+    
+    let mut ctx = JitRuntimeContext::new();
+    let e_handle = ctx.alloc_enum("Option", "None", 0, vec![]);
+    let a_handle = ctx.alloc_array(vec![]);
+    let ctx_ptr = &mut ctx as *mut JitRuntimeContext;
+    
+    // 1. Success + Wrapper
+    let res = tmpr_jit_enum_tag(ctx_ptr, e_handle.0);
+    assert_eq!(res.to_result(), Ok(0));
+    
+    // 2. Type error (calling enum helper on array)
+    assert_eq!(tmpr_jit_enum_tag(ctx_ptr, a_handle.0).to_result(), Err(JitRuntimeError::TypeError));
+    
+    // 3. Invalid handle
+    assert_eq!(tmpr_jit_enum_tag(ctx_ptr, 9999).to_result(), Err(JitRuntimeError::InvalidHandle));
+    
+    // 4. Null context
+    assert_eq!(tmpr_jit_enum_tag(std::ptr::null_mut(), e_handle.0).to_result(), Err(JitRuntimeError::InvalidContext));
+}

@@ -35,6 +35,8 @@ pub enum JitHelperSignature {
     EnumUnwrap,
     /// (ctx: *mut JitRuntimeContext) -> JitHelperResult (value=handle, status)
     AllocStringEmpty,
+    /// (ctx: *mut JitRuntimeContext, HeapHandle, HeapHandle) -> JitHelperResult (value=handle, status)
+    StringConcat,
 }
 
 impl JitHelperRegistry {
@@ -87,6 +89,12 @@ impl JitHelperRegistry {
             name: "tmpr_jit_alloc_string_empty",
             signature: JitHelperSignature::AllocStringEmpty,
             ptr: tmpr_jit_alloc_string_empty as *const (),
+        });
+
+        helpers.insert("tmpr_jit_string_concat", JitHelperInfo {
+            name: "tmpr_jit_string_concat",
+            signature: JitHelperSignature::StringConcat,
+            ptr: tmpr_jit_string_concat as *const (),
         });
 
         Self { helpers }
@@ -177,6 +185,34 @@ impl JitRuntimeContext {
         }));
         self.next_handle += 1;
         HeapHandle(handle)
+    }
+
+    pub fn get_string(&self, handle: HeapHandle) -> Result<&String, crate::abi::JitStatus> {
+        if let Some(obj) = self.heap_handles.get(&handle.0) {
+            match obj {
+                JitHeapObject::String(s) => Ok(s),
+                _ => Err(crate::abi::JIT_STATUS_ERROR_TYPE),
+            }
+        } else {
+            Err(crate::abi::JIT_STATUS_ERROR_INVALID_HANDLE)
+        }
+    }
+
+    pub fn string_concat(&mut self, left: HeapHandle, right: HeapHandle) -> JitHelperResult {
+        let left_str = match self.get_string(left) {
+            Ok(s) => s.to_owned(),
+            Err(status) => return JitHelperResult { value: 0, status },
+        };
+        let right_str = match self.get_string(right) {
+            Ok(s) => s.to_owned(),
+            Err(status) => return JitHelperResult { value: 0, status },
+        };
+        
+        let new_handle = self.alloc_string(format!("{}{}", left_str, right_str));
+        JitHelperResult {
+            value: new_handle.0,
+            status: crate::abi::JIT_STATUS_SUCCESS,
+        }
     }
 
     pub fn clear(&mut self) {
@@ -335,4 +371,22 @@ pub extern "C" fn tmpr_jit_alloc_string_empty(ctx: *mut JitRuntimeContext) -> Ji
         value: handle.0,
         status: crate::abi::JIT_STATUS_SUCCESS,
     }
+}
+
+/// Helper implementation for concatenating two strings.
+/// 
+/// ABI: (ctx: *mut JitRuntimeContext, left_handle: u64, right_handle: u64) -> JitHelperResult
+pub extern "C" fn tmpr_jit_string_concat(
+    ctx: *mut JitRuntimeContext,
+    left_handle: u64,
+    right_handle: u64,
+) -> JitHelperResult {
+    if ctx.is_null() {
+        return JitHelperResult {
+            value: 0,
+            status: crate::abi::JIT_STATUS_ERROR_INVALID_CONTEXT,
+        };
+    }
+    let ctx = unsafe { &mut *ctx };
+    ctx.string_concat(crate::abi::HeapHandle(left_handle), crate::abi::HeapHandle(right_handle))
 }

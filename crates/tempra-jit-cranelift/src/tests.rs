@@ -1466,3 +1466,69 @@ fn jit_runtime_error_from_status_allocation_failed() {
     let err = JitRuntimeError::from_status(JIT_STATUS_ERROR_ALLOCATION_FAILED);
     assert_eq!(err, Some(JitRuntimeError::AllocationFailed));
 }
+
+#[test]
+fn jit_helper_string_concat_ascii_and_errors() {
+    use crate::helpers::{JitRuntimeContext, tmpr_jit_string_concat, tmpr_jit_string_len, tmpr_jit_string_size};
+    use crate::error::JitRuntimeError;
+
+    let mut ctx = JitRuntimeContext::new();
+    let left = ctx.alloc_string("hello".to_string());
+    let right = ctx.alloc_string("world".to_string());
+    let a_handle = ctx.alloc_array(vec![]);
+    let ctx_ptr = &mut ctx as *mut JitRuntimeContext;
+
+    // 1. Success case: "hello" + "world"
+    let res = tmpr_jit_string_concat(ctx_ptr, left.0, right.0);
+    let new_handle_val = res.to_result().expect("Should concatenate successfully");
+    
+    assert_ne!(new_handle_val, 0);
+    assert_ne!(new_handle_val, left.0);
+    assert_ne!(new_handle_val, right.0);
+
+    // Verify length of new string (10)
+    let len_res = tmpr_jit_string_len(ctx_ptr, new_handle_val);
+    assert_eq!(len_res.to_result().unwrap(), 10);
+
+    // Verify size of new string (10)
+    let size_res = tmpr_jit_string_size(ctx_ptr, new_handle_val);
+    assert_eq!(size_res.to_result().unwrap(), 10);
+
+    // 2. Type error (left is not a string)
+    let res = tmpr_jit_string_concat(ctx_ptr, a_handle.0, right.0);
+    assert_eq!(res.to_result(), Err(JitRuntimeError::TypeError));
+
+    // 3. Type error (right is not a string)
+    let res = tmpr_jit_string_concat(ctx_ptr, left.0, a_handle.0);
+    assert_eq!(res.to_result(), Err(JitRuntimeError::TypeError));
+
+    // 4. Invalid handle
+    let res = tmpr_jit_string_concat(ctx_ptr, 9999, right.0);
+    assert_eq!(res.to_result(), Err(JitRuntimeError::InvalidHandle));
+
+    // 5. Null context
+    let res = tmpr_jit_string_concat(std::ptr::null_mut(), left.0, right.0);
+    assert_eq!(res.to_result(), Err(JitRuntimeError::InvalidContext));
+}
+
+#[test]
+fn jit_helper_string_concat_unicode() {
+    use crate::helpers::{JitRuntimeContext, tmpr_jit_string_concat, tmpr_jit_string_len, tmpr_jit_string_size};
+
+    let mut ctx = JitRuntimeContext::new();
+    let left = ctx.alloc_string("hé".to_string());
+    let right = ctx.alloc_string("👋".to_string());
+    let ctx_ptr = &mut ctx as *mut JitRuntimeContext;
+
+    let res = tmpr_jit_string_concat(ctx_ptr, left.0, right.0);
+    let new_handle_val = res.to_result().expect("Should concatenate unicode successfully");
+    
+    // len("hé") = 2, size("hé") = 3
+    // len("👋") = 1, size("👋") = 4
+    // len("hé👋") = 3, size("hé👋") = 7
+    let len_res = tmpr_jit_string_len(ctx_ptr, new_handle_val);
+    assert_eq!(len_res.to_result().unwrap(), 3);
+
+    let size_res = tmpr_jit_string_size(ctx_ptr, new_handle_val);
+    assert_eq!(size_res.to_result().unwrap(), 7);
+}

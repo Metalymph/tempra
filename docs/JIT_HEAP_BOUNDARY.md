@@ -79,7 +79,12 @@ Helpers that can fail (e.g., due to bounds checks or type mismatches) follow a d
     - **Failure Policy**: Introduced `JIT_STATUS_ERROR_ALLOCATION_FAILED`.
     - **Invalid Handle**: Formally reserved `HeapHandle(0)` as invalid/null.
     - **Probe Implementation**: Added `tmpr_jit_alloc_string_empty` to validate return-path for new handles.
-- **Phase 16.13**: Implement JIT Helper Probe: String.concat (First mutation probe). [PLANNED]
+- **Phase 16.13**: JIT Helper Probe: String.concat. [COMPLETE]
+    - **Heap-Producing Helper**: Implemented `tmpr_jit_string_concat`, returning a new context-owned handle.
+    - **Value Semantics**: Confirmed original strings are never mutated.
+    - **Unicode Safety**: Verified correct UTF-8 concatenation interacting correctly with `String.len` and `String.size`.
+    - **Type Safety**: Verified `TypeError` when concatenating non-strings.
+- **Phase 16.14**: Implement JIT Helper Probe: Array.push (Value-semantic array extension). [PLANNED]
 
 ## Heap Allocation Boundary (Phase 16.12)
 

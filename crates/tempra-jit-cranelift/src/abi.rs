@@ -23,8 +23,12 @@ pub const JIT_STATUS_ERROR_MISSING_HELPER: JitStatus = 5;
 pub const JIT_STATUS_ERROR_INVALID_CONTEXT: JitStatus = 6;
 pub const JIT_STATUS_ERROR_OUT_OF_BOUNDS: JitStatus = 7;
 pub const JIT_STATUS_ERROR_WRONG_VARIANT: JitStatus = 8;
+/// Allocation failed (OOM or internal runtime error).
+pub const JIT_STATUS_ERROR_ALLOCATION_FAILED: JitStatus = 9;
 
 /// A representation of a value passed across the JIT/VM boundary.
+/// 
+/// Note: HeapHandle(0) is reserved as the invalid/null handle.
 #[derive(Debug, Clone, Copy)]
 pub enum JitValueAbi {
     /// A 64-bit primitive (Int64 or internal Bool).

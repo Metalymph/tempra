@@ -74,10 +74,23 @@ Helpers that can fail (e.g., due to bounds checks or type mismatches) follow a d
 - **Phase 16.9**: JIT Helper Probe: Struct.get Int64. [COMPLETE]
 - **Phase 16.10**: JIT Helper Probe: Enum.tag. [COMPLETE]
 - **Phase 16.11**: JIT Helper Probe: Enum.unwrap Int64. [COMPLETE]
-    - **Safe Unwrapping**: Implemented `tmpr_jit_enum_unwrap_i64` with `expected_tag` validation.
-    - **WrongVariant Status**: Introduced `JIT_STATUS_ERROR_WRONG_VARIANT` for mismatched tags.
-    - **Full Coverage**: Verified `Option::Some(42)`, `Result::Ok(-7)`, and `WrongVariant` (Err as Ok).
-    - **Type Safety**: Confirmed `TypeError` for non-enum handles or non-integer payloads.
-- **Phase 16.12**: Implement JIT Helper Probe: String.concat (First mutation probe). [PLANNED]
-- **Phase 16.3**: Implement Struct field access.
+- **Phase 16.12**: JIT Heap Allocation Boundary Design. [COMPLETE]
+    - **Allocation Boundary**: Formalized "context-owned" allocation model.
+    - **Failure Policy**: Introduced `JIT_STATUS_ERROR_ALLOCATION_FAILED`.
+    - **Invalid Handle**: Formally reserved `HeapHandle(0)` as invalid/null.
+    - **Probe Implementation**: Added `tmpr_jit_alloc_string_empty` to validate return-path for new handles.
+- **Phase 16.13**: Implement JIT Helper Probe: String.concat (First mutation probe). [PLANNED]
+
+## Heap Allocation Boundary (Phase 16.12)
+
+To ensure memory safety and maintain the integrity of the VM garbage collector (or arena), the JIT compiler adheres to strict rules regarding heap allocation:
+
+1. **No Direct Allocation**: JIT-compiled native code must *never* directly allocate heap memory. All object creation is delegated to the `JitRuntimeContext` via external C ABI helpers (e.g., `alloc_string`).
+2. **Context Ownership**: Objects created during JIT execution are owned by the active `JitRuntimeContext`. Their lifetime is guaranteed for the duration of the JIT session (until `JitRuntimeContext::clear()` is called).
+3. **Value Semantics (Handles)**: Allocation helpers return a `JitHelperResult`. On success, the `value` field contains a new `HeapHandle`. The JIT treats this handle as an opaque, immutable token.
+4. **Invalid Handle**: `HeapHandle(0)` is explicitly reserved as the invalid or null handle representation.
+5. **Allocation Failure**: If the runtime fails to allocate an object (e.g., Out Of Memory), the helper returns `JIT_STATUS_ERROR_ALLOCATION_FAILED`. The JIT must map this to `JitRuntimeError::AllocationFailed` and trap/fallback to the VM.
+6. **No In-Place Mutation**: To preserve value semantics and simplify the boundary, operations like string concatenation or array appending return *new* handles rather than mutating existing ones.
+
+## Phase 16.3: Implement Struct field access
 - **Phase 16.4**: Finalize Enum/Option support via Tag/Unwrap helpers.

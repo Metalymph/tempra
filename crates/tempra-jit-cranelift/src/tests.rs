@@ -1424,3 +1424,45 @@ fn jit_helper_enum_unwrap_i64_result_and_negative() {
     let res = tmpr_jit_enum_unwrap_i64(ctx_ptr, a_handle.0, 0, 0);
     assert_eq!(res.to_i64_result(), Err(JitRuntimeError::TypeError));
 }
+
+#[test]
+fn jit_alloc_string_empty_returns_handle() {
+    use crate::helpers::{JitRuntimeContext, tmpr_jit_alloc_string_empty};
+
+    let mut ctx = JitRuntimeContext::new();
+    let ctx_ptr = &mut ctx as *mut JitRuntimeContext;
+
+    let res = tmpr_jit_alloc_string_empty(ctx_ptr);
+    let handle1 = res.to_result().expect("Should allocate successfully");
+    assert_ne!(handle1, 0, "Handle(0) is reserved and invalid");
+
+    let res2 = tmpr_jit_alloc_string_empty(ctx_ptr);
+    let handle2 = res2.to_result().expect("Should allocate successfully");
+    assert_ne!(handle2, 0);
+    assert_ne!(handle1, handle2, "Subsequent allocations must return distinct handles");
+}
+
+#[test]
+fn jit_alloc_string_empty_handle_can_be_used_with_len() {
+    use crate::helpers::{JitRuntimeContext, tmpr_jit_alloc_string_empty, tmpr_jit_string_len};
+
+    let mut ctx = JitRuntimeContext::new();
+    let ctx_ptr = &mut ctx as *mut JitRuntimeContext;
+
+    let alloc_res = tmpr_jit_alloc_string_empty(ctx_ptr);
+    let handle = alloc_res.to_result().expect("Should allocate successfully");
+
+    // Pass the newly allocated handle to another helper
+    let len_res = tmpr_jit_string_len(ctx_ptr, handle);
+    let len = len_res.to_result().expect("Should get length of valid handle");
+    assert_eq!(len, 0, "Empty string should have length 0");
+}
+
+#[test]
+fn jit_runtime_error_from_status_allocation_failed() {
+    use crate::error::JitRuntimeError;
+    use crate::abi::JIT_STATUS_ERROR_ALLOCATION_FAILED;
+
+    let err = JitRuntimeError::from_status(JIT_STATUS_ERROR_ALLOCATION_FAILED);
+    assert_eq!(err, Some(JitRuntimeError::AllocationFailed));
+}

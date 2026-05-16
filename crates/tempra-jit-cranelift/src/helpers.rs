@@ -33,6 +33,8 @@ pub enum JitHelperSignature {
     EnumTag,
     /// (ctx: *mut JitRuntimeContext, HeapHandle, expected_tag: u64, payload_index: u64) -> JitHelperResult (value=i64_bits, status)
     EnumUnwrap,
+    /// (ctx: *mut JitRuntimeContext) -> JitHelperResult (value=handle, status)
+    AllocStringEmpty,
 }
 
 impl JitHelperRegistry {
@@ -79,6 +81,12 @@ impl JitHelperRegistry {
             name: "tmpr_jit_enum_unwrap_i64",
             signature: JitHelperSignature::EnumUnwrap,
             ptr: tmpr_jit_enum_unwrap_i64 as *const (),
+        });
+
+        helpers.insert("tmpr_jit_alloc_string_empty", JitHelperInfo {
+            name: "tmpr_jit_alloc_string_empty",
+            signature: JitHelperSignature::AllocStringEmpty,
+            ptr: tmpr_jit_alloc_string_empty as *const (),
         });
 
         Self { helpers }
@@ -309,4 +317,22 @@ pub extern "C" fn tmpr_jit_enum_unwrap_i64(
         }
         _ => Err(crate::abi::JIT_STATUS_ERROR_TYPE),
     })
+}
+
+/// Helper implementation for allocating an empty string.
+/// 
+/// ABI: (ctx: *mut JitRuntimeContext) -> JitHelperResult
+pub extern "C" fn tmpr_jit_alloc_string_empty(ctx: *mut JitRuntimeContext) -> JitHelperResult {
+    if ctx.is_null() {
+        return JitHelperResult {
+            value: 0,
+            status: crate::abi::JIT_STATUS_ERROR_INVALID_CONTEXT,
+        };
+    }
+    let ctx = unsafe { &mut *ctx };
+    let handle = ctx.alloc_string(String::new());
+    JitHelperResult {
+        value: handle.0,
+        status: crate::abi::JIT_STATUS_SUCCESS,
+    }
 }

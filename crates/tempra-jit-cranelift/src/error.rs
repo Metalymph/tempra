@@ -31,6 +31,8 @@ pub enum JitRuntimeError {
     OutOfBounds,
     #[error("Wrong enum variant")]
     WrongVariant,
+    #[error("Allocation failed")]
+    AllocationFailed,
     #[error("Helper failed with status {status}")]
     HelperFailed { status: i64 },
 }
@@ -46,6 +48,7 @@ impl JitRuntimeError {
             JIT_STATUS_ERROR_TYPE => Some(Self::TypeError),
             JIT_STATUS_ERROR_OUT_OF_BOUNDS => Some(Self::OutOfBounds),
             JIT_STATUS_ERROR_WRONG_VARIANT => Some(Self::WrongVariant),
+            JIT_STATUS_ERROR_ALLOCATION_FAILED => Some(Self::AllocationFailed),
             _ => Some(Self::HelperFailed { status }),
         }
     }

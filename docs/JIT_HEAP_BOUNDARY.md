@@ -70,9 +70,10 @@ Helpers that can fail (e.g., due to bounds checks or type mismatches) follow a d
 - **Phase 16.5**: JIT Helper Probe: Array.get Int64. [COMPLETE]
 - **Phase 16.6**: Heap Helper Status Consumption Probe. [COMPLETE]
 - **Phase 16.7**: Heap Helper Error Policy Design. [COMPLETE]
-    - **Error Mapping**: Formalized `JitRuntimeError` with status-to-error mapping.
-    - **Failure Policy**: Established `ReturnError`/`FallbackToVm` for user errors, `Trap` for bugs.
-    - **Validation**: Verified all `abi.rs` status codes map correctly to runtime errors.
-- **Phase 16.8**: Implement Struct field access and Enum tag probes. [PLANNED]
+- **Phase 16.8**: JIT Heap Helper Wrapper API. [COMPLETE]
+    - **Idiomatic Conversion**: Added `to_result()` and `to_i64_result()` to `JitHelperResult`.
+    - **Type Safety**: Formalized conversion to `Result<u64/i64, JitRuntimeError>`.
+    - **Roundtrip Verification**: Confirmed negative `i64` bit-preserving roundtrip via the wrapper.
+- **Phase 16.9**: Implement Struct field access and Enum tag probes. [PLANNED]
 - **Phase 16.3**: Implement Struct field access.
 - **Phase 16.4**: Finalize Enum/Option support via Tag/Unwrap helpers.

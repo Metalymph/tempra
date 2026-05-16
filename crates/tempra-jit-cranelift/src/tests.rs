@@ -1144,3 +1144,38 @@ fn jit_runtime_error_from_status_mappings() {
     assert_eq!(JitRuntimeError::from_status(JIT_STATUS_ERROR_OUT_OF_BOUNDS), Some(JitRuntimeError::OutOfBounds));
     assert_eq!(JitRuntimeError::from_status(999), Some(JitRuntimeError::HelperFailed { status: 999 }));
 }
+
+#[test]
+fn jit_helper_result_wrapper_api() {
+    use crate::abi::*;
+    use crate::error::JitRuntimeError;
+
+    // 1. OK path
+    let res = JitHelperResult { value: 42, status: JIT_STATUS_SUCCESS };
+    assert_eq!(res.to_result(), Ok(42));
+    assert_eq!(res.to_i64_result(), Ok(42));
+
+    // 2. Negative i64 roundtrip
+    let res = JitHelperResult { value: -7i64 as u64, status: JIT_STATUS_SUCCESS };
+    assert_eq!(res.to_i64_result(), Ok(-7));
+
+    // 3. Error path - OOB
+    let res = JitHelperResult { value: 0, status: JIT_STATUS_ERROR_OUT_OF_BOUNDS };
+    assert_eq!(res.to_result(), Err(JitRuntimeError::OutOfBounds));
+
+    // 4. Error path - TypeError
+    let res = JitHelperResult { value: 0, status: JIT_STATUS_ERROR_TYPE };
+    assert_eq!(res.to_result(), Err(JitRuntimeError::TypeError));
+
+    // 5. Error path - InvalidHandle
+    let res = JitHelperResult { value: 0, status: JIT_STATUS_ERROR_INVALID_HANDLE };
+    assert_eq!(res.to_result(), Err(JitRuntimeError::InvalidHandle));
+
+    // 6. Error path - InvalidContext
+    let res = JitHelperResult { value: 0, status: JIT_STATUS_ERROR_INVALID_CONTEXT };
+    assert_eq!(res.to_result(), Err(JitRuntimeError::InvalidContext));
+
+    // 7. Error path - Unknown
+    let res = JitHelperResult { value: 0, status: 999 };
+    assert_eq!(res.to_result(), Err(JitRuntimeError::HelperFailed { status: 999 }));
+}

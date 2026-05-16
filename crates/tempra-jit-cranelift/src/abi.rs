@@ -32,11 +32,28 @@ pub enum JitValueAbi {
     Handle(HeapHandle),
 }
 
-/// The result of a fallible JIT helper call.
+/// A representation of a value passed across the JIT/VM boundary.
+#[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct JitHelperResult {
-    /// The primary result value (e.g. a handle or a primitive).
+    /// The returned value (e.g. handle or length).
     pub value: u64,
-    /// The status of the operation.
+    /// The status of the operation (0 = OK).
     pub status: JitStatus,
+}
+
+impl JitHelperResult {
+    /// Converts a raw JIT helper result into an idiomatic Rust Result.
+    pub fn to_result(self) -> Result<u64, crate::error::JitRuntimeError> {
+        if let Some(err) = crate::error::JitRuntimeError::from_status(self.status) {
+            Err(err)
+        } else {
+            Ok(self.value)
+        }
+    }
+
+    /// Converts a raw JIT helper result into an i64 Result (bit-preserving).
+    pub fn to_i64_result(self) -> Result<i64, crate::error::JitRuntimeError> {
+        self.to_result().map(|v| v as i64)
+    }
 }

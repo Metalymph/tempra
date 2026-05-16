@@ -1,11 +1,10 @@
-//! Runtime Helpers and Handle Boundary (Phase 16.1).
+//! Runtime Helpers and Handle Boundary (Phase 16.2).
 //! 
 //! These structures define the interface that the VM provides to 
 //! JIT-compiled code for heap operations.
 
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
-use crate::abi::{JitHelperResult, JIT_STATUS_SUCCESS, JIT_STATUS_ERROR_INVALID_HANDLE};
+use crate::abi::{HeapHandle, JitHelperResult, JIT_STATUS_SUCCESS, JIT_STATUS_ERROR_INVALID_HANDLE};
 
 /// Registry of available runtime helpers.
 pub struct JitHelperRegistry {
@@ -20,14 +19,10 @@ pub struct JitHelperInfo {
 
 #[derive(Debug, Clone)]
 pub enum JitHelperSignature {
-    /// (HeapHandle) -> JitHelperResult (value=len, status)
+    /// (ctx: *mut JitRuntimeContext, HeapHandle) -> JitHelperResult (value=len, status)
     StringLen,
-    /// (HeapHandle, i64) -> JitHelperResult (value=handle, status)
+    /// (ctx: *mut JitRuntimeContext, HeapHandle, i64) -> JitHelperResult (value=handle, status)
     ArrayGet,
-    /// (HeapHandle, i64) -> JitHelperResult (value=handle, status)
-    StructGetField,
-    /// (HeapHandle) -> JitHelperResult (value=tag, status)
-    EnumTag,
 }
 
 impl JitHelperRegistry {
@@ -44,22 +39,51 @@ impl JitHelperRegistry {
     }
 }
 
-// --- Test Scaffold ---
+/// A prototype runtime context for JIT heap operations.
+/// 
+/// Responsibility:
+/// - Manages a local "arena" of heap values visible to JIT code.
+/// - Validates handles during helper calls.
+/// - This is a prototype context; the final version will be VM-owned.
+pub struct JitRuntimeContext {
+    heap_handles: HashMap<u64, String>,
+    next_handle: u64,
+}
 
-/// A temporary testing scaffold to map handles to strings.
-/// NOT the final runtime model.
-static TEST_HANDLE_TABLE: OnceLock<Mutex<HashMap<u64, String>>> = OnceLock::new();
+impl JitRuntimeContext {
+    pub fn new() -> Self {
+        Self {
+            heap_handles: HashMap::new(),
+            next_handle: 1000, // Start handles at 1000 to avoid collision with small constants
+        }
+    }
 
-pub fn get_test_handle_table() -> &'static Mutex<HashMap<u64, String>> {
-    TEST_HANDLE_TABLE.get_or_init(|| Mutex::new(HashMap::new()))
+    pub fn alloc_string(&mut self, value: String) -> HeapHandle {
+        let handle = self.next_handle;
+        self.heap_handles.insert(handle, value);
+        self.next_handle += 1;
+        HeapHandle(handle)
+    }
+
+    pub fn clear(&mut self) {
+        self.heap_handles.clear();
+        self.next_handle = 1000;
+    }
 }
 
 /// Helper implementation for String.len()
 /// 
-/// Validates the opaque handle against the test table.
-pub extern "C" fn tmpr_jit_string_len(handle: u64) -> JitHelperResult {
-    let table = get_test_handle_table().lock().unwrap();
-    if let Some(s) = table.get(&handle) {
+/// ABI: (ctx: *mut JitRuntimeContext, handle: u64) -> JitHelperResult
+pub extern "C" fn tmpr_jit_string_len(ctx: *mut JitRuntimeContext, handle: u64) -> JitHelperResult {
+    if ctx.is_null() {
+        return JitHelperResult {
+            value: 0,
+            status: JIT_STATUS_ERROR_INVALID_HANDLE,
+        };
+    }
+
+    let ctx_ref = unsafe { &*ctx };
+    if let Some(s) = ctx_ref.heap_handles.get(&handle) {
         JitHelperResult {
             value: s.chars().count() as u64,
             status: JIT_STATUS_SUCCESS,

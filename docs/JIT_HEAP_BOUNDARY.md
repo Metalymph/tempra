@@ -64,9 +64,10 @@ Helpers that can fail (e.g., due to bounds checks or type mismatches) follow a d
 
 - **Phase 16.0**: Define the boundary, ABI, and diagnostics. [COMPLETE]
 - **Phase 16.1**: Implement String length and basic handle passing. [COMPLETE]
-    - **Probe Result**: Successfully verified `tmpr_jit_string_len` calling from JIT to native helper.
-    - **ABI Verified**: `(Value, Status)` dual-return pattern correctly handled by Cranelift.
-    - **Safety Verified**: Opaque handles validated via `TestHandleTable` scaffold.
-- **Phase 16.2**: Implement Array indexing and bounds-check helpers. [PLANNED]
+- **Phase 16.2**: VM-owned JIT handle arena prototype. [COMPLETE]
+    - **Prototype Context**: Introduced `JitRuntimeContext` for handle-to-value resolution.
+    - **Context-First ABI**: Verified `extern "C" fn(ctx, handle) -> (value, status)`.
+    - **Safety Verified**: Safe failures for `null` context and invalid handles.
+- **Phase 16.3**: Implement Array indexing and bounds-check helpers. [PLANNED]
 - **Phase 16.3**: Implement Struct field access.
 - **Phase 16.4**: Finalize Enum/Option support via Tag/Unwrap helpers.

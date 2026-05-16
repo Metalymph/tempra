@@ -66,10 +66,10 @@ Helpers that can fail (e.g., due to bounds checks or type mismatches) follow a d
 - **Phase 16.1**: Implement String length and basic handle passing. [COMPLETE]
 - **Phase 16.2**: VM-owned JIT handle arena prototype. [COMPLETE]
 - **Phase 16.3**: JIT Helper Probe: String.size + Status Handling. [COMPLETE]
-    - **Reusable Boundary**: Successfully added `tmpr_jit_string_size`.
-    - **Semantic Parity**: Verified `len` (char count) vs `size` (UTF-8 bytes).
-    - **Error Handling**: Hardened status codes for invalid context/handles.
-    - **Eligibility**: String functions remain probe-only (non-eligible by default).
-- **Phase 16.4**: Implement Array indexing and bounds-check helpers. [PLANNED]
+- **Phase 16.4**: JIT Helper Probe: Array.len. [COMPLETE]
+    - **Multi-Kind Arena**: Supported `String` and `Array` objects.
+    - **Type Safety**: Verified `TypeError` when calling array helpers on strings (and vice-versa).
+    - **Probe Result**: Successfully verified `tmpr_jit_array_len` calling from JIT.
+- **Phase 16.5**: Implement Struct field access and Enum tag probes. [PLANNED]
 - **Phase 16.3**: Implement Struct field access.
 - **Phase 16.4**: Finalize Enum/Option support via Tag/Unwrap helpers.

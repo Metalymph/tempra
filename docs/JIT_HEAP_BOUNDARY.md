@@ -69,9 +69,10 @@ Helpers that can fail (e.g., due to bounds checks or type mismatches) follow a d
 - **Phase 16.4**: JIT Helper Probe: Array.len. [COMPLETE]
 - **Phase 16.5**: JIT Helper Probe: Array.get Int64. [COMPLETE]
 - **Phase 16.6**: Heap Helper Status Consumption Probe. [COMPLETE]
-    - **Native Branching**: Verified that Cranelift-emitted code can branch on `JitHelperResult.status`.
-    - **Control Flow**: Implemented native probe: `if status == SUCCESS return value else return -1`.
-    - **Full Coverage**: Validated success, OOB, TypeError, and invalid context paths via native branching.
-- **Phase 16.7**: Implement Struct field access and Enum tag probes. [PLANNED]
+- **Phase 16.7**: Heap Helper Error Policy Design. [COMPLETE]
+    - **Error Mapping**: Formalized `JitRuntimeError` with status-to-error mapping.
+    - **Failure Policy**: Established `ReturnError`/`FallbackToVm` for user errors, `Trap` for bugs.
+    - **Validation**: Verified all `abi.rs` status codes map correctly to runtime errors.
+- **Phase 16.8**: Implement Struct field access and Enum tag probes. [PLANNED]
 - **Phase 16.3**: Implement Struct field access.
 - **Phase 16.4**: Finalize Enum/Option support via Tag/Unwrap helpers.

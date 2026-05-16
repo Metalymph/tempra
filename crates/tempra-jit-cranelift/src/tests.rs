@@ -1131,3 +1131,16 @@ fn jit_helper_status_consumed_array_get_ok() {
     // 4. Invalid handle -> -1
     assert_eq!(native_fn(ctx_ptr as u64, 9999, 0), -1);
 }
+
+#[test]
+fn jit_runtime_error_from_status_mappings() {
+    use crate::error::JitRuntimeError;
+    use crate::abi::*;
+
+    assert_eq!(JitRuntimeError::from_status(JIT_STATUS_SUCCESS), None);
+    assert_eq!(JitRuntimeError::from_status(JIT_STATUS_ERROR_INVALID_CONTEXT), Some(JitRuntimeError::InvalidContext));
+    assert_eq!(JitRuntimeError::from_status(JIT_STATUS_ERROR_INVALID_HANDLE), Some(JitRuntimeError::InvalidHandle));
+    assert_eq!(JitRuntimeError::from_status(JIT_STATUS_ERROR_TYPE), Some(JitRuntimeError::TypeError));
+    assert_eq!(JitRuntimeError::from_status(JIT_STATUS_ERROR_OUT_OF_BOUNDS), Some(JitRuntimeError::OutOfBounds));
+    assert_eq!(JitRuntimeError::from_status(999), Some(JitRuntimeError::HelperFailed { status: 999 }));
+}

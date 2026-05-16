@@ -84,7 +84,11 @@ Helpers that can fail (e.g., due to bounds checks or type mismatches) follow a d
     - **Value Semantics**: Confirmed original strings are never mutated.
     - **Unicode Safety**: Verified correct UTF-8 concatenation interacting correctly with `String.len` and `String.size`.
     - **Type Safety**: Verified `TypeError` when concatenating non-strings.
-- **Phase 16.14**: Implement JIT Helper Probe: Array.push (Value-semantic array extension). [PLANNED]
+- **Phase 16.14**: JIT Helper Probe: Array.push Int64. [COMPLETE]
+    - **Value Semantics**: Confirmed `tmpr_jit_array_push_i64` allocates a new array, leaving the original unchanged.
+    - **Length Consistency**: Verified `Array.len` on old and new handles.
+    - **Type Safety**: Verified `TypeError` on non-array handles.
+- **Phase 16.15**: (Optional) JIT memory/arena bounds enforcement probe. [PLANNED]
 
 ## Heap Allocation Boundary (Phase 16.12)
 

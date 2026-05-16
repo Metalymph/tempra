@@ -37,6 +37,8 @@ pub enum JitHelperSignature {
     AllocStringEmpty,
     /// (ctx: *mut JitRuntimeContext, HeapHandle, HeapHandle) -> JitHelperResult (value=handle, status)
     StringConcat,
+    /// (ctx: *mut JitRuntimeContext, HeapHandle, value: i64) -> JitHelperResult (value=handle, status)
+    ArrayPushI64,
 }
 
 impl JitHelperRegistry {
@@ -95,6 +97,12 @@ impl JitHelperRegistry {
             name: "tmpr_jit_string_concat",
             signature: JitHelperSignature::StringConcat,
             ptr: tmpr_jit_string_concat as *const (),
+        });
+
+        helpers.insert("tmpr_jit_array_push_i64", JitHelperInfo {
+            name: "tmpr_jit_array_push_i64",
+            signature: JitHelperSignature::ArrayPushI64,
+            ptr: tmpr_jit_array_push_i64 as *const (),
         });
 
         Self { helpers }
@@ -209,6 +217,44 @@ impl JitRuntimeContext {
         };
         
         let new_handle = self.alloc_string(format!("{}{}", left_str, right_str));
+        JitHelperResult {
+            value: new_handle.0,
+            status: crate::abi::JIT_STATUS_SUCCESS,
+        }
+    }
+
+    pub fn get_array(&self, handle: HeapHandle) -> Result<&Vec<JitHeapScalar>, crate::abi::JitStatus> {
+        if let Some(obj) = self.heap_handles.get(&handle.0) {
+            match obj {
+                JitHeapObject::Array(arr) => Ok(arr),
+                _ => Err(crate::abi::JIT_STATUS_ERROR_TYPE),
+            }
+        } else {
+            Err(crate::abi::JIT_STATUS_ERROR_INVALID_HANDLE)
+        }
+    }
+
+    pub fn array_push_i64(&mut self, array: HeapHandle, value: i64) -> JitHelperResult {
+        let mut new_arr = match self.get_array(array) {
+            Ok(arr) => {
+                let mut clone = Vec::with_capacity(arr.len() + 1);
+                // We cannot derive Clone for JitHeapScalar easily if HeapHandle doesn't,
+                // but actually JitHeapScalar only has simple types for now. Let's do a manual clone to be safe.
+                for item in arr {
+                    clone.push(match item {
+                        JitHeapScalar::Int64(v) => JitHeapScalar::Int64(*v),
+                        JitHeapScalar::UInt8(v) => JitHeapScalar::UInt8(*v),
+                        JitHeapScalar::Bool(v) => JitHeapScalar::Bool(*v),
+                        JitHeapScalar::Handle(h) => JitHeapScalar::Handle(crate::abi::HeapHandle(h.0)),
+                    });
+                }
+                clone
+            },
+            Err(status) => return JitHelperResult { value: 0, status },
+        };
+        new_arr.push(JitHeapScalar::Int64(value));
+        
+        let new_handle = self.alloc_array(new_arr);
         JitHelperResult {
             value: new_handle.0,
             status: crate::abi::JIT_STATUS_SUCCESS,
@@ -389,4 +435,22 @@ pub extern "C" fn tmpr_jit_string_concat(
     }
     let ctx = unsafe { &mut *ctx };
     ctx.string_concat(crate::abi::HeapHandle(left_handle), crate::abi::HeapHandle(right_handle))
+}
+
+/// Helper implementation for array push with value semantics.
+/// 
+/// ABI: (ctx: *mut JitRuntimeContext, array_handle: u64, value: i64) -> JitHelperResult
+pub extern "C" fn tmpr_jit_array_push_i64(
+    ctx: *mut JitRuntimeContext,
+    array_handle: u64,
+    value: i64,
+) -> JitHelperResult {
+    if ctx.is_null() {
+        return JitHelperResult {
+            value: 0,
+            status: crate::abi::JIT_STATUS_ERROR_INVALID_CONTEXT,
+        };
+    }
+    let ctx = unsafe { &mut *ctx };
+    ctx.array_push_i64(crate::abi::HeapHandle(array_handle), value)
 }

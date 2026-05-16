@@ -1532,3 +1532,63 @@ fn jit_helper_string_concat_unicode() {
     let size_res = tmpr_jit_string_size(ctx_ptr, new_handle_val);
     assert_eq!(size_res.to_result().unwrap(), 7);
 }
+
+#[test]
+fn jit_helper_array_push_i64_empty_and_non_empty() {
+    use crate::helpers::{JitRuntimeContext, JitHeapScalar, tmpr_jit_array_push_i64, tmpr_jit_array_len, tmpr_jit_array_get_i64};
+
+    let mut ctx = JitRuntimeContext::new();
+    let empty_handle = ctx.alloc_array(vec![]);
+    let non_empty_handle = ctx.alloc_array(vec![JitHeapScalar::Int64(10), JitHeapScalar::Int64(20)]);
+    let ctx_ptr = &mut ctx as *mut JitRuntimeContext;
+
+    // 1. Push to empty array
+    let res = tmpr_jit_array_push_i64(ctx_ptr, empty_handle.0, 42);
+    let new_handle1 = res.to_result().expect("Should push successfully");
+    
+    assert_ne!(new_handle1, 0);
+    assert_ne!(new_handle1, empty_handle.0);
+    
+    // Check lengths
+    assert_eq!(tmpr_jit_array_len(ctx_ptr, empty_handle.0).to_result().unwrap(), 0, "Original array unchanged");
+    assert_eq!(tmpr_jit_array_len(ctx_ptr, new_handle1).to_result().unwrap(), 1, "New array length is 1");
+    
+    // Check value
+    assert_eq!(tmpr_jit_array_get_i64(ctx_ptr, new_handle1, 0).to_i64_result().unwrap(), 42);
+
+    // 2. Push to non-empty array (negative value)
+    let res = tmpr_jit_array_push_i64(ctx_ptr, non_empty_handle.0, -99);
+    let new_handle2 = res.to_result().expect("Should push successfully");
+    
+    assert_ne!(new_handle2, 0);
+    assert_ne!(new_handle2, non_empty_handle.0);
+    
+    // Check lengths
+    assert_eq!(tmpr_jit_array_len(ctx_ptr, non_empty_handle.0).to_result().unwrap(), 2, "Original array unchanged");
+    assert_eq!(tmpr_jit_array_len(ctx_ptr, new_handle2).to_result().unwrap(), 3, "New array length is 3");
+    
+    // Check value (last index)
+    assert_eq!(tmpr_jit_array_get_i64(ctx_ptr, new_handle2, 2).to_i64_result().unwrap(), -99);
+}
+
+#[test]
+fn jit_helper_array_push_i64_errors() {
+    use crate::helpers::{JitRuntimeContext, tmpr_jit_array_push_i64};
+    use crate::error::JitRuntimeError;
+
+    let mut ctx = JitRuntimeContext::new();
+    let string_handle = ctx.alloc_string("hello".to_string());
+    let ctx_ptr = &mut ctx as *mut JitRuntimeContext;
+
+    // 1. Type error (pushing to a string)
+    let res = tmpr_jit_array_push_i64(ctx_ptr, string_handle.0, 42);
+    assert_eq!(res.to_result(), Err(JitRuntimeError::TypeError));
+
+    // 2. Invalid handle
+    let res = tmpr_jit_array_push_i64(ctx_ptr, 9999, 42);
+    assert_eq!(res.to_result(), Err(JitRuntimeError::InvalidHandle));
+
+    // 3. Null context
+    let res = tmpr_jit_array_push_i64(std::ptr::null_mut(), string_handle.0, 42);
+    assert_eq!(res.to_result(), Err(JitRuntimeError::InvalidContext));
+}

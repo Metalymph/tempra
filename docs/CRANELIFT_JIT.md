@@ -190,3 +190,12 @@ To ensure long-term stability, a specialized burn-in corpus is maintained in `ex
 - **Semantic Parity**: JIT and VM must agree on all results.
 - **Graceful Rejection**: Unsupported features (Strings, Structs) must never cause a crash, only a clean fallback.
 - **Warm-run Integrity**: Compiled functions must be reused correctly across multiple calls.
+
+## Future: Heap Boundary (Phase 16.0+)
+
+As the JIT expands beyond primitives, it adopts a strict **Heap Boundary** design to maintain safety and VM isolation:
+- **Opaque Handles**: All heap types (String, Array, etc.) are treated as opaque `u64` tokens.
+- **Runtime Helpers**: Native code interacts with the heap exclusively via VM-provided helper functions.
+- **Fallible ABI**: Soft errors (bounds checks) use a `(Value, Status)` return pattern to avoid unnecessary traps.
+
+See [JIT_HEAP_BOUNDARY.md](file:///Users/lorenzopirro/coding/rust/tempra/docs/JIT_HEAP_BOUNDARY.md) for full details.

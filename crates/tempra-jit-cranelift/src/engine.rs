@@ -105,29 +105,40 @@ fn explain_jit_eligibility_internal(
         }
     };
 
-    // Params must be Int64 (Bool ABI not yet supported)
+    // Params must be Int64 (Bool ABI not yet supported, Heap requires Phase 16.1+)
     for (i, p) in func.params.iter().enumerate() {
         if *p != BytecodeType::Int64 {
             visited.remove(&function_id);
-            if *p == BytecodeType::Bool {
-                return JitEligibility::UnsupportedType("Bool signatures are not supported by JIT v1".into());
+            match p {
+                BytecodeType::Bool => return JitEligibility::UnsupportedType("Bool signatures are not supported by JIT v1".into()),
+                BytecodeType::String | BytecodeType::Any => {
+                    return JitEligibility::UnsupportedType("heap value signatures are not supported by JIT v1 (requires boundary)".into());
+                }
+                _ => return JitEligibility::UnsupportedType(format!("Parameter {} has unsupported type {:?}", i, p)),
             }
-            return JitEligibility::UnsupportedType(format!("Parameter {} has unsupported type {:?}", i, p));
         }
     }
     // Return must be Int64
     if func.ret != BytecodeType::Int64 {
         visited.remove(&function_id);
-        if func.ret == BytecodeType::Bool {
-            return JitEligibility::UnsupportedType("Bool signatures are not supported by JIT v1".into());
+        match &func.ret {
+            BytecodeType::Bool => return JitEligibility::UnsupportedType("Bool signatures are not supported by JIT v1".into()),
+            BytecodeType::String | BytecodeType::Any => {
+                return JitEligibility::UnsupportedType("heap value signatures are not supported by JIT v1 (requires boundary)".into());
+            }
+            _ => return JitEligibility::UnsupportedType(format!("Return has unsupported type {:?}", func.ret)),
         }
-        return JitEligibility::UnsupportedType(format!("Return has unsupported type {:?}", func.ret));
     }
     // Locals must be Int64 or Bool (for internal control flow)
     for (i, l) in func.locals.iter().enumerate() {
         if *l != BytecodeType::Int64 && *l != BytecodeType::Bool {
             visited.remove(&function_id);
-            return JitEligibility::UnsupportedType(format!("Local {} has unsupported type {:?}. JIT v1 only supports Int64 and internal Bool locals.", i, l));
+            match l {
+                BytecodeType::String | BytecodeType::Any => {
+                    return JitEligibility::UnsupportedType(format!("Local {} is a heap type. Heap locals are not supported by JIT v1.", i));
+                }
+                _ => return JitEligibility::UnsupportedType(format!("Local {} has unsupported type {:?}. JIT v1 only supports Int64 and internal Bool locals.", i, l)),
+            }
         }
     }
 
@@ -146,7 +157,20 @@ fn explain_jit_eligibility_internal(
             }
         } else if !crate::lower::is_instr_supported(instr) {
             visited.remove(&function_id);
-            return JitEligibility::UnsupportedInstr { offset, instr: format!("{:?}", instr) };
+            use tempra_bytecode::opcode::BytecodeInstr;
+            let msg = match instr {
+                BytecodeInstr::GetField(_) | BytecodeInstr::SetField(_) => {
+                    "heap operation requires runtime helper boundary".into()
+                }
+                BytecodeInstr::GetIndex | BytecodeInstr::MakeArray(_) | BytecodeInstr::Slice => {
+                    "heap operation requires runtime helper boundary".into()
+                }
+                BytecodeInstr::MakeEnum(_, _, _) | BytecodeInstr::Tag | BytecodeInstr::Unwrap(_, _) => {
+                    "heap operation requires runtime helper boundary".into()
+                }
+                _ => format!("{:?}", instr),
+            };
+            return JitEligibility::UnsupportedInstr { offset, instr: msg };
         }
     }
 

@@ -381,3 +381,47 @@ fn jit_rejects_recursive_function_v1() {
     assert!(matches!(eligibility, crate::engine::JitEligibility::UnsupportedInstr { .. }));
     assert!(eligibility.to_string().contains("recursion"));
 }
+
+#[test]
+fn jit_rejects_string_signature_with_heap_boundary_message() {
+    let mut module = BytecodeModule::new();
+    let func = BytecodeFunction::new("test".into(), vec![BytecodeType::String], BytecodeType::Int64);
+    let id = module.add_function(func);
+    
+    let eligibility = crate::engine::explain_jit_eligibility(&module, id);
+    assert!(eligibility.to_string().contains("heap value signatures are not supported by JIT v1"));
+}
+
+#[test]
+fn jit_rejects_array_instruction_with_heap_boundary_message() {
+    let mut module = BytecodeModule::new();
+    let mut func = BytecodeFunction::new("test".into(), vec![BytecodeType::Int64], BytecodeType::Int64);
+    func.code.push(BytecodeInstr::MakeArray(0));
+    func.code.push(BytecodeInstr::Return);
+    let id = module.add_function(func);
+    
+    let eligibility = crate::engine::explain_jit_eligibility(&module, id);
+    assert!(eligibility.to_string().contains("heap operation requires runtime helper boundary"));
+}
+
+#[test]
+fn jit_rejects_struct_getfield_with_helper_message() {
+    let mut module = BytecodeModule::new();
+    let mut func = BytecodeFunction::new("test".into(), vec![BytecodeType::Int64], BytecodeType::Int64);
+    let c_name = module.add_constant(BytecodeConstant::String("field".into()));
+    func.code.push(BytecodeInstr::GetField(c_name));
+    func.code.push(BytecodeInstr::Return);
+    let id = module.add_function(func);
+    
+    let eligibility = crate::engine::explain_jit_eligibility(&module, id);
+    assert!(eligibility.to_string().contains("heap operation requires runtime helper boundary"));
+}
+
+#[test]
+fn jit_int64_functions_still_eligible() {
+    let mut module = BytecodeModule::new();
+    let func = BytecodeFunction::new("test".into(), vec![BytecodeType::Int64], BytecodeType::Int64);
+    let id = module.add_function(func);
+    
+    assert!(crate::engine::can_jit_function(&module, id));
+}

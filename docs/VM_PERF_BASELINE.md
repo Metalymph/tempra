@@ -27,6 +27,20 @@ Measurements are averaged over 20 iterations after 2 warmup runs.
 
 ## Candidates for Optimization
 
+### Phase 16.0 — JIT Heap Boundary Design
+Established the architectural interface for supporting heap-allocated types in the native JIT.
+- **Opaque Handle ABI**: Defined `HeapHandle` as an opaque `u64` token, isolating the JIT from internal VM memory layouts.
+- **Runtime Helpers**: Designed the "Boundary" interface where JIT-compiled code interacts with the heap exclusively via VM-provided C-compatible helpers.
+- **Fallible ABI**: Adopted a `(Value, Status)` pattern for soft errors (e.g. bounds checks) to enable graceful fallbacks and future deoptimization.
+- **Safety Policy**: JIT never dereferences or mutates heap memory directly; ownership remains 100% with the VM runtime.
+
+### Phase 15.8 — JIT Bool/Branch support hardening
+Consolidated the `Int64 + internal Bool` subset by resolving complex control-flow lowering bugs and adding native boolean opcode support.
+- **Branch Hardening**: Fixed TIR lowering for deeply nested `if-else` and `match` structures.
+- **Boolean Opcodes**: Added `ConstBool`, `Not`, `And`, and `Or` to the Cranelift JIT.
+- **Reachability Validation**: Improved TIR verifier parity and return-path checking for unreachable join blocks.
+- **Success**: Verified with the full burn-in corpus (12 tests passed).
+
 ### Phase 15.7 — JIT Stability Burn-in
 Established a comprehensive validation suite to ensure JIT reliability across complex Int64 workloads.
 - **Burn-in Corpus**: Added `examples/jit_burnin/` with coverage for deep call chains, nested loops, and heavy branching.

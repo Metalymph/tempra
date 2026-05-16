@@ -264,8 +264,4 @@ impl ProfilingState {
         }
     }
 
-    pub fn is_hot(&self, function_id: FunctionId) -> bool {
-        let s = &self.stats[function_id.0 as usize];
-        s.call_count >= self.options.hot_call_threshold || s.backedge_count >= self.options.hot_backedge_threshold
-    }
 }

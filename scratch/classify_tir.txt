@@ -1,0 +1,132 @@
+fn classify (%0: i64) -> i64 {
+  // slot $0 = n
+^block0:
+  slot $0: i64
+  store $0, %0
+  %1 = load $0
+  %2 = const 0i64
+  %3 = lt %1, %2
+  condbr %3, ^block1, ^block2
+^block1:
+  %4 = const 1i64
+  %5 = const 0i64
+  %6 = sub %5, %4
+  ret %6
+^block2:
+  %7 = load $0
+  %8 = const 0i64
+  %9 = eq %7, %8
+  condbr %9, ^block3, ^block4
+^block3:
+  %10 = const 0i64
+  ret %10
+^block4:
+  %11 = load $0
+  %12 = const 100i64
+  %13 = gt %11, %12
+  condbr %13, ^block5, ^block6
+^block5:
+  %14 = const 2i64
+  ret %14
+^block6:
+  %15 = const 1i64
+  ret %15
+}
+
+fn main () -> i64 {
+  // slot $0 = total
+  // slot $1 = $iter_obj_341
+  // slot $2 = $idx_341
+  // slot $3 = $len_341
+  // slot $4 = i
+  // slot $5 = $iter_obj_381
+  // slot $6 = $idx_381
+  // slot $7 = $len_381
+  // slot $8 = j
+^block0:
+  slot $0: i64
+  %0 = const 0i64
+  store $0, %0
+  %1 = const 10i64
+  %2 = const 0i64
+  %3 = sub %2, %1
+  %4 = const 0i64
+  %5 = const 5i64
+  %6 = const 50i64
+  %7 = const 150i64
+  %8 = make [i64]::None (%3, %4, %5, %6, %7)
+  slot $1: [i64]
+  store $1, %8
+  %9 = const 0i64
+  slot $2: i64
+  store $2, %9
+  %10 = load $1
+  %11 = len %10
+  slot $3: i64
+  store $3, %11
+  br ^block1
+^block1:
+  %12 = load $2
+  %13 = load $3
+  %14 = lt %12, %13
+  condbr %14, ^block2, ^block3
+^block2:
+  %15 = load $1
+  %16 = load $2
+  %17 = get_index %15, %16
+  slot $4: i64
+  store $4, %17
+  %18 = const 1i64
+  %19 = const 2i64
+  %20 = const 3i64
+  %21 = const 4i64
+  %22 = const 5i64
+  %23 = const 6i64
+  %24 = const 7i64
+  %25 = const 8i64
+  %26 = const 9i64
+  %27 = const 10i64
+  %28 = make [i64]::None (%18, %19, %20, %21, %22, %23, %24, %25, %26, %27)
+  slot $5: [i64]
+  store $5, %28
+  %29 = const 0i64
+  slot $6: i64
+  store $6, %29
+  %30 = load $5
+  %31 = len %30
+  slot $7: i64
+  store $7, %31
+  br ^block4
+^block3:
+  %49 = load $0
+  ret %49
+^block4:
+  %32 = load $6
+  %33 = load $7
+  %34 = lt %32, %33
+  condbr %34, ^block5, ^block6
+^block5:
+  %35 = load $5
+  %36 = load $6
+  %37 = get_index %35, %36
+  slot $8: i64
+  store $8, %37
+  %38 = load $0
+  %39 = load $4
+  %40 = call @0 (%39)
+  %41 = add %38, %40
+  store $0, %41
+  %42 = const ()
+  %43 = load $6
+  %44 = const 1i64
+  %45 = add %43, %44
+  store $6, %45
+  br ^block4
+^block6:
+  %46 = load $2
+  %47 = const 1i64
+  %48 = add %46, %47
+  store $2, %48
+  br ^block1
+}
+

@@ -180,3 +180,10 @@ tempra run examples/jit_benchmark.tmpr --experimental-vm --experimental-jit
 ```
 
 Currently, the CLI does not automatically print the `VmProfile` summary to stdout unless specifically triggered by a profiling flag (planned for future phases).
+
+## Stability Burn-in (Phase 15.7)
+
+To ensure long-term stability, a specialized burn-in corpus is maintained in `examples/jit_burnin/`. These scripts are used to validate:
+- **Semantic Parity**: JIT and VM must agree on all results.
+- **Graceful Rejection**: Unsupported features (Strings, Structs) must never cause a crash, only a clean fallback.
+- **Warm-run Integrity**: Compiled functions must be reused correctly across multiple calls.

@@ -122,9 +122,9 @@ fn explain_jit_eligibility_internal(
         visited.remove(&function_id);
         return JitEligibility::UnsupportedType(format!("Return has unsupported type {:?}", func.ret));
     }
-    // Locals must be Int64
+    // Locals must be Int64 or Bool (for comparisons)
     for (i, l) in func.locals.iter().enumerate() {
-        if *l != BytecodeType::Int64 {
+        if *l != BytecodeType::Int64 && *l != BytecodeType::Bool {
             visited.remove(&function_id);
             return JitEligibility::UnsupportedType(format!("Local {} has unsupported type {:?}", i, l));
         }

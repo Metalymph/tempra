@@ -1,0 +1,20 @@
+struct Point {
+    x: Int64,
+    y: Int64
+}
+
+fn process_point(p: Point) -> Int64 {
+    return p.x + p.y
+}
+
+fn main() -> Int64 {
+    let p = Point { x: 10, y: 20 }
+    var total = 0
+    for i in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] {
+        total = total + process_point(p)
+    }
+    // 30 * 10 = 300
+    return total
+}
+// Expected: 300
+// Note: process_point should be rejected by JIT.

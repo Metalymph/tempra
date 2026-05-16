@@ -27,6 +27,13 @@ Measurements are averaged over 20 iterations after 2 warmup runs.
 
 ## Candidates for Optimization
 
+### Phase 15.7 — JIT Stability Burn-in
+Established a comprehensive validation suite to ensure JIT reliability across complex Int64 workloads.
+- **Burn-in Corpus**: Added `examples/jit_burnin/` with coverage for deep call chains, nested loops, and heavy branching.
+- **Differential Testing**: Automated comparison between HIR interpreter results and JIT execution.
+- **Fallback Verification**: Confirmed that unsupported features (Strings, Structs) reject the JIT gracefully and use the VM stack interpreter.
+- **Stress Testing**: Validated state stability over repeated executions and warm-run reuse.
+
 ### Phase 15.5 — JIT Threshold Tuning & Policy
 Introduced a stable, measurable compilation policy to prevent compile storms and eliminate wasted Cranelift invocations.
 - **New `VmOptions` fields**: `jit_min_instruction_count` (default 8) and `jit_retry_limit` (default 1).

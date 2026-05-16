@@ -1,0 +1,17 @@
+// Function that is otherwise eligible but calls a non-eligible function
+fn caller_of_unsupported(a: Int64) -> Int64 {
+    // String operations are not supported in JIT
+    let s = "forced_fallback"
+    return a + s.len()
+}
+
+fn main() -> Int64 {
+    var x = 0
+    for i in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] {
+        x = x + caller_of_unsupported(i)
+    }
+    // sum(1..10) + 10 * 15 = 55 + 150 = 205
+    return x
+}
+// Expected: 205
+// Note: caller_of_unsupported should be rejected/fallback.

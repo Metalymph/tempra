@@ -781,8 +781,10 @@ impl<'a> LowerContext<'a> {
                         for stmt in &b.statements {
                             self.lower_statement(stmt)?;
                         }
+                    } else if let HirExpression::If(_nested_if) = &**else_expr {
+                        self.lower_expression(else_expr)?;
                     } else {
-                        return Err(TirLowerError::UnsupportedExpr("Else is not a block".into(), else_expr.span()));
+                        return Err(TirLowerError::UnsupportedExpr("Else is not a block or if".into(), else_expr.span()));
                     }
                 }
                 let f_terminated = self.builder.is_terminated();
@@ -1434,16 +1436,8 @@ impl<'a> LowerContext<'a> {
 
 pub fn lower_function(func: &HirFunction, type_ctx: &TypeContext, module_builder: &mut ModuleBuilder, self_ty: Option<Type>) -> Result<TirFunction, TirLowerError> {
     let ret_ty = if let Some(rt) = &func.return_type {
-        match rt {
-            HirType::Named(_, n) => {
-                let ty = tempra_typeck::types::resolve_named_type(n);
-                map_type(&ty)?
-            }
-            _ => {
-                let ty = resolve_hir_type(rt, type_ctx, self_ty.as_ref())?;
-                map_type(&ty)?
-            }
-        }
+        let ty = resolve_hir_type(rt, type_ctx, self_ty.as_ref())?;
+        map_type(&ty)?
     } else {
         TirType::Unit
     };
@@ -1456,10 +1450,7 @@ pub fn lower_function(func: &HirFunction, type_ctx: &TypeContext, module_builder
     ctx.builder.set_current_block(entry_block);
     
     for p in &func.parameters {
-        let ty = match &p.ty {
-            HirType::Named(_, n) => tempra_typeck::types::resolve_named_type(n),
-            _ => resolve_hir_type(&p.ty, type_ctx, self_ty.as_ref())?,
-        };
+        let ty = resolve_hir_type(&p.ty, type_ctx, self_ty.as_ref())?;
         let tir_ty = map_type(&ty)?;
         let val_id = ctx.builder.add_param(tir_ty.clone());
         

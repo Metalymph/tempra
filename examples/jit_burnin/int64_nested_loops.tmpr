@@ -1,0 +1,17 @@
+fn inner_loop(x: Int64) -> Int64 {
+    return x + 1
+}
+
+fn main() -> Int64 {
+    var x = 0
+    for i in [1, 2, 3, 4, 5] {
+        for j in [1, 2, 3, 4, 5] {
+            for k in [1, 2, 3, 4, 5] {
+                x = inner_loop(x)
+            }
+        }
+    }
+    // 5 * 5 * 5 = 125
+    return x
+}
+// Expected: 125

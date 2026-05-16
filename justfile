@@ -168,3 +168,11 @@ install-tools:
 # Run VM performance baseline
 perf-vm:
     cargo test -p tempra-driver --test perf_baseline -- --ignored --nocapture
+
+# Run JIT burn-in stability tests
+jit-burnin:
+    cargo test -p tempra-driver --test jit_burnin_tests --features jit-cranelift -- --nocapture
+
+# Run JIT burn-in including ignored stress tests
+jit-burnin-all:
+    cargo test -p tempra-driver --test jit_burnin_tests --features jit-cranelift -- --nocapture --include-ignored

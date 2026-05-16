@@ -1,0 +1,22 @@
+fn level3(a: Int64) -> Int64 {
+    return a + 3
+}
+
+fn level2(a: Int64) -> Int64 {
+    return level3(a) + 2
+}
+
+fn level1(a: Int64) -> Int64 {
+    return level2(a) + 1
+}
+
+fn main() -> Int64 {
+    var total = 0
+    // Run multiple times to trigger JIT
+    for i in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] {
+        total = total + level1(i)
+    }
+    // sum(1..10) + 10*(1+2+3) = 55 + 60 = 115
+    return total
+}
+// Expected: 115

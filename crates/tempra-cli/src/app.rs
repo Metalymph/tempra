@@ -23,6 +23,8 @@ pub enum Commands {
 pub struct RunArgs {
     #[arg(long, help = "Use the experimental bytecode VM and cache")]
     pub experimental_vm: bool,
+    #[arg(long, help = "Enable experimental Cranelift JIT (requires --experimental-vm)")]
+    pub experimental_jit: bool,
     pub path: PathBuf,
     pub args: Vec<String>,
 }

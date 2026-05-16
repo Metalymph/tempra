@@ -8,7 +8,7 @@ fn main() {
     let cli = Cli::parse();
 
     let result = match cli.command {
-        Commands::Run(args) => commands::run::run_command(args.path, args.args, args.experimental_vm),
+        Commands::Run(args) => commands::run::run_command(args.path, args.args, args.experimental_vm, args.experimental_jit),
         Commands::Check(args) => commands::check::check_command(args.path),
         Commands::Test(args) => commands::test::test_command(args.path),
         Commands::Repl => commands::repl::repl_command(),

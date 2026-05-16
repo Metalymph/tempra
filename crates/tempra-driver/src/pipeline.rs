@@ -190,8 +190,21 @@ pub fn run_file(path: &Path) -> Result<(), DriverError> {
 }
 
 pub fn run_file_with_experimental_vm(path: &Path, args: &[String]) -> Result<(), DriverError> {
+    run_file_with_experimental_vm_jit(path, args, false)
+}
+
+pub fn run_file_with_experimental_vm_jit(path: &Path, args: &[String], jit_enabled: bool) -> Result<(), DriverError> {
     let source = fs::read_to_string(path)?;
-    run_source_with_experimental_vm(&source, args)
+    run_source_with_experimental_vm_jit(&source, args, jit_enabled)
+}
+
+pub fn run_source_with_experimental_vm_jit(source: &str, args: &[String], jit_enabled: bool) -> Result<(), DriverError> {
+    let mut options = tempra_vm::profile::VmOptions::default();
+    options.jit_enabled = jit_enabled;
+    match run_source_vm_with_options(source, args, options) {
+        Ok(_) => Ok(()),
+        Err(e) => Err(e),
+    }
 }
 
 pub fn run_file_with_args(path: &Path, args: &[String]) -> Result<(), DriverError> {

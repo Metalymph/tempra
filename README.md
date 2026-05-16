@@ -80,6 +80,20 @@ tempra fmt                # Format source code
 tempra repl               # Start interactive session
 ```
 
+### Experimental Features
+
+Tempra includes an experimental Just-In-Time (JIT) compiler and a stack-based bytecode VM for performance testing. These are strictly opt-in:
+
+```bash
+# Run using the experimental bytecode VM
+tempra run script.tmpr --experimental-vm
+
+# Run using the experimental Cranelift JIT (requires feature-gate)
+tempra run script.tmpr --experimental-vm --experimental-jit
+```
+
+See [docs/CRANELIFT_JIT.md](docs/CRANELIFT_JIT.md) for current support and limitations.
+
 ### Build Examples
 
 ```bash

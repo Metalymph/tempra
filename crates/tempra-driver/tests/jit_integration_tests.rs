@@ -414,3 +414,73 @@ fn test_jit_policy_retry_limit_respected() {
     assert!(unsup.jit_is_permanently_rejected);
     assert!(unsup.jit_skipped_below_threshold == 0, "threshold was 0, should not be in threshold-skip bucket");
 }
+
+// ============================================================
+// Phase 15.6 — Driver / CLI JIT integration tests
+// ============================================================
+
+#[test]
+#[cfg(feature = "jit-cranelift")]
+fn test_jit_enabled_vm_executes() {
+    // Verify that the new driver entry point with jit_enabled=true produces correct results
+    let source = r#"
+        fn add(a: Int64, b: Int64) -> Int64 { return a + b }
+        fn main() -> Int64 {
+            var x = 0
+            for i in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] {
+                for j in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] {
+                    x = add(x, i)
+                }
+            }
+            return x
+        }
+    "#;
+    // Use the new driver function that threads jit_enabled
+    let result = tempra_driver::run_source_with_experimental_vm_jit(source, &[], true);
+    assert!(result.is_ok(), "JIT-enabled run failed: {:?}", result.err());
+}
+
+#[test]
+#[cfg(feature = "jit-cranelift")]
+fn test_jit_enabled_hot_function_compiles() {
+    // Verify that hot functions are actually compiled when using the driver with JIT
+    let source = r#"
+        fn add(a: Int64, b: Int64) -> Int64 { return a + b }
+        fn main() -> Int64 {
+            var x = 0
+            for i in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] {
+                for j in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] {
+                    x = add(x, i)
+                }
+            }
+            return x
+        }
+    "#;
+    let mut options = VmOptions::default();
+    options.jit_enabled = true;
+    options.profiling = true;
+    options.hot_call_threshold = 5;
+    options.jit_min_instruction_count = 0;
+
+    let (val, profile) = tempra_driver::run_source_vm_profiled(source, options).unwrap();
+    assert_eq!(val, VmValue::Int64(550));
+
+    let add_stats = profile.function_stats.iter().find(|f| f.function_name == "add").unwrap();
+    assert!(add_stats.jit_compile_successes > 0, "add() should have been JIT-compiled");
+}
+
+#[test]
+#[cfg(feature = "jit-cranelift")]
+fn test_jit_enabled_unsupported_function_fallback() {
+    // Verify that JIT correctly falls back to the interpreter for unsupported functions
+    let source = r#"
+        fn greet(name: String) -> String { return name }
+        fn main() -> Int64 {
+            let s = greet("hello")
+            return s.len()
+        }
+    "#;
+    // Should succeed — the string function falls back to the interpreter
+    let result = tempra_driver::run_source_with_experimental_vm_jit(source, &[], true);
+    assert!(result.is_ok(), "JIT fallback failed: {:?}", result.err());
+}

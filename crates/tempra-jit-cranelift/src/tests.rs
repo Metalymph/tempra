@@ -1179,3 +1179,99 @@ fn jit_helper_result_wrapper_api() {
     let res = JitHelperResult { value: 0, status: 999 };
     assert_eq!(res.to_result(), Err(JitRuntimeError::HelperFailed { status: 999 }));
 }
+
+#[test]
+fn jit_helper_struct_get_i64_first_field() {
+    use crate::helpers::{JitRuntimeContext, JitHeapScalar, tmpr_jit_struct_get_i64};
+    use cranelift::prelude::*;
+    use cranelift_module::Module;
+
+    let mut engine = JitEngine::new();
+    let mut ctx = JitRuntimeContext::new();
+    let handle = ctx.alloc_struct("Point", vec![
+        ("x".to_string(), JitHeapScalar::Int64(10)),
+        ("y".to_string(), JitHeapScalar::Int64(20)),
+    ]);
+    let ctx_ptr = &mut ctx as *mut JitRuntimeContext;
+
+    engine.ctx.clear();
+    let mut sig = engine.module.make_signature();
+    sig.params.push(AbiParam::new(types::I64)); // ctx
+    sig.params.push(AbiParam::new(types::I64)); // handle
+    sig.params.push(AbiParam::new(types::I64)); // field_id
+    sig.returns.push(AbiParam::new(types::I64)); // value
+    sig.returns.push(AbiParam::new(types::I64)); // status
+    engine.ctx.func.signature = sig.clone();
+
+    let mut builder = FunctionBuilder::new(&mut engine.ctx.func, &mut engine.builder_context);
+    let block = builder.create_block();
+    builder.append_block_params_for_function_params(block);
+    builder.switch_to_block(block);
+    builder.seal_block(block);
+
+    let args = builder.block_params(block).to_vec();
+    let helper_sig_ref = builder.import_signature(sig);
+    let helper_addr = builder.ins().iconst(types::I64, tmpr_jit_struct_get_i64 as i64);
+    let call = builder.ins().call_indirect(helper_sig_ref, helper_addr, &args);
+    let results = builder.inst_results(call).to_vec();
+    
+    builder.ins().return_(&[results[0], results[1]]);
+    builder.finalize();
+
+    let func_id = engine.module.declare_function("test_struct_get", cranelift_module::Linkage::Export, &engine.ctx.func.signature).unwrap();
+    engine.module.define_function(func_id, &mut engine.ctx).unwrap();
+    engine.module.finalize_definitions().unwrap();
+
+    let code = engine.module.get_finalized_function(func_id);
+    let native_fn: extern "C" fn(u64, u64, u64) -> crate::abi::JitHelperResult = unsafe { std::mem::transmute(code) };
+    
+    let res = native_fn(ctx_ptr as u64, handle.0, 0);
+    assert_eq!(res.value, 10);
+    assert_eq!(res.status, crate::abi::JIT_STATUS_SUCCESS);
+
+    let res = native_fn(ctx_ptr as u64, handle.0, 1);
+    assert_eq!(res.value, 20);
+    assert_eq!(res.status, crate::abi::JIT_STATUS_SUCCESS);
+}
+
+#[test]
+fn jit_helper_struct_get_i64_negative_value() {
+    use crate::helpers::{JitRuntimeContext, JitHeapScalar, tmpr_jit_struct_get_i64};
+    
+    let mut ctx = JitRuntimeContext::new();
+    let handle = ctx.alloc_struct("S", vec![
+        ("f".to_string(), JitHeapScalar::Int64(-42)),
+    ]);
+    let ctx_ptr = &mut ctx as *mut JitRuntimeContext;
+    
+    // Direct call probe to verify wrapper
+    let res = tmpr_jit_struct_get_i64(ctx_ptr, handle.0, 0);
+    let val = res.to_i64_result().expect("Should be Ok");
+    assert_eq!(val, -42);
+}
+
+#[test]
+fn jit_helper_struct_get_i64_errors() {
+    use crate::helpers::{JitRuntimeContext, JitHeapScalar, tmpr_jit_struct_get_i64};
+    use crate::error::JitRuntimeError;
+    
+    let mut ctx = JitRuntimeContext::new();
+    let s_handle = ctx.alloc_struct("S", vec![("f".to_string(), JitHeapScalar::Bool(true))]);
+    let a_handle = ctx.alloc_array(vec![]);
+    let ctx_ptr = &mut ctx as *mut JitRuntimeContext;
+    
+    // 1. OOB field_id
+    assert_eq!(tmpr_jit_struct_get_i64(ctx_ptr, s_handle.0, 1).to_i64_result(), Err(JitRuntimeError::OutOfBounds));
+    
+    // 2. Type error (accessing non-i64 field)
+    assert_eq!(tmpr_jit_struct_get_i64(ctx_ptr, s_handle.0, 0).to_i64_result(), Err(JitRuntimeError::TypeError));
+    
+    // 3. Type error (calling struct helper on array)
+    assert_eq!(tmpr_jit_struct_get_i64(ctx_ptr, a_handle.0, 0).to_i64_result(), Err(JitRuntimeError::TypeError));
+    
+    // 4. Invalid handle
+    assert_eq!(tmpr_jit_struct_get_i64(ctx_ptr, 9999, 0).to_i64_result(), Err(JitRuntimeError::InvalidHandle));
+    
+    // 5. Null context
+    assert_eq!(tmpr_jit_struct_get_i64(std::ptr::null_mut(), s_handle.0, 0).to_i64_result(), Err(JitRuntimeError::InvalidContext));
+}

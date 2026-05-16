@@ -27,6 +27,8 @@ pub enum JitHelperSignature {
     ArrayLen,
     /// (ctx: *mut JitRuntimeContext, HeapHandle, i64) -> JitHelperResult (value=handle, status)
     ArrayGet,
+    /// (ctx: *mut JitRuntimeContext, HeapHandle, u64) -> JitHelperResult (value=i64_bits, status)
+    StructGet,
 }
 
 impl JitHelperRegistry {
@@ -57,6 +59,12 @@ impl JitHelperRegistry {
             ptr: tmpr_jit_array_get_i64 as *const (),
         });
 
+        helpers.insert("tmpr_jit_struct_get_i64", JitHelperInfo {
+            name: "tmpr_jit_struct_get_i64",
+            signature: JitHelperSignature::StructGet,
+            ptr: tmpr_jit_struct_get_i64 as *const (),
+        });
+
         Self { helpers }
     }
 }
@@ -71,6 +79,13 @@ pub struct JitRuntimeContext {
 pub enum JitHeapObject {
     String(String),
     Array(Vec<JitHeapScalar>),
+    Struct(JitHeapStruct),
+}
+
+/// Prototype struct object.
+pub struct JitHeapStruct {
+    pub type_name: String,
+    pub fields: Vec<(String, JitHeapScalar)>,
 }
 
 /// Prototype scalar values within heap objects.
@@ -99,6 +114,16 @@ impl JitRuntimeContext {
     pub fn alloc_array(&mut self, values: Vec<JitHeapScalar>) -> HeapHandle {
         let handle = self.next_handle;
         self.heap_handles.insert(handle, JitHeapObject::Array(values));
+        self.next_handle += 1;
+        HeapHandle(handle)
+    }
+
+    pub fn alloc_struct(&mut self, type_name: impl Into<String>, fields: Vec<(String, JitHeapScalar)>) -> HeapHandle {
+        let handle = self.next_handle;
+        self.heap_handles.insert(handle, JitHeapObject::Struct(JitHeapStruct {
+            type_name: type_name.into(),
+            fields,
+        }));
         self.next_handle += 1;
         HeapHandle(handle)
     }
@@ -178,6 +203,27 @@ pub extern "C" fn tmpr_jit_array_get_i64(ctx: *mut JitRuntimeContext, handle: u6
                 return Err(crate::abi::JIT_STATUS_ERROR_OUT_OF_BOUNDS);
             }
             match &arr[index as usize] {
+                JitHeapScalar::Int64(val) => Ok(*val as u64),
+                _ => Err(crate::abi::JIT_STATUS_ERROR_TYPE),
+            }
+        }
+        _ => Err(crate::abi::JIT_STATUS_ERROR_TYPE),
+    })
+}
+
+/// Helper implementation for Struct.get(field_id)
+/// 
+/// field_id is prototype-only and index-based.
+/// Production will need stable field IDs from compiler metadata.
+/// 
+/// ABI: (ctx: *mut JitRuntimeContext, handle: u64, field_id: u64) -> JitHelperResult
+pub extern "C" fn tmpr_jit_struct_get_i64(ctx: *mut JitRuntimeContext, handle: u64, field_id: u64) -> JitHelperResult {
+    with_handle(ctx, handle, |obj| match obj {
+        JitHeapObject::Struct(s) => {
+            if field_id >= s.fields.len() as u64 {
+                return Err(crate::abi::JIT_STATUS_ERROR_OUT_OF_BOUNDS);
+            }
+            match &s.fields[field_id as usize].1 {
                 JitHeapScalar::Int64(val) => Ok(*val as u64),
                 _ => Err(crate::abi::JIT_STATUS_ERROR_TYPE),
             }

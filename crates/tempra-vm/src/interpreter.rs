@@ -9,7 +9,12 @@ use crate::error::VmError;
 use crate::profile::{VmOptions, VmProfile, FunctionProfile, ProfilingState};
 
 #[cfg(feature = "jit-cranelift")]
-use tempra_jit_cranelift::{JitEngine, JitFunctionI64};
+use tempra_jit_cranelift::{
+    JitEngine, JitFunctionI64, JitFunctionI64HeapAware,
+    compile_function_heap_aware, is_heap_requiring,
+};
+#[cfg(feature = "jit-cranelift")]
+use tempra_jit_cranelift::helpers::{JitRuntimeContext, JitHeapScalar};
 #[cfg(feature = "jit-cranelift")]
 use std::collections::HashMap;
 
@@ -27,8 +32,12 @@ pub struct Interpreter<'a> {
 
     #[cfg(feature = "jit-cranelift")]
     pub(crate) jit_engine: Option<JitEngine>,
+    /// Cache for pure-Int64 JIT functions (no heap params/locals).
     #[cfg(feature = "jit-cranelift")]
     pub(crate) jit_cache: HashMap<FunctionId, JitFunctionI64>,
+    /// Cache for heap-aware JIT functions (String/Array params or Len/Size/GetIndex opcodes).
+    #[cfg(feature = "jit-cranelift")]
+    pub(crate) jit_cache_heap: HashMap<FunctionId, JitFunctionI64HeapAware>,
 }
 
 impl<'a> Interpreter<'a> {
@@ -41,6 +50,8 @@ impl<'a> Interpreter<'a> {
             jit_engine: None,
             #[cfg(feature = "jit-cranelift")]
             jit_cache: HashMap::new(),
+            #[cfg(feature = "jit-cranelift")]
+            jit_cache_heap: HashMap::new(),
         }
     }
 
@@ -66,6 +77,8 @@ impl<'a> Interpreter<'a> {
             jit_engine,
             #[cfg(feature = "jit-cranelift")]
             jit_cache,
+            #[cfg(feature = "jit-cranelift")]
+            jit_cache_heap: HashMap::new(),
         }
     }
 
@@ -82,7 +95,34 @@ impl<'a> Interpreter<'a> {
 
         #[cfg(feature = "jit-cranelift")]
         if self.profiling.as_ref().map(|p| p.options.jit_enabled).unwrap_or(false) {
-            if let Some(jit_fn) = self.jit_cache.get(&function_id).copied() {
+            // ── Heap-aware JIT dispatch ──────────────────────────────────────────
+            if let Some(jit_fn) = self.jit_cache_heap.get(&function_id).copied() {
+                let mut ctx = JitRuntimeContext::new();
+                let mut i64_args: Vec<i64> = Vec::with_capacity(args.len());
+                let mut marshal_ok = true;
+                for arg in &args {
+                    match vm_value_to_jit_handle(arg, &mut ctx) {
+                        Some(h) => i64_args.push(h),
+                        None => { marshal_ok = false; break; }
+                    }
+                }
+                if marshal_ok {
+                    let start_native = std::time::Instant::now();
+                    if let Ok(res) = jit_fn.call_with_ctx(&mut ctx as *mut JitRuntimeContext, &i64_args) {
+                        let elapsed = start_native.elapsed().as_nanos() as u64;
+                        if let Some(ref mut prof) = self.profiling {
+                            prof.stats[function_id.0 as usize].jit_runtime_calls += 1;
+                            prof.stats[function_id.0 as usize].jit_total_native_time_ns += elapsed;
+                        }
+                        return Ok(VmValue::Int64(res));
+                    }
+                }
+                if let Some(ref mut prof) = self.profiling {
+                    prof.stats[function_id.0 as usize].jit_fallback_calls += 1;
+                }
+            }
+            // ── Pure-i64 JIT dispatch ────────────────────────────────────────────
+            else if let Some(jit_fn) = self.jit_cache.get(&function_id).copied() {
                 let mut i64_args = Vec::with_capacity(args.len());
                 let mut compatible = true;
                 for arg in &args {
@@ -93,8 +133,6 @@ impl<'a> Interpreter<'a> {
                         break;
                     }
                 }
-
-                let success = false;
                 if compatible {
                     let start_native = std::time::Instant::now();
                     if let Ok(res) = jit_fn.call_i64(&i64_args) {
@@ -106,11 +144,8 @@ impl<'a> Interpreter<'a> {
                         return Ok(VmValue::Int64(res));
                     }
                 }
-
-                if !success {
-                    if let Some(ref mut prof) = self.profiling {
-                        prof.stats[function_id.0 as usize].jit_fallback_calls += 1;
-                    }
+                if let Some(ref mut prof) = self.profiling {
+                    prof.stats[function_id.0 as usize].jit_fallback_calls += 1;
                 }
             }
         }
@@ -265,7 +300,8 @@ impl<'a> Interpreter<'a> {
 
     #[cfg(feature = "jit-cranelift")]
     fn maybe_compile_jit(&mut self, function_id: FunctionId) {
-        if self.jit_cache.contains_key(&function_id) {
+        // Skip if already compiled (either cache)
+        if self.jit_cache.contains_key(&function_id) || self.jit_cache_heap.contains_key(&function_id) {
             return;
         }
 
@@ -278,7 +314,7 @@ impl<'a> Interpreter<'a> {
             }
             
             if stats.jit_is_permanently_rejected {
-                return; // Guardrail: permanent rejection cache
+                return;
             }
             
             let is_hot = stats.call_count >= prof.options.hot_call_threshold || stats.backedge_count >= prof.options.hot_backedge_threshold;
@@ -321,37 +357,70 @@ impl<'a> Interpreter<'a> {
             }
         }
 
+        // Determine compile path: heap-aware or pure-i64
+        let heap_required = is_heap_requiring(&self.module.functions[function_id.0 as usize]);
+
         if let Some(ref mut engine) = self.jit_engine {
-            let old_keys: Vec<tempra_bytecode::function::FunctionId> = self.jit_cache.keys().copied().collect();
             let mut compiling = std::collections::HashSet::new();
-            match tempra_jit_cranelift::compile_function_i64(engine, self.module, function_id, &mut self.jit_cache, &mut compiling) {
-                Ok(compiled) => {
-                    self.jit_cache.insert(function_id, compiled);
-                    let elapsed = start_time.elapsed().as_nanos() as u64;
-                    if let Some(ref mut prof) = self.profiling {
-                        for new_key in self.jit_cache.keys() {
-                            if !old_keys.contains(new_key) && *new_key != function_id {
-                                prof.stats[new_key.0 as usize].jit_compile_attempts += 1;
-                                prof.stats[new_key.0 as usize].jit_compile_successes += 1;
+
+            if heap_required {
+                // ── Heap-aware compile path ───────────────────────────────────────
+                match compile_function_heap_aware(engine, self.module, function_id, &mut self.jit_cache_heap, &mut compiling) {
+                    Ok(compiled) => {
+                        self.jit_cache_heap.insert(function_id, compiled);
+                        let elapsed = start_time.elapsed().as_nanos() as u64;
+                        if let Some(ref mut prof) = self.profiling {
+                            prof.stats[function_id.0 as usize].jit_compile_successes += 1;
+                            prof.stats[function_id.0 as usize].jit_compile_time_ns += elapsed;
+                        }
+                    }
+                    Err(e) => {
+                        let elapsed = start_time.elapsed().as_nanos() as u64;
+                        if let Some(ref mut prof) = self.profiling {
+                            prof.stats[function_id.0 as usize].jit_compile_failures += 1;
+                            prof.stats[function_id.0 as usize].jit_rejection_reason = Some(format!("Heap compile failed: {:?}", e));
+                            prof.stats[function_id.0 as usize].jit_compile_time_ns += elapsed;
+                            let failures = prof.stats[function_id.0 as usize].jit_compile_failures;
+                            if failures >= prof.options.jit_retry_limit as u64 {
+                                prof.stats[function_id.0 as usize].jit_is_permanently_rejected = true;
+                                prof.stats[function_id.0 as usize].jit_permanent_rejections += 1;
+                            } else {
+                                prof.stats[function_id.0 as usize].jit_retryable_failures += 1;
                             }
                         }
-                        prof.stats[function_id.0 as usize].jit_compile_successes += 1;
-                        prof.stats[function_id.0 as usize].jit_compile_time_ns += elapsed;
                     }
                 }
-                Err(e) => {
-                    let elapsed = start_time.elapsed().as_nanos() as u64;
-                    if let Some(ref mut prof) = self.profiling {
-                        prof.stats[function_id.0 as usize].jit_compile_failures += 1;
-                        prof.stats[function_id.0 as usize].jit_rejection_reason = Some(format!("Compilation failed: {:?}", e));
-                        prof.stats[function_id.0 as usize].jit_compile_time_ns += elapsed;
-                        
-                        let failures = prof.stats[function_id.0 as usize].jit_compile_failures;
-                        if failures >= prof.options.jit_retry_limit as u64 {
-                            prof.stats[function_id.0 as usize].jit_is_permanently_rejected = true;
-                            prof.stats[function_id.0 as usize].jit_permanent_rejections += 1;
-                        } else {
-                            prof.stats[function_id.0 as usize].jit_retryable_failures += 1;
+            } else {
+                // ── Pure-i64 compile path ─────────────────────────────────────────
+                let old_keys: Vec<tempra_bytecode::function::FunctionId> = self.jit_cache.keys().copied().collect();
+                match tempra_jit_cranelift::compile_function_i64(engine, self.module, function_id, &mut self.jit_cache, &mut compiling) {
+                    Ok(compiled) => {
+                        self.jit_cache.insert(function_id, compiled);
+                        let elapsed = start_time.elapsed().as_nanos() as u64;
+                        if let Some(ref mut prof) = self.profiling {
+                            for new_key in self.jit_cache.keys() {
+                                if !old_keys.contains(new_key) && *new_key != function_id {
+                                    prof.stats[new_key.0 as usize].jit_compile_attempts += 1;
+                                    prof.stats[new_key.0 as usize].jit_compile_successes += 1;
+                                }
+                            }
+                            prof.stats[function_id.0 as usize].jit_compile_successes += 1;
+                            prof.stats[function_id.0 as usize].jit_compile_time_ns += elapsed;
+                        }
+                    }
+                    Err(e) => {
+                        let elapsed = start_time.elapsed().as_nanos() as u64;
+                        if let Some(ref mut prof) = self.profiling {
+                            prof.stats[function_id.0 as usize].jit_compile_failures += 1;
+                            prof.stats[function_id.0 as usize].jit_rejection_reason = Some(format!("Compilation failed: {:?}", e));
+                            prof.stats[function_id.0 as usize].jit_compile_time_ns += elapsed;
+                            let failures = prof.stats[function_id.0 as usize].jit_compile_failures;
+                            if failures >= prof.options.jit_retry_limit as u64 {
+                                prof.stats[function_id.0 as usize].jit_is_permanently_rejected = true;
+                                prof.stats[function_id.0 as usize].jit_permanent_rejections += 1;
+                            } else {
+                                prof.stats[function_id.0 as usize].jit_retryable_failures += 1;
+                            }
                         }
                     }
                 }
@@ -603,14 +672,50 @@ impl<'a> Interpreter<'a> {
                 BytecodeInstr::Call(target_id, argc) => {
                     #[cfg(feature = "jit-cranelift")]
                     if self.profiling.as_ref().map(|p| p.options.jit_enabled).unwrap_or(false) {
-                        if let Some(jit_fn) = self.jit_cache.get(&target_id).copied() {
-                            // Attempt JIT call
+                        // ── Heap-aware JIT call ──────────────────────────────────────────
+                        if let Some(jit_fn) = self.jit_cache_heap.get(&target_id).copied() {
                             let mut args = Vec::with_capacity(argc as usize);
-                            for _ in 0..argc {
-                                args.push(self.pop()?);
-                            }
+                            for _ in 0..argc { args.push(self.pop()?); }
                             args.reverse();
-                            
+
+                            let mut ctx = JitRuntimeContext::new();
+                            let mut i64_args: Vec<i64> = Vec::with_capacity(argc as usize);
+                            let mut marshal_ok = true;
+                            for arg in &args {
+                                match vm_value_to_jit_handle(arg, &mut ctx) {
+                                    Some(h) => i64_args.push(h),
+                                    None => { marshal_ok = false; break; }
+                                }
+                            }
+
+                            let mut success = false;
+                            if marshal_ok {
+                                if let Ok(res) = jit_fn.call_with_ctx(&mut ctx as *mut JitRuntimeContext, &i64_args) {
+                                    self.push(VmValue::Int64(res))?;
+                                    success = true;
+                                }
+                            }
+
+                            if let Some(ref mut prof) = self.profiling {
+                                if success {
+                                    prof.stats[target_id.0 as usize].jit_runtime_calls += 1;
+                                } else {
+                                    prof.stats[target_id.0 as usize].jit_fallback_calls += 1;
+                                }
+                            }
+
+                            if success {
+                                continue;
+                            }
+                            // Fallback: put args back on stack
+                            for arg in args { self.push(arg)?; }
+                        }
+                        // ── Pure-i64 JIT call ────────────────────────────────────────────
+                        else if let Some(jit_fn) = self.jit_cache.get(&target_id).copied() {
+                            let mut args = Vec::with_capacity(argc as usize);
+                            for _ in 0..argc { args.push(self.pop()?); }
+                            args.reverse();
+
                             let mut i64_args = Vec::with_capacity(argc as usize);
                             let mut compatible = true;
                             for arg in &args {
@@ -641,11 +746,8 @@ impl<'a> Interpreter<'a> {
                             if success {
                                 continue;
                             }
-                            
                             // Fallback: put args back on stack
-                            for arg in args {
-                                self.push(arg)?;
-                            }
+                            for arg in args { self.push(arg)?; }
                         } else {
                             self.maybe_compile_jit(target_id);
                         }
@@ -1008,6 +1110,40 @@ impl<'a> Interpreter<'a> {
         }
     }
 }
+
+/// Marshals a `VmValue` into an i64 suitable for passing to a heap-aware JIT function.
+///
+/// - `VmValue::Int64(i)`  → the integer itself, no allocation needed.
+/// - `VmValue::String(s)` → allocates a string handle in `ctx`, returns handle as i64.
+/// - `VmValue::Array(arr)` where every element is `Int64` → allocates an array handle
+///   containing `JitHeapScalar::Int64` elements, returns handle as i64.
+///
+/// Returns `None` for any type that cannot be represented across the JIT boundary
+/// (Bool, UInt64, Float64, Slice, Enum, Struct, heterogeneous arrays). The caller
+/// must fall back to the interpreter in that case.
+#[cfg(feature = "jit-cranelift")]
+fn vm_value_to_jit_handle(value: &VmValue, ctx: &mut JitRuntimeContext) -> Option<i64> {
+    match value {
+        VmValue::Int64(i) => Some(*i),
+        VmValue::String(s) => {
+            let handle = ctx.alloc_string(s.clone());
+            Some(handle.0 as i64)
+        }
+        VmValue::Array(arr) => {
+            let mut scalars = Vec::with_capacity(arr.len());
+            for elem in arr.iter() {
+                match elem {
+                    VmValue::Int64(i) => scalars.push(JitHeapScalar::Int64(*i)),
+                    _ => return None, // heterogeneous or unsupported element type
+                }
+            }
+            let handle = ctx.alloc_array(scalars);
+            Some(handle.0 as i64)
+        }
+        _ => None,
+    }
+}
+
 
 pub fn run_function(module: &BytecodeModule, name: &str, args: Vec<VmValue>) -> Result<VmValue, VmError> {
     let id = module.functions.iter().position(|f| f.name == name)

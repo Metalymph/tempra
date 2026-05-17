@@ -200,3 +200,216 @@ fn test_jit_disabled_has_zero_stats() {
     assert_eq!(stats.jit_compile_attempts, 0);
     assert_eq!(stats.jit_runtime_calls, 0);
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Phase 17.1: Heap-aware JIT VM integration tests
+// ═══════════════════════════════════════════════════════════════════════════════
+
+fn build_string_len_func(module: &mut BytecodeModule) -> tempra_bytecode::function::FunctionId {
+    let mut func = BytecodeFunction::new(
+        "string_len".into(),
+        vec![BytecodeType::String],
+        BytecodeType::Int64,
+    );
+    func.locals = vec![BytecodeType::String];
+    func.code.push(BytecodeInstr::LoadLocal(LocalId(0)));
+    func.code.push(BytecodeInstr::Len);
+    func.code.push(BytecodeInstr::Return);
+    func.max_stack = 2;
+    module.add_function(func)
+}
+
+#[test]
+#[cfg(feature = "jit-cranelift")]
+fn test_jit_heap_string_len_correctness() {
+    let mut module = BytecodeModule::new();
+    let func_id = build_string_len_func(&mut module);
+
+    let mut options = VmOptions::default();
+    options.jit_enabled = true;
+    options.hot_call_threshold = 3;
+    options.jit_min_instruction_count = 0;
+
+    let mut interp = Interpreter::with_options(&module, options);
+
+    for _ in 0..3 {
+        let res = interp.run_function_id(func_id, vec![VmValue::String("hello".into())]).unwrap();
+        assert_eq!(res, VmValue::Int64(5));
+    }
+
+    assert!(interp.jit_cache_heap.contains_key(&func_id), "heap JIT not compiled");
+    assert!(!interp.jit_cache.contains_key(&func_id), "should NOT be in pure-i64 cache");
+
+    let res = interp.run_function_id(func_id, vec![VmValue::String("tempra".into())]).unwrap();
+    assert_eq!(res, VmValue::Int64(6));
+}
+
+#[test]
+#[cfg(feature = "jit-cranelift")]
+fn test_jit_heap_string_len_unicode() {
+    let mut module = BytecodeModule::new();
+    let func_id = build_string_len_func(&mut module);
+
+    let mut options = VmOptions::default();
+    options.jit_enabled = true;
+    options.hot_call_threshold = 2;
+    options.jit_min_instruction_count = 0;
+
+    let mut interp = Interpreter::with_options(&module, options);
+
+    for _ in 0..2 {
+        interp.run_function_id(func_id, vec![VmValue::String("ab".into())]).unwrap();
+    }
+
+    // "👋 hi" = 4 unicode scalars
+    let res = interp.run_function_id(func_id, vec![VmValue::String("👋 hi".into())]).unwrap();
+    assert_eq!(res, VmValue::Int64(4));
+}
+
+#[test]
+#[cfg(feature = "jit-cranelift")]
+fn test_jit_heap_string_size() {
+    let mut module = BytecodeModule::new();
+    let mut func = BytecodeFunction::new(
+        "string_size".into(),
+        vec![BytecodeType::String],
+        BytecodeType::Int64,
+    );
+    func.locals = vec![BytecodeType::String];
+    func.code.push(BytecodeInstr::LoadLocal(LocalId(0)));
+    func.code.push(BytecodeInstr::Size);
+    func.code.push(BytecodeInstr::Return);
+    func.max_stack = 2;
+    let func_id = module.add_function(func);
+
+    let mut options = VmOptions::default();
+    options.jit_enabled = true;
+    options.hot_call_threshold = 2;
+    options.jit_min_instruction_count = 0;
+
+    let mut interp = Interpreter::with_options(&module, options);
+
+    for _ in 0..2 {
+        interp.run_function_id(func_id, vec![VmValue::String("abc".into())]).unwrap();
+    }
+
+    // "👋 tempra" = 4 (emoji) + 1 (space) + 6 (tempra) = 11 bytes
+    let res = interp.run_function_id(func_id, vec![VmValue::String("👋 tempra".into())]).unwrap();
+    assert_eq!(res, VmValue::Int64(11));
+    assert!(interp.jit_cache_heap.contains_key(&func_id));
+}
+
+#[test]
+#[cfg(feature = "jit-cranelift")]
+fn test_jit_heap_array_len() {
+    let mut module = BytecodeModule::new();
+    let mut func = BytecodeFunction::new(
+        "array_len".into(),
+        vec![BytecodeType::Any],
+        BytecodeType::Int64,
+    );
+    func.locals = vec![BytecodeType::Any];
+    func.code.push(BytecodeInstr::LoadLocal(LocalId(0)));
+    func.code.push(BytecodeInstr::Len);
+    func.code.push(BytecodeInstr::Return);
+    func.max_stack = 2;
+    let func_id = module.add_function(func);
+
+    let mut options = VmOptions::default();
+    options.jit_enabled = true;
+    options.hot_call_threshold = 2;
+    options.jit_min_instruction_count = 0;
+
+    let mut interp = Interpreter::with_options(&module, options);
+
+    use std::rc::Rc;
+    let arr3 = VmValue::Array(Rc::new(vec![VmValue::Int64(1), VmValue::Int64(2), VmValue::Int64(3)]));
+    let arr5 = VmValue::Array(Rc::new(vec![
+        VmValue::Int64(10), VmValue::Int64(20), VmValue::Int64(30),
+        VmValue::Int64(40), VmValue::Int64(50),
+    ]));
+
+    for _ in 0..2 {
+        interp.run_function_id(func_id, vec![arr3.clone()]).unwrap();
+    }
+
+    let res = interp.run_function_id(func_id, vec![arr5.clone()]).unwrap();
+    assert_eq!(res, VmValue::Int64(5));
+    assert!(interp.jit_cache_heap.contains_key(&func_id));
+}
+
+#[test]
+#[cfg(feature = "jit-cranelift")]
+fn test_jit_heap_array_get_i64() {
+    let mut module = BytecodeModule::new();
+    // fn get(arr: Any, idx: Int64) -> Int64 { return arr[idx]; }
+    let mut func = BytecodeFunction::new(
+        "array_get".into(),
+        vec![BytecodeType::Any, BytecodeType::Int64],
+        BytecodeType::Int64,
+    );
+    func.locals = vec![BytecodeType::Any, BytecodeType::Int64];
+    // GetIndex pops index first, then array → push array, then index
+    func.code.push(BytecodeInstr::LoadLocal(LocalId(0))); // array
+    func.code.push(BytecodeInstr::LoadLocal(LocalId(1))); // index
+    func.code.push(BytecodeInstr::GetIndex);
+    func.code.push(BytecodeInstr::Return);
+    func.max_stack = 2;
+    let func_id = module.add_function(func);
+
+    let mut options = VmOptions::default();
+    options.jit_enabled = true;
+    options.hot_call_threshold = 2;
+    options.jit_min_instruction_count = 0;
+
+    let mut interp = Interpreter::with_options(&module, options);
+
+    use std::rc::Rc;
+    let arr = VmValue::Array(Rc::new(vec![
+        VmValue::Int64(10),
+        VmValue::Int64(20),
+        VmValue::Int64(30),
+    ]));
+
+    for _ in 0..2 {
+        interp.run_function_id(func_id, vec![arr.clone(), VmValue::Int64(0)]).unwrap();
+    }
+
+    let r1 = interp.run_function_id(func_id, vec![arr.clone(), VmValue::Int64(1)]).unwrap();
+    assert_eq!(r1, VmValue::Int64(20));
+
+    let r2 = interp.run_function_id(func_id, vec![arr.clone(), VmValue::Int64(2)]).unwrap();
+    assert_eq!(r2, VmValue::Int64(30));
+
+    assert!(interp.jit_cache_heap.contains_key(&func_id));
+}
+
+#[test]
+#[cfg(feature = "jit-cranelift")]
+fn test_jit_heap_stats_tracking() {
+    let mut module = BytecodeModule::new();
+    let func_id = build_string_len_func(&mut module);
+
+    let mut options = VmOptions::default();
+    options.jit_enabled = true;
+    options.hot_call_threshold = 2;
+    options.profiling = true;
+    options.jit_min_instruction_count = 0;
+
+    let mut interp = Interpreter::with_options(&module, options);
+
+    // 2 interpreter calls → triggers JIT compilation at threshold
+    interp.run_function_id(func_id, vec![VmValue::String("hi".into())]).unwrap();
+    interp.run_function_id(func_id, vec![VmValue::String("hi".into())]).unwrap();
+    // 1 call via JIT
+    interp.run_function_id(func_id, vec![VmValue::String("hello".into())]).unwrap();
+
+    let profile = interp.build_profile();
+    let stats = &profile.function_stats[func_id.0 as usize];
+
+    assert_eq!(stats.jit_compile_attempts, 1, "should attempt once");
+    assert_eq!(stats.jit_compile_successes, 1, "should succeed once");
+    assert_eq!(stats.jit_runtime_calls, 1, "one JIT call after compilation");
+    assert_eq!(stats.jit_compile_failures, 0, "no failures expected");
+}
+

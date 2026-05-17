@@ -24,6 +24,17 @@ pub fn is_instr_supported(instr: &BytecodeInstr) -> bool {
     }
 }
 
+/// Returns true when a bytecode function requires the heap-aware JIT path.
+///
+/// A function is heap-requiring when any of its params or locals are of
+/// `BytecodeType::String` or `BytecodeType::Any` (which represents heap
+/// handles at the bytecode level).
+pub fn is_heap_requiring(func: &tempra_bytecode::function::BytecodeFunction) -> bool {
+    use tempra_bytecode::function::BytecodeType;
+    func.params.iter().any(|p| *p == BytecodeType::String || *p == BytecodeType::Any)
+        || func.locals.iter().any(|l| *l == BytecodeType::String || *l == BytecodeType::Any)
+}
+
 pub fn compile_function_i64(
     engine: &mut JitEngine,
     module: &BytecodeModule,

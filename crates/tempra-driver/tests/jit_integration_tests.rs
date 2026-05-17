@@ -298,10 +298,10 @@ fn test_jit_policy_skips_too_small_function() {
 #[test]
 #[cfg(feature = "jit-cranelift")]
 fn test_jit_policy_rejects_unsupported_permanently() {
-    // Function uses a String parameter → unsupported, must be permanently rejected
+    // Function uses a Bool parameter → unsupported in signature, must be permanently rejected
     let source = r#"
-        fn greet(s: String) -> Int64 { return s.len() }
-        fn main() -> Int64 { return greet("hello") }
+        fn greet(s: Bool) -> Int64 { if s { return 1 } else { return 0 } }
+        fn main() -> Int64 { return greet(true) }
     "#;
     let mut options = VmOptions::default();
     options.jit_enabled = true;
@@ -312,7 +312,7 @@ fn test_jit_policy_rejects_unsupported_permanently() {
     let (_, profile) = tempra_driver::run_source_vm_profiled(source, options).unwrap();
     let greet = profile.function_stats.iter().find(|f| f.function_name == "greet").unwrap();
 
-    assert!(greet.jit_is_permanently_rejected, "string function must be permanently rejected");
+    assert!(greet.jit_is_permanently_rejected, "bool signature function must be permanently rejected");
     assert!(greet.jit_rejection_reason.is_some(), "rejection reason must be set");
     assert_eq!(greet.jit_permanent_rejections, 1);
 }
@@ -322,11 +322,11 @@ fn test_jit_policy_rejects_unsupported_permanently() {
 fn test_jit_policy_does_not_recompile_rejected_function() {
     // Call the unsupported function multiple times; compile must only be attempted once
     let source = r#"
-        fn greet(s: String) -> Int64 { return s.len() }
+        fn greet(s: Bool) -> Int64 { if s { return 1 } else { return 0 } }
         fn main() -> Int64 {
             var sum = 0
-            let strs = ["a", "bb", "ccc"]
-            for s in strs {
+            let Bools = [true, false, true]
+            for s in Bools {
                 sum = sum + greet(s)
             }
             return sum
@@ -389,10 +389,10 @@ fn test_jit_policy_retry_limit_respected() {
     // We cannot easily force a Cranelift internal error, but we CAN verify that unsupported
     // eligibility sets is_permanently_rejected so subsequent calls are zero-cost no-ops.
     let source = r#"
-        fn unsupported(s: String) -> Int64 { return s.len() }
+        fn unsupported(s: Bool) -> Int64 { if s { return 1 } else { return 0 } }
         fn main() -> Int64 {
             var n = 0
-            let xs = ["a", "b", "c", "d", "e"]
+            let xs = [true, false, true, false, true]
             for x in xs {
                 n = n + unsupported(x)
             }
@@ -414,6 +414,7 @@ fn test_jit_policy_retry_limit_respected() {
     assert!(unsup.jit_is_permanently_rejected);
     assert!(unsup.jit_skipped_below_threshold == 0, "threshold was 0, should not be in threshold-skip bucket");
 }
+
 
 // ============================================================
 // Phase 15.6 — Driver / CLI JIT integration tests

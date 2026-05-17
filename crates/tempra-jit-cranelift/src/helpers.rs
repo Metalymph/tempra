@@ -24,10 +24,12 @@ pub enum JitHelperSignature {
     GenericLen,
     /// (ctx: *mut JitRuntimeContext, HeapHandle) -> JitHelperResult (value=byte_count, status)
     StringSize,
+    GenericSize,
     /// (ctx: *mut JitRuntimeContext, HeapHandle) -> JitHelperResult (value=len, status)
     ArrayLen,
     /// (ctx: *mut JitRuntimeContext, HeapHandle, i64) -> JitHelperResult (value=handle, status)
     ArrayGet,
+    GenericGetI64,
     /// (ctx: *mut JitRuntimeContext, HeapHandle, u64) -> JitHelperResult (value=i64_bits, status)
     StructGet,
     /// (ctx: *mut JitRuntimeContext, HeapHandle) -> JitHelperResult (value=tag, status)
@@ -83,11 +85,29 @@ impl JitHelperRegistry {
         );
 
         helpers.insert(
+            "tmpr_jit_generic_size",
+            JitHelperInfo {
+                name: "tmpr_jit_generic_size",
+                signature: JitHelperSignature::GenericSize,
+                ptr: tmpr_jit_generic_size as *const (),
+            },
+        );
+
+        helpers.insert(
             "tmpr_jit_array_get_i64",
             JitHelperInfo {
                 name: "tmpr_jit_array_get_i64",
                 signature: JitHelperSignature::ArrayGet,
                 ptr: tmpr_jit_array_get_i64 as *const (),
+            },
+        );
+
+        helpers.insert(
+            "tmpr_jit_generic_get_i64",
+            JitHelperInfo {
+                name: "tmpr_jit_generic_get_i64",
+                signature: JitHelperSignature::GenericGetI64,
+                ptr: tmpr_jit_generic_get_i64 as *const (),
             },
         );
 
@@ -459,10 +479,42 @@ pub extern "C" fn tmpr_jit_string_size(
     })
 }
 
+/// Helper implementation for generic Size (String only, TypeError for Array)
+pub extern "C" fn tmpr_jit_generic_size(
+    ctx: *mut JitRuntimeContext,
+    handle: u64,
+) -> JitHelperResult {
+    with_handle(ctx, handle, |obj| match obj {
+        JitHeapObject::String(s) => Ok(s.len() as u64),
+        JitHeapObject::Array(_) => Err(crate::abi::JIT_STATUS_ERROR_TYPE),
+        _ => Err(crate::abi::JIT_STATUS_ERROR_TYPE),
+    })
+}
+
 /// Helper implementation for Array.len()
 pub extern "C" fn tmpr_jit_array_len(ctx: *mut JitRuntimeContext, handle: u64) -> JitHelperResult {
     with_handle(ctx, handle, |obj| match obj {
         JitHeapObject::Array(arr) => Ok(arr.len() as u64),
+        _ => Err(crate::abi::JIT_STATUS_ERROR_TYPE),
+    })
+}
+
+/// Helper implementation for generic Array.get_i64 (TypeError for String)
+pub extern "C" fn tmpr_jit_generic_get_i64(
+    ctx: *mut JitRuntimeContext,
+    handle: u64,
+    index: i64,
+) -> JitHelperResult {
+    with_handle(ctx, handle, |obj| match obj {
+        JitHeapObject::Array(arr) => {
+            if index < 0 || index as usize >= arr.len() {
+                return Err(crate::abi::JIT_STATUS_ERROR_OUT_OF_BOUNDS);
+            }
+            match &arr[index as usize] {
+                JitHeapScalar::Int64(val) => Ok(*val as u64),
+                _ => Err(crate::abi::JIT_STATUS_ERROR_TYPE),
+            }
+        }
         _ => Err(crate::abi::JIT_STATUS_ERROR_TYPE),
     })
 }

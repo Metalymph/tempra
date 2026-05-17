@@ -2125,3 +2125,80 @@ fn jit_heap_rejects_unsupported_heap_ops_source_level() {
         _ => panic!("Should reject GetField"),
     }
 }
+
+#[test]
+fn jit_generic_len_string() {
+    use crate::helpers::{tmpr_jit_generic_len, JitRuntimeContext};
+    let mut ctx = JitRuntimeContext::new();
+    let handle = ctx.alloc_string("hello".to_string());
+    let res = tmpr_jit_generic_len(&mut ctx as *mut _, handle.0);
+    assert_eq!(res.value, 5);
+    assert_eq!(res.status, crate::abi::JIT_STATUS_SUCCESS);
+}
+
+#[test]
+fn jit_generic_len_array() {
+    use crate::helpers::{tmpr_jit_generic_len, JitHeapScalar, JitRuntimeContext};
+    let mut ctx = JitRuntimeContext::new();
+    let handle = ctx.alloc_array(vec![JitHeapScalar::Int64(10), JitHeapScalar::Int64(20)]);
+    let res = tmpr_jit_generic_len(&mut ctx as *mut _, handle.0);
+    assert_eq!(res.value, 2);
+    assert_eq!(res.status, crate::abi::JIT_STATUS_SUCCESS);
+}
+
+#[test]
+fn jit_generic_size_string_ascii() {
+    use crate::helpers::{tmpr_jit_generic_size, JitRuntimeContext};
+    let mut ctx = JitRuntimeContext::new();
+    let handle = ctx.alloc_string("hello".to_string());
+    let res = tmpr_jit_generic_size(&mut ctx as *mut _, handle.0);
+    assert_eq!(res.value, 5);
+    assert_eq!(res.status, crate::abi::JIT_STATUS_SUCCESS);
+}
+
+#[test]
+fn jit_generic_size_string_unicode() {
+    use crate::helpers::{tmpr_jit_generic_size, JitRuntimeContext};
+    let mut ctx = JitRuntimeContext::new();
+    let handle = ctx.alloc_string("hé".to_string());
+    let res = tmpr_jit_generic_size(&mut ctx as *mut _, handle.0);
+    assert_eq!(res.value, 3); // "hé" is 3 bytes (h = 1, é = 2)
+    assert_eq!(res.status, crate::abi::JIT_STATUS_SUCCESS);
+}
+
+#[test]
+fn jit_generic_size_type_error_array() {
+    use crate::helpers::{tmpr_jit_generic_size, JitHeapScalar, JitRuntimeContext};
+    let mut ctx = JitRuntimeContext::new();
+    let handle = ctx.alloc_array(vec![JitHeapScalar::Int64(10)]);
+    let res = tmpr_jit_generic_size(&mut ctx as *mut _, handle.0);
+    assert_eq!(res.status, crate::abi::JIT_STATUS_ERROR_TYPE);
+}
+
+#[test]
+fn jit_generic_get_i64_array() {
+    use crate::helpers::{tmpr_jit_generic_get_i64, JitHeapScalar, JitRuntimeContext};
+    let mut ctx = JitRuntimeContext::new();
+    let handle = ctx.alloc_array(vec![JitHeapScalar::Int64(10), JitHeapScalar::Int64(42)]);
+    let res = tmpr_jit_generic_get_i64(&mut ctx as *mut _, handle.0, 1);
+    assert_eq!(res.value, 42);
+    assert_eq!(res.status, crate::abi::JIT_STATUS_SUCCESS);
+}
+
+#[test]
+fn jit_generic_get_i64_oob() {
+    use crate::helpers::{tmpr_jit_generic_get_i64, JitHeapScalar, JitRuntimeContext};
+    let mut ctx = JitRuntimeContext::new();
+    let handle = ctx.alloc_array(vec![JitHeapScalar::Int64(10)]);
+    let res = tmpr_jit_generic_get_i64(&mut ctx as *mut _, handle.0, 5);
+    assert_eq!(res.status, crate::abi::JIT_STATUS_ERROR_OUT_OF_BOUNDS);
+}
+
+#[test]
+fn jit_generic_get_i64_type_error_string() {
+    use crate::helpers::{tmpr_jit_generic_get_i64, JitRuntimeContext};
+    let mut ctx = JitRuntimeContext::new();
+    let handle = ctx.alloc_string("hello".to_string());
+    let res = tmpr_jit_generic_get_i64(&mut ctx as *mut _, handle.0, 0);
+    assert_eq!(res.status, crate::abi::JIT_STATUS_ERROR_TYPE);
+}

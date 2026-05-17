@@ -113,9 +113,10 @@ To ensure memory safety and maintain the integrity of the VM garbage collector (
     - **Metrics**: Added `cache_hits` and `cache_misses` tracking.
 - **Phase 17.4**: Heap-aware JIT Source-level Expansion. [COMPLETE]
     - **End-to-end Integration**: Connected `String.len`, `String.size`, `Array.len`, and `Array.get_i64` down to the source-level JIT execution pipeline.
-    - **Generic Dispatch**: Lowered `BytecodeInstr::Len` to dynamically dispatch to `tmpr_jit_generic_len` to support both strings and arrays correctly.
-    - **Arity Support**: Extended JIT caller `call_with_ctx` to support arity 3 functions.
     - **Differential Testing**: Implemented source-level differential test suites (`heap_jit_source_tests.rs`) to ensure parity between interpreter and JIT paths.
+- **Phase 17.5**: Heap-aware JIT Generic Helper Intrinsics. [COMPLETE]
+    - **Intrinsic Layer**: Introduced generic dispatcher intrinsics (`tmpr_jit_generic_len`, `tmpr_jit_generic_size`, `tmpr_jit_generic_get_i64`) to route JIT operations securely across distinct heap types at runtime.
+    - **Source Level Integration**: Bound language-level generic bytecode (`Size`, `Len`, `GetIndex`) to these intrinsics instead of directly hardcoding type-specific helpers. Specialized helpers are retained purely as granular lower-level building blocks.
 
 ## Integrated JIT Telemetry & Lifetime Scoping (Phase 17.2)
 

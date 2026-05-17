@@ -176,6 +176,24 @@ fn heap_jit_source_mixed_int_and_heap() {
 
 #[test]
 #[cfg(feature = "jit-cranelift")]
+fn heap_jit_source_generic_mixed() {
+    let source = r#"
+        fn f(s: String, xs: [Int64]) -> Int64 {
+            return s.len() + s.size() + xs.len() + xs[1]
+        }
+        fn main() -> Int64 {
+            let xs: [Int64] = [10, 20, 30]
+            let v1 = f("hé", xs)
+            let v2 = f("hé", xs)
+            return v1 + v2
+        }
+    "#;
+    // f("hé", [10, 20, 30]) = 2 + 3 + 3 + 20 = 28. 28 * 2 = 56.
+    run_differential_test(source, VmValue::Int64(56));
+}
+
+#[test]
+#[cfg(feature = "jit-cranelift")]
 fn heap_jit_source_array_get_oob_safe_error_or_fallback() {
     let source = r#"
         fn get(xs: [Int64]) -> Int64 {

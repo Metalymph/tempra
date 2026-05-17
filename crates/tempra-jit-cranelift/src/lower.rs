@@ -701,7 +701,7 @@ pub fn compile_function_heap_aware(
                     .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
                 current_block_terminated = emit_helper_call(
                     &mut builder,
-                    crate::helpers::tmpr_jit_string_size as *const (),
+                    crate::helpers::tmpr_jit_generic_size as *const (),
                     &[ctx_val, handle],
                     &mut stack,
                 )?;
@@ -715,7 +715,7 @@ pub fn compile_function_heap_aware(
                     .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
                 current_block_terminated = emit_helper_call(
                     &mut builder,
-                    crate::helpers::tmpr_jit_array_get_i64 as *const (),
+                    crate::helpers::tmpr_jit_generic_get_i64 as *const (),
                     &[ctx_val, handle, index],
                     &mut stack,
                 )?;

@@ -27,6 +27,11 @@ Measurements are averaged over 20 iterations after 2 warmup runs.
 
 ## Candidates for Optimization
 
+### Phase 17.5 — JIT Generic Helper Intrinsics
+Replaced hardcoded dispatch helpers with generic intrinsics (`generic_len`, `generic_size`, `generic_get_i64`). 
+- **Dynamic Dispatch**: Generic intrinsics resolve exact types at runtime without needing specialized bytecode, returning graceful fallbacks for unexpected object variants.
+- **Overhead Note**: The match statement on the `JitHeapObject` variant introduces a minimal single-branch overhead compared to specialized helpers, but enables a vastly simplified compiler frontend.
+
 ### Phase 16.0 — JIT Heap Boundary Design
 Established the architectural interface for supporting heap-allocated types in the native JIT.
 - **Opaque Handle ABI**: Defined `HeapHandle` as an opaque `u64` token, isolating the JIT from internal VM memory layouts.

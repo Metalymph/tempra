@@ -1,10 +1,10 @@
 //! Runtime Helpers and Handle Boundary (Phase 16.2).
-//! 
-//! These structures define the interface that the VM provides to 
+//!
+//! These structures define the interface that the VM provides to
 //! JIT-compiled code for heap operations.
 
-use std::collections::HashMap;
 use crate::abi::{HeapHandle, JitHelperResult};
+use std::collections::HashMap;
 
 /// Registry of available runtime helpers.
 pub struct JitHelperRegistry {
@@ -44,66 +44,96 @@ pub enum JitHelperSignature {
 impl JitHelperRegistry {
     pub fn new_with_helpers() -> Self {
         let mut helpers = HashMap::new();
-        
-        helpers.insert("tmpr_jit_string_len", JitHelperInfo {
-            name: "tmpr_jit_string_len",
-            signature: JitHelperSignature::StringLen,
-            ptr: tmpr_jit_string_len as *const (),
-        });
 
-        helpers.insert("tmpr_jit_string_size", JitHelperInfo {
-            name: "tmpr_jit_string_size",
-            signature: JitHelperSignature::StringSize,
-            ptr: tmpr_jit_string_size as *const (),
-        });
+        helpers.insert(
+            "tmpr_jit_string_len",
+            JitHelperInfo {
+                name: "tmpr_jit_string_len",
+                signature: JitHelperSignature::StringLen,
+                ptr: tmpr_jit_string_len as *const (),
+            },
+        );
 
-        helpers.insert("tmpr_jit_array_len", JitHelperInfo {
-            name: "tmpr_jit_array_len",
-            signature: JitHelperSignature::ArrayLen,
-            ptr: tmpr_jit_array_len as *const (),
-        });
+        helpers.insert(
+            "tmpr_jit_string_size",
+            JitHelperInfo {
+                name: "tmpr_jit_string_size",
+                signature: JitHelperSignature::StringSize,
+                ptr: tmpr_jit_string_size as *const (),
+            },
+        );
 
-        helpers.insert("tmpr_jit_array_get_i64", JitHelperInfo {
-            name: "tmpr_jit_array_get_i64",
-            signature: JitHelperSignature::ArrayGet,
-            ptr: tmpr_jit_array_get_i64 as *const (),
-        });
+        helpers.insert(
+            "tmpr_jit_array_len",
+            JitHelperInfo {
+                name: "tmpr_jit_array_len",
+                signature: JitHelperSignature::ArrayLen,
+                ptr: tmpr_jit_array_len as *const (),
+            },
+        );
 
-        helpers.insert("tmpr_jit_struct_get_i64", JitHelperInfo {
-            name: "tmpr_jit_struct_get_i64",
-            signature: JitHelperSignature::StructGet,
-            ptr: tmpr_jit_struct_get_i64 as *const (),
-        });
+        helpers.insert(
+            "tmpr_jit_array_get_i64",
+            JitHelperInfo {
+                name: "tmpr_jit_array_get_i64",
+                signature: JitHelperSignature::ArrayGet,
+                ptr: tmpr_jit_array_get_i64 as *const (),
+            },
+        );
 
-        helpers.insert("tmpr_jit_enum_tag", JitHelperInfo {
-            name: "tmpr_jit_enum_tag",
-            signature: JitHelperSignature::EnumTag,
-            ptr: tmpr_jit_enum_tag as *const (),
-        });
+        helpers.insert(
+            "tmpr_jit_struct_get_i64",
+            JitHelperInfo {
+                name: "tmpr_jit_struct_get_i64",
+                signature: JitHelperSignature::StructGet,
+                ptr: tmpr_jit_struct_get_i64 as *const (),
+            },
+        );
 
-        helpers.insert("tmpr_jit_enum_unwrap_i64", JitHelperInfo {
-            name: "tmpr_jit_enum_unwrap_i64",
-            signature: JitHelperSignature::EnumUnwrap,
-            ptr: tmpr_jit_enum_unwrap_i64 as *const (),
-        });
+        helpers.insert(
+            "tmpr_jit_enum_tag",
+            JitHelperInfo {
+                name: "tmpr_jit_enum_tag",
+                signature: JitHelperSignature::EnumTag,
+                ptr: tmpr_jit_enum_tag as *const (),
+            },
+        );
 
-        helpers.insert("tmpr_jit_alloc_string_empty", JitHelperInfo {
-            name: "tmpr_jit_alloc_string_empty",
-            signature: JitHelperSignature::AllocStringEmpty,
-            ptr: tmpr_jit_alloc_string_empty as *const (),
-        });
+        helpers.insert(
+            "tmpr_jit_enum_unwrap_i64",
+            JitHelperInfo {
+                name: "tmpr_jit_enum_unwrap_i64",
+                signature: JitHelperSignature::EnumUnwrap,
+                ptr: tmpr_jit_enum_unwrap_i64 as *const (),
+            },
+        );
 
-        helpers.insert("tmpr_jit_string_concat", JitHelperInfo {
-            name: "tmpr_jit_string_concat",
-            signature: JitHelperSignature::StringConcat,
-            ptr: tmpr_jit_string_concat as *const (),
-        });
+        helpers.insert(
+            "tmpr_jit_alloc_string_empty",
+            JitHelperInfo {
+                name: "tmpr_jit_alloc_string_empty",
+                signature: JitHelperSignature::AllocStringEmpty,
+                ptr: tmpr_jit_alloc_string_empty as *const (),
+            },
+        );
 
-        helpers.insert("tmpr_jit_array_push_i64", JitHelperInfo {
-            name: "tmpr_jit_array_push_i64",
-            signature: JitHelperSignature::ArrayPushI64,
-            ptr: tmpr_jit_array_push_i64 as *const (),
-        });
+        helpers.insert(
+            "tmpr_jit_string_concat",
+            JitHelperInfo {
+                name: "tmpr_jit_string_concat",
+                signature: JitHelperSignature::StringConcat,
+                ptr: tmpr_jit_string_concat as *const (),
+            },
+        );
+
+        helpers.insert(
+            "tmpr_jit_array_push_i64",
+            JitHelperInfo {
+                name: "tmpr_jit_array_push_i64",
+                signature: JitHelperSignature::ArrayPushI64,
+                ptr: tmpr_jit_array_push_i64 as *const (),
+            },
+        );
 
         Self { helpers }
     }
@@ -113,6 +143,8 @@ impl JitHelperRegistry {
 pub struct JitRuntimeContext {
     heap_handles: HashMap<u64, JitHeapObject>,
     next_handle: u64,
+    pub total_allocations: u64,
+    pub helper_calls: u64,
 }
 
 /// Prototype heap objects visible to JIT.
@@ -150,30 +182,52 @@ impl JitRuntimeContext {
         Self {
             heap_handles: HashMap::new(),
             next_handle: 1000,
+            total_allocations: 0,
+            helper_calls: 0,
         }
+    }
+
+    pub fn object_count(&self) -> usize {
+        self.heap_handles.len()
+    }
+
+    pub fn allocation_count(&self) -> u64 {
+        self.total_allocations
     }
 
     pub fn alloc_string(&mut self, value: String) -> HeapHandle {
         let handle = self.next_handle;
-        self.heap_handles.insert(handle, JitHeapObject::String(value));
+        self.heap_handles
+            .insert(handle, JitHeapObject::String(value));
         self.next_handle += 1;
+        self.total_allocations += 1;
         HeapHandle(handle)
     }
 
     pub fn alloc_array(&mut self, values: Vec<JitHeapScalar>) -> HeapHandle {
         let handle = self.next_handle;
-        self.heap_handles.insert(handle, JitHeapObject::Array(values));
+        self.heap_handles
+            .insert(handle, JitHeapObject::Array(values));
         self.next_handle += 1;
+        self.total_allocations += 1;
         HeapHandle(handle)
     }
 
-    pub fn alloc_struct(&mut self, type_name: impl Into<String>, fields: Vec<(String, JitHeapScalar)>) -> HeapHandle {
+    pub fn alloc_struct(
+        &mut self,
+        type_name: impl Into<String>,
+        fields: Vec<(String, JitHeapScalar)>,
+    ) -> HeapHandle {
         let handle = self.next_handle;
-        self.heap_handles.insert(handle, JitHeapObject::Struct(JitHeapStruct {
-            type_name: type_name.into(),
-            fields,
-        }));
+        self.heap_handles.insert(
+            handle,
+            JitHeapObject::Struct(JitHeapStruct {
+                type_name: type_name.into(),
+                fields,
+            }),
+        );
         self.next_handle += 1;
+        self.total_allocations += 1;
         HeapHandle(handle)
     }
 
@@ -185,13 +239,17 @@ impl JitRuntimeContext {
         payloads: Vec<JitHeapScalar>,
     ) -> HeapHandle {
         let handle = self.next_handle;
-        self.heap_handles.insert(handle, JitHeapObject::Enum(JitHeapEnum {
-            type_name: type_name.into(),
-            variant_name: variant_name.into(),
-            tag,
-            payloads,
-        }));
+        self.heap_handles.insert(
+            handle,
+            JitHeapObject::Enum(JitHeapEnum {
+                type_name: type_name.into(),
+                variant_name: variant_name.into(),
+                tag,
+                payloads,
+            }),
+        );
         self.next_handle += 1;
+        self.total_allocations += 1;
         HeapHandle(handle)
     }
 
@@ -215,7 +273,7 @@ impl JitRuntimeContext {
             Ok(s) => s.to_owned(),
             Err(status) => return JitHelperResult { value: 0, status },
         };
-        
+
         let new_handle = self.alloc_string(format!("{}{}", left_str, right_str));
         JitHelperResult {
             value: new_handle.0,
@@ -223,7 +281,10 @@ impl JitRuntimeContext {
         }
     }
 
-    pub fn get_array(&self, handle: HeapHandle) -> Result<&Vec<JitHeapScalar>, crate::abi::JitStatus> {
+    pub fn get_array(
+        &self,
+        handle: HeapHandle,
+    ) -> Result<&Vec<JitHeapScalar>, crate::abi::JitStatus> {
         if let Some(obj) = self.heap_handles.get(&handle.0) {
             match obj {
                 JitHeapObject::Array(arr) => Ok(arr),
@@ -245,15 +306,17 @@ impl JitRuntimeContext {
                         JitHeapScalar::Int64(v) => JitHeapScalar::Int64(*v),
                         JitHeapScalar::UInt8(v) => JitHeapScalar::UInt8(*v),
                         JitHeapScalar::Bool(v) => JitHeapScalar::Bool(*v),
-                        JitHeapScalar::Handle(h) => JitHeapScalar::Handle(crate::abi::HeapHandle(h.0)),
+                        JitHeapScalar::Handle(h) => {
+                            JitHeapScalar::Handle(crate::abi::HeapHandle(h.0))
+                        }
                     });
                 }
                 clone
-            },
+            }
             Err(status) => return JitHelperResult { value: 0, status },
         };
         new_arr.push(JitHeapScalar::Int64(value));
-        
+
         let new_handle = self.alloc_array(new_arr);
         JitHelperResult {
             value: new_handle.0,
@@ -264,6 +327,8 @@ impl JitRuntimeContext {
     pub fn clear(&mut self) {
         self.heap_handles.clear();
         self.next_handle = 1000;
+        self.total_allocations = 0;
+        self.helper_calls = 0;
     }
 }
 
@@ -272,14 +337,24 @@ fn with_handle<T>(
     ctx: *mut JitRuntimeContext,
     handle: u64,
     f: impl FnOnce(&JitHeapObject) -> Result<T, crate::abi::JitStatus>,
-) -> JitHelperResult where T: Into<u64> {
-    use crate::abi::{JIT_STATUS_SUCCESS, JIT_STATUS_ERROR_INVALID_HANDLE, JIT_STATUS_ERROR_INVALID_CONTEXT};
-    
+) -> JitHelperResult
+where
+    T: Into<u64>,
+{
+    use crate::abi::{
+        JIT_STATUS_ERROR_INVALID_CONTEXT, JIT_STATUS_ERROR_INVALID_HANDLE, JIT_STATUS_SUCCESS,
+    };
+
     if ctx.is_null() {
         return JitHelperResult {
             value: 0,
             status: JIT_STATUS_ERROR_INVALID_CONTEXT,
         };
+    }
+
+    // Increment helper calls on the context pointer
+    unsafe {
+        (*ctx).helper_calls += 1;
     }
 
     let ctx_ref = unsafe { &*ctx };
@@ -289,10 +364,7 @@ fn with_handle<T>(
                 value: val.into(),
                 status: JIT_STATUS_SUCCESS,
             },
-            Err(status) => JitHelperResult {
-                value: 0,
-                status,
-            },
+            Err(status) => JitHelperResult { value: 0, status },
         }
     } else {
         JitHelperResult {
@@ -311,7 +383,10 @@ pub extern "C" fn tmpr_jit_string_len(ctx: *mut JitRuntimeContext, handle: u64) 
 }
 
 /// Helper implementation for String.size() (UTF-8 byte count)
-pub extern "C" fn tmpr_jit_string_size(ctx: *mut JitRuntimeContext, handle: u64) -> JitHelperResult {
+pub extern "C" fn tmpr_jit_string_size(
+    ctx: *mut JitRuntimeContext,
+    handle: u64,
+) -> JitHelperResult {
     with_handle(ctx, handle, |obj| match obj {
         JitHeapObject::String(s) => Ok(s.len() as u64),
         _ => Err(crate::abi::JIT_STATUS_ERROR_TYPE),
@@ -327,9 +402,13 @@ pub extern "C" fn tmpr_jit_array_len(ctx: *mut JitRuntimeContext, handle: u64) -
 }
 
 /// Helper implementation for Array.get(Int64)
-/// 
+///
 /// ABI: (ctx: *mut JitRuntimeContext, handle: u64, index: i64) -> JitHelperResult
-pub extern "C" fn tmpr_jit_array_get_i64(ctx: *mut JitRuntimeContext, handle: u64, index: i64) -> JitHelperResult {
+pub extern "C" fn tmpr_jit_array_get_i64(
+    ctx: *mut JitRuntimeContext,
+    handle: u64,
+    index: i64,
+) -> JitHelperResult {
     with_handle(ctx, handle, |obj| match obj {
         JitHeapObject::Array(arr) => {
             if index < 0 || index as usize >= arr.len() {
@@ -345,12 +424,16 @@ pub extern "C" fn tmpr_jit_array_get_i64(ctx: *mut JitRuntimeContext, handle: u6
 }
 
 /// Helper implementation for Struct.get(field_id)
-/// 
+///
 /// field_id is prototype-only and index-based.
 /// Production will need stable field IDs from compiler metadata.
-/// 
+///
 /// ABI: (ctx: *mut JitRuntimeContext, handle: u64, field_id: u64) -> JitHelperResult
-pub extern "C" fn tmpr_jit_struct_get_i64(ctx: *mut JitRuntimeContext, handle: u64, field_id: u64) -> JitHelperResult {
+pub extern "C" fn tmpr_jit_struct_get_i64(
+    ctx: *mut JitRuntimeContext,
+    handle: u64,
+    field_id: u64,
+) -> JitHelperResult {
     with_handle(ctx, handle, |obj| match obj {
         JitHeapObject::Struct(s) => {
             if field_id >= s.fields.len() as u64 {
@@ -366,7 +449,7 @@ pub extern "C" fn tmpr_jit_struct_get_i64(ctx: *mut JitRuntimeContext, handle: u
 }
 
 /// Helper implementation for Enum.tag
-/// 
+///
 /// ABI: (ctx: *mut JitRuntimeContext, handle: u64) -> JitHelperResult
 pub extern "C" fn tmpr_jit_enum_tag(ctx: *mut JitRuntimeContext, handle: u64) -> JitHelperResult {
     with_handle(ctx, handle, |obj| match obj {
@@ -376,7 +459,7 @@ pub extern "C" fn tmpr_jit_enum_tag(ctx: *mut JitRuntimeContext, handle: u64) ->
 }
 
 /// Helper implementation for Enum.unwrap_i64
-/// 
+///
 /// ABI: (ctx: *mut JitRuntimeContext, handle: u64, expected_tag: u64, payload_index: u64) -> JitHelperResult
 pub extern "C" fn tmpr_jit_enum_unwrap_i64(
     ctx: *mut JitRuntimeContext,
@@ -402,7 +485,7 @@ pub extern "C" fn tmpr_jit_enum_unwrap_i64(
 }
 
 /// Helper implementation for allocating an empty string.
-/// 
+///
 /// ABI: (ctx: *mut JitRuntimeContext) -> JitHelperResult
 pub extern "C" fn tmpr_jit_alloc_string_empty(ctx: *mut JitRuntimeContext) -> JitHelperResult {
     if ctx.is_null() {
@@ -412,6 +495,7 @@ pub extern "C" fn tmpr_jit_alloc_string_empty(ctx: *mut JitRuntimeContext) -> Ji
         };
     }
     let ctx = unsafe { &mut *ctx };
+    ctx.helper_calls += 1;
     let handle = ctx.alloc_string(String::new());
     JitHelperResult {
         value: handle.0,
@@ -420,7 +504,7 @@ pub extern "C" fn tmpr_jit_alloc_string_empty(ctx: *mut JitRuntimeContext) -> Ji
 }
 
 /// Helper implementation for concatenating two strings.
-/// 
+///
 /// ABI: (ctx: *mut JitRuntimeContext, left_handle: u64, right_handle: u64) -> JitHelperResult
 pub extern "C" fn tmpr_jit_string_concat(
     ctx: *mut JitRuntimeContext,
@@ -434,11 +518,15 @@ pub extern "C" fn tmpr_jit_string_concat(
         };
     }
     let ctx = unsafe { &mut *ctx };
-    ctx.string_concat(crate::abi::HeapHandle(left_handle), crate::abi::HeapHandle(right_handle))
+    ctx.helper_calls += 1;
+    ctx.string_concat(
+        crate::abi::HeapHandle(left_handle),
+        crate::abi::HeapHandle(right_handle),
+    )
 }
 
 /// Helper implementation for array push with value semantics.
-/// 
+///
 /// ABI: (ctx: *mut JitRuntimeContext, array_handle: u64, value: i64) -> JitHelperResult
 pub extern "C" fn tmpr_jit_array_push_i64(
     ctx: *mut JitRuntimeContext,
@@ -452,5 +540,6 @@ pub extern "C" fn tmpr_jit_array_push_i64(
         };
     }
     let ctx = unsafe { &mut *ctx };
+    ctx.helper_calls += 1;
     ctx.array_push_i64(crate::abi::HeapHandle(array_handle), value)
 }

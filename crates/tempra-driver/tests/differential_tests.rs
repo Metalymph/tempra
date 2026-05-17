@@ -1,5 +1,5 @@
 use tempra_driver::{run_source_hir, run_source_vm};
-use tempra_interpreter::value::{Value, ValueResult, OptionValue};
+use tempra_interpreter::value::{OptionValue, Value, ValueResult};
 use tempra_vm::value::VmValue;
 
 #[derive(Debug, PartialEq, Clone)]
@@ -26,7 +26,11 @@ fn normalize_hir(val: Value) -> NormalizedValue {
         Value::Float64(f) => NormalizedValue::Float(f),
         Value::String(s) => NormalizedValue::String(s),
         Value::Array(arr) => {
-            let inner = arr.borrow().iter().map(|v| normalize_hir(v.clone())).collect();
+            let inner = arr
+                .borrow()
+                .iter()
+                .map(|v| normalize_hir(v.clone()))
+                .collect();
             NormalizedValue::Array(inner)
         }
         Value::Slice(s) => {
@@ -34,7 +38,9 @@ fn normalize_hir(val: Value) -> NormalizedValue {
             NormalizedValue::Array(inner)
         }
         Value::Struct(s) => {
-            let mut fields: Vec<_> = s.fields.into_iter()
+            let mut fields: Vec<_> = s
+                .fields
+                .into_iter()
                 .map(|(k, v)| (k, normalize_hir(v)))
                 .collect();
             fields.sort_by(|a, b| a.0.cmp(&b.0));
@@ -45,11 +51,17 @@ fn normalize_hir(val: Value) -> NormalizedValue {
             NormalizedValue::Enum(e.enum_name, e.variant_name, payloads)
         }
         Value::Result(res) => match *res {
-            ValueResult::Ok(v) => NormalizedValue::Enum("Result".into(), "Ok".into(), vec![normalize_hir(v)]),
-            ValueResult::Err(v) => NormalizedValue::Enum("Result".into(), "Err".into(), vec![normalize_hir(v)]),
+            ValueResult::Ok(v) => {
+                NormalizedValue::Enum("Result".into(), "Ok".into(), vec![normalize_hir(v)])
+            }
+            ValueResult::Err(v) => {
+                NormalizedValue::Enum("Result".into(), "Err".into(), vec![normalize_hir(v)])
+            }
         },
         Value::Option(opt) => match opt {
-            OptionValue::Some(v) => NormalizedValue::Enum("Option".into(), "Some".into(), vec![normalize_hir(*v)]),
+            OptionValue::Some(v) => {
+                NormalizedValue::Enum("Option".into(), "Some".into(), vec![normalize_hir(*v)])
+            }
             OptionValue::None => NormalizedValue::Enum("Option".into(), "None".into(), vec![]),
         },
         _ => NormalizedValue::Unsupported(format!("{:?}", val)),
@@ -70,11 +82,15 @@ fn normalize_vm(val: VmValue) -> NormalizedValue {
             NormalizedValue::Array(inner)
         }
         VmValue::Slice { parent, start, end } => {
-            let inner = parent[start..end].iter().map(|v| normalize_vm(v.clone())).collect();
+            let inner = parent[start..end]
+                .iter()
+                .map(|v| normalize_vm(v.clone()))
+                .collect();
             NormalizedValue::Array(inner)
         }
         VmValue::Struct { name, fields } => {
-            let mut normalized_fields: Vec<_> = fields.into_iter()
+            let mut normalized_fields: Vec<_> = fields
+                .into_iter()
                 .map(|(k, v)| (k, normalize_vm(v)))
                 .collect();
             normalized_fields.sort_by(|a, b| a.0.cmp(&b.0));
@@ -90,17 +106,27 @@ fn normalize_vm(val: VmValue) -> NormalizedValue {
 fn assert_differential(source: &str) {
     let hir_res = match run_source_hir(source, &[]) {
         Ok(v) => v,
-        Err(e) => panic!("HIR execution failed for source:\n{}\nError: {:?}", source, e),
+        Err(e) => panic!(
+            "HIR execution failed for source:\n{}\nError: {:?}",
+            source, e
+        ),
     };
     let vm_res = match run_source_vm(source, &[]) {
         Ok(v) => v,
-        Err(e) => panic!("VM execution failed for source:\n{}\nError: {:?}", source, e),
+        Err(e) => panic!(
+            "VM execution failed for source:\n{}\nError: {:?}",
+            source, e
+        ),
     };
-    
+
     let normalized_hir = normalize_hir(hir_res);
     let normalized_vm = normalize_vm(vm_res);
-    
-    assert_eq!(normalized_hir, normalized_vm, "Result mismatch for source:\n{}", source);
+
+    assert_eq!(
+        normalized_hir, normalized_vm,
+        "Result mismatch for source:\n{}",
+        source
+    );
 }
 
 #[test]
@@ -143,7 +169,9 @@ fn test_diff_function_call() {
 fn test_diff_array_ops() {
     assert_differential("fn main() -> Int64 { let xs = [1, 2, 3]; return xs[1] }");
     assert_differential("fn main() -> Int64 { let xs = [1, 2, 3]; return xs.len() }");
-    assert_differential("fn main() -> Slice(Int64) { let xs: [Int64] = [1, 2, 3, 4]; return xs[1..3] }");
+    assert_differential(
+        "fn main() -> Slice(Int64) { let xs: [Int64] = [1, 2, 3, 4]; return xs[1..3] }",
+    );
 }
 
 #[test]
@@ -310,7 +338,11 @@ fn test_match_non_exhaustive_error() {
     let vm_res = run_source_vm(source, &[]);
     assert!(vm_res.is_err());
     let err = format!("{:?}", vm_res.err().unwrap());
-    assert!(err.contains("non-exhaustive match"), "Unexpected error: {}", err);
+    assert!(
+        err.contains("non-exhaustive match"),
+        "Unexpected error: {}",
+        err
+    );
 }
 
 #[test]
@@ -322,8 +354,12 @@ fn test_unsupported_closure() {
         }
     "#;
     let hir_res = run_source_hir(source, &[]);
-    assert!(hir_res.is_ok(), "HIR should support closures: {:?}", hir_res.err());
-    
+    assert!(
+        hir_res.is_ok(),
+        "HIR should support closures: {:?}",
+        hir_res.err()
+    );
+
     let vm_res = run_source_vm(source, &[]);
     assert!(vm_res.is_err(), "VM should have failed for closures");
 }
@@ -343,7 +379,11 @@ fn test_unsupported_string_for_in() {
     let vm_res = run_source_vm(source, &[]);
     assert!(vm_res.is_err(), "VM should have failed for string for-in");
     let err = format!("{:?}", vm_res.err().unwrap());
-    assert!(err.contains("supports Array/Slice"), "Unexpected error: {}", err);
+    assert!(
+        err.contains("supports Array/Slice"),
+        "Unexpected error: {}",
+        err
+    );
 }
 
 #[test]
@@ -360,7 +400,11 @@ fn test_unsupported_match_guard() {
     let vm_res = run_source_vm(source, &[]);
     assert!(vm_res.is_err(), "VM should have failed for match guards");
     let err = format!("{:?}", vm_res.err().unwrap());
-    assert!(err.contains("match guards are not yet supported"), "Unexpected error: {}", err);
+    assert!(
+        err.contains("match guards are not yet supported"),
+        "Unexpected error: {}",
+        err
+    );
 }
 
 #[test]
@@ -378,5 +422,9 @@ fn test_unsupported_nested_pattern() {
     let vm_res = run_source_vm(source, &[]);
     assert!(vm_res.is_err(), "VM should have failed for nested patterns");
     let err = format!("{:?}", vm_res.err().unwrap());
-    assert!(err.contains("not yet supported in experimental VM"), "Unexpected error: {}", err);
+    assert!(
+        err.contains("not yet supported in experimental VM"),
+        "Unexpected error: {}",
+        err
+    );
 }

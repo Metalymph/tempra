@@ -18,7 +18,11 @@ pub fn repl_command() -> Result<(), String> {
         io::stdout().flush().map_err(|e| e.to_string())?;
 
         let mut line = String::new();
-        if io::stdin().read_line(&mut line).map_err(|e| e.to_string())? == 0 {
+        if io::stdin()
+            .read_line(&mut line)
+            .map_err(|e| e.to_string())?
+            == 0
+        {
             break; // EOF
         }
 

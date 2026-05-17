@@ -1,6 +1,6 @@
-use thiserror::Error;
 use crate::constant::ConstId;
 use crate::function::{FunctionId, LocalId};
+use thiserror::Error;
 
 #[derive(Debug, Error, PartialEq, Clone)]
 pub enum BytecodeError {

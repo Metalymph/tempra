@@ -3,10 +3,10 @@ use tempra_interpreter::value::Value;
 use tempra_parser::parse_source;
 use tempra_typeck::context::TypeContext;
 
-use tempra_interpreter::interpreter::Interpreter;
-use tempra_interpreter::env::RuntimeEnv;
 use tempra_hir::HirFile;
 use tempra_interpreter::control_flow::ControlFlow;
+use tempra_interpreter::env::RuntimeEnv;
+use tempra_interpreter::interpreter::Interpreter;
 #[derive(Debug)]
 pub enum ReplOutcome {
     Value(Value),
@@ -31,7 +31,7 @@ impl ReplSession {
             top_level_statements: vec![],
         };
         let interpreter = Interpreter::new(&empty_hir);
-        
+
         // Setup stdlib
         // The stdlib needs a Rc<RefCell<Env>> for tests, but Interpreter handles its own RuntimeEnv.
         // Interpreter relies on its own functions map, but there might be external methods or hooks.
@@ -71,9 +71,9 @@ impl ReplSession {
                 // However, `tempra_typeck::check_file` is meant for fresh files.
                 // We need `register_items` then `check_item` then `check_statement`.
                 // For simplicity, we can use a custom pass here using internal typeck functions.
-                
+
                 tempra_typeck::check_item::register_items(&mut candidate_type_ctx, &hir_file.items);
-                
+
                 for item in &mut hir_file.items {
                     tempra_typeck::check_item::check_item(&mut candidate_type_ctx, item);
                 }
@@ -82,13 +82,20 @@ impl ReplSession {
                     candidate_type_ctx.current_is_fallible = true;
                     candidate_type_ctx.current_return_type = None;
                     for stmt in &mut hir_file.top_level_statements {
-                        tempra_typeck::check_stmt::check_statement(&mut candidate_type_ctx, stmt, None);
+                        tempra_typeck::check_stmt::check_statement(
+                            &mut candidate_type_ctx,
+                            stmt,
+                            None,
+                        );
                     }
                     candidate_type_ctx.current_is_fallible = false;
                 }
 
                 if !candidate_type_ctx.errors.is_empty() {
-                    return ReplOutcome::Diagnostic(format!("Type Error: {:?}", candidate_type_ctx.errors));
+                    return ReplOutcome::Diagnostic(format!(
+                        "Type Error: {:?}",
+                        candidate_type_ctx.errors
+                    ));
                 }
 
                 // If typecheck succeeds, commit type context
@@ -105,7 +112,7 @@ impl ReplSession {
                     mode: self.interpreter.mode,
                     fuel: self.interpreter.fuel,
                 };
-                
+
                 // Register new items
                 for item in &hir_file.items {
                     tempra_interpreter::eval_item::register_item(
@@ -119,12 +126,16 @@ impl ReplSession {
 
                 let mut candidate_env = self.env.clone();
                 let mut result_val = Value::Unit;
-                
+
                 for stmt in &hir_file.top_level_statements {
                     match candidate_interpreter.eval_statement(stmt, &mut candidate_env) {
                         Ok(ControlFlow::Value(v)) => result_val = v,
-                        Ok(_) => return ReplOutcome::Diagnostic("Unexpected control flow".to_string()),
-                        Err(e) => return ReplOutcome::Diagnostic(format!("Runtime Error: {:?}", e)),
+                        Ok(_) => {
+                            return ReplOutcome::Diagnostic("Unexpected control flow".to_string())
+                        }
+                        Err(e) => {
+                            return ReplOutcome::Diagnostic(format!("Runtime Error: {:?}", e))
+                        }
                     }
                 }
 
@@ -137,9 +148,7 @@ impl ReplSession {
                     ReplOutcome::Value(result_val)
                 }
             }
-            Err(e) => {
-                ReplOutcome::Diagnostic(format!("Parse Error: {:?}", e))
-            }
+            Err(e) => ReplOutcome::Diagnostic(format!("Parse Error: {:?}", e)),
         }
     }
 }

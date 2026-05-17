@@ -111,7 +111,8 @@ fn test_string_indexing_fails() {
     "#;
     let res = test_source(source);
     assert!(res.is_err());
-    assert!(format!("{:?}", res.err().unwrap()).contains("string indexing is intentionally unsupported"));
+    assert!(format!("{:?}", res.err().unwrap())
+        .contains("string indexing is intentionally unsupported"));
 }
 
 #[test]
@@ -122,7 +123,8 @@ fn test_nested_subscript_assignment_fails() {
     "#;
     let res = test_source(source);
     assert!(res.is_err());
-    assert!(format!("{:?}", res.err().unwrap()).contains("nested subscript assignment is not supported in v1"));
+    assert!(format!("{:?}", res.err().unwrap())
+        .contains("nested subscript assignment is not supported in v1"));
 }
 
 #[test]

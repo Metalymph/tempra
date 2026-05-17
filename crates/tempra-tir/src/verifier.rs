@@ -18,7 +18,7 @@ pub enum VerifierError {
 pub fn verify_module(module: &TirModule) -> Result<(), Vec<VerifierError>> {
     let mut errors = Vec::new();
     let mut functions = HashMap::new();
-    
+
     for func in &module.functions {
         functions.insert(func.id, func);
     }
@@ -36,7 +36,10 @@ pub fn verify_module(module: &TirModule) -> Result<(), Vec<VerifierError>> {
     }
 }
 
-pub fn verify_function(func: &TirFunction, functions: &HashMap<TirFunctionId, &TirFunction>) -> Result<(), Vec<VerifierError>> {
+pub fn verify_function(
+    func: &TirFunction,
+    functions: &HashMap<TirFunctionId, &TirFunction>,
+) -> Result<(), Vec<VerifierError>> {
     let mut errors = Vec::new();
 
     if func.blocks.is_empty() {
@@ -91,7 +94,7 @@ pub fn verify_function(func: &TirFunction, functions: &HashMap<TirFunctionId, &T
                         errors.push(VerifierError::UndeclaredValue(*target));
                     }
                     // Type is unknown without full layout
-                    value_types.insert(*res, None); 
+                    value_types.insert(*res, None);
                 }
                 TirInstr::Set(res, target, _key, val) => {
                     if !value_types.contains_key(target) {
@@ -163,7 +166,10 @@ pub fn verify_function(func: &TirFunction, functions: &HashMap<TirFunctionId, &T
                                 }
                             }
                         } else {
-                            errors.push(VerifierError::GenericError(format!("Call arg count mismatch for {:?}", target_func)));
+                            errors.push(VerifierError::GenericError(format!(
+                                "Call arg count mismatch for {:?}",
+                                target_func
+                            )));
                         }
                         value_types.insert(*res, Some(f.return_type.clone()));
                     } else {
@@ -171,21 +177,37 @@ pub fn verify_function(func: &TirFunction, functions: &HashMap<TirFunctionId, &T
                         value_types.insert(*res, None);
                     }
                 }
-                TirInstr::Add(res, a, b) | TirInstr::Sub(res, a, b) | TirInstr::Mul(res, a, b) | TirInstr::Div(res, a, b) => {
+                TirInstr::Add(res, a, b)
+                | TirInstr::Sub(res, a, b)
+                | TirInstr::Mul(res, a, b)
+                | TirInstr::Div(res, a, b) => {
                     let a_ty = value_types.get(a);
                     let b_ty = value_types.get(b);
-                    if a_ty.is_none() { errors.push(VerifierError::UndeclaredValue(*a)); }
-                    if b_ty.is_none() { errors.push(VerifierError::UndeclaredValue(*b)); }
+                    if a_ty.is_none() {
+                        errors.push(VerifierError::UndeclaredValue(*a));
+                    }
+                    if b_ty.is_none() {
+                        errors.push(VerifierError::UndeclaredValue(*b));
+                    }
 
                     let mut res_ty = None;
                     if let (Some(Some(at)), Some(Some(bt))) = (a_ty, b_ty) {
                         if at != bt {
-                            errors.push(VerifierError::TypeMismatch { expected: at.clone(), actual: bt.clone() });
+                            errors.push(VerifierError::TypeMismatch {
+                                expected: at.clone(),
+                                actual: bt.clone(),
+                            });
                         }
-                        if *at == TirType::Int64 || *at == TirType::UInt64 || *at == TirType::Float64 {
+                        if *at == TirType::Int64
+                            || *at == TirType::UInt64
+                            || *at == TirType::Float64
+                        {
                             res_ty = Some(at.clone());
                         } else {
-                            errors.push(VerifierError::GenericError(format!("Invalid type for arithmetic: {:?}", at)));
+                            errors.push(VerifierError::GenericError(format!(
+                                "Invalid type for arithmetic: {:?}",
+                                at
+                            )));
                             res_ty = Some(at.clone());
                         }
                     } else if let Some(Some(at)) = a_ty {
@@ -196,12 +218,19 @@ pub fn verify_function(func: &TirFunction, functions: &HashMap<TirFunctionId, &T
                 TirInstr::Eq(res, a, b) | TirInstr::Lt(res, a, b) | TirInstr::Gt(res, a, b) => {
                     let a_ty = value_types.get(a);
                     let b_ty = value_types.get(b);
-                    if a_ty.is_none() { errors.push(VerifierError::UndeclaredValue(*a)); }
-                    if b_ty.is_none() { errors.push(VerifierError::UndeclaredValue(*b)); }
+                    if a_ty.is_none() {
+                        errors.push(VerifierError::UndeclaredValue(*a));
+                    }
+                    if b_ty.is_none() {
+                        errors.push(VerifierError::UndeclaredValue(*b));
+                    }
 
                     if let (Some(Some(at)), Some(Some(bt))) = (a_ty, b_ty) {
                         if at != bt {
-                            errors.push(VerifierError::TypeMismatch { expected: at.clone(), actual: bt.clone() });
+                            errors.push(VerifierError::TypeMismatch {
+                                expected: at.clone(),
+                                actual: bt.clone(),
+                            });
                         }
                     }
                     value_types.insert(*res, Some(TirType::Bool));
@@ -209,27 +238,42 @@ pub fn verify_function(func: &TirFunction, functions: &HashMap<TirFunctionId, &T
                 TirInstr::And(res, a, b) | TirInstr::Or(res, a, b) => {
                     let a_ty = value_types.get(a);
                     let b_ty = value_types.get(b);
-                    if a_ty.is_none() { errors.push(VerifierError::UndeclaredValue(*a)); }
-                    if b_ty.is_none() { errors.push(VerifierError::UndeclaredValue(*b)); }
-                    
+                    if a_ty.is_none() {
+                        errors.push(VerifierError::UndeclaredValue(*a));
+                    }
+                    if b_ty.is_none() {
+                        errors.push(VerifierError::UndeclaredValue(*b));
+                    }
+
                     if let Some(Some(at)) = a_ty {
                         if *at != TirType::Bool {
-                            errors.push(VerifierError::TypeMismatch { expected: TirType::Bool, actual: at.clone() });
+                            errors.push(VerifierError::TypeMismatch {
+                                expected: TirType::Bool,
+                                actual: at.clone(),
+                            });
                         }
                     }
                     if let Some(Some(bt)) = b_ty {
                         if *bt != TirType::Bool {
-                            errors.push(VerifierError::TypeMismatch { expected: TirType::Bool, actual: bt.clone() });
+                            errors.push(VerifierError::TypeMismatch {
+                                expected: TirType::Bool,
+                                actual: bt.clone(),
+                            });
                         }
                     }
                     value_types.insert(*res, Some(TirType::Bool));
                 }
                 TirInstr::Not(res, a) => {
                     let a_ty = value_types.get(a);
-                    if a_ty.is_none() { errors.push(VerifierError::UndeclaredValue(*a)); }
+                    if a_ty.is_none() {
+                        errors.push(VerifierError::UndeclaredValue(*a));
+                    }
                     if let Some(Some(at)) = a_ty {
                         if *at != TirType::Bool {
-                            errors.push(VerifierError::TypeMismatch { expected: TirType::Bool, actual: at.clone() });
+                            errors.push(VerifierError::TypeMismatch {
+                                expected: TirType::Bool,
+                                actual: at.clone(),
+                            });
                         }
                     }
                     value_types.insert(*res, Some(TirType::Bool));
@@ -296,7 +340,10 @@ pub fn verify_function(func: &TirFunction, functions: &HashMap<TirFunctionId, &T
             Some(TirTerminator::CondBr(cond, t_target, f_target)) => {
                 if let Some(Some(cond_ty)) = value_types.get(cond) {
                     if *cond_ty != TirType::Bool {
-                        errors.push(VerifierError::TypeMismatch { expected: TirType::Bool, actual: cond_ty.clone() });
+                        errors.push(VerifierError::TypeMismatch {
+                            expected: TirType::Bool,
+                            actual: cond_ty.clone(),
+                        });
                     }
                 } else if !value_types.contains_key(cond) {
                     errors.push(VerifierError::UndeclaredValue(*cond));
@@ -313,14 +360,20 @@ pub fn verify_function(func: &TirFunction, functions: &HashMap<TirFunctionId, &T
                 if let Some(val) = val_opt {
                     if let Some(Some(val_ty)) = value_types.get(val) {
                         if *val_ty != func.return_type {
-                            errors.push(VerifierError::TypeMismatch { expected: func.return_type.clone(), actual: val_ty.clone() });
+                            errors.push(VerifierError::TypeMismatch {
+                                expected: func.return_type.clone(),
+                                actual: val_ty.clone(),
+                            });
                         }
                     } else if !value_types.contains_key(val) {
                         errors.push(VerifierError::UndeclaredValue(*val));
                     }
                 } else {
                     if func.return_type != TirType::Unit {
-                        errors.push(VerifierError::TypeMismatch { expected: func.return_type.clone(), actual: TirType::Unit });
+                        errors.push(VerifierError::TypeMismatch {
+                            expected: func.return_type.clone(),
+                            actual: TirType::Unit,
+                        });
                     }
                 }
             }

@@ -311,16 +311,22 @@ impl TypeContext {
                 let r_type = self.resolve_hir_type(ret);
                 Type::Function(p_types, Box::new(r_type))
             }
-            HirType::SelfType(_span) => {
-                Type::SelfType
-            }
+            HirType::SelfType(_span) => Type::SelfType,
             HirType::Projection(span, base_hir, assoc) => {
                 let base_ty = self.resolve_hir_type(base_hir);
-                if let Type::GenericParam { id, name, constraint } = base_ty {
+                if let Type::GenericParam {
+                    id,
+                    name,
+                    constraint,
+                } = base_ty
+                {
                     if let Some(itf_name) = constraint {
                         if let Some(itf) = self.interfaces.get(&itf_name) {
                             if itf.associated_types.contains(assoc) {
-                                return Type::Projection { base: id, assoc: assoc.clone() };
+                                return Type::Projection {
+                                    base: id,
+                                    assoc: assoc.clone(),
+                                };
                             } else {
                                 self.error(format!("generic parameter {} has no interface constraint declaring associated type {}", name, assoc), *span);
                             }
@@ -413,9 +419,12 @@ impl TypeContext {
         // 2. Check interface constraints for generic parameters
         let mut generic_info = None;
         if let Type::GenericParam { id, .. } = receiver_ty {
-            if let Some(constraint) = self.current_generic_params_info.iter()
+            if let Some(constraint) = self
+                .current_generic_params_info
+                .iter()
                 .find(|p| p.id == *id)
-                .and_then(|p| p.constraint.clone()) {
+                .and_then(|p| p.constraint.clone())
+            {
                 generic_info = Some((*id, constraint));
             }
         }
@@ -426,13 +435,28 @@ impl TypeContext {
                     return Some(FunctionSignature {
                         visibility: itf.visibility,
                         generic_params: Vec::new(),
-                        params: req.params.iter().enumerate().map(|(i, p_ty)| FunctionParam {
-                            name: if i == 0 { "self".to_string() } else { format!("p{}", i) },
-                            ty: self.resolve_associated_to_projections(&substitute_self(p_ty, receiver_ty), id),
-                            is_inout: req.param_inout[i],
-                            kind: ParameterKind::Runtime,
-                        }).collect(),
-                        return_type: self.resolve_associated_to_projections(&substitute_self(&req.return_type, receiver_ty), id),
+                        params: req
+                            .params
+                            .iter()
+                            .enumerate()
+                            .map(|(i, p_ty)| FunctionParam {
+                                name: if i == 0 {
+                                    "self".to_string()
+                                } else {
+                                    format!("p{}", i)
+                                },
+                                ty: self.resolve_associated_to_projections(
+                                    &substitute_self(p_ty, receiver_ty),
+                                    id,
+                                ),
+                                is_inout: req.param_inout[i],
+                                kind: ParameterKind::Runtime,
+                            })
+                            .collect(),
+                        return_type: self.resolve_associated_to_projections(
+                            &substitute_self(&req.return_type, receiver_ty),
+                            id,
+                        ),
                         is_fallible: false,
                     });
                 }
@@ -448,18 +472,37 @@ impl TypeContext {
             };
             if has_method {
                 if crate::check_expr::satisfies_interface_no_errors(self, receiver_ty, &itf_name) {
-                    let req = self.interfaces[&itf_name].methods.get(method_name).cloned().unwrap();
+                    let req = self.interfaces[&itf_name]
+                        .methods
+                        .get(method_name)
+                        .cloned()
+                        .unwrap();
                     if let Some(mappings) = self.infer_associated_types(receiver_ty, &itf_name) {
                         return Some(FunctionSignature {
                             visibility,
                             generic_params: Vec::new(),
-                            params: req.params.iter().enumerate().map(|(i, p_ty)| FunctionParam {
-                                name: if i == 0 { "self".to_string() } else { format!("p{}", i) },
-                                ty: self.resolve_associated_types(&substitute_self(p_ty, receiver_ty), &mappings),
-                                is_inout: req.param_inout[i],
-                                kind: ParameterKind::Runtime,
-                            }).collect(),
-                            return_type: self.resolve_associated_types(&substitute_self(&req.return_type, receiver_ty), &mappings),
+                            params: req
+                                .params
+                                .iter()
+                                .enumerate()
+                                .map(|(i, p_ty)| FunctionParam {
+                                    name: if i == 0 {
+                                        "self".to_string()
+                                    } else {
+                                        format!("p{}", i)
+                                    },
+                                    ty: self.resolve_associated_types(
+                                        &substitute_self(p_ty, receiver_ty),
+                                        &mappings,
+                                    ),
+                                    is_inout: req.param_inout[i],
+                                    kind: ParameterKind::Runtime,
+                                })
+                                .collect(),
+                            return_type: self.resolve_associated_types(
+                                &substitute_self(&req.return_type, receiver_ty),
+                                &mappings,
+                            ),
                             is_fallible: false,
                         });
                     }
@@ -504,7 +547,11 @@ impl TypeContext {
         None
     }
 
-    pub fn infer_associated_types(&self, ty: &Type, interface_name: &str) -> Option<HashMap<String, Type>> {
+    pub fn infer_associated_types(
+        &self,
+        ty: &Type,
+        interface_name: &str,
+    ) -> Option<HashMap<String, Type>> {
         if interface_name == "Collection" {
             match ty {
                 Type::Array(inner) | Type::Slice(inner) => {
@@ -567,7 +614,8 @@ impl TypeContext {
                 let mut mappings = HashMap::new();
                 if let Some(itf) = self.interfaces.get(name) {
                     for assoc in &itf.associated_types {
-                        mappings.insert(assoc.clone(), Type::Associated(name.clone(), assoc.clone()));
+                        mappings
+                            .insert(assoc.clone(), Type::Associated(name.clone(), assoc.clone()));
                     }
                 }
                 return Some(mappings);
@@ -579,16 +627,22 @@ impl TypeContext {
         for (method_name, req) in &interface.methods {
             let full_name = format!("{}.{}", ty.get_name(), method_name);
             if let Some(sig) = self.functions.get(&full_name) {
-                 let req_params: Vec<Type> = req.params.iter().map(|p| substitute_self(p, ty)).collect();
-                 let req_ret = substitute_self(&req.return_type, ty);
+                let req_params: Vec<Type> =
+                    req.params.iter().map(|p| substitute_self(p, ty)).collect();
+                let req_ret = substitute_self(&req.return_type, ty);
 
-                 for (p_req, p_act) in req_params.iter().zip(sig.params.iter()) {
-                     self.unify_associated_internal(p_req, &p_act.ty, interface_name, &mut mappings);
-                 }
-                 self.unify_associated_internal(&req_ret, &sig.return_type, interface_name, &mut mappings);
+                for (p_req, p_act) in req_params.iter().zip(sig.params.iter()) {
+                    self.unify_associated_internal(p_req, &p_act.ty, interface_name, &mut mappings);
+                }
+                self.unify_associated_internal(
+                    &req_ret,
+                    &sig.return_type,
+                    interface_name,
+                    &mut mappings,
+                );
             }
         }
-        
+
         // Special case for Iterable: Item is often not directly in the iter() signature,
         // but it is the Item of the returned Iter (which must satisfy Iterator).
         if interface_name == "Iterable" && !mappings.contains_key("Item") {
@@ -601,56 +655,92 @@ impl TypeContext {
             }
         }
 
-        if interface.associated_types.iter().all(|name| mappings.contains_key(name)) {
+        if interface
+            .associated_types
+            .iter()
+            .all(|name| mappings.contains_key(name))
+        {
             Some(mappings)
         } else {
             None
         }
     }
 
-    fn unify_associated_internal(&self, req: &Type, actual: &Type, interface_name: &str, mappings: &mut HashMap<String, Type>) {
+    fn unify_associated_internal(
+        &self,
+        req: &Type,
+        actual: &Type,
+        interface_name: &str,
+        mappings: &mut HashMap<String, Type>,
+    ) {
         match req {
             Type::Associated(itf, name) if itf == interface_name => {
-                mappings.entry(name.clone()).or_insert_with(|| actual.clone());
+                mappings
+                    .entry(name.clone())
+                    .or_insert_with(|| actual.clone());
             }
-            Type::Array(inner) => if let Type::Array(act_inner) = actual { self.unify_associated_internal(inner, act_inner, interface_name, mappings); }
-            Type::Slice(inner) => if let Type::Slice(act_inner) = actual { self.unify_associated_internal(inner, act_inner, interface_name, mappings); }
-            Type::Option(inner) => if let Type::Option(act_inner) = actual { self.unify_associated_internal(inner, act_inner, interface_name, mappings); }
-            Type::Result(ok, err) => if let Type::Result(act_ok, act_err) = actual {
-                self.unify_associated_internal(ok, act_ok, interface_name, mappings);
-                self.unify_associated_internal(err, act_err, interface_name, mappings);
+            Type::Array(inner) => {
+                if let Type::Array(act_inner) = actual {
+                    self.unify_associated_internal(inner, act_inner, interface_name, mappings);
+                }
             }
-            Type::Tuple(elems) => if let Type::Tuple(act_elems) = actual {
-                if elems.len() == act_elems.len() {
-                    for (e, ae) in elems.iter().zip(act_elems.iter()) {
-                        self.unify_associated_internal(e, ae, interface_name, mappings);
+            Type::Slice(inner) => {
+                if let Type::Slice(act_inner) = actual {
+                    self.unify_associated_internal(inner, act_inner, interface_name, mappings);
+                }
+            }
+            Type::Option(inner) => {
+                if let Type::Option(act_inner) = actual {
+                    self.unify_associated_internal(inner, act_inner, interface_name, mappings);
+                }
+            }
+            Type::Result(ok, err) => {
+                if let Type::Result(act_ok, act_err) = actual {
+                    self.unify_associated_internal(ok, act_ok, interface_name, mappings);
+                    self.unify_associated_internal(err, act_err, interface_name, mappings);
+                }
+            }
+            Type::Tuple(elems) => {
+                if let Type::Tuple(act_elems) = actual {
+                    if elems.len() == act_elems.len() {
+                        for (e, ae) in elems.iter().zip(act_elems.iter()) {
+                            self.unify_associated_internal(e, ae, interface_name, mappings);
+                        }
                     }
                 }
             }
-            Type::Function(params, ret) => if let Type::Function(act_params, act_ret) = actual {
-                if params.len() == act_params.len() {
-                    for (p, ap) in params.iter().zip(act_params.iter()) {
-                        self.unify_associated_internal(p, ap, interface_name, mappings);
-                    }
-                    self.unify_associated_internal(ret, act_ret, interface_name, mappings);
-                }
-            }
-            Type::Struct(name, args) => if let Type::Struct(act_name, act_args) = actual {
-                if name == act_name && args.len() == act_args.len() {
-                    for (a, aa) in args.iter().zip(act_args.iter()) {
-                        self.unify_associated_internal(a, aa, interface_name, mappings);
+            Type::Function(params, ret) => {
+                if let Type::Function(act_params, act_ret) = actual {
+                    if params.len() == act_params.len() {
+                        for (p, ap) in params.iter().zip(act_params.iter()) {
+                            self.unify_associated_internal(p, ap, interface_name, mappings);
+                        }
+                        self.unify_associated_internal(ret, act_ret, interface_name, mappings);
                     }
                 }
             }
-            Type::Enum(name, args) => if let Type::Enum(act_name, act_args) = actual {
-                if name == act_name && args.len() == act_args.len() {
-                    for (a, aa) in args.iter().zip(act_args.iter()) {
-                        self.unify_associated_internal(a, aa, interface_name, mappings);
+            Type::Struct(name, args) => {
+                if let Type::Struct(act_name, act_args) = actual {
+                    if name == act_name && args.len() == act_args.len() {
+                        for (a, aa) in args.iter().zip(act_args.iter()) {
+                            self.unify_associated_internal(a, aa, interface_name, mappings);
+                        }
                     }
                 }
             }
-            Type::Meta(inner) => if let Type::Meta(act_inner) = actual {
-                self.unify_associated_internal(inner, act_inner, interface_name, mappings);
+            Type::Enum(name, args) => {
+                if let Type::Enum(act_name, act_args) = actual {
+                    if name == act_name && args.len() == act_args.len() {
+                        for (a, aa) in args.iter().zip(act_args.iter()) {
+                            self.unify_associated_internal(a, aa, interface_name, mappings);
+                        }
+                    }
+                }
+            }
+            Type::Meta(inner) => {
+                if let Type::Meta(act_inner) = actual {
+                    self.unify_associated_internal(inner, act_inner, interface_name, mappings);
+                }
             }
             _ => {}
         }
@@ -659,55 +749,102 @@ impl TypeContext {
     pub fn resolve_associated_types(&self, ty: &Type, mappings: &HashMap<String, Type>) -> Type {
         match ty {
             Type::Associated(_, name) => mappings.get(name).cloned().unwrap_or(ty.clone()),
-            Type::Array(inner) => Type::Array(Box::new(self.resolve_associated_types(inner, mappings))),
-            Type::Slice(inner) => Type::Slice(Box::new(self.resolve_associated_types(inner, mappings))),
-            Type::Option(inner) => Type::Option(Box::new(self.resolve_associated_types(inner, mappings))),
+            Type::Array(inner) => {
+                Type::Array(Box::new(self.resolve_associated_types(inner, mappings)))
+            }
+            Type::Slice(inner) => {
+                Type::Slice(Box::new(self.resolve_associated_types(inner, mappings)))
+            }
+            Type::Option(inner) => {
+                Type::Option(Box::new(self.resolve_associated_types(inner, mappings)))
+            }
             Type::Result(ok, err) => Type::Result(
                 Box::new(self.resolve_associated_types(ok, mappings)),
                 Box::new(self.resolve_associated_types(err, mappings)),
             ),
-            Type::Tuple(elems) => Type::Tuple(elems.iter().map(|e| self.resolve_associated_types(e, mappings)).collect()),
+            Type::Tuple(elems) => Type::Tuple(
+                elems
+                    .iter()
+                    .map(|e| self.resolve_associated_types(e, mappings))
+                    .collect(),
+            ),
             Type::Function(params, ret) => Type::Function(
-                params.iter().map(|p| self.resolve_associated_types(p, mappings)).collect(),
+                params
+                    .iter()
+                    .map(|p| self.resolve_associated_types(p, mappings))
+                    .collect(),
                 Box::new(self.resolve_associated_types(ret, mappings)),
             ),
             Type::Struct(name, args) => Type::Struct(
                 name.clone(),
-                args.iter().map(|a| self.resolve_associated_types(a, mappings)).collect(),
+                args.iter()
+                    .map(|a| self.resolve_associated_types(a, mappings))
+                    .collect(),
             ),
             Type::Enum(name, args) => Type::Enum(
                 name.clone(),
-                args.iter().map(|a| self.resolve_associated_types(a, mappings)).collect(),
+                args.iter()
+                    .map(|a| self.resolve_associated_types(a, mappings))
+                    .collect(),
             ),
-            Type::Meta(inner) => Type::Meta(Box::new(self.resolve_associated_types(inner, mappings))),
+            Type::Meta(inner) => {
+                Type::Meta(Box::new(self.resolve_associated_types(inner, mappings)))
+            }
             _ => ty.clone(),
         }
     }
 
-    pub fn resolve_associated_to_projections(&self, ty: &Type, base_id: crate::types::GenericParamId) -> Type {
+    pub fn resolve_associated_to_projections(
+        &self,
+        ty: &Type,
+        base_id: crate::types::GenericParamId,
+    ) -> Type {
         match ty {
-            Type::Associated(_, name) => Type::Projection { base: base_id, assoc: name.clone() },
-            Type::Array(inner) => Type::Array(Box::new(self.resolve_associated_to_projections(inner, base_id))),
-            Type::Slice(inner) => Type::Slice(Box::new(self.resolve_associated_to_projections(inner, base_id))),
-            Type::Option(inner) => Type::Option(Box::new(self.resolve_associated_to_projections(inner, base_id))),
+            Type::Associated(_, name) => Type::Projection {
+                base: base_id,
+                assoc: name.clone(),
+            },
+            Type::Array(inner) => Type::Array(Box::new(
+                self.resolve_associated_to_projections(inner, base_id),
+            )),
+            Type::Slice(inner) => Type::Slice(Box::new(
+                self.resolve_associated_to_projections(inner, base_id),
+            )),
+            Type::Option(inner) => Type::Option(Box::new(
+                self.resolve_associated_to_projections(inner, base_id),
+            )),
             Type::Result(ok, err) => Type::Result(
                 Box::new(self.resolve_associated_to_projections(ok, base_id)),
                 Box::new(self.resolve_associated_to_projections(err, base_id)),
             ),
-            Type::Tuple(elems) => Type::Tuple(elems.iter().map(|e| self.resolve_associated_to_projections(e, base_id)).collect()),
+            Type::Tuple(elems) => Type::Tuple(
+                elems
+                    .iter()
+                    .map(|e| self.resolve_associated_to_projections(e, base_id))
+                    .collect(),
+            ),
             Type::Function(params, ret) => Type::Function(
-                params.iter().map(|p| self.resolve_associated_to_projections(p, base_id)).collect(),
+                params
+                    .iter()
+                    .map(|p| self.resolve_associated_to_projections(p, base_id))
+                    .collect(),
                 Box::new(self.resolve_associated_to_projections(ret, base_id)),
             ),
             Type::Struct(name, args) => Type::Struct(
                 name.clone(),
-                args.iter().map(|a| self.resolve_associated_to_projections(a, base_id)).collect(),
+                args.iter()
+                    .map(|a| self.resolve_associated_to_projections(a, base_id))
+                    .collect(),
             ),
             Type::Enum(name, args) => Type::Enum(
                 name.clone(),
-                args.iter().map(|a| self.resolve_associated_to_projections(a, base_id)).collect(),
+                args.iter()
+                    .map(|a| self.resolve_associated_to_projections(a, base_id))
+                    .collect(),
             ),
-            Type::Meta(inner) => Type::Meta(Box::new(self.resolve_associated_to_projections(inner, base_id))),
+            Type::Meta(inner) => Type::Meta(Box::new(
+                self.resolve_associated_to_projections(inner, base_id),
+            )),
             _ => ty.clone(),
         }
     }

@@ -163,7 +163,10 @@ fn test_projection_in_expression_rejected_generic() {
         fn main() {}
     "#;
     let res = test_source(source);
-    assert!(res.is_err(), "Expected error for projection in expression position");
+    assert!(
+        res.is_err(),
+        "Expected error for projection in expression position"
+    );
 }
 
 #[test]
@@ -179,7 +182,10 @@ fn test_projection_in_expression_rejected_concrete() {
         }
     "#;
     let res = test_source(source);
-    assert!(res.is_err(), "Expected error for concrete projection in expression position");
+    assert!(
+        res.is_err(),
+        "Expected error for concrete projection in expression position"
+    );
 }
 
 #[test]
@@ -193,7 +199,10 @@ fn test_projection_in_call_arg_rejected() {
         fn main() {}
     "#;
     let res = test_source(source);
-    assert!(res.is_err(), "Expected error for projection passed as call argument");
+    assert!(
+        res.is_err(),
+        "Expected error for projection passed as call argument"
+    );
 }
 
 // ─── Interface-as-Runtime-Type Rejection Tests ───────────────────────────────

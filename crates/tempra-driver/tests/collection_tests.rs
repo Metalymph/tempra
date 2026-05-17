@@ -27,7 +27,8 @@ fn test_mixed_array_fails() {
     "#;
     let res = test_source(source);
     assert!(res.is_err());
-    assert!(format!("{:?}", res.err().unwrap()).contains("array literal elements must have the same type"));
+    assert!(format!("{:?}", res.err().unwrap())
+        .contains("array literal elements must have the same type"));
 }
 
 #[test]
@@ -37,7 +38,8 @@ fn test_empty_array_requires_type() {
     "#;
     let res = test_source(source);
     assert!(res.is_err());
-    assert!(format!("{:?}", res.err().unwrap()).contains("cannot infer element type for empty array literal"));
+    assert!(format!("{:?}", res.err().unwrap())
+        .contains("cannot infer element type for empty array literal"));
 }
 
 #[test]
@@ -125,7 +127,8 @@ fn test_string_indexing_still_fails() {
     "#;
     let res = test_source(source);
     assert!(res.is_err());
-    assert!(format!("{:?}", res.err().unwrap()).contains("string indexing is intentionally unsupported"));
+    assert!(format!("{:?}", res.err().unwrap())
+        .contains("string indexing is intentionally unsupported"));
 }
 
 #[test]
@@ -135,7 +138,8 @@ fn test_never_unification_failure() {
     "#;
     let res = test_source(source);
     assert!(res.is_err());
-    assert!(format!("{:?}", res.err().unwrap()).contains("cannot infer element type for array literal with only Never elements"));
+    assert!(format!("{:?}", res.err().unwrap())
+        .contains("cannot infer element type for array literal with only Never elements"));
 }
 
 #[test]

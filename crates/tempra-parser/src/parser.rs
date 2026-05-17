@@ -895,7 +895,10 @@ impl<'src> Parser<'src> {
             TokenKind::OrOr => Some(2),
             TokenKind::AndAnd => Some(3),
             TokenKind::EqualEqual | TokenKind::BangEqual | TokenKind::Is | TokenKind::As => Some(4),
-            TokenKind::Less | TokenKind::LessEqual | TokenKind::Greater | TokenKind::GreaterEqual => Some(5),
+            TokenKind::Less
+            | TokenKind::LessEqual
+            | TokenKind::Greater
+            | TokenKind::GreaterEqual => Some(5),
             TokenKind::Pipe => Some(6),
             TokenKind::ShiftRight => Some(7),
             TokenKind::Plus | TokenKind::Minus => Some(8),

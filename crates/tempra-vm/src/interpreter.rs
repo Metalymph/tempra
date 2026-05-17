@@ -1,22 +1,22 @@
+use crate::error::VmError;
+use crate::profile::{FunctionProfile, ProfilingState, VmOptions, VmProfile};
+use crate::value::VmValue;
 use std::rc::Rc;
 use tempra_bytecode::bytecode::BytecodeModule;
-use tempra_bytecode::function::{FunctionId, BytecodeType};
-use tempra_bytecode::opcode::BytecodeInstr;
 use tempra_bytecode::constant::BytecodeConstant;
+use tempra_bytecode::function::{BytecodeType, FunctionId};
+use tempra_bytecode::opcode::BytecodeInstr;
 use tempra_bytecode::verify::verify_module;
-use crate::value::VmValue;
-use crate::error::VmError;
-use crate::profile::{VmOptions, VmProfile, FunctionProfile, ProfilingState};
 
 #[cfg(feature = "jit-cranelift")]
-use tempra_jit_cranelift::{
-    JitEngine, JitFunctionI64, JitFunctionI64HeapAware,
-    compile_function_heap_aware, is_heap_requiring,
-};
-#[cfg(feature = "jit-cranelift")]
-use tempra_jit_cranelift::helpers::{JitRuntimeContext, JitHeapScalar};
-#[cfg(feature = "jit-cranelift")]
 use std::collections::HashMap;
+#[cfg(feature = "jit-cranelift")]
+use tempra_jit_cranelift::helpers::{JitHeapScalar, JitRuntimeContext};
+#[cfg(feature = "jit-cranelift")]
+use tempra_jit_cranelift::{
+    compile_function_heap_aware, is_heap_requiring, JitEngine, JitFunctionI64,
+    JitFunctionI64HeapAware,
+};
 
 pub struct Frame {
     pub function_id: FunctionId,
@@ -82,19 +82,34 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    pub fn run_function_id(&mut self, function_id: FunctionId, args: Vec<VmValue>) -> Result<VmValue, VmError> {
+    pub fn run_function_id(
+        &mut self,
+        function_id: FunctionId,
+        args: Vec<VmValue>,
+    ) -> Result<VmValue, VmError> {
         // Verify module before execution
         verify_module(self.module)?;
 
-        let func = self.module.functions.get(function_id.0 as usize)
+        let func = self
+            .module
+            .functions
+            .get(function_id.0 as usize)
             .ok_or_else(|| VmError::UnknownFunction(function_id.to_string()))?;
 
         if func.params.len() != args.len() {
-            return Err(VmError::WrongArity { expected: func.params.len() as u16, found: args.len() as u16 });
+            return Err(VmError::WrongArity {
+                expected: func.params.len() as u16,
+                found: args.len() as u16,
+            });
         }
 
         #[cfg(feature = "jit-cranelift")]
-        if self.profiling.as_ref().map(|p| p.options.jit_enabled).unwrap_or(false) {
+        if self
+            .profiling
+            .as_ref()
+            .map(|p| p.options.jit_enabled)
+            .unwrap_or(false)
+        {
             // ── Heap-aware JIT dispatch ──────────────────────────────────────────
             if let Some(jit_fn) = self.jit_cache_heap.get(&function_id).copied() {
                 let mut ctx = JitRuntimeContext::new();
@@ -103,22 +118,46 @@ impl<'a> Interpreter<'a> {
                 for arg in &args {
                     match vm_value_to_jit_handle(arg, &mut ctx) {
                         Some(h) => i64_args.push(h),
-                        None => { marshal_ok = false; break; }
+                        None => {
+                            marshal_ok = false;
+                            break;
+                        }
                     }
                 }
+                let mut returned_err = false;
                 if marshal_ok {
+                    let before_helpers = ctx.helper_calls;
+                    let before_allocs = ctx.allocation_count();
+
                     let start_native = std::time::Instant::now();
-                    if let Ok(res) = jit_fn.call_with_ctx(&mut ctx as *mut JitRuntimeContext, &i64_args) {
-                        let elapsed = start_native.elapsed().as_nanos() as u64;
-                        if let Some(ref mut prof) = self.profiling {
-                            prof.stats[function_id.0 as usize].jit_runtime_calls += 1;
-                            prof.stats[function_id.0 as usize].jit_total_native_time_ns += elapsed;
+                    match jit_fn.call_with_ctx(&mut ctx as *mut JitRuntimeContext, &i64_args) {
+                        Ok(res) => {
+                            let elapsed = start_native.elapsed().as_nanos() as u64;
+                            let delta_helpers = ctx.helper_calls - before_helpers;
+                            let delta_allocs = ctx.allocation_count() - before_allocs;
+                            if let Some(ref mut prof) = self.profiling {
+                                let stats = &mut prof.stats[function_id.0 as usize];
+                                stats.jit_runtime_calls += 1;
+                                stats.jit_heap_runtime_calls += 1;
+                                stats.jit_heap_helper_calls += delta_helpers;
+                                stats.jit_heap_handle_allocations += delta_allocs;
+                                stats.jit_heap_context_objects += ctx.object_count() as u64;
+                                stats.jit_total_native_time_ns += elapsed;
+                            }
+                            return Ok(VmValue::Int64(res));
                         }
-                        return Ok(VmValue::Int64(res));
+                        Err(_) => {
+                            returned_err = true;
+                        }
                     }
                 }
                 if let Some(ref mut prof) = self.profiling {
-                    prof.stats[function_id.0 as usize].jit_fallback_calls += 1;
+                    let stats = &mut prof.stats[function_id.0 as usize];
+                    stats.jit_fallback_calls += 1;
+                    stats.jit_heap_fallbacks += 1;
+                    if returned_err || !marshal_ok {
+                        stats.jit_heap_errors += 1;
+                    }
                 }
             }
             // ── Pure-i64 JIT dispatch ────────────────────────────────────────────
@@ -167,7 +206,7 @@ impl<'a> Interpreter<'a> {
 
         if let Some(ref mut prof) = self.profiling {
             prof.stats[function_id.0 as usize].call_count += 1;
-            
+
             #[cfg(feature = "jit-cranelift")]
             self.maybe_compile_jit(function_id);
         }
@@ -175,8 +214,16 @@ impl<'a> Interpreter<'a> {
         self.execute()
     }
 
-    pub fn run_function_profiled(module: &'a BytecodeModule, name: &str, args: Vec<VmValue>, options: VmOptions) -> Result<(VmValue, VmProfile), VmError> {
-        let id = module.functions.iter().position(|f| f.name == name)
+    pub fn run_function_profiled(
+        module: &'a BytecodeModule,
+        name: &str,
+        args: Vec<VmValue>,
+        options: VmOptions,
+    ) -> Result<(VmValue, VmProfile), VmError> {
+        let id = module
+            .functions
+            .iter()
+            .position(|f| f.name == name)
             .map(|i| FunctionId(i as u32))
             .ok_or_else(|| VmError::UnknownFunction(name.to_string()))?;
 
@@ -189,21 +236,30 @@ impl<'a> Interpreter<'a> {
     pub fn build_profile(&self) -> VmProfile {
         let stats = match &self.profiling {
             Some(s) => s,
-            None => return VmProfile { function_stats: vec![], global_opcode_counts: vec![] },
+            None => {
+                return VmProfile {
+                    function_stats: vec![],
+                    global_opcode_counts: vec![],
+                }
+            }
         };
 
         let mut function_stats = Vec::new();
         for (i, s) in stats.stats.iter().enumerate() {
             let func = &self.module.functions[i];
-            let is_hot = s.call_count >= stats.options.hot_call_threshold || s.backedge_count >= stats.options.hot_backedge_threshold;
-            
-            let mut top_opcodes: Vec<_> = s.opcode_counts.iter()
+            let is_hot = s.call_count >= stats.options.hot_call_threshold
+                || s.backedge_count >= stats.options.hot_backedge_threshold;
+
+            let mut top_opcodes: Vec<_> = s
+                .opcode_counts
+                .iter()
                 .enumerate()
                 .filter(|(_, &count)| count > 0)
                 .collect();
             top_opcodes.sort_by_key(|(_, &count)| std::cmp::Reverse(count));
-            
-            let top_opcodes_named = top_opcodes.iter()
+
+            let top_opcodes_named = top_opcodes
+                .iter()
                 .take(5)
                 .map(|&(id, count)| (self.get_opcode_name(id), *count))
                 .collect();
@@ -225,6 +281,12 @@ impl<'a> Interpreter<'a> {
                 jit_compile_time_ns: s.jit_compile_time_ns,
                 jit_total_native_time_ns: s.jit_total_native_time_ns,
                 jit_rejected_count: s.jit_rejected_count,
+                jit_heap_runtime_calls: s.jit_heap_runtime_calls,
+                jit_heap_helper_calls: s.jit_heap_helper_calls,
+                jit_heap_handle_allocations: s.jit_heap_handle_allocations,
+                jit_heap_context_objects: s.jit_heap_context_objects,
+                jit_heap_fallbacks: s.jit_heap_fallbacks,
+                jit_heap_errors: s.jit_heap_errors,
                 jit_skipped_below_threshold: s.jit_skipped_below_threshold,
                 jit_skipped_too_small: s.jit_skipped_too_small,
                 jit_skipped_retry_limit: s.jit_skipped_retry_limit,
@@ -234,7 +296,7 @@ impl<'a> Interpreter<'a> {
             });
         }
 
-        VmProfile { 
+        VmProfile {
             function_stats,
             global_opcode_counts: stats.global_opcode_counts.clone(),
         }
@@ -301,39 +363,42 @@ impl<'a> Interpreter<'a> {
     #[cfg(feature = "jit-cranelift")]
     fn maybe_compile_jit(&mut self, function_id: FunctionId) {
         // Skip if already compiled (either cache)
-        if self.jit_cache.contains_key(&function_id) || self.jit_cache_heap.contains_key(&function_id) {
+        if self.jit_cache.contains_key(&function_id)
+            || self.jit_cache_heap.contains_key(&function_id)
+        {
             return;
         }
 
         let mut attempt_needed = false;
         if let Some(ref mut prof) = self.profiling {
             let stats = &mut prof.stats[function_id.0 as usize];
-            
+
             if !prof.options.jit_enabled {
                 return;
             }
-            
+
             if stats.jit_is_permanently_rejected {
                 return;
             }
-            
-            let is_hot = stats.call_count >= prof.options.hot_call_threshold || stats.backedge_count >= prof.options.hot_backedge_threshold;
+
+            let is_hot = stats.call_count >= prof.options.hot_call_threshold
+                || stats.backedge_count >= prof.options.hot_backedge_threshold;
             if !is_hot {
                 stats.jit_skipped_below_threshold += 1;
                 return;
             }
-            
+
             let func_len = self.module.functions[function_id.0 as usize].code.len() as u64;
             if func_len < prof.options.jit_min_instruction_count {
                 stats.jit_skipped_too_small += 1;
                 return;
             }
-            
+
             if stats.jit_compile_failures >= prof.options.jit_retry_limit as u64 {
                 stats.jit_skipped_retry_limit += 1;
                 return;
             }
-            
+
             attempt_needed = true;
         }
 
@@ -347,7 +412,8 @@ impl<'a> Interpreter<'a> {
         if let Some(ref mut prof) = self.profiling {
             prof.stats[function_id.0 as usize].jit_compile_attempts += 1;
             if !matches!(eligibility, tempra_jit_cranelift::JitEligibility::Eligible) {
-                prof.stats[function_id.0 as usize].jit_rejection_reason = Some(eligibility.to_string());
+                prof.stats[function_id.0 as usize].jit_rejection_reason =
+                    Some(eligibility.to_string());
                 prof.stats[function_id.0 as usize].jit_rejected_count += 1;
                 prof.stats[function_id.0 as usize].jit_permanent_rejections += 1;
                 prof.stats[function_id.0 as usize].jit_is_permanently_rejected = true;
@@ -365,7 +431,13 @@ impl<'a> Interpreter<'a> {
 
             if heap_required {
                 // ── Heap-aware compile path ───────────────────────────────────────
-                match compile_function_heap_aware(engine, self.module, function_id, &mut self.jit_cache_heap, &mut compiling) {
+                match compile_function_heap_aware(
+                    engine,
+                    self.module,
+                    function_id,
+                    &mut self.jit_cache_heap,
+                    &mut compiling,
+                ) {
                     Ok(compiled) => {
                         self.jit_cache_heap.insert(function_id, compiled);
                         let elapsed = start_time.elapsed().as_nanos() as u64;
@@ -378,11 +450,13 @@ impl<'a> Interpreter<'a> {
                         let elapsed = start_time.elapsed().as_nanos() as u64;
                         if let Some(ref mut prof) = self.profiling {
                             prof.stats[function_id.0 as usize].jit_compile_failures += 1;
-                            prof.stats[function_id.0 as usize].jit_rejection_reason = Some(format!("Heap compile failed: {:?}", e));
+                            prof.stats[function_id.0 as usize].jit_rejection_reason =
+                                Some(format!("Heap compile failed: {:?}", e));
                             prof.stats[function_id.0 as usize].jit_compile_time_ns += elapsed;
                             let failures = prof.stats[function_id.0 as usize].jit_compile_failures;
                             if failures >= prof.options.jit_retry_limit as u64 {
-                                prof.stats[function_id.0 as usize].jit_is_permanently_rejected = true;
+                                prof.stats[function_id.0 as usize].jit_is_permanently_rejected =
+                                    true;
                                 prof.stats[function_id.0 as usize].jit_permanent_rejections += 1;
                             } else {
                                 prof.stats[function_id.0 as usize].jit_retryable_failures += 1;
@@ -392,8 +466,15 @@ impl<'a> Interpreter<'a> {
                 }
             } else {
                 // ── Pure-i64 compile path ─────────────────────────────────────────
-                let old_keys: Vec<tempra_bytecode::function::FunctionId> = self.jit_cache.keys().copied().collect();
-                match tempra_jit_cranelift::compile_function_i64(engine, self.module, function_id, &mut self.jit_cache, &mut compiling) {
+                let old_keys: Vec<tempra_bytecode::function::FunctionId> =
+                    self.jit_cache.keys().copied().collect();
+                match tempra_jit_cranelift::compile_function_i64(
+                    engine,
+                    self.module,
+                    function_id,
+                    &mut self.jit_cache,
+                    &mut compiling,
+                ) {
                     Ok(compiled) => {
                         self.jit_cache.insert(function_id, compiled);
                         let elapsed = start_time.elapsed().as_nanos() as u64;
@@ -412,11 +493,13 @@ impl<'a> Interpreter<'a> {
                         let elapsed = start_time.elapsed().as_nanos() as u64;
                         if let Some(ref mut prof) = self.profiling {
                             prof.stats[function_id.0 as usize].jit_compile_failures += 1;
-                            prof.stats[function_id.0 as usize].jit_rejection_reason = Some(format!("Compilation failed: {:?}", e));
+                            prof.stats[function_id.0 as usize].jit_rejection_reason =
+                                Some(format!("Compilation failed: {:?}", e));
                             prof.stats[function_id.0 as usize].jit_compile_time_ns += elapsed;
                             let failures = prof.stats[function_id.0 as usize].jit_compile_failures;
                             if failures >= prof.options.jit_retry_limit as u64 {
-                                prof.stats[function_id.0 as usize].jit_is_permanently_rejected = true;
+                                prof.stats[function_id.0 as usize].jit_is_permanently_rejected =
+                                    true;
                                 prof.stats[function_id.0 as usize].jit_permanent_rejections += 1;
                             } else {
                                 prof.stats[function_id.0 as usize].jit_retryable_failures += 1;
@@ -428,7 +511,8 @@ impl<'a> Interpreter<'a> {
         } else {
             if let Some(ref mut prof) = self.profiling {
                 prof.stats[function_id.0 as usize].jit_compile_failures += 1;
-                prof.stats[function_id.0 as usize].jit_rejection_reason = Some("JIT engine not available".into());
+                prof.stats[function_id.0 as usize].jit_rejection_reason =
+                    Some("JIT engine not available".into());
             }
         }
     }
@@ -496,11 +580,13 @@ impl<'a> Interpreter<'a> {
                     };
                     self.push(val)?;
                 }
- 
+
                 BytecodeInstr::LoadLocal(id) => {
                     let val = {
                         let frame = self.call_stack.last().ok_or(VmError::MissingReturn)?;
-                        frame.locals.get(id.0 as usize)
+                        frame
+                            .locals
+                            .get(id.0 as usize)
                             .ok_or(VmError::LocalOutOfBounds(id.0))?
                             .as_ref()
                             .ok_or(VmError::LocalNotInitialized(id.0))?
@@ -516,8 +602,10 @@ impl<'a> Interpreter<'a> {
                     }
                     frame.locals[id.0 as usize] = Some(val);
                 }
- 
-                BytecodeInstr::Pop => { self.pop()?; }
+
+                BytecodeInstr::Pop => {
+                    self.pop()?;
+                }
                 BytecodeInstr::Dup => {
                     let val = self.pop()?;
                     self.push(val.clone())?;
@@ -542,7 +630,9 @@ impl<'a> Interpreter<'a> {
                 BytecodeInstr::DivI64 => {
                     let b = self.pop_i64()?;
                     let a = self.pop_i64()?;
-                    if b == 0 { return Err(VmError::DivisionByZero); }
+                    if b == 0 {
+                        return Err(VmError::DivisionByZero);
+                    }
                     self.push(VmValue::Int64(a / b))?;
                 }
 
@@ -564,7 +654,9 @@ impl<'a> Interpreter<'a> {
                 BytecodeInstr::DivU64 => {
                     let b = self.pop_u64()?;
                     let a = self.pop_u64()?;
-                    if b == 0 { return Err(VmError::DivisionByZero); }
+                    if b == 0 {
+                        return Err(VmError::DivisionByZero);
+                    }
                     self.push(VmValue::UInt64(a / b))?;
                 }
 
@@ -646,7 +738,7 @@ impl<'a> Interpreter<'a> {
                         if offset.0 <= current_ip {
                             let stats = &mut prof.stats[frame_func_id.0 as usize];
                             stats.backedge_count += 1;
-                            
+
                             #[cfg(feature = "jit-cranelift")]
                             self.maybe_compile_jit(frame_func_id);
                         }
@@ -671,11 +763,18 @@ impl<'a> Interpreter<'a> {
 
                 BytecodeInstr::Call(target_id, argc) => {
                     #[cfg(feature = "jit-cranelift")]
-                    if self.profiling.as_ref().map(|p| p.options.jit_enabled).unwrap_or(false) {
+                    if self
+                        .profiling
+                        .as_ref()
+                        .map(|p| p.options.jit_enabled)
+                        .unwrap_or(false)
+                    {
                         // ── Heap-aware JIT call ──────────────────────────────────────────
                         if let Some(jit_fn) = self.jit_cache_heap.get(&target_id).copied() {
                             let mut args = Vec::with_capacity(argc as usize);
-                            for _ in 0..argc { args.push(self.pop()?); }
+                            for _ in 0..argc {
+                                args.push(self.pop()?);
+                            }
                             args.reverse();
 
                             let mut ctx = JitRuntimeContext::new();
@@ -684,23 +783,53 @@ impl<'a> Interpreter<'a> {
                             for arg in &args {
                                 match vm_value_to_jit_handle(arg, &mut ctx) {
                                     Some(h) => i64_args.push(h),
-                                    None => { marshal_ok = false; break; }
+                                    None => {
+                                        marshal_ok = false;
+                                        break;
+                                    }
                                 }
                             }
 
                             let mut success = false;
+                            let mut returned_err = false;
+                            let mut delta_helpers = 0;
+                            let mut delta_allocs = 0;
+                            let mut final_objects = 0;
+
                             if marshal_ok {
-                                if let Ok(res) = jit_fn.call_with_ctx(&mut ctx as *mut JitRuntimeContext, &i64_args) {
-                                    self.push(VmValue::Int64(res))?;
-                                    success = true;
+                                let before_helpers = ctx.helper_calls;
+                                let before_allocs = ctx.allocation_count();
+
+                                match jit_fn
+                                    .call_with_ctx(&mut ctx as *mut JitRuntimeContext, &i64_args)
+                                {
+                                    Ok(res) => {
+                                        self.push(VmValue::Int64(res))?;
+                                        success = true;
+                                        delta_helpers = ctx.helper_calls - before_helpers;
+                                        delta_allocs = ctx.allocation_count() - before_allocs;
+                                        final_objects = ctx.object_count() as u64;
+                                    }
+                                    Err(_) => {
+                                        returned_err = true;
+                                    }
                                 }
                             }
 
                             if let Some(ref mut prof) = self.profiling {
+                                let stats = &mut prof.stats[target_id.0 as usize];
                                 if success {
-                                    prof.stats[target_id.0 as usize].jit_runtime_calls += 1;
+                                    stats.jit_runtime_calls += 1;
+                                    stats.jit_heap_runtime_calls += 1;
+                                    stats.jit_heap_helper_calls += delta_helpers;
+                                    stats.jit_heap_handle_allocations += delta_allocs;
+                                    stats.jit_heap_context_objects += final_objects;
                                 } else {
-                                    prof.stats[target_id.0 as usize].jit_fallback_calls += 1;
+                                    stats.jit_fallback_calls += 1;
+                                    stats.jit_heap_fallbacks += 1;
+                                    if returned_err || !marshal_ok {
+                                        stats.jit_heap_errors += 1;
+                                    }
                                 }
                             }
 
@@ -708,12 +837,16 @@ impl<'a> Interpreter<'a> {
                                 continue;
                             }
                             // Fallback: put args back on stack
-                            for arg in args { self.push(arg)?; }
+                            for arg in args {
+                                self.push(arg)?;
+                            }
                         }
                         // ── Pure-i64 JIT call ────────────────────────────────────────────
                         else if let Some(jit_fn) = self.jit_cache.get(&target_id).copied() {
                             let mut args = Vec::with_capacity(argc as usize);
-                            for _ in 0..argc { args.push(self.pop()?); }
+                            for _ in 0..argc {
+                                args.push(self.pop()?);
+                            }
                             args.reverse();
 
                             let mut i64_args = Vec::with_capacity(argc as usize);
@@ -747,13 +880,18 @@ impl<'a> Interpreter<'a> {
                                 continue;
                             }
                             // Fallback: put args back on stack
-                            for arg in args { self.push(arg)?; }
+                            for arg in args {
+                                self.push(arg)?;
+                            }
                         } else {
                             self.maybe_compile_jit(target_id);
                         }
                     }
 
-                    let target_func = self.module.functions.get(target_id.0 as usize)
+                    let target_func = self
+                        .module
+                        .functions
+                        .get(target_id.0 as usize)
                         .ok_or_else(|| VmError::UnknownFunction(target_id.to_string()))?;
 
                     let mut locals = vec![None; target_func.locals.len()];
@@ -799,7 +937,7 @@ impl<'a> Interpreter<'a> {
                         payloads.push(self.pop()?);
                     }
                     payloads.reverse(); // Args are pushed left-to-right
-                    
+
                     let enum_name = match self.module.constants.get(enum_id.0 as usize) {
                         Some(tempra_bytecode::constant::BytecodeConstant::String(s)) => s.clone(),
                         _ => return Err(VmError::Message("Invalid enum name constant".into())),
@@ -826,7 +964,10 @@ impl<'a> Interpreter<'a> {
                     let val = self.pop()?;
                     if let VmValue::Enum(_, variant, payloads) = val {
                         if variant != expected_variant {
-                            return Err(VmError::WrongVariant { expected: expected_variant, found: variant });
+                            return Err(VmError::WrongVariant {
+                                expected: expected_variant,
+                                found: variant,
+                            });
                         }
                         if index as usize >= payloads.len() {
                             return Err(VmError::PayloadOutOfBounds(index));
@@ -886,16 +1027,36 @@ impl<'a> Interpreter<'a> {
                     match object {
                         VmValue::Array(arr) => {
                             if start > end || end > arr.len() {
-                                return Err(VmError::InvalidSliceRange { start, end, len: arr.len() });
+                                return Err(VmError::InvalidSliceRange {
+                                    start,
+                                    end,
+                                    len: arr.len(),
+                                });
                             }
-                            self.push(VmValue::Slice { parent: arr, start, end })?;
+                            self.push(VmValue::Slice {
+                                parent: arr,
+                                start,
+                                end,
+                            })?;
                         }
-                        VmValue::Slice { parent, start: p_start, end: p_end } => {
+                        VmValue::Slice {
+                            parent,
+                            start: p_start,
+                            end: p_end,
+                        } => {
                             let p_len = p_end - p_start;
                             if start > end || end > p_len {
-                                return Err(VmError::InvalidSliceRange { start, end, len: p_len });
+                                return Err(VmError::InvalidSliceRange {
+                                    start,
+                                    end,
+                                    len: p_len,
+                                });
                             }
-                            self.push(VmValue::Slice { parent, start: p_start + start, end: p_start + end })?;
+                            self.push(VmValue::Slice {
+                                parent,
+                                start: p_start + start,
+                                end: p_start + end,
+                            })?;
                         }
                         _ => return Err(VmError::ExpectedArrayOrSlice),
                     }
@@ -927,7 +1088,8 @@ impl<'a> Interpreter<'a> {
                 BytecodeInstr::Bytes => {
                     let object = self.pop()?;
                     if let VmValue::String(s) = object {
-                        let bytes: Vec<VmValue> = s.as_bytes().iter().map(|&b| VmValue::UInt8(b)).collect();
+                        let bytes: Vec<VmValue> =
+                            s.as_bytes().iter().map(|&b| VmValue::UInt8(b)).collect();
                         let len = bytes.len();
                         self.push(VmValue::Slice {
                             parent: Rc::new(bytes),
@@ -956,26 +1118,26 @@ impl<'a> Interpreter<'a> {
                         fields.push(self.pop()?);
                     }
                     fields.reverse();
-                    
+
                     let name = match self.module.constants.get(name_id.0 as usize) {
                         Some(tempra_bytecode::constant::BytecodeConstant::String(s)) => s,
                         _ => return Err(VmError::InvalidConstant(name_id.0)),
                     };
-                        
+
                     let field_names = match self.module.constants.get(fields_id.0 as usize) {
                         Some(tempra_bytecode::constant::BytecodeConstant::FieldList(fs)) => fs,
                         _ => return Err(VmError::InvalidConstant(fields_id.0)),
                     };
-                    
+
                     if field_names.len() != count as usize {
                         return Err(VmError::Message("MakeStruct field count mismatch".into()));
                     }
-                    
+
                     let mut named_fields = Vec::with_capacity(count as usize);
                     for (i, name) in field_names.iter().enumerate() {
                         named_fields.push((name.clone(), fields[i].clone()));
                     }
-                    
+
                     self.push(VmValue::Struct {
                         name: name.to_string(),
                         fields: named_fields,
@@ -987,7 +1149,7 @@ impl<'a> Interpreter<'a> {
                         _ => return Err(VmError::InvalidConstant(name_id.0)),
                     };
                     let object = self.pop()?;
-                    
+
                     if let VmValue::Struct { name: _, fields } = object {
                         if let Some((_, val)) = fields.iter().find(|(k, _)| k == field_name) {
                             self.push(val.clone())?;
@@ -1005,7 +1167,7 @@ impl<'a> Interpreter<'a> {
                     };
                     let new_val = self.pop()?;
                     let object = self.pop()?;
-                    
+
                     if let VmValue::Struct { name, mut fields } = object {
                         let mut found = false;
                         for (k, v) in fields.iter_mut() {
@@ -1027,15 +1189,19 @@ impl<'a> Interpreter<'a> {
 
                 BytecodeInstr::AddI64LL(a, b) => {
                     let frame = self.call_stack.last().ok_or(VmError::MissingReturn)?;
-                    let val_a = frame.locals.get(a.0 as usize)
+                    let val_a = frame
+                        .locals
+                        .get(a.0 as usize)
                         .ok_or(VmError::LocalOutOfBounds(a.0))?
                         .as_ref()
                         .ok_or(VmError::LocalNotInitialized(a.0))?;
-                    let val_b = frame.locals.get(b.0 as usize)
+                    let val_b = frame
+                        .locals
+                        .get(b.0 as usize)
                         .ok_or(VmError::LocalOutOfBounds(b.0))?
                         .as_ref()
                         .ok_or(VmError::LocalNotInitialized(b.0))?;
-                    
+
                     if let (VmValue::Int64(ia), VmValue::Int64(ib)) = (val_a, val_b) {
                         let res = VmValue::Int64(ia + ib);
                         self.push(res)?;
@@ -1045,16 +1211,18 @@ impl<'a> Interpreter<'a> {
                 }
                 BytecodeInstr::AddI64LC(a, id) => {
                     let frame = self.call_stack.last().ok_or(VmError::MissingReturn)?;
-                    let val_a = frame.locals.get(a.0 as usize)
+                    let val_a = frame
+                        .locals
+                        .get(a.0 as usize)
                         .ok_or(VmError::LocalOutOfBounds(a.0))?
                         .as_ref()
                         .ok_or(VmError::LocalNotInitialized(a.0))?;
-                    
+
                     let constant = match self.module.constants.get(id.0 as usize) {
                         Some(BytecodeConstant::Int64(i)) => *i,
                         _ => return Err(VmError::InvalidConstant(id.0)),
                     };
-                    
+
                     if let VmValue::Int64(ia) = val_a {
                         let res = VmValue::Int64(ia + constant);
                         self.push(res)?;
@@ -1071,42 +1239,58 @@ impl<'a> Interpreter<'a> {
         self.call_stack.last_mut().unwrap().stack.push(val);
         Ok(())
     }
- 
+
     #[inline(always)]
     fn pop(&mut self) -> Result<VmValue, VmError> {
-        self.call_stack.last_mut().unwrap().stack.pop()
+        self.call_stack
+            .last_mut()
+            .unwrap()
+            .stack
+            .pop()
             .ok_or(VmError::StackUnderflow)
     }
- 
+
     #[inline(always)]
     fn pop_i64(&mut self) -> Result<i64, VmError> {
         match self.pop()? {
             VmValue::Int64(i) => Ok(i),
-            other => Err(VmError::TypeMismatch { expected: "Int64".into(), found: other.type_name().into() }),
+            other => Err(VmError::TypeMismatch {
+                expected: "Int64".into(),
+                found: other.type_name().into(),
+            }),
         }
     }
- 
+
     #[inline(always)]
     fn pop_u64(&mut self) -> Result<u64, VmError> {
         match self.pop()? {
             VmValue::UInt64(u) => Ok(u),
-            other => Err(VmError::TypeMismatch { expected: "UInt64".into(), found: other.type_name().into() }),
+            other => Err(VmError::TypeMismatch {
+                expected: "UInt64".into(),
+                found: other.type_name().into(),
+            }),
         }
     }
- 
+
     #[inline(always)]
     fn pop_f64(&mut self) -> Result<f64, VmError> {
         match self.pop()? {
             VmValue::Float64(f) => Ok(f),
-            other => Err(VmError::TypeMismatch { expected: "Float64".into(), found: other.type_name().into() }),
+            other => Err(VmError::TypeMismatch {
+                expected: "Float64".into(),
+                found: other.type_name().into(),
+            }),
         }
     }
- 
+
     #[inline(always)]
     fn pop_bool(&mut self) -> Result<bool, VmError> {
         match self.pop()? {
             VmValue::Bool(b) => Ok(b),
-            other => Err(VmError::TypeMismatch { expected: "Bool".into(), found: other.type_name().into() }),
+            other => Err(VmError::TypeMismatch {
+                expected: "Bool".into(),
+                found: other.type_name().into(),
+            }),
         }
     }
 }
@@ -1144,25 +1328,48 @@ fn vm_value_to_jit_handle(value: &VmValue, ctx: &mut JitRuntimeContext) -> Optio
     }
 }
 
-
-pub fn run_function(module: &BytecodeModule, name: &str, args: Vec<VmValue>) -> Result<VmValue, VmError> {
-    let id = module.functions.iter().position(|f| f.name == name)
+pub fn run_function(
+    module: &BytecodeModule,
+    name: &str,
+    args: Vec<VmValue>,
+) -> Result<VmValue, VmError> {
+    let id = module
+        .functions
+        .iter()
+        .position(|f| f.name == name)
         .ok_or_else(|| VmError::UnknownFunction(name.to_string()))?;
     let mut interp = Interpreter::new(module);
     interp.run_function_id(FunctionId(id as u32), args)
 }
 
-pub fn run_function_id(module: &BytecodeModule, id: FunctionId, args: Vec<VmValue>) -> Result<VmValue, VmError> {
+pub fn run_function_id(
+    module: &BytecodeModule,
+    id: FunctionId,
+    args: Vec<VmValue>,
+) -> Result<VmValue, VmError> {
     let mut interp = Interpreter::new(module);
     interp.run_function_id(id, args)
 }
 
-pub fn run_function_profiled(module: &BytecodeModule, name: &str, args: Vec<VmValue>, options: VmOptions) -> Result<(VmValue, VmProfile), VmError> {
+pub fn run_function_profiled(
+    module: &BytecodeModule,
+    name: &str,
+    args: Vec<VmValue>,
+    options: VmOptions,
+) -> Result<(VmValue, VmProfile), VmError> {
     Interpreter::run_function_profiled(module, name, args, options)
 }
 
-pub fn run_function_with_options(module: &BytecodeModule, name: &str, args: Vec<VmValue>, options: VmOptions) -> Result<VmValue, VmError> {
-    let id = module.functions.iter().position(|f| f.name == name)
+pub fn run_function_with_options(
+    module: &BytecodeModule,
+    name: &str,
+    args: Vec<VmValue>,
+    options: VmOptions,
+) -> Result<VmValue, VmError> {
+    let id = module
+        .functions
+        .iter()
+        .position(|f| f.name == name)
         .ok_or_else(|| VmError::UnknownFunction(name.to_string()))?;
     let mut interp = Interpreter::with_options(module, options);
     interp.run_function_id(FunctionId(id as u32), args)

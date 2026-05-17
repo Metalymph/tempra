@@ -1,8 +1,8 @@
-use tempra_tir::builder::*;
-use tempra_tir::ir::*;
+use crate::error::TirInterpError;
 use crate::interp::interpret_function;
 use crate::value::TirRuntimeValue;
-use crate::error::TirInterpError;
+use tempra_tir::builder::*;
+use tempra_tir::ir::*;
 
 fn build_simple_module(
     name: &str,
@@ -150,18 +150,26 @@ fn interpret_division_by_zero_error() {
     });
     let result = interpret_function(&module, "test", vec![]);
     assert!(result.is_err());
-    assert!(matches!(result.unwrap_err(), TirInterpError::DivisionByZero));
+    assert!(matches!(
+        result.unwrap_err(),
+        TirInterpError::DivisionByZero
+    ));
 }
 
 #[test]
 fn interpret_unsupported_make_error() {
     let module = build_simple_module("test", TirType::Unit, |fb| {
-        let _ = fb.build_make(TirType::Struct("Foo".into()), None, vec![]).unwrap();
+        let _ = fb
+            .build_make(TirType::Struct("Foo".into()), None, vec![])
+            .unwrap();
         fb.build_ret(None).unwrap();
     });
     let result = interpret_function(&module, "test", vec![]);
     assert!(result.is_err());
-    assert!(matches!(result.unwrap_err(), TirInterpError::UnsupportedInstr(_)));
+    assert!(matches!(
+        result.unwrap_err(),
+        TirInterpError::UnsupportedInstr(_)
+    ));
 }
 
 #[test]
@@ -171,5 +179,8 @@ fn interpret_unreachable_error() {
     });
     let result = interpret_function(&module, "test", vec![]);
     assert!(result.is_err());
-    assert!(matches!(result.unwrap_err(), TirInterpError::UnreachableExecuted));
+    assert!(matches!(
+        result.unwrap_err(),
+        TirInterpError::UnreachableExecuted
+    ));
 }

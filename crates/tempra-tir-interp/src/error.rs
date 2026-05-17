@@ -1,5 +1,5 @@
-use thiserror::Error;
 use tempra_tir::ir::{TirBlockId, TirSlotId, TirValueId};
+use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum TirInterpError {

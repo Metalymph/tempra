@@ -57,7 +57,9 @@ impl fmt::Display for VmValue {
                 } else {
                     write!(f, "{}(", v)?;
                     for (i, p) in payloads.iter().enumerate() {
-                        if i > 0 { write!(f, ", ")?; }
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
                         write!(f, "{}", p)?;
                     }
                     write!(f, ")")
@@ -66,7 +68,9 @@ impl fmt::Display for VmValue {
             VmValue::Array(arr) => {
                 write!(f, "[")?;
                 for (i, v) in arr.iter().enumerate() {
-                    if i > 0 { write!(f, ", ")?; }
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
                     write!(f, "{}", v)?;
                 }
                 write!(f, "]")
@@ -74,7 +78,9 @@ impl fmt::Display for VmValue {
             VmValue::Slice { parent, start, end } => {
                 write!(f, "[")?;
                 for i in *start..*end {
-                    if i > *start { write!(f, ", ")?; }
+                    if i > *start {
+                        write!(f, ", ")?;
+                    }
                     write!(f, "{}", parent[i])?;
                 }
                 write!(f, "]")
@@ -82,7 +88,9 @@ impl fmt::Display for VmValue {
             VmValue::Struct { name, fields } => {
                 write!(f, "{} {{ ", name)?;
                 for (i, (fname, fval)) in fields.iter().enumerate() {
-                    if i > 0 { write!(f, ", ")?; }
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
                     write!(f, "{}: {}", fname, fval)?;
                 }
                 write!(f, " }}")

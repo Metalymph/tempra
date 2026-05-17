@@ -418,7 +418,11 @@ fn test_comptime_if_selected_branch_compile_error_fails() {
     "#;
     let res = test_source(source);
     let err = format!("{:?}", res.err().unwrap());
-    assert!(err.contains("selected failure"), "Actual error was: {}", err);
+    assert!(
+        err.contains("selected failure"),
+        "Actual error was: {}",
+        err
+    );
 }
 
 #[test]

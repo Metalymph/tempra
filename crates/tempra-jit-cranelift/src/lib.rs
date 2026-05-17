@@ -1,14 +1,17 @@
-pub mod engine;
-pub mod lower;
-pub mod error;
 pub mod abi;
+pub mod engine;
+pub mod error;
 pub mod helpers;
+pub mod lower;
 
-pub use engine::{JitEngine, JitFunctionI64, JitFunctionI64HeapAware, can_jit_function, JitEligibility, explain_jit_eligibility};
-pub use lower::{compile_function_i64, compile_function_heap_aware, is_heap_requiring};
+pub use abi::{HeapHandle, JitHelperResult, JitStatus, JitValueAbi};
+pub use engine::{
+    can_jit_function, explain_jit_eligibility, JitEligibility, JitEngine, JitFunctionI64,
+    JitFunctionI64HeapAware,
+};
 pub use error::JitCompileError;
-pub use abi::{HeapHandle, JitStatus, JitValueAbi, JitHelperResult};
-pub use helpers::{JitHelperRegistry, JitHelperSignature, JitHelperInfo};
+pub use helpers::{JitHelperInfo, JitHelperRegistry, JitHelperSignature};
+pub use lower::{compile_function_heap_aware, compile_function_i64, is_heap_requiring};
 
 #[cfg(test)]
 mod tests;

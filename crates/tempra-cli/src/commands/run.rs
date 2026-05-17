@@ -1,6 +1,11 @@
 use std::path::PathBuf;
 
-pub fn run_command(path: PathBuf, args: Vec<String>, experimental_vm: bool, experimental_jit: bool) -> Result<(), String> {
+pub fn run_command(
+    path: PathBuf,
+    args: Vec<String>,
+    experimental_vm: bool,
+    experimental_jit: bool,
+) -> Result<(), String> {
     // Validate: --experimental-jit requires --experimental-vm
     if experimental_jit && !experimental_vm {
         return Err("--experimental-jit requires --experimental-vm".into());
@@ -8,7 +13,10 @@ pub fn run_command(path: PathBuf, args: Vec<String>, experimental_vm: bool, expe
 
     // Validate: JIT requires the jit-cranelift feature to be compiled in
     if experimental_jit && !cfg!(feature = "jit-cranelift") {
-        return Err("JIT support not compiled into this build. Rebuild with --features jit-cranelift".into());
+        return Err(
+            "JIT support not compiled into this build. Rebuild with --features jit-cranelift"
+                .into(),
+        );
     }
 
     let result = if experimental_vm {

@@ -165,7 +165,8 @@ pub fn validate_pattern_against_type(
 
                         let mut substituted_payloads = Vec::new();
                         for t in payload_tys {
-                            substituted_payloads.push(crate::check_expr::substitute_generics(ctx, t, &sub_map));
+                            substituted_payloads
+                                .push(crate::check_expr::substitute_generics(ctx, t, &sub_map));
                         }
                         // Validate arity
                         if pat_args.len() != payload_tys.len() {
@@ -350,8 +351,11 @@ pub fn validate_pattern_against_type(
                         }
                         if let Some(field_def) = def.fields.get(field_name) {
                             if let Some(pat) = field_pat {
-                                let expected =
-                                    crate::check_expr::substitute_generics(ctx, &field_def.ty, &sub_map);
+                                let expected = crate::check_expr::substitute_generics(
+                                    ctx,
+                                    &field_def.ty,
+                                    &sub_map,
+                                );
                                 validate_pattern_against_type(ctx, &expected, pat);
                             }
                         } else {
@@ -522,11 +526,17 @@ pub fn extract_pattern_bindings(
                     }
                     let mut field_types = Vec::new();
                     for (name, _) in fields.iter() {
-                        field_types.push(def.fields.get(name).map(|f| f.ty.clone()).unwrap_or(Type::Unknown));
+                        field_types.push(
+                            def.fields
+                                .get(name)
+                                .map(|f| f.ty.clone())
+                                .unwrap_or(Type::Unknown),
+                        );
                     }
                     for ((field_name, field_pat), field_ty) in fields.iter_mut().zip(field_types) {
                         if field_ty != Type::Unknown {
-                            let substituted = crate::check_expr::substitute_generics(ctx, &field_ty, &sub_map);
+                            let substituted =
+                                crate::check_expr::substitute_generics(ctx, &field_ty, &sub_map);
                             if let Some(pat) = field_pat {
                                 extract_pattern_bindings(ctx, &substituted, pat, out);
                             } else {

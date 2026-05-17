@@ -1,24 +1,30 @@
-use cranelift::prelude::*;
-use cranelift_module::{Linkage, Module};
-use tempra_bytecode::bytecode::BytecodeModule;
-use tempra_bytecode::function::FunctionId;
-use tempra_bytecode::opcode::BytecodeInstr;
-use tempra_bytecode::constant::BytecodeConstant;
 use crate::engine::{JitEngine, JitFunctionI64};
 use crate::error::JitCompileError;
+use cranelift::prelude::*;
+use cranelift_module::{Linkage, Module};
 use std::collections::HashMap;
+use tempra_bytecode::bytecode::BytecodeModule;
+use tempra_bytecode::constant::BytecodeConstant;
+use tempra_bytecode::function::FunctionId;
+use tempra_bytecode::opcode::BytecodeInstr;
 
 pub fn is_instr_supported(instr: &BytecodeInstr) -> bool {
     match instr {
         BytecodeInstr::ConstI64(_) => true,
         BytecodeInstr::LoadLocal(_) => true,
         BytecodeInstr::StoreLocal(_) => true,
-        BytecodeInstr::AddI64 | BytecodeInstr::SubI64 | BytecodeInstr::MulI64 | BytecodeInstr::DivI64 => true,
+        BytecodeInstr::AddI64
+        | BytecodeInstr::SubI64
+        | BytecodeInstr::MulI64
+        | BytecodeInstr::DivI64 => true,
         BytecodeInstr::Eq | BytecodeInstr::LtI64 | BytecodeInstr::GtI64 => true,
         BytecodeInstr::Jump(_) | BytecodeInstr::JumpIfFalse(_) => true,
         BytecodeInstr::Return => true,
         BytecodeInstr::AddI64LL(_, _) | BytecodeInstr::AddI64LC(_, _) => true,
-        BytecodeInstr::ConstBool(_) | BytecodeInstr::Not | BytecodeInstr::And | BytecodeInstr::Or => true,
+        BytecodeInstr::ConstBool(_)
+        | BytecodeInstr::Not
+        | BytecodeInstr::And
+        | BytecodeInstr::Or => true,
         BytecodeInstr::Len | BytecodeInstr::Size | BytecodeInstr::GetIndex => true,
         _ => false,
     }
@@ -31,8 +37,13 @@ pub fn is_instr_supported(instr: &BytecodeInstr) -> bool {
 /// handles at the bytecode level).
 pub fn is_heap_requiring(func: &tempra_bytecode::function::BytecodeFunction) -> bool {
     use tempra_bytecode::function::BytecodeType;
-    func.params.iter().any(|p| *p == BytecodeType::String || *p == BytecodeType::Any)
-        || func.locals.iter().any(|l| *l == BytecodeType::String || *l == BytecodeType::Any)
+    func.params
+        .iter()
+        .any(|p| *p == BytecodeType::String || *p == BytecodeType::Any)
+        || func
+            .locals
+            .iter()
+            .any(|l| *l == BytecodeType::String || *l == BytecodeType::Any)
 }
 
 pub fn compile_function_i64(
@@ -43,11 +54,15 @@ pub fn compile_function_i64(
     compiling: &mut std::collections::HashSet<FunctionId>,
 ) -> Result<JitFunctionI64, JitCompileError> {
     if compiling.contains(&function_id) {
-        return Err(JitCompileError::CraneliftError("Call target not JIT eligible (recursion)".into()));
+        return Err(JitCompileError::CraneliftError(
+            "Call target not JIT eligible (recursion)".into(),
+        ));
     }
     compiling.insert(function_id);
 
-    let func = module.functions.get(function_id.0 as usize)
+    let func = module
+        .functions
+        .get(function_id.0 as usize)
         .ok_or_else(|| JitCompileError::CraneliftError("Function not found".into()))?;
 
     // Pre-compile dependencies
@@ -68,20 +83,33 @@ pub fn compile_function_i64(
 
     engine.ctx.clear();
     engine.ctx.func.signature = engine.module.make_signature();
-    engine.ctx.func.signature.returns.push(AbiParam::new(types::I64));
+    engine
+        .ctx
+        .func
+        .signature
+        .returns
+        .push(AbiParam::new(types::I64));
     for _ in 0..func.params.len() {
-        engine.ctx.func.signature.params.push(AbiParam::new(types::I64));
+        engine
+            .ctx
+            .func
+            .signature
+            .params
+            .push(AbiParam::new(types::I64));
     }
 
     let mut builder = FunctionBuilder::new(&mut engine.ctx.func, &mut engine.builder_context);
-    
 
     // 1. Identify jump targets
     let mut jump_targets = HashMap::new();
     for instr in &func.code {
         match instr {
-            BytecodeInstr::Jump(off) => { jump_targets.insert(off.0, None); }
-            BytecodeInstr::JumpIfFalse(off) => { jump_targets.insert(off.0, None); }
+            BytecodeInstr::Jump(off) => {
+                jump_targets.insert(off.0, None);
+            }
+            BytecodeInstr::JumpIfFalse(off) => {
+                jump_targets.insert(off.0, None);
+            }
             _ => {}
         }
     }
@@ -102,7 +130,7 @@ pub fn compile_function_i64(
         let var = Variable::new(i);
         builder.declare_var(var, types::I64);
         variables.push(var);
-        
+
         // If it's a param, initialize it
         if i < func.params.len() {
             let val = builder.block_params(entry_block)[i];
@@ -142,46 +170,76 @@ pub fn compile_function_i64(
                 stack.push(builder.use_var(var));
             }
             BytecodeInstr::StoreLocal(id) => {
-                let val = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                let val = stack
+                    .pop()
+                    .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
                 let var = variables[id.0 as usize];
                 builder.def_var(var, val);
             }
             BytecodeInstr::AddI64 => {
-                let b = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
-                let a = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                let b = stack
+                    .pop()
+                    .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                let a = stack
+                    .pop()
+                    .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
                 stack.push(builder.ins().iadd(a, b));
             }
             BytecodeInstr::SubI64 => {
-                let b = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
-                let a = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                let b = stack
+                    .pop()
+                    .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                let a = stack
+                    .pop()
+                    .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
                 stack.push(builder.ins().isub(a, b));
             }
             BytecodeInstr::MulI64 => {
-                let b = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
-                let a = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                let b = stack
+                    .pop()
+                    .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                let a = stack
+                    .pop()
+                    .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
                 stack.push(builder.ins().imul(a, b));
             }
             BytecodeInstr::DivI64 => {
-                let b = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
-                let a = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                let b = stack
+                    .pop()
+                    .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                let a = stack
+                    .pop()
+                    .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
                 // TODO: Check for zero? VM handles it.
                 stack.push(builder.ins().sdiv(a, b));
             }
             BytecodeInstr::Eq => {
-                let b = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
-                let a = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                let b = stack
+                    .pop()
+                    .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                let a = stack
+                    .pop()
+                    .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
                 let cmp = builder.ins().icmp(IntCC::Equal, a, b);
                 stack.push(builder.ins().uextend(types::I64, cmp));
             }
             BytecodeInstr::LtI64 => {
-                let b = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
-                let a = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                let b = stack
+                    .pop()
+                    .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                let a = stack
+                    .pop()
+                    .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
                 let cmp = builder.ins().icmp(IntCC::SignedLessThan, a, b);
                 stack.push(builder.ins().uextend(types::I64, cmp));
             }
             BytecodeInstr::GtI64 => {
-                let b = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
-                let a = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                let b = stack
+                    .pop()
+                    .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                let a = stack
+                    .pop()
+                    .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
                 let cmp = builder.ins().icmp(IntCC::SignedGreaterThan, a, b);
                 stack.push(builder.ins().uextend(types::I64, cmp));
             }
@@ -190,20 +248,30 @@ pub fn compile_function_i64(
                 stack.push(builder.ins().iconst(types::I64, val));
             }
             BytecodeInstr::Not => {
-                let a = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                let a = stack
+                    .pop()
+                    .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
                 // Boolean in Tempra is 0 or 1. !a is 1 - a.
                 // Or use icmp_imm(Equal, a, 0)
                 let cmp = builder.ins().icmp_imm(IntCC::Equal, a, 0);
                 stack.push(builder.ins().uextend(types::I64, cmp));
             }
             BytecodeInstr::And => {
-                let b = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
-                let a = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                let b = stack
+                    .pop()
+                    .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                let a = stack
+                    .pop()
+                    .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
                 stack.push(builder.ins().band(a, b));
             }
             BytecodeInstr::Or => {
-                let b = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
-                let a = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                let b = stack
+                    .pop()
+                    .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                let a = stack
+                    .pop()
+                    .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
                 stack.push(builder.ins().bor(a, b));
             }
             BytecodeInstr::Jump(off) => {
@@ -212,11 +280,13 @@ pub fn compile_function_i64(
                 current_block_terminated = true;
             }
             BytecodeInstr::JumpIfFalse(off) => {
-                let cond_val = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                let cond_val = stack
+                    .pop()
+                    .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
                 // In Tempra VM, bool is i64(1) for true, i64(0) for false
                 let cond = builder.ins().icmp_imm(IntCC::NotEqual, cond_val, 0);
                 let target = jump_targets.get(&off.0).unwrap().unwrap();
-                
+
                 let next_block = builder.create_block();
                 builder.ins().brif(cond, next_block, &[], target, &[]);
                 builder.switch_to_block(next_block);
@@ -224,7 +294,9 @@ pub fn compile_function_i64(
                 // Still not terminated because we switched to next_block
             }
             BytecodeInstr::Return => {
-                let val = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                let val = stack
+                    .pop()
+                    .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
                 builder.ins().return_(&[val]);
                 current_block_terminated = true;
             }
@@ -245,7 +317,9 @@ pub fn compile_function_i64(
             BytecodeInstr::Call(target_id, argc) => {
                 let mut args = Vec::new();
                 for _ in 0..*argc {
-                    args.push(stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?);
+                    args.push(stack.pop().ok_or_else(|| {
+                        JitCompileError::CraneliftError("Stack underflow".into())
+                    })?);
                 }
                 args.reverse();
 
@@ -256,10 +330,14 @@ pub fn compile_function_i64(
                 }
 
                 let target_name = format!("jit_fn_{}", target_id.0);
-                let callee_id = engine.module.declare_function(&target_name, Linkage::Export, &sig)
+                let callee_id = engine
+                    .module
+                    .declare_function(&target_name, Linkage::Export, &sig)
                     .map_err(|e| JitCompileError::CraneliftError(e.to_string()))?;
-                
-                let local_callee = engine.module.declare_func_in_func(callee_id, &mut builder.func);
+
+                let local_callee = engine
+                    .module
+                    .declare_func_in_func(callee_id, &mut builder.func);
                 let call_inst = builder.ins().call(local_callee, &args);
                 let res = builder.inst_results(call_inst)[0];
                 stack.push(res);
@@ -277,14 +355,21 @@ pub fn compile_function_i64(
 
     // 3. Compile
     let func_name = format!("jit_fn_{}", function_id.0);
-    let id = engine.module.declare_function(&func_name, Linkage::Export, &engine.ctx.func.signature)
+    let id = engine
+        .module
+        .declare_function(&func_name, Linkage::Export, &engine.ctx.func.signature)
         .map_err(|e| JitCompileError::CraneliftError(e.to_string()))?;
 
-    let _result = engine.module.define_function(id, &mut engine.ctx)
+    let _result = engine
+        .module
+        .define_function(id, &mut engine.ctx)
         .map_err(|e| JitCompileError::CraneliftError(format!("Compilation error: {}", e)))?;
 
     engine.module.clear_context(&mut engine.ctx);
-    engine.module.finalize_definitions().map_err(|e| JitCompileError::CraneliftError(format!("Finalization error: {}", e)))?;
+    engine
+        .module
+        .finalize_definitions()
+        .map_err(|e| JitCompileError::CraneliftError(format!("Finalization error: {}", e)))?;
 
     let code_ptr = engine.module.get_finalized_function(id);
     Ok(JitFunctionI64::new(code_ptr, func.params.len()))
@@ -298,11 +383,15 @@ pub fn compile_function_heap_aware(
     compiling: &mut std::collections::HashSet<FunctionId>,
 ) -> Result<crate::engine::JitFunctionI64HeapAware, JitCompileError> {
     if compiling.contains(&function_id) {
-        return Err(JitCompileError::CraneliftError("Call target not JIT eligible (recursion)".into()));
+        return Err(JitCompileError::CraneliftError(
+            "Call target not JIT eligible (recursion)".into(),
+        ));
     }
     compiling.insert(function_id);
 
-    let func = module.functions.get(function_id.0 as usize)
+    let func = module
+        .functions
+        .get(function_id.0 as usize)
         .ok_or_else(|| JitCompileError::CraneliftError("Function not found".into()))?;
 
     // Pre-compile dependencies
@@ -323,25 +412,49 @@ pub fn compile_function_heap_aware(
 
     engine.ctx.clear();
     engine.ctx.func.signature = engine.module.make_signature();
-    
+
     // Returns: (value: i64, status: i64)
-    engine.ctx.func.signature.returns.push(AbiParam::new(types::I64));
-    engine.ctx.func.signature.returns.push(AbiParam::new(types::I64));
-    
+    engine
+        .ctx
+        .func
+        .signature
+        .returns
+        .push(AbiParam::new(types::I64));
+    engine
+        .ctx
+        .func
+        .signature
+        .returns
+        .push(AbiParam::new(types::I64));
+
     // Params: ctx_ptr: i64, args...
-    engine.ctx.func.signature.params.push(AbiParam::new(types::I64));
+    engine
+        .ctx
+        .func
+        .signature
+        .params
+        .push(AbiParam::new(types::I64));
     for _ in 0..func.params.len() {
-        engine.ctx.func.signature.params.push(AbiParam::new(types::I64));
+        engine
+            .ctx
+            .func
+            .signature
+            .params
+            .push(AbiParam::new(types::I64));
     }
 
     let mut builder = FunctionBuilder::new(&mut engine.ctx.func, &mut engine.builder_context);
-    
+
     // 1. Identify jump targets
     let mut jump_targets = HashMap::new();
     for instr in &func.code {
         match instr {
-            BytecodeInstr::Jump(off) => { jump_targets.insert(off.0, None); }
-            BytecodeInstr::JumpIfFalse(off) => { jump_targets.insert(off.0, None); }
+            BytecodeInstr::Jump(off) => {
+                jump_targets.insert(off.0, None);
+            }
+            BytecodeInstr::JumpIfFalse(off) => {
+                jump_targets.insert(off.0, None);
+            }
             _ => {}
         }
     }
@@ -365,7 +478,7 @@ pub fn compile_function_heap_aware(
         let var = Variable::new(i);
         builder.declare_var(var, types::I64);
         variables.push(var);
-        
+
         // If it's a param, initialize it (offset by 1 for ctx)
         if i < func.params.len() {
             let val = builder.block_params(entry_block)[i + 1];
@@ -376,7 +489,11 @@ pub fn compile_function_heap_aware(
     let mut stack: Vec<Value> = Vec::new();
     let mut current_block_terminated = false;
 
-    let emit_helper_call = |builder: &mut FunctionBuilder, helper_ptr: *const (), args: &[Value], stack: &mut Vec<Value>| -> Result<bool, JitCompileError> {
+    let emit_helper_call = |builder: &mut FunctionBuilder,
+                            helper_ptr: *const (),
+                            args: &[Value],
+                            stack: &mut Vec<Value>|
+     -> Result<bool, JitCompileError> {
         let mut sig = cranelift::codegen::ir::Signature::new(builder.func.signature.call_conv);
         for _ in 0..args.len() {
             sig.params.push(AbiParam::new(types::I64));
@@ -384,26 +501,30 @@ pub fn compile_function_heap_aware(
         sig.returns.push(AbiParam::new(types::I64)); // value
         sig.returns.push(AbiParam::new(types::I64)); // status
         let helper_sig_ref = builder.import_signature(sig);
-        
+
         let helper_addr = builder.ins().iconst(types::I64, helper_ptr as i64);
-        let call = builder.ins().call_indirect(helper_sig_ref, helper_addr, args);
+        let call = builder
+            .ins()
+            .call_indirect(helper_sig_ref, helper_addr, args);
         let results = builder.inst_results(call).to_vec();
-        
+
         let val = results[0];
         let status = results[1];
-        
+
         let success_block = builder.create_block();
         let error_block = builder.create_block();
-        
+
         let is_ok = builder.ins().icmp_imm(IntCC::Equal, status, 0); // JIT_STATUS_SUCCESS
-        builder.ins().brif(is_ok, success_block, &[], error_block, &[]);
-        
+        builder
+            .ins()
+            .brif(is_ok, success_block, &[], error_block, &[]);
+
         // Error path: return (0, status) immediately
         builder.switch_to_block(error_block);
         builder.seal_block(error_block);
         let zero = builder.ins().iconst(types::I64, 0);
         builder.ins().return_(&[zero, status]);
-        
+
         // Success path: continue with value
         builder.switch_to_block(success_block);
         builder.seal_block(success_block);
@@ -437,45 +558,75 @@ pub fn compile_function_heap_aware(
                 stack.push(builder.use_var(var));
             }
             BytecodeInstr::StoreLocal(id) => {
-                let val = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                let val = stack
+                    .pop()
+                    .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
                 let var = variables[id.0 as usize];
                 builder.def_var(var, val);
             }
             BytecodeInstr::AddI64 => {
-                let b = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
-                let a = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                let b = stack
+                    .pop()
+                    .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                let a = stack
+                    .pop()
+                    .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
                 stack.push(builder.ins().iadd(a, b));
             }
             BytecodeInstr::SubI64 => {
-                let b = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
-                let a = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                let b = stack
+                    .pop()
+                    .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                let a = stack
+                    .pop()
+                    .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
                 stack.push(builder.ins().isub(a, b));
             }
             BytecodeInstr::MulI64 => {
-                let b = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
-                let a = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                let b = stack
+                    .pop()
+                    .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                let a = stack
+                    .pop()
+                    .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
                 stack.push(builder.ins().imul(a, b));
             }
             BytecodeInstr::DivI64 => {
-                let b = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
-                let a = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                let b = stack
+                    .pop()
+                    .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                let a = stack
+                    .pop()
+                    .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
                 stack.push(builder.ins().sdiv(a, b));
             }
             BytecodeInstr::Eq => {
-                let b = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
-                let a = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                let b = stack
+                    .pop()
+                    .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                let a = stack
+                    .pop()
+                    .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
                 let cmp = builder.ins().icmp(IntCC::Equal, a, b);
                 stack.push(builder.ins().uextend(types::I64, cmp));
             }
             BytecodeInstr::LtI64 => {
-                let b = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
-                let a = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                let b = stack
+                    .pop()
+                    .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                let a = stack
+                    .pop()
+                    .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
                 let cmp = builder.ins().icmp(IntCC::SignedLessThan, a, b);
                 stack.push(builder.ins().uextend(types::I64, cmp));
             }
             BytecodeInstr::GtI64 => {
-                let b = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
-                let a = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                let b = stack
+                    .pop()
+                    .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                let a = stack
+                    .pop()
+                    .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
                 let cmp = builder.ins().icmp(IntCC::SignedGreaterThan, a, b);
                 stack.push(builder.ins().uextend(types::I64, cmp));
             }
@@ -484,18 +635,28 @@ pub fn compile_function_heap_aware(
                 stack.push(builder.ins().iconst(types::I64, val));
             }
             BytecodeInstr::Not => {
-                let a = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                let a = stack
+                    .pop()
+                    .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
                 let cmp = builder.ins().icmp_imm(IntCC::Equal, a, 0);
                 stack.push(builder.ins().uextend(types::I64, cmp));
             }
             BytecodeInstr::And => {
-                let b = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
-                let a = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                let b = stack
+                    .pop()
+                    .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                let a = stack
+                    .pop()
+                    .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
                 stack.push(builder.ins().band(a, b));
             }
             BytecodeInstr::Or => {
-                let b = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
-                let a = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                let b = stack
+                    .pop()
+                    .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                let a = stack
+                    .pop()
+                    .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
                 stack.push(builder.ins().bor(a, b));
             }
             BytecodeInstr::Jump(off) => {
@@ -504,33 +665,60 @@ pub fn compile_function_heap_aware(
                 current_block_terminated = true;
             }
             BytecodeInstr::JumpIfFalse(off) => {
-                let cond_val = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                let cond_val = stack
+                    .pop()
+                    .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
                 let cond = builder.ins().icmp_imm(IntCC::NotEqual, cond_val, 0);
                 let target = jump_targets.get(&off.0).unwrap().unwrap();
-                
+
                 let next_block = builder.create_block();
                 builder.ins().brif(cond, next_block, &[], target, &[]);
                 builder.switch_to_block(next_block);
                 builder.seal_block(next_block);
             }
             BytecodeInstr::Return => {
-                let val = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                let val = stack
+                    .pop()
+                    .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
                 let status_ok = builder.ins().iconst(types::I64, 0);
                 builder.ins().return_(&[val, status_ok]);
                 current_block_terminated = true;
             }
             BytecodeInstr::Len => {
-                let handle = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
-                current_block_terminated = emit_helper_call(&mut builder, crate::helpers::tmpr_jit_string_len as *const (), &[ctx_val, handle], &mut stack)?;
+                let handle = stack
+                    .pop()
+                    .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                current_block_terminated = emit_helper_call(
+                    &mut builder,
+                    crate::helpers::tmpr_jit_string_len as *const (),
+                    &[ctx_val, handle],
+                    &mut stack,
+                )?;
             }
             BytecodeInstr::Size => {
-                let handle = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
-                current_block_terminated = emit_helper_call(&mut builder, crate::helpers::tmpr_jit_string_size as *const (), &[ctx_val, handle], &mut stack)?;
+                let handle = stack
+                    .pop()
+                    .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                current_block_terminated = emit_helper_call(
+                    &mut builder,
+                    crate::helpers::tmpr_jit_string_size as *const (),
+                    &[ctx_val, handle],
+                    &mut stack,
+                )?;
             }
             BytecodeInstr::GetIndex => {
-                let index = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
-                let handle = stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
-                current_block_terminated = emit_helper_call(&mut builder, crate::helpers::tmpr_jit_array_get_i64 as *const (), &[ctx_val, handle, index], &mut stack)?;
+                let index = stack
+                    .pop()
+                    .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                let handle = stack
+                    .pop()
+                    .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
+                current_block_terminated = emit_helper_call(
+                    &mut builder,
+                    crate::helpers::tmpr_jit_array_get_i64 as *const (),
+                    &[ctx_val, handle, index],
+                    &mut stack,
+                )?;
             }
             BytecodeInstr::AddI64LL(a_id, b_id) => {
                 let a = builder.use_var(variables[a_id.0 as usize]);
@@ -549,10 +737,12 @@ pub fn compile_function_heap_aware(
             BytecodeInstr::Call(target_id, argc) => {
                 let mut args = Vec::new();
                 args.push(ctx_val);
-                
+
                 let mut call_args = Vec::new();
                 for _ in 0..*argc {
-                    call_args.push(stack.pop().ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?);
+                    call_args.push(stack.pop().ok_or_else(|| {
+                        JitCompileError::CraneliftError("Stack underflow".into())
+                    })?);
                 }
                 call_args.reverse();
                 args.extend(call_args);
@@ -560,32 +750,39 @@ pub fn compile_function_heap_aware(
                 let mut sig = engine.module.make_signature();
                 sig.returns.push(AbiParam::new(types::I64));
                 sig.returns.push(AbiParam::new(types::I64)); // status
-                for _ in 0..(*argc + 1) { // +1 for ctx
+                for _ in 0..(*argc + 1) {
+                    // +1 for ctx
                     sig.params.push(AbiParam::new(types::I64));
                 }
 
                 let target_name = format!("jit_fn_{}", target_id.0);
-                let callee_id = engine.module.declare_function(&target_name, Linkage::Export, &sig)
+                let callee_id = engine
+                    .module
+                    .declare_function(&target_name, Linkage::Export, &sig)
                     .map_err(|e| JitCompileError::CraneliftError(e.to_string()))?;
-                
-                let local_callee = engine.module.declare_func_in_func(callee_id, &mut builder.func);
+
+                let local_callee = engine
+                    .module
+                    .declare_func_in_func(callee_id, &mut builder.func);
                 let call_inst = builder.ins().call(local_callee, &args);
                 let results = builder.inst_results(call_inst).to_vec();
-                
+
                 let val = results[0];
                 let status = results[1];
-                
+
                 let success_block = builder.create_block();
                 let error_block = builder.create_block();
-                
+
                 let is_ok = builder.ins().icmp_imm(IntCC::Equal, status, 0);
-                builder.ins().brif(is_ok, success_block, &[], error_block, &[]);
-                
+                builder
+                    .ins()
+                    .brif(is_ok, success_block, &[], error_block, &[]);
+
                 builder.switch_to_block(error_block);
                 builder.seal_block(error_block);
                 let zero = builder.ins().iconst(types::I64, 0);
                 builder.ins().return_(&[zero, status]);
-                
+
                 builder.switch_to_block(success_block);
                 builder.seal_block(success_block);
                 stack.push(val);
@@ -601,16 +798,25 @@ pub fn compile_function_heap_aware(
     builder.finalize();
 
     let func_name = format!("jit_fn_{}", function_id.0);
-    let id = engine.module.declare_function(&func_name, Linkage::Export, &engine.ctx.func.signature)
+    let id = engine
+        .module
+        .declare_function(&func_name, Linkage::Export, &engine.ctx.func.signature)
         .map_err(|e| JitCompileError::CraneliftError(e.to_string()))?;
 
-    let _result = engine.module.define_function(id, &mut engine.ctx)
+    let _result = engine
+        .module
+        .define_function(id, &mut engine.ctx)
         .map_err(|e| JitCompileError::CraneliftError(format!("Compilation error: {}", e)))?;
 
     engine.module.clear_context(&mut engine.ctx);
-    engine.module.finalize_definitions().map_err(|e| JitCompileError::CraneliftError(format!("Finalization error: {}", e)))?;
+    engine
+        .module
+        .finalize_definitions()
+        .map_err(|e| JitCompileError::CraneliftError(format!("Finalization error: {}", e)))?;
 
     let code_ptr = engine.module.get_finalized_function(id);
-    Ok(crate::engine::JitFunctionI64HeapAware::new(code_ptr, func.params.len()))
+    Ok(crate::engine::JitFunctionI64HeapAware::new(
+        code_ptr,
+        func.params.len(),
+    ))
 }
-

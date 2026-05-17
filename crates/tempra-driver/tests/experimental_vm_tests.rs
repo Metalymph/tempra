@@ -1,7 +1,7 @@
-use tempra_driver::pipeline::run_source_with_experimental_vm;
 use std::fs;
 use tempra_bytecode::serialize::decode_artifact;
 use tempra_driver::cache::{compute_source_hash, get_cache_path};
+use tempra_driver::pipeline::run_source_with_experimental_vm;
 
 #[test]
 fn test_run_experimental_vm_simple_main() {
@@ -16,7 +16,7 @@ fn test_run_experimental_vm_writes_cache() {
     let hash = compute_source_hash(source);
     let path = get_cache_path(&hash);
     let _ = fs::remove_file(&path); // Ensure clean state
-    
+
     let res = run_source_with_experimental_vm(source, &[]);
     assert!(res.is_ok());
     assert!(path.exists());
@@ -28,17 +28,17 @@ fn test_run_experimental_vm_uses_cache_hit_and_rebuilds_on_corrupt() {
     let hash = compute_source_hash(source);
     let path = get_cache_path(&hash);
     let _ = fs::remove_file(&path);
-    
+
     // First run creates cache
     assert!(run_source_with_experimental_vm(source, &[]).is_ok());
     assert!(path.exists());
-    
+
     // Corrupt cache
     fs::write(&path, vec![0, 0, 0, 0]).unwrap();
-    
+
     // Second run should ignore corrupt cache, rebuild, and succeed
     assert!(run_source_with_experimental_vm(source, &[]).is_ok());
-    
+
     // Check if cache was rebuilt properly
     let bytes = fs::read(&path).unwrap();
     let decoded = decode_artifact(&bytes);
@@ -100,7 +100,11 @@ fn main() -> Int!String {
 }
 "#;
     let res = run_source_with_experimental_vm(source, &[]);
-    assert!(res.is_ok(), "Expected Ok path to succeed, got {:?}", res.err());
+    assert!(
+        res.is_ok(),
+        "Expected Ok path to succeed, got {:?}",
+        res.err()
+    );
 }
 
 #[test]
@@ -120,10 +124,13 @@ fn main() -> Int!String {
 "#;
     let res = run_source_with_experimental_vm(source, &[]);
     // If it works correctly, it should return Err("bad") which is still a Result value.
-    // In run_source_with_experimental_vm, we return Ok(()) if the VM returns Ok, 
+    // In run_source_with_experimental_vm, we return Ok(()) if the VM returns Ok,
     // and DriverError::VmError if it returns a VmError.
     // However, the VM return value of main is not currently checked for success/failure in the same way the interpreter does.
     // Wait, run_source_with_experimental_vm just checks if run_function returned Ok.
-    assert!(res.is_ok(), "Expected Err path to return successfully from VM with Err value, got {:?}", res.err());
+    assert!(
+        res.is_ok(),
+        "Expected Err path to return successfully from VM with Err value, got {:?}",
+        res.err()
+    );
 }
-

@@ -29,7 +29,9 @@ fn test_for_array_sum() {
             expect(sum == 6);
         }
     "#);
-    if let Err(e) = &res { println!("FAIL: {}", e); }
+    if let Err(e) = &res {
+        println!("FAIL: {}", e);
+    }
     assert!(res.is_ok());
 }
 
@@ -46,7 +48,9 @@ fn test_for_array_expression() {
             expect(ys[2] == 4);
         }
     "#);
-    if let Err(e) = &res { println!("FAIL: {}", e); }
+    if let Err(e) = &res {
+        println!("FAIL: {}", e);
+    }
     assert!(res.is_ok());
 }
 
@@ -68,7 +72,9 @@ fn test_for_slice_sum() {
             expect(sum == 5);
         }
     "#);
-    if let Err(e) = &res { println!("FAIL: {}", e); }
+    if let Err(e) = &res {
+        println!("FAIL: {}", e);
+    }
     assert!(res.is_ok());
 }
 
@@ -88,7 +94,9 @@ fn test_for_filtered() {
             expect(ys[1] == 4);
         }
     "#);
-    if let Err(e) = &res { println!("FAIL: {}", e); }
+    if let Err(e) = &res {
+        println!("FAIL: {}", e);
+    }
     assert!(res.is_ok());
 }
 
@@ -130,7 +138,9 @@ fn test_custom_iterable() {
             if sum != 3 { crash("fail") }
         }
     "#);
-    if let Err(e) = &res { println!("FAIL: {}", e); }
+    if let Err(e) = &res {
+        println!("FAIL: {}", e);
+    }
     assert!(res.is_ok());
 }
 
@@ -138,7 +148,8 @@ fn test_custom_iterable() {
 
 #[test]
 fn test_generic_iterable_count() {
-    let res = typecheck_ok(r#"
+    let res = typecheck_ok(
+        r#"
         fn count(type T: Iterable, value: T) -> Int {
             var n = 0;
             for dummy in value {
@@ -150,8 +161,11 @@ fn test_generic_iterable_count() {
             let xs: Array(Int) = [1, 2, 3];
             let dummy = count[Array(Int)](xs);
         }
-    "#);
-    if let Err(e) = &res { println!("FAIL: {}", e); }
+    "#,
+    );
+    if let Err(e) = &res {
+        println!("FAIL: {}", e);
+    }
     assert!(res.is_ok());
 }
 
@@ -160,7 +174,8 @@ fn test_generic_iterable_count() {
 #[test]
 fn test_iterable_item_projection_in_return_type() {
     // T.Item is valid as a return type for Iterable-constrained generics
-    let res = typecheck_ok(r#"
+    let res = typecheck_ok(
+        r#"
         fn first(type T: Iterable, value: T) -> T.Item? {
             for x in value {
                 return Some(x);
@@ -171,8 +186,11 @@ fn test_iterable_item_projection_in_return_type() {
             let xs: Array(Int) = [1, 2, 3];
             let dummy = first[Array(Int)](xs);
         }
-    "#);
-    if let Err(e) = &res { println!("FAIL: {}", e); }
+    "#,
+    );
+    if let Err(e) = &res {
+        println!("FAIL: {}", e);
+    }
     assert!(res.is_ok());
 }
 
@@ -181,44 +199,58 @@ fn test_iterable_item_projection_in_return_type() {
 #[test]
 fn test_non_iterable_struct_rejected() {
     // A plain struct without iter() should fail in a for-in
-    assert!(typecheck_err(r#"
+    assert!(typecheck_err(
+        r#"
         struct Foo { x: Int }
         fn main() {
             let f = Foo { x: 1 };
             for item in f { }
         }
-    "#));
+    "#
+    ));
 }
 
 #[test]
 fn test_iterable_rejected_as_runtime_type() {
-    assert!(typecheck_err(r#"
+    assert!(typecheck_err(
+        r#"
         fn main() { let x: Iterable = 1; }
-    "#));
-    assert!(typecheck_err(r#"
+    "#
+    ));
+    assert!(typecheck_err(
+        r#"
         fn f(x: Iterable) {}
-    "#));
-    assert!(typecheck_err(r#"
+    "#
+    ));
+    assert!(typecheck_err(
+        r#"
         fn f() -> Iterable { return 1; }
-    "#));
-    assert!(typecheck_err(r#"
+    "#
+    ));
+    assert!(typecheck_err(
+        r#"
         struct Box { value: Iterable }
-    "#));
+    "#
+    ));
 }
 
 #[test]
 fn test_iterable_projection_in_expression_rejected() {
     // T.Iter and T.Item in expression position must be rejected
-    assert!(typecheck_err(r#"
+    assert!(typecheck_err(
+        r#"
         fn check(type T: Iterable) {
             let x = T.Item;
         }
         fn main() {}
-    "#));
-    assert!(typecheck_err(r#"
+    "#
+    ));
+    assert!(typecheck_err(
+        r#"
         fn check(type T: Iterable) {
             let x = T.Iter;
         }
         fn main() {}
-    "#));
+    "#
+    ));
 }

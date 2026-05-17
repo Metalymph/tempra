@@ -13,10 +13,10 @@ pub mod check_file;
 pub mod check_item;
 pub mod check_stmt;
 pub mod context;
-pub mod projection;
 pub mod env;
 pub mod error;
 pub mod pattern;
+pub mod projection;
 pub mod types;
 
 pub use check_file::{check_file, check_file_with_context};

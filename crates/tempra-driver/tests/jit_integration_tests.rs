@@ -1,6 +1,6 @@
 use tempra_driver::run_source_vm_with_options;
-use tempra_vm::value::VmValue;
 use tempra_vm::profile::VmOptions;
+use tempra_vm::value::VmValue;
 
 #[test]
 #[cfg(feature = "jit-cranelift")]
@@ -20,12 +20,12 @@ fn test_driver_jit_loop() {
             return sum
         }
     "#;
-    
+
     let mut options = VmOptions::default();
     options.jit_enabled = true;
     options.hot_call_threshold = 10;
     options.hot_backedge_threshold = 10;
-    
+
     let res = run_source_vm_with_options(source, &[], options).unwrap();
     // sum = 10 * (1+2+3+4+5+6+7+8+9+10) = 10 * 55 = 550
     assert_eq!(res, VmValue::Int64(550));
@@ -49,15 +49,15 @@ fn test_driver_jit_observability() {
             return sum
         }
     "#;
-    
+
     let mut options = VmOptions::default();
     options.jit_enabled = true;
     options.profiling = true;
     options.hot_call_threshold = 5;
-    
+
     let (res, profile) = tempra_driver::run_source_vm_profiled(source, options).unwrap();
     assert_eq!(res, VmValue::Int64(75)); // 5 * (1+2+3+4+5) = 5 * 15 = 75
-    
+
     let summary = profile.summary();
     assert!(summary.contains("JIT Summary:"));
     assert!(summary.contains("Compile attempts:"));
@@ -79,17 +79,16 @@ fn test_driver_jit_native_calls() {
             return s3
         }
     "#;
-    
+
     let mut options = VmOptions::default();
     options.jit_enabled = true;
     options.profiling = true;
     options.hot_call_threshold = 0; // Compile immediately on first call
     options.hot_backedge_threshold = 100;
-    
+
     let (res, profile) = tempra_driver::run_source_vm_profiled(source, options).unwrap();
     assert_eq!(res, VmValue::Int64(100)); // 10+20+30+40 = 100
 
-    
     let summary = profile.summary();
     // main is hot because of backedges. It calls add.
     // add gets pre-compiled as a dependency of main.
@@ -114,15 +113,15 @@ fn test_driver_jit_fallback() {
             return sum
         }
     "#;
-    
+
     let mut options = VmOptions::default();
     options.jit_enabled = true;
     options.profiling = true;
     options.hot_call_threshold = 1;
-    
+
     let (res, profile) = tempra_driver::run_source_vm_profiled(source, options).unwrap();
     assert_eq!(res, VmValue::Int64(12)); // 3 * 4 = 12
-    
+
     let summary = profile.summary();
     assert!(summary.contains("JIT Summary:"));
     assert!(summary.contains("Compile attempts:"));
@@ -142,11 +141,19 @@ fn test_jit_profile_records_compile_time() {
     options.jit_enabled = true;
     options.profiling = true;
     options.hot_call_threshold = 0;
-    
+
     let (_, profile) = tempra_driver::run_source_vm_profiled(source, options).unwrap();
-    let main_stats = profile.function_stats.iter().find(|f| f.function_name == "main").unwrap();
-    let add_stats = profile.function_stats.iter().find(|f| f.function_name == "add").unwrap();
-    
+    let main_stats = profile
+        .function_stats
+        .iter()
+        .find(|f| f.function_name == "main")
+        .unwrap();
+    let add_stats = profile
+        .function_stats
+        .iter()
+        .find(|f| f.function_name == "add")
+        .unwrap();
+
     assert!(main_stats.jit_compile_time_ns > 0);
     // Add is compiled as a dependency, its compile time is aggregated into main's compile time for v0 policy
     assert_eq!(add_stats.jit_compile_time_ns, 0);
@@ -167,25 +174,35 @@ fn test_jit_profile_runtime_calls_increase() {
     options.jit_enabled = true;
     options.profiling = true;
     options.hot_call_threshold = 0; // main is hot immediately
-    
+
     let hash = tempra_driver::cache::compute_source_hash(source);
     let cache_path = tempra_driver::cache::get_cache_path(&hash);
     let module = tempra_driver::compile_to_bytecode(source, &cache_path).unwrap();
-    
+
     let mut interpreter = tempra_vm::Interpreter::with_options(&module, options);
-    let main_id = tempra_bytecode::function::FunctionId(module.functions.iter().position(|f| f.name == "main").unwrap() as u32);
-    
+    let main_id = tempra_bytecode::function::FunctionId(
+        module
+            .functions
+            .iter()
+            .position(|f| f.name == "main")
+            .unwrap() as u32,
+    );
+
     // Cold run (compiles)
     interpreter.run_function_id(main_id, vec![]).unwrap();
     // Warm run (executes natively)
     interpreter.run_function_id(main_id, vec![]).unwrap();
     // Warm run (executes natively)
     interpreter.run_function_id(main_id, vec![]).unwrap();
-    
+
     let profile = interpreter.build_profile();
-    let main_stats = profile.function_stats.iter().find(|f| f.function_name == "main").unwrap();
-    
-    // main is called natively 2 times 
+    let main_stats = profile
+        .function_stats
+        .iter()
+        .find(|f| f.function_name == "main")
+        .unwrap();
+
+    // main is called natively 2 times
     assert_eq!(main_stats.jit_runtime_calls, 2);
     // On Mac/Linux, measuring Instant::now() might be 0ns if super fast.
     // So we just check that it compiles correctly and metrics aren't broken.
@@ -202,25 +219,39 @@ fn test_jit_warm_run_uses_existing_compiled_function() {
     options.jit_enabled = true;
     options.profiling = true;
     options.hot_call_threshold = 0;
-    
+
     let hash = tempra_driver::cache::compute_source_hash(source);
     let cache_path = tempra_driver::cache::get_cache_path(&hash);
     let module = tempra_driver::compile_to_bytecode(source, &cache_path).unwrap();
-    
+
     let mut interpreter = tempra_vm::Interpreter::with_options(&module, options);
-    let main_id = tempra_bytecode::function::FunctionId(module.functions.iter().position(|f| f.name == "main").unwrap() as u32);
-    
+    let main_id = tempra_bytecode::function::FunctionId(
+        module
+            .functions
+            .iter()
+            .position(|f| f.name == "main")
+            .unwrap() as u32,
+    );
+
     // Cold run
     let _ = interpreter.run_function_id(main_id, vec![]).unwrap();
     let cold_profile = interpreter.build_profile();
-    let cold_main = cold_profile.function_stats.iter().find(|f| f.function_name == "main").unwrap();
+    let cold_main = cold_profile
+        .function_stats
+        .iter()
+        .find(|f| f.function_name == "main")
+        .unwrap();
     assert_eq!(cold_main.jit_compile_attempts, 1);
-    
+
     // Warm run
     let _ = interpreter.run_function_id(main_id, vec![]).unwrap();
     let warm_profile = interpreter.build_profile();
-    let warm_main = warm_profile.function_stats.iter().find(|f| f.function_name == "main").unwrap();
-    
+    let warm_main = warm_profile
+        .function_stats
+        .iter()
+        .find(|f| f.function_name == "main")
+        .unwrap();
+
     // Attempt count should remain exactly 1, no new compilation attempt
     assert_eq!(warm_main.jit_compile_attempts, 1);
     // It should have executed as a runtime call during the warm run
@@ -238,10 +269,14 @@ fn test_jit_threshold_prevents_early_compile() {
     options.jit_enabled = true;
     options.profiling = true;
     options.hot_call_threshold = 5; // higher than the 1 call to main
-    
+
     let (_, profile) = tempra_driver::run_source_vm_profiled(source, options).unwrap();
-    let main_stats = profile.function_stats.iter().find(|f| f.function_name == "main").unwrap();
-    
+    let main_stats = profile
+        .function_stats
+        .iter()
+        .find(|f| f.function_name == "main")
+        .unwrap();
+
     assert_eq!(main_stats.jit_compile_attempts, 0);
     assert_eq!(main_stats.jit_compile_successes, 0);
     assert_eq!(main_stats.jit_compile_time_ns, 0);
@@ -263,13 +298,23 @@ fn test_jit_policy_skips_below_threshold() {
     "#;
     let mut options = VmOptions::default(); // hot_call_threshold = 100
     options.jit_enabled = true;
-    options.profiling  = true;
+    options.profiling = true;
 
     let (_, profile) = tempra_driver::run_source_vm_profiled(source, options).unwrap();
-    let main = profile.function_stats.iter().find(|f| f.function_name == "main").unwrap();
+    let main = profile
+        .function_stats
+        .iter()
+        .find(|f| f.function_name == "main")
+        .unwrap();
 
-    assert_eq!(main.jit_compile_attempts, 0, "must not attempt compilation below threshold");
-    assert!(main.jit_skipped_below_threshold > 0, "skip counter must be non-zero");
+    assert_eq!(
+        main.jit_compile_attempts, 0,
+        "must not attempt compilation below threshold"
+    );
+    assert!(
+        main.jit_skipped_below_threshold > 0,
+        "skip counter must be non-zero"
+    );
     assert_eq!(main.jit_compile_successes, 0);
 }
 
@@ -283,16 +328,26 @@ fn test_jit_policy_skips_too_small_function() {
     "#;
     let mut options = VmOptions::default();
     options.jit_enabled = true;
-    options.profiling  = true;
+    options.profiling = true;
     options.hot_call_threshold = 0; // force hot
     options.jit_min_instruction_count = 8;
 
     let (_, profile) = tempra_driver::run_source_vm_profiled(source, options).unwrap();
-    let tiny = profile.function_stats.iter().find(|f| f.function_name == "tiny").unwrap();
+    let tiny = profile
+        .function_stats
+        .iter()
+        .find(|f| f.function_name == "tiny")
+        .unwrap();
 
     // tiny() has very few instructions, so it should be skipped as too small
-    assert_eq!(tiny.jit_compile_attempts, 0, "tiny function must not be compiled");
-    assert!(tiny.jit_skipped_too_small > 0, "skipped_too_small counter must be non-zero");
+    assert_eq!(
+        tiny.jit_compile_attempts, 0,
+        "tiny function must not be compiled"
+    );
+    assert!(
+        tiny.jit_skipped_too_small > 0,
+        "skipped_too_small counter must be non-zero"
+    );
 }
 
 #[test]
@@ -305,15 +360,25 @@ fn test_jit_policy_rejects_unsupported_permanently() {
     "#;
     let mut options = VmOptions::default();
     options.jit_enabled = true;
-    options.profiling  = true;
+    options.profiling = true;
     options.hot_call_threshold = 0;
     options.jit_min_instruction_count = 0;
 
     let (_, profile) = tempra_driver::run_source_vm_profiled(source, options).unwrap();
-    let greet = profile.function_stats.iter().find(|f| f.function_name == "greet").unwrap();
+    let greet = profile
+        .function_stats
+        .iter()
+        .find(|f| f.function_name == "greet")
+        .unwrap();
 
-    assert!(greet.jit_is_permanently_rejected, "bool signature function must be permanently rejected");
-    assert!(greet.jit_rejection_reason.is_some(), "rejection reason must be set");
+    assert!(
+        greet.jit_is_permanently_rejected,
+        "bool signature function must be permanently rejected"
+    );
+    assert!(
+        greet.jit_rejection_reason.is_some(),
+        "rejection reason must be set"
+    );
     assert_eq!(greet.jit_permanent_rejections, 1);
 }
 
@@ -334,12 +399,16 @@ fn test_jit_policy_does_not_recompile_rejected_function() {
     "#;
     let mut options = VmOptions::default();
     options.jit_enabled = true;
-    options.profiling  = true;
+    options.profiling = true;
     options.hot_call_threshold = 0;
     options.jit_min_instruction_count = 0;
 
     let (_, profile) = tempra_driver::run_source_vm_profiled(source, options).unwrap();
-    let greet = profile.function_stats.iter().find(|f| f.function_name == "greet").unwrap();
+    let greet = profile
+        .function_stats
+        .iter()
+        .find(|f| f.function_name == "greet")
+        .unwrap();
 
     // Attempted once, then permanently rejected → never attempted again
     assert_eq!(greet.jit_compile_attempts, 1, "must only attempt once");
@@ -357,7 +426,7 @@ fn test_jit_policy_compiles_after_threshold() {
     "#;
     let mut options = VmOptions::default();
     options.jit_enabled = true;
-    options.profiling  = true;
+    options.profiling = true;
     options.hot_call_threshold = 3;
     options.jit_min_instruction_count = 0;
 
@@ -366,7 +435,11 @@ fn test_jit_policy_compiles_after_threshold() {
     let module = tempra_driver::compile_to_bytecode(source, &cache_path).unwrap();
     let mut interp = tempra_vm::Interpreter::with_options(&module, options);
     let main_id = tempra_bytecode::function::FunctionId(
-        module.functions.iter().position(|f| f.name == "main").unwrap() as u32
+        module
+            .functions
+            .iter()
+            .position(|f| f.name == "main")
+            .unwrap() as u32,
     );
 
     // Run 4 times: after 3 calls main becomes hot and is compiled on the 4th
@@ -374,12 +447,22 @@ fn test_jit_policy_compiles_after_threshold() {
         interp.run_function_id(main_id, vec![]).unwrap();
     }
     let profile = interp.build_profile();
-    let main = profile.function_stats.iter().find(|f| f.function_name == "main").unwrap();
+    let main = profile
+        .function_stats
+        .iter()
+        .find(|f| f.function_name == "main")
+        .unwrap();
 
-    assert!(main.jit_compile_attempts > 0, "compilation must be attempted after crossing threshold");
+    assert!(
+        main.jit_compile_attempts > 0,
+        "compilation must be attempted after crossing threshold"
+    );
     assert_eq!(main.jit_compile_successes, 1);
     // calls 1 and 2 are below threshold (call_count < 3); call 3 hits the threshold and compiles
-    assert_eq!(main.jit_skipped_below_threshold, 2, "first 2 calls skipped (not yet hot)");
+    assert_eq!(
+        main.jit_skipped_below_threshold, 2,
+        "first 2 calls skipped (not yet hot)"
+    );
 }
 
 #[test]
@@ -401,20 +484,29 @@ fn test_jit_policy_retry_limit_respected() {
     "#;
     let mut options = VmOptions::default();
     options.jit_enabled = true;
-    options.profiling  = true;
+    options.profiling = true;
     options.hot_call_threshold = 0;
     options.jit_min_instruction_count = 0;
     options.jit_retry_limit = 1;
 
     let (_, profile) = tempra_driver::run_source_vm_profiled(source, options).unwrap();
-    let unsup = profile.function_stats.iter().find(|f| f.function_name == "unsupported").unwrap();
+    let unsup = profile
+        .function_stats
+        .iter()
+        .find(|f| f.function_name == "unsupported")
+        .unwrap();
 
     // Must never exceed 1 attempt regardless of how many times the function is dispatched
-    assert_eq!(unsup.jit_compile_attempts, 1, "only one attempt allowed by retry_limit=1");
+    assert_eq!(
+        unsup.jit_compile_attempts, 1,
+        "only one attempt allowed by retry_limit=1"
+    );
     assert!(unsup.jit_is_permanently_rejected);
-    assert!(unsup.jit_skipped_below_threshold == 0, "threshold was 0, should not be in threshold-skip bucket");
+    assert!(
+        unsup.jit_skipped_below_threshold == 0,
+        "threshold was 0, should not be in threshold-skip bucket"
+    );
 }
-
 
 // ============================================================
 // Phase 15.6 — Driver / CLI JIT integration tests
@@ -466,8 +558,15 @@ fn test_jit_enabled_hot_function_compiles() {
     let (val, profile) = tempra_driver::run_source_vm_profiled(source, options).unwrap();
     assert_eq!(val, VmValue::Int64(550));
 
-    let add_stats = profile.function_stats.iter().find(|f| f.function_name == "add").unwrap();
-    assert!(add_stats.jit_compile_successes > 0, "add() should have been JIT-compiled");
+    let add_stats = profile
+        .function_stats
+        .iter()
+        .find(|f| f.function_name == "add")
+        .unwrap();
+    assert!(
+        add_stats.jit_compile_successes > 0,
+        "add() should have been JIT-compiled"
+    );
 }
 
 #[test]

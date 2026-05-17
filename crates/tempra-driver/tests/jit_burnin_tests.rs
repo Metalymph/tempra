@@ -1,41 +1,71 @@
-use tempra_driver::{run_source_vm_profiled, run_source_hir};
-use tempra_vm::value::VmValue;
-use tempra_vm::profile::VmOptions;
 use std::fs;
 use std::path::PathBuf;
+use tempra_driver::{run_source_hir, run_source_vm_profiled};
+use tempra_vm::profile::VmOptions;
+use tempra_vm::value::VmValue;
 
 fn run_burnin_test(filename: &str, expected: i64, should_compile: bool) {
     run_burnin_test_with_options(filename, expected, should_compile, VmOptions::default());
 }
 
-fn run_burnin_test_with_options(filename: &str, expected: i64, should_compile: bool, mut options: VmOptions) {
+fn run_burnin_test_with_options(
+    filename: &str,
+    expected: i64,
+    should_compile: bool,
+    mut options: VmOptions,
+) {
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     path.push("../../examples/jit_burnin");
     path.push(filename);
-    
+
     let source = fs::read_to_string(&path).expect(&format!("failed to read {:?}", path));
-    
+
     // 1. Get reference result from HIR interpreter
     let _ref_res = run_source_hir(&source, &[]).expect("HIR run failed");
-    
+
     // 2. Run with JIT enabled
     options.jit_enabled = true;
     options.profiling = true;
     // If using defaults (100/1000), lower them for burn-in
-    if options.hot_call_threshold == 100 { options.hot_call_threshold = 5; }
-    if options.hot_backedge_threshold == 1000 { options.hot_backedge_threshold = 5; }
+    if options.hot_call_threshold == 100 {
+        options.hot_call_threshold = 5;
+    }
+    if options.hot_backedge_threshold == 1000 {
+        options.hot_backedge_threshold = 5;
+    }
     options.jit_min_instruction_count = 0; // Don't skip small ones in burn-in
-    
+
     let (res, profile) = run_source_vm_profiled(&source, options).expect("VM JIT run failed");
-    
-    assert_eq!(res, VmValue::Int64(expected), "Result mismatch in {}", filename);
-    
+
+    assert_eq!(
+        res,
+        VmValue::Int64(expected),
+        "Result mismatch in {}",
+        filename
+    );
+
     if should_compile {
-        let successes: u64 = profile.function_stats.iter().map(|f| f.jit_compile_successes).sum();
-        assert!(successes > 0, "Expected at least one function to compile in {}", filename);
+        let successes: u64 = profile
+            .function_stats
+            .iter()
+            .map(|f| f.jit_compile_successes)
+            .sum();
+        assert!(
+            successes > 0,
+            "Expected at least one function to compile in {}",
+            filename
+        );
     } else {
-        let rejections: u64 = profile.function_stats.iter().map(|f| f.jit_permanent_rejections).sum();
-        assert!(rejections > 0, "Expected at least one rejection in {}", filename);
+        let rejections: u64 = profile
+            .function_stats
+            .iter()
+            .map(|f| f.jit_permanent_rejections)
+            .sum();
+        assert!(
+            rejections > 0,
+            "Expected at least one rejection in {}",
+            filename
+        );
     }
 }
 
@@ -103,7 +133,11 @@ fn main() -> Int64 {
     options.hot_call_threshold = 2;
     let (res, profile) = tempra_driver::run_source_vm_profiled(source, options).unwrap();
     assert_eq!(res, VmValue::Int64(36));
-    let successes: u64 = profile.function_stats.iter().map(|f| f.jit_compile_successes).sum();
+    let successes: u64 = profile
+        .function_stats
+        .iter()
+        .map(|f| f.jit_compile_successes)
+        .sum();
     assert!(successes > 0);
 }
 
@@ -137,7 +171,7 @@ fn main() -> Int64 {
     options.jit_enabled = true;
     options.hot_call_threshold = 1;
     let (res, _) = tempra_driver::run_source_vm_profiled(source, options).unwrap();
-    assert_eq!(res, VmValue::Int64(1+2+3)); // 6
+    assert_eq!(res, VmValue::Int64(1 + 2 + 3)); // 6
 }
 
 #[test]
@@ -167,18 +201,28 @@ fn jit_warm_run_reuses_compiled_functions() {
             return x
         }
     "#;
-    
+
     let mut options = VmOptions::default();
     options.jit_enabled = true;
     options.profiling = true;
     options.hot_call_threshold = 2;
     options.jit_min_instruction_count = 0;
-    
+
     let (_, profile) = run_source_vm_profiled(source, options).expect("VM run failed");
-    let add_stats = profile.function_stats.iter().find(|f| f.function_name == "add").unwrap();
-    
-    assert_eq!(add_stats.jit_compile_successes, 1, "Should compile exactly once");
-    assert!(add_stats.jit_runtime_calls > 5, "Should use JIT version multiple times");
+    let add_stats = profile
+        .function_stats
+        .iter()
+        .find(|f| f.function_name == "add")
+        .unwrap();
+
+    assert_eq!(
+        add_stats.jit_compile_successes, 1,
+        "Should compile exactly once"
+    );
+    assert!(
+        add_stats.jit_runtime_calls > 5,
+        "Should use JIT version multiple times"
+    );
 }
 
 #[test]
@@ -196,7 +240,7 @@ fn jit_repeated_execution_stress() {
     let mut options = VmOptions::default();
     options.jit_enabled = true;
     options.hot_call_threshold = 2;
-    
+
     for _ in 0..20 {
         let (res, _) = run_source_vm_profiled(source, options).unwrap();
         assert_eq!(res, VmValue::Int64(10));
@@ -213,15 +257,20 @@ fn jit_differential_micro_tests() {
         ("fn main() -> Int64 {\n var x = 1\n for i in [1,2,3] { x = x * 2 }\n return x\n }", 8),
         ("fn add(a: Int64, b: Int64) -> Int64 { return a + b }\n fn main() -> Int64 { return add(10, 20) }", 30),
     ];
-    
+
     for (source, expected) in cases {
         let mut options = VmOptions::default();
         options.jit_enabled = true;
         options.hot_call_threshold = 0; // Eager
         options.jit_min_instruction_count = 0;
-        
+
         let (res, _) = run_source_vm_profiled(source, options).expect("JIT run failed");
-        assert_eq!(res, VmValue::Int64(expected), "Mismatch in source: {}", source);
+        assert_eq!(
+            res,
+            VmValue::Int64(expected),
+            "Mismatch in source: {}",
+            source
+        );
     }
 }
 
@@ -245,15 +294,26 @@ fn jit_profile_summary_validation() {
     options.profiling = true;
     options.hot_call_threshold = 2;
     options.jit_min_instruction_count = 0;
-    
+
     let (_, profile) = run_source_vm_profiled(source, options).unwrap();
     let summary = profile.summary();
-    
-    assert!(summary.contains("JIT Summary:"), "Summary missing JIT section");
+
+    assert!(
+        summary.contains("JIT Summary:"),
+        "Summary missing JIT section"
+    );
     // In Phase 15.5, the summary section labels are:
     // "  Successes:        N"
     // "  Runtime calls:    N"
     // etc.
-    assert!(summary.contains("Successes:"), "Summary missing successes. Summary was: {}", summary);
-    assert!(summary.contains("Runtime calls:"), "Summary missing runtime calls. Summary was: {}", summary);
+    assert!(
+        summary.contains("Successes:"),
+        "Summary missing successes. Summary was: {}",
+        summary
+    );
+    assert!(
+        summary.contains("Runtime calls:"),
+        "Summary missing runtime calls. Summary was: {}",
+        summary
+    );
 }

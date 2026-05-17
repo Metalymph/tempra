@@ -731,7 +731,10 @@ fn check_assignment(ctx: &mut TypeContext, b: &mut HirBinary) -> Type {
                         if let Some(field_info) = info.fields.get(&m.field) {
                             if !field_info.is_mutable {
                                 ctx.error(
-                                    format!("cannot mutate immutable field '{}' of struct '{}'", m.field, name),
+                                    format!(
+                                        "cannot mutate immutable field '{}' of struct '{}'",
+                                        m.field, name
+                                    ),
                                     b.span,
                                 );
                             }
@@ -751,46 +754,82 @@ fn check_assignment(ctx: &mut TypeContext, b: &mut HirBinary) -> Type {
                 check_receiver_mutable(ctx, &idx.object, b.span);
 
                 if object_ty == Type::String {
-                    ctx.error("string indexing is intentionally unsupported".to_string(), b.span);
+                    ctx.error(
+                        "string indexing is intentionally unsupported".to_string(),
+                        b.span,
+                    );
                     return Type::Error;
                 }
 
-                if matches!(&*idx.object, HirExpression::Index(_) | HirExpression::Slice(_)) {
-                    ctx.error("nested subscript assignment is not supported in v1".to_string(), b.span);
+                if matches!(
+                    &*idx.object,
+                    HirExpression::Index(_) | HirExpression::Slice(_)
+                ) {
+                    ctx.error(
+                        "nested subscript assignment is not supported in v1".to_string(),
+                        b.span,
+                    );
                 }
 
                 if let Type::Array(elem) | Type::Slice(elem) = &object_ty {
                     if !index_ty.is_integer() && index_ty != Type::Error {
-                        ctx.error(format!("index must be integer, found {}", index_ty), idx.index.span());
+                        ctx.error(
+                            format!("index must be integer, found {}", index_ty),
+                            idx.index.span(),
+                        );
                     }
                     if !types_compatible(elem, &right) {
-                        ctx.error(format!("Cannot assign {} to element of type {}", right, elem), b.span);
+                        ctx.error(
+                            format!("Cannot assign {} to element of type {}", right, elem),
+                            b.span,
+                        );
                     }
                     return Type::Unit;
                 }
 
                 if let Some(sig) = ctx.lookup_method_signature(&object_ty, "set") {
                     if sig.params.len() != 3 {
-                        ctx.error("'set' hook must take exactly 2 arguments (index, value)".to_string(), b.span);
+                        ctx.error(
+                            "'set' hook must take exactly 2 arguments (index, value)".to_string(),
+                            b.span,
+                        );
                         return Type::Error;
                     }
                     if !sig.params[0].is_inout {
-                        ctx.error("'set' hook receiver must be 'inout self'".to_string(), b.span);
+                        ctx.error(
+                            "'set' hook receiver must be 'inout self'".to_string(),
+                            b.span,
+                        );
                     }
                     if sig.return_type != Type::Unit && sig.return_type != Type::Error {
                         ctx.error("'set' hook must return Unit".to_string(), b.span);
                     }
                     if !types_compatible(&sig.params[1].ty, &index_ty) {
-                        ctx.error(format!("Index type mismatch: expected {}, found {}", sig.params[1].ty, index_ty), idx.index.span());
+                        ctx.error(
+                            format!(
+                                "Index type mismatch: expected {}, found {}",
+                                sig.params[1].ty, index_ty
+                            ),
+                            idx.index.span(),
+                        );
                     }
                     if !types_compatible(&sig.params[2].ty, &right) {
-                        ctx.error(format!("Cannot assign {} to {}", right, sig.params[2].ty), b.right.span());
+                        ctx.error(
+                            format!("Cannot assign {} to {}", right, sig.params[2].ty),
+                            b.right.span(),
+                        );
                     }
                     return Type::Unit;
                 }
 
                 if object_ty != Type::Error {
-                    ctx.error(format!("Cannot assign to index of type {} (missing 'set' method)", object_ty), b.span);
+                    ctx.error(
+                        format!(
+                            "Cannot assign to index of type {} (missing 'set' method)",
+                            object_ty
+                        ),
+                        b.span,
+                    );
                 }
             }
         }
@@ -802,52 +841,97 @@ fn check_assignment(ctx: &mut TypeContext, b: &mut HirBinary) -> Type {
                 check_receiver_mutable(ctx, &slc.object, b.span);
 
                 if !start_ty.is_integer() && start_ty != Type::Error {
-                    ctx.error(format!("slice start bound must be integer, found {}", start_ty), slc.start.span());
+                    ctx.error(
+                        format!("slice start bound must be integer, found {}", start_ty),
+                        slc.start.span(),
+                    );
                 }
                 if !end_ty.is_integer() && end_ty != Type::Error {
-                    ctx.error(format!("slice end bound must be integer, found {}", end_ty), slc.end.span());
+                    ctx.error(
+                        format!("slice end bound must be integer, found {}", end_ty),
+                        slc.end.span(),
+                    );
                 }
 
-                if matches!(&*slc.object, HirExpression::Index(_) | HirExpression::Slice(_)) {
-                    ctx.error("nested subscript assignment is not supported in v1".to_string(), b.span);
+                if matches!(
+                    &*slc.object,
+                    HirExpression::Index(_) | HirExpression::Slice(_)
+                ) {
+                    ctx.error(
+                        "nested subscript assignment is not supported in v1".to_string(),
+                        b.span,
+                    );
                 }
 
                 if let Type::Array(elem) | Type::Slice(elem) = &object_ty {
                     let compatible = match &right {
-                        Type::Array(rhs_elem) | Type::Slice(rhs_elem) => types_compatible(elem, rhs_elem),
+                        Type::Array(rhs_elem) | Type::Slice(rhs_elem) => {
+                            types_compatible(elem, rhs_elem)
+                        }
                         _ => false,
                     };
                     if !compatible {
-                        ctx.error(format!("Cannot assign {} to slice of type {}", right, object_ty), b.span);
+                        ctx.error(
+                            format!("Cannot assign {} to slice of type {}", right, object_ty),
+                            b.span,
+                        );
                     }
                     return Type::Unit;
                 }
 
                 if let Some(sig) = ctx.lookup_method_signature(&object_ty, "set_slice") {
                     if sig.params.len() != 4 {
-                        ctx.error("'set_slice' hook must take exactly 3 arguments (start, end, value)".to_string(), b.span);
+                        ctx.error(
+                            "'set_slice' hook must take exactly 3 arguments (start, end, value)"
+                                .to_string(),
+                            b.span,
+                        );
                         return Type::Error;
                     }
                     if !sig.params[0].is_inout {
-                        ctx.error("'set_slice' hook receiver must be 'inout self'".to_string(), b.span);
+                        ctx.error(
+                            "'set_slice' hook receiver must be 'inout self'".to_string(),
+                            b.span,
+                        );
                     }
                     if sig.return_type != Type::Unit && sig.return_type != Type::Error {
                         ctx.error("'set_slice' hook must return Unit".to_string(), b.span);
                     }
                     if !types_compatible(&sig.params[1].ty, &start_ty) {
-                        ctx.error(format!("Start bound type mismatch: expected {}, found {}", sig.params[1].ty, start_ty), slc.start.span());
+                        ctx.error(
+                            format!(
+                                "Start bound type mismatch: expected {}, found {}",
+                                sig.params[1].ty, start_ty
+                            ),
+                            slc.start.span(),
+                        );
                     }
                     if !types_compatible(&sig.params[2].ty, &end_ty) {
-                        ctx.error(format!("End bound type mismatch: expected {}, found {}", sig.params[2].ty, end_ty), slc.end.span());
+                        ctx.error(
+                            format!(
+                                "End bound type mismatch: expected {}, found {}",
+                                sig.params[2].ty, end_ty
+                            ),
+                            slc.end.span(),
+                        );
                     }
                     if !types_compatible(&sig.params[3].ty, &right) {
-                        ctx.error(format!("Cannot assign {} to {}", right, sig.params[3].ty), b.right.span());
+                        ctx.error(
+                            format!("Cannot assign {} to {}", right, sig.params[3].ty),
+                            b.right.span(),
+                        );
                     }
                     return Type::Unit;
                 }
 
                 if object_ty != Type::Error {
-                    ctx.error(format!("Cannot assign to slice of type {} (missing 'set_slice' method)", object_ty), b.span);
+                    ctx.error(
+                        format!(
+                            "Cannot assign to slice of type {} (missing 'set_slice' method)",
+                            object_ty
+                        ),
+                        b.span,
+                    );
                 }
             }
         }
@@ -1907,8 +1991,21 @@ fn match_generic_types(
             }
             Ok(())
         }
-        (Type::Projection { base: b1, assoc: a1 }, Type::Projection { base: b2, assoc: a2 }) => {
-            if b1 == b2 && a1 == a2 { Ok(()) } else { Err(()) }
+        (
+            Type::Projection {
+                base: b1,
+                assoc: a1,
+            },
+            Type::Projection {
+                base: b2,
+                assoc: a2,
+            },
+        ) => {
+            if b1 == b2 && a1 == a2 {
+                Ok(())
+            } else {
+                Err(())
+            }
         }
         (Type::Projection { .. }, _) => Ok(()),
         (_, Type::Projection { .. }) => Ok(()),
@@ -1972,7 +2069,11 @@ fn check_function_call(
         (0..sig.params.len()).map(|_| None).collect();
     let mut named_keys = std::collections::HashSet::new();
 
-    let num_args = c.args.iter().filter(|a| matches!(a, HirCallArgument::Positional(_))).count();
+    let num_args = c
+        .args
+        .iter()
+        .filter(|a| matches!(a, HirCallArgument::Positional(_)))
+        .count();
     let mut type_params_skipped = 0;
     let mut param_idx = 0;
 
@@ -1980,10 +2081,13 @@ fn check_function_call(
         match arg {
             HirCallArgument::Positional(e) => {
                 // Determine if we should skip 'type' parameters
-                while param_idx < sig.params.len() && sig.params[param_idx].kind == tempra_ast::ParameterKind::Type {
+                while param_idx < sig.params.len()
+                    && sig.params[param_idx].kind == tempra_ast::ParameterKind::Type
+                {
                     let already_satisfied = explicit_type_args.is_some();
-                    let not_enough_args = (num_args - (param_idx - type_params_skipped)) < (sig.params.len() - param_idx);
-                    
+                    let not_enough_args = (num_args - (param_idx - type_params_skipped))
+                        < (sig.params.len() - param_idx);
+
                     if already_satisfied || not_enough_args {
                         param_idx += 1;
                         type_params_skipped += 1;
@@ -2272,14 +2376,14 @@ fn check_member(ctx: &mut TypeContext, m: &mut HirMember, _expected: Option<&Typ
         // Check if this looks like an associated type projection attempt
         let is_projection_attempt = match inner.as_ref() {
             // T.Item where T is a generic param constrained to an interface
-            Type::GenericParam { id, .. } => {
-                ctx.current_generic_params_info.iter()
-                    .find(|p| p.id == *id)
-                    .and_then(|p| p.constraint.as_deref())
-                    .and_then(|iface| ctx.interfaces.get(iface))
-                    .map(|iface| iface.associated_types.contains(&m.field))
-                    .unwrap_or(false)
-            }
+            Type::GenericParam { id, .. } => ctx
+                .current_generic_params_info
+                .iter()
+                .find(|p| p.id == *id)
+                .and_then(|p| p.constraint.as_deref())
+                .and_then(|iface| ctx.interfaces.get(iface))
+                .map(|iface| iface.associated_types.contains(&m.field))
+                .unwrap_or(false),
             // MyIter.Item where MyIter is a concrete type satisfying some interface
             other => {
                 let interfaces = ctx.interfaces.clone();
@@ -2352,10 +2456,7 @@ fn check_index(ctx: &mut TypeContext, i: &mut HirIndex) -> Type {
 
     if object_ty != Type::Error {
         ctx.error(
-            format!(
-                "Cannot index type {} (missing 'get' method)",
-                object_ty
-            ),
+            format!("Cannot index type {} (missing 'get' method)", object_ty),
             i.span,
         );
     }
@@ -2391,10 +2492,7 @@ fn check_slice(ctx: &mut TypeContext, s: &mut HirSlice) -> Type {
 
     if object_ty != Type::Error {
         ctx.error(
-            format!(
-                "cannot slice type {} (missing 'slice' method)",
-                object_ty
-            ),
+            format!("cannot slice type {} (missing 'slice' method)", object_ty),
             s.span,
         );
     }
@@ -2407,13 +2505,7 @@ fn check_receiver_mutable(ctx: &mut TypeContext, expr: &HirExpression, span: Spa
         HirExpression::Name(_, name) => {
             if let Some(info) = ctx.scopes.lookup(name) {
                 if !info.is_mutable {
-                    ctx.error(
-                        format!(
-                            "cannot mutate immutable value '{}'",
-                            name
-                        ),
-                        span,
-                    );
+                    ctx.error(format!("cannot mutate immutable value '{}'", name), span);
                 }
             }
         }
@@ -3736,11 +3828,15 @@ pub(crate) fn satisfies_interface(ctx: &mut TypeContext, ty: &Type, interface_na
     }
     if let Type::Projection { base, assoc } = ty {
         if interface_name == "Iterator" && assoc == "Iter" {
-             if let Some(p) = ctx.current_generic_params_info.iter().find(|p| p.id == *base) {
-                 if p.constraint.as_deref() == Some("Iterable") {
-                     return true;
-                 }
-             }
+            if let Some(p) = ctx
+                .current_generic_params_info
+                .iter()
+                .find(|p| p.id == *base)
+            {
+                if p.constraint.as_deref() == Some("Iterable") {
+                    return true;
+                }
+            }
         }
     }
     let interface = match ctx.interfaces.get(interface_name) {
@@ -3803,7 +3899,9 @@ pub(crate) fn satisfies_interface(ctx: &mut TypeContext, ty: &Type, interface_na
                 }
 
                 if method_match {
-                    if let Err(e) = unify_associated(&req_ret, &sig.return_type, interface_name, &mut mappings) {
+                    if let Err(e) =
+                        unify_associated(&req_ret, &sig.return_type, interface_name, &mut mappings)
+                    {
                         ctx.error(e, tempra_span::Span::new(0, 0));
                         method_match = false;
                     }
@@ -3889,11 +3987,15 @@ pub fn satisfies_interface_no_errors(ctx: &TypeContext, ty: &Type, interface_nam
     }
     if let Type::Projection { base, assoc } = ty {
         if interface_name == "Iterator" && assoc == "Iter" {
-             if let Some(p) = ctx.current_generic_params_info.iter().find(|p| p.id == *base) {
-                 if p.constraint.as_deref() == Some("Iterable") {
-                     return true;
-                 }
-             }
+            if let Some(p) = ctx
+                .current_generic_params_info
+                .iter()
+                .find(|p| p.id == *base)
+            {
+                if p.constraint.as_deref() == Some("Iterable") {
+                    return true;
+                }
+            }
         }
     }
     let interface = match ctx.interfaces.get(interface_name) {
@@ -3934,7 +4036,10 @@ pub fn satisfies_interface_no_errors(ctx: &TypeContext, ty: &Type, interface_nam
                         }
                     }
                 }
-                if method_match && unify_associated(&req_ret, &sig.return_type, interface_name, &mut mappings).is_err() {
+                if method_match
+                    && unify_associated(&req_ret, &sig.return_type, interface_name, &mut mappings)
+                        .is_err()
+                {
                     method_match = false;
                 }
                 if !method_match {
@@ -3983,7 +4088,10 @@ fn unify_associated(
                 if existing == actual {
                     return Ok(());
                 } else {
-                    return Err(format!("conflicting associated type inference for {}", name));
+                    return Err(format!(
+                        "conflicting associated type inference for {}",
+                        name
+                    ));
                 }
             }
             mappings.insert(name.clone(), actual.clone());

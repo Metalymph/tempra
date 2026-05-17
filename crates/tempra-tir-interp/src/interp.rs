@@ -103,9 +103,10 @@ impl<'a> Frame<'a> {
                             self.current_block = self.find_block_index(*f_target)?;
                         }
                         _ => {
-                            return Err(TirInterpError::TypeMismatch(
-                                format!("condbr condition must be Bool, got {:?}", cond),
-                            ));
+                            return Err(TirInterpError::TypeMismatch(format!(
+                                "condbr condition must be Bool, got {:?}",
+                                cond
+                            )));
                         }
                     }
                 }
@@ -146,15 +147,18 @@ impl<'a> Frame<'a> {
                 self.slots.insert(*slot_id, val);
             }
             TirInstr::Add(res, a, b) => {
-                let result = self.arith_op(*a, *b, "add", |l, r| l + r, |l, r| l + r, |l, r| l + r)?;
+                let result =
+                    self.arith_op(*a, *b, "add", |l, r| l + r, |l, r| l + r, |l, r| l + r)?;
                 self.values.insert(*res, result);
             }
             TirInstr::Sub(res, a, b) => {
-                let result = self.arith_op(*a, *b, "sub", |l, r| l - r, |l, r| l - r, |l, r| l - r)?;
+                let result =
+                    self.arith_op(*a, *b, "sub", |l, r| l - r, |l, r| l - r, |l, r| l - r)?;
                 self.values.insert(*res, result);
             }
             TirInstr::Mul(res, a, b) => {
-                let result = self.arith_op(*a, *b, "mul", |l, r| l * r, |l, r| l * r, |l, r| l * r)?;
+                let result =
+                    self.arith_op(*a, *b, "mul", |l, r| l * r, |l, r| l * r, |l, r| l * r)?;
                 self.values.insert(*res, result);
             }
             TirInstr::Div(res, a, b) => {
@@ -169,7 +173,8 @@ impl<'a> Frame<'a> {
                     }
                     _ => {}
                 }
-                let result = self.arith_op(*a, *b, "div", |l, r| l / r, |l, r| l / r, |l, r| l / r)?;
+                let result =
+                    self.arith_op(*a, *b, "div", |l, r| l / r, |l, r| l / r, |l, r| l / r)?;
                 self.values.insert(*res, result);
             }
             TirInstr::Eq(res, a, b) => {
@@ -179,11 +184,25 @@ impl<'a> Frame<'a> {
                 self.values.insert(*res, TirRuntimeValue::Bool(result));
             }
             TirInstr::Lt(res, a, b) => {
-                let result = self.cmp_op(*a, *b, "lt", |l, r| l < r, |l, r| l < r, |l: f64, r: f64| l < r)?;
+                let result = self.cmp_op(
+                    *a,
+                    *b,
+                    "lt",
+                    |l, r| l < r,
+                    |l, r| l < r,
+                    |l: f64, r: f64| l < r,
+                )?;
                 self.values.insert(*res, TirRuntimeValue::Bool(result));
             }
             TirInstr::Gt(res, a, b) => {
-                let result = self.cmp_op(*a, *b, "gt", |l, r| l > r, |l, r| l > r, |l: f64, r: f64| l > r)?;
+                let result = self.cmp_op(
+                    *a,
+                    *b,
+                    "gt",
+                    |l, r| l > r,
+                    |l, r| l > r,
+                    |l: f64, r: f64| l > r,
+                )?;
                 self.values.insert(*res, TirRuntimeValue::Bool(result));
             }
             TirInstr::And(res, a, b) => {

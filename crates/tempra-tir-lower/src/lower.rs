@@ -35,7 +35,7 @@ pub fn map_type(ty: &Type) -> Result<TirType, TirLowerError> {
         }
         Type::Unknown => Err(TirLowerError::UnsupportedType("Unknown".to_string())),
         Type::Error => Err(TirLowerError::UnsupportedType("Error".to_string())),
-        
+
         Type::Array(inner) => Ok(TirType::Array(Box::new(map_type(inner)?))),
         Type::Slice(inner) => Ok(TirType::Slice(Box::new(map_type(inner)?))),
         Type::Tuple(_) => Err(TirLowerError::UnsupportedType("Tuple".to_string())),
@@ -48,7 +48,9 @@ pub fn map_type(ty: &Type) -> Result<TirType, TirLowerError> {
         Type::BuiltinError => Err(TirLowerError::UnsupportedType("BuiltinError".to_string())),
         Type::Namespace(_) => Err(TirLowerError::UnsupportedType("Namespace".to_string())),
         Type::Function(_, _) => Err(TirLowerError::UnsupportedType("Function".to_string())),
-        Type::GenericParam { .. } => Err(TirLowerError::UnsupportedType("GenericParam".to_string())),
+        Type::GenericParam { .. } => {
+            Err(TirLowerError::UnsupportedType("GenericParam".to_string()))
+        }
         Type::Meta(_) => Err(TirLowerError::UnsupportedType("Meta".to_string())),
         Type::Projection { .. } => Err(TirLowerError::UnsupportedType("Projection".to_string())),
         Type::Interface(_) => Err(TirLowerError::UnsupportedType("Interface".to_string())),
@@ -81,17 +83,44 @@ pub fn unmap_type(tir_ty: &TirType) -> Result<Type, TirLowerError> {
 }
 
 /// Resolve an HirType to a semantic Type. Minimal — only handles what Phase 14.4 needs.
-fn resolve_hir_type(hir_ty: &HirType, _type_ctx: &TypeContext, self_ty: Option<&Type>) -> Result<Type, TirLowerError> {
+fn resolve_hir_type(
+    hir_ty: &HirType,
+    _type_ctx: &TypeContext,
+    self_ty: Option<&Type>,
+) -> Result<Type, TirLowerError> {
     match hir_ty {
         HirType::Named(_, name) => {
             let ty = tempra_typeck::types::resolve_named_type(name);
             if ty == Type::Unknown {
                 if let Some(info) = _type_ctx.structs.get(name) {
-                    Ok(Type::Struct(name.clone(), info.generic_params.iter().map(|p| Type::GenericParam { id: p.id, name: p.name.clone(), constraint: p.constraint.clone() }).collect()))
+                    Ok(Type::Struct(
+                        name.clone(),
+                        info.generic_params
+                            .iter()
+                            .map(|p| Type::GenericParam {
+                                id: p.id,
+                                name: p.name.clone(),
+                                constraint: p.constraint.clone(),
+                            })
+                            .collect(),
+                    ))
                 } else if let Some(info) = _type_ctx.enums.get(name) {
-                    Ok(Type::Enum(name.clone(), info.generic_params.iter().map(|p| Type::GenericParam { id: p.id, name: p.name.clone(), constraint: p.constraint.clone() }).collect()))
+                    Ok(Type::Enum(
+                        name.clone(),
+                        info.generic_params
+                            .iter()
+                            .map(|p| Type::GenericParam {
+                                id: p.id,
+                                name: p.name.clone(),
+                                constraint: p.constraint.clone(),
+                            })
+                            .collect(),
+                    ))
                 } else {
-                    Err(TirLowerError::UnsupportedType(format!("Unknown type name: {}", name)))
+                    Err(TirLowerError::UnsupportedType(format!(
+                        "Unknown type name: {}",
+                        name
+                    )))
                 }
             } else {
                 Ok(ty)
@@ -130,16 +159,24 @@ fn resolve_hir_type(hir_ty: &HirType, _type_ctx: &TypeContext, self_ty: Option<&
                     return Ok(Type::Result(Box::new(ok_ty), Box::new(err_ty)));
                 }
             }
-            Err(TirLowerError::UnsupportedType(format!("Cannot resolve HirType::Apply: {:?}", hir_ty)))
+            Err(TirLowerError::UnsupportedType(format!(
+                "Cannot resolve HirType::Apply: {:?}",
+                hir_ty
+            )))
         }
         HirType::SelfType(_) => {
             if let Some(sty) = self_ty {
                 Ok(sty.clone())
             } else {
-                Err(TirLowerError::UnsupportedType("Self type used outside of method".to_string()))
+                Err(TirLowerError::UnsupportedType(
+                    "Self type used outside of method".to_string(),
+                ))
             }
         }
-        _ => Err(TirLowerError::UnsupportedType(format!("Cannot resolve HirType: {:?}", hir_ty))),
+        _ => Err(TirLowerError::UnsupportedType(format!(
+            "Cannot resolve HirType: {:?}",
+            hir_ty
+        ))),
     }
 }
 
@@ -153,7 +190,12 @@ pub struct LowerContext<'a> {
 }
 
 impl<'a> LowerContext<'a> {
-    pub fn new(builder: FunctionBuilder, type_ctx: &'a TypeContext, module_builder: &'a mut ModuleBuilder, self_ty: Option<Type>) -> Self {
+    pub fn new(
+        builder: FunctionBuilder,
+        type_ctx: &'a TypeContext,
+        module_builder: &'a mut ModuleBuilder,
+        self_ty: Option<Type>,
+    ) -> Self {
         Self {
             builder,
             type_ctx,
@@ -172,7 +214,8 @@ impl<'a> LowerContext<'a> {
                     self.infer_expr_type(&l.value)?
                 };
                 let tir_ty = map_type(&ty)?;
-                self.locals.insert(l.name.clone(), (TirSlotId(0), tir_ty, false));
+                self.locals
+                    .insert(l.name.clone(), (TirSlotId(0), tir_ty, false));
             }
             HirStatement::Var(v) => {
                 let ty = if let Some(ht) = &v.ty {
@@ -181,7 +224,8 @@ impl<'a> LowerContext<'a> {
                     self.infer_expr_type(&v.value)?
                 };
                 let tir_ty = map_type(&ty)?;
-                self.locals.insert(v.name.clone(), (TirSlotId(0), tir_ty, true));
+                self.locals
+                    .insert(v.name.clone(), (TirSlotId(0), tir_ty, true));
             }
             _ => {}
         }
@@ -193,13 +237,13 @@ impl<'a> LowerContext<'a> {
         for stmt in &block.statements {
             self.collect_locals_from_statement(stmt)?;
         }
-        
+
         let res = if let Some(HirStatement::Expr(expr)) = block.statements.last() {
             self.infer_expr_type(expr)
         } else {
             Ok(Type::Unit)
         };
-        
+
         self.locals = old_locals;
         res
     }
@@ -221,17 +265,29 @@ impl<'a> LowerContext<'a> {
                     Err(TirLowerError::UnknownLocal(name.clone(), *span))
                 }
             }
-            HirExpression::Binary(b) => {
-                match b.op {
-                    HirBinaryOp::Add | HirBinaryOp::Sub | HirBinaryOp::Mul | HirBinaryOp::Div => {
-                        self.infer_expr_type(&b.left)
-                    }
-                    HirBinaryOp::Eq | HirBinaryOp::NotEq | HirBinaryOp::Less | HirBinaryOp::LessEq | HirBinaryOp::Greater | HirBinaryOp::GreaterEq | HirBinaryOp::And | HirBinaryOp::Or => Ok(Type::Bool),
-                    _ => Err(TirLowerError::UnsupportedExpr("binary op type".into(), b.span)),
+            HirExpression::Binary(b) => match b.op {
+                HirBinaryOp::Add | HirBinaryOp::Sub | HirBinaryOp::Mul | HirBinaryOp::Div => {
+                    self.infer_expr_type(&b.left)
                 }
-            }
+                HirBinaryOp::Eq
+                | HirBinaryOp::NotEq
+                | HirBinaryOp::Less
+                | HirBinaryOp::LessEq
+                | HirBinaryOp::Greater
+                | HirBinaryOp::GreaterEq
+                | HirBinaryOp::And
+                | HirBinaryOp::Or => Ok(Type::Bool),
+                _ => Err(TirLowerError::UnsupportedExpr(
+                    "binary op type".into(),
+                    b.span,
+                )),
+            },
             HirExpression::Unary(u) => {
-                if u.op == HirUnaryOp::Not { Ok(Type::Bool) } else { self.infer_expr_type(&u.expr) }
+                if u.op == HirUnaryOp::Not {
+                    Ok(Type::Bool)
+                } else {
+                    self.infer_expr_type(&u.expr)
+                }
             }
             HirExpression::Array(_, elements) => {
                 if let Some(first) = elements.first() {
@@ -245,14 +301,20 @@ impl<'a> LowerContext<'a> {
                 let obj_ty = self.infer_expr_type(&i.object)?;
                 match obj_ty {
                     Type::Array(inner) | Type::Slice(inner) => Ok(*inner),
-                    _ => Err(TirLowerError::UnsupportedExpr("Indexing non-array/slice".into(), i.span)),
+                    _ => Err(TirLowerError::UnsupportedExpr(
+                        "Indexing non-array/slice".into(),
+                        i.span,
+                    )),
                 }
             }
             HirExpression::Slice(s) => {
                 let obj_ty = self.infer_expr_type(&s.object)?;
                 match obj_ty {
                     Type::Array(inner) | Type::Slice(inner) => Ok(Type::Slice(inner)),
-                    _ => Err(TirLowerError::UnsupportedExpr("Slicing non-array/slice".into(), s.span)),
+                    _ => Err(TirLowerError::UnsupportedExpr(
+                        "Slicing non-array/slice".into(),
+                        s.span,
+                    )),
                 }
             }
             HirExpression::Member(m) => {
@@ -275,7 +337,10 @@ impl<'a> LowerContext<'a> {
                         }
                     }
                 }
-                Err(TirLowerError::UnsupportedExpr(format!("Member access: {}", m.field), m.span))
+                Err(TirLowerError::UnsupportedExpr(
+                    format!("Member access: {}", m.field),
+                    m.span,
+                ))
             }
             HirExpression::StructLiteral(s) => {
                 let ty = resolve_hir_type(&s.ty, self.type_ctx, self.self_ty.as_ref())?;
@@ -291,7 +356,10 @@ impl<'a> LowerContext<'a> {
                     }
 
                     let obj_ty = self.infer_expr_type(&m.object)?;
-                    if let Some(sig) = self.type_ctx.lookup_direct_method_signature(&obj_ty, &m.field) {
+                    if let Some(sig) = self
+                        .type_ctx
+                        .lookup_direct_method_signature(&obj_ty, &m.field)
+                    {
                         return Ok(sig.return_type.clone());
                     }
                 }
@@ -313,12 +381,18 @@ impl<'a> LowerContext<'a> {
                             if let Some(sig) = self.type_ctx.functions.get(name.as_str()) {
                                 Ok(sig.return_type.clone())
                             } else {
-                                Err(TirLowerError::UnsupportedExpr(format!("Cannot infer call type for {}", name), c.span))
+                                Err(TirLowerError::UnsupportedExpr(
+                                    format!("Cannot infer call type for {}", name),
+                                    c.span,
+                                ))
                             }
                         }
                     }
                 } else {
-                    Err(TirLowerError::UnsupportedExpr("Cannot infer call type for complex callee".into(), c.span))
+                    Err(TirLowerError::UnsupportedExpr(
+                        "Cannot infer call type for complex callee".into(),
+                        c.span,
+                    ))
                 }
             }
             HirExpression::Try(e) => {
@@ -326,7 +400,8 @@ impl<'a> LowerContext<'a> {
                 match inner_ty {
                     Type::Result(ok, _) => Ok(*ok),
                     _ => Err(TirLowerError::UnsupportedExpr(
-                        "'?' operator expects a Result type".into(), e.span,
+                        "'?' operator expects a Result type".into(),
+                        e.span,
                     )),
                 }
             }
@@ -340,12 +415,16 @@ impl<'a> LowerContext<'a> {
                 };
                 let tir_element_ty = map_type(&element_ty)?;
                 let old_locals = self.locals.clone();
-                self.locals.insert(f.binding.clone(), (TirSlotId(0), tir_element_ty, false));
+                self.locals
+                    .insert(f.binding.clone(), (TirSlotId(0), tir_element_ty, false));
                 let body_ty = self.infer_block_type(&f.body)?;
                 self.locals = old_locals;
                 Ok(Type::Array(Box::new(body_ty)))
             }
-            _ => Err(TirLowerError::UnsupportedExpr(format!("{:?}", expr), expr.span())),
+            _ => Err(TirLowerError::UnsupportedExpr(
+                format!("{:?}", expr),
+                expr.span(),
+            )),
         }
     }
 
@@ -364,11 +443,13 @@ impl<'a> LowerContext<'a> {
                 };
                 let tir_ty = map_type(&val_ty)?;
                 let slot = self.builder.build_slot(tir_ty.clone(), Some(&l.name))?;
-                self.locals.insert(l.name.clone(), (slot, tir_ty.clone(), false));
+                self.locals
+                    .insert(l.name.clone(), (slot, tir_ty.clone(), false));
 
                 let val = match &l.value {
                     HirExpression::Name(_, name) if name == "None" => {
-                        self.builder.build_make(tir_ty.clone(), Some("None".to_string()), vec![])?
+                        self.builder
+                            .build_make(tir_ty.clone(), Some("None".to_string()), vec![])?
                     }
                     HirExpression::Array(_, elements) if elements.is_empty() => {
                         self.builder.build_make(tir_ty.clone(), None, vec![])?
@@ -386,11 +467,13 @@ impl<'a> LowerContext<'a> {
                 };
                 let tir_ty = map_type(&val_ty)?;
                 let slot = self.builder.build_slot(tir_ty.clone(), Some(&v.name))?;
-                self.locals.insert(v.name.clone(), (slot, tir_ty.clone(), true));
+                self.locals
+                    .insert(v.name.clone(), (slot, tir_ty.clone(), true));
 
                 let val = match &v.value {
                     HirExpression::Name(_, name) if name == "None" => {
-                        self.builder.build_make(tir_ty.clone(), Some("None".to_string()), vec![])?
+                        self.builder
+                            .build_make(tir_ty.clone(), Some("None".to_string()), vec![])?
                     }
                     HirExpression::Array(_, elements) if elements.is_empty() => {
                         self.builder.build_make(tir_ty.clone(), None, vec![])?
@@ -409,10 +492,11 @@ impl<'a> LowerContext<'a> {
                 self.builder.build_ret(None)?;
                 Ok(())
             }
-            HirStatement::For(f) => {
-                self.lower_for(f)
-            }
-            _ => Err(TirLowerError::UnsupportedStmt(format!("{:?}", stmt), stmt.span())),
+            HirStatement::For(f) => self.lower_for(f),
+            _ => Err(TirLowerError::UnsupportedStmt(
+                format!("{:?}", stmt),
+                stmt.span(),
+            )),
         }
     }
 
@@ -425,29 +509,40 @@ impl<'a> LowerContext<'a> {
             ));
         }
 
-        let element_ty = match &iterable_ty {
-            Type::Array(inner) | Type::Slice(inner) => inner.as_ref().clone(),
-            _ => return Err(TirLowerError::UnsupportedExpr(
-                format!("for-in currently only supports Array/Slice in experimental VM, found {}", iterable_ty),
-                f.iterable.span(),
-            )),
-        };
+        let element_ty =
+            match &iterable_ty {
+                Type::Array(inner) | Type::Slice(inner) => inner.as_ref().clone(),
+                _ => return Err(TirLowerError::UnsupportedExpr(
+                    format!(
+                        "for-in currently only supports Array/Slice in experimental VM, found {}",
+                        iterable_ty
+                    ),
+                    f.iterable.span(),
+                )),
+            };
 
         // 1. Lower iterable and store in a hidden slot
         let iter_val = self.lower_expression(&f.iterable)?;
         let tir_iterable_ty = map_type(&iterable_ty)?;
-        let iter_obj_slot = self.builder.build_slot(tir_iterable_ty, Some(&format!("$iter_obj_{}", f.span.start)))?;
+        let iter_obj_slot = self.builder.build_slot(
+            tir_iterable_ty,
+            Some(&format!("$iter_obj_{}", f.span.start)),
+        )?;
         self.builder.build_store(iter_obj_slot, iter_val)?;
 
         // 2. Initialize index slot
         let zero = self.builder.build_const(TirConst::Int64(0))?;
-        let idx_slot = self.builder.build_slot(TirType::Int64, Some(&format!("$idx_{}", f.span.start)))?;
+        let idx_slot = self
+            .builder
+            .build_slot(TirType::Int64, Some(&format!("$idx_{}", f.span.start)))?;
         self.builder.build_store(idx_slot, zero)?;
 
         // 3. Initialize length slot
         let loaded_iter = self.builder.build_load(iter_obj_slot)?;
         let len_val = self.builder.build_len(loaded_iter)?;
-        let len_slot = self.builder.build_slot(TirType::Int64, Some(&format!("$len_{}", f.span.start)))?;
+        let len_slot = self
+            .builder
+            .build_slot(TirType::Int64, Some(&format!("$len_{}", f.span.start)))?;
         self.builder.build_store(len_slot, len_val)?;
 
         // 4. Create blocks
@@ -467,25 +562,30 @@ impl<'a> LowerContext<'a> {
 
         // 6. Body Block
         self.builder.set_current_block(body_block);
-        
+
         // Load element
         let iter_obj_for_get = self.builder.build_load(iter_obj_slot)?;
         let idx_for_get = self.builder.build_load(idx_slot)?;
-        let element_val = self.builder.build_get_index(iter_obj_for_get, idx_for_get)?;
-        
+        let element_val = self
+            .builder
+            .build_get_index(iter_obj_for_get, idx_for_get)?;
+
         // Scope for loop variable
         let old_locals = self.locals.clone();
-        
+
         let tir_element_ty = map_type(&element_ty)?;
-        let x_slot = self.builder.build_slot(tir_element_ty.clone(), Some(&f.binding))?;
+        let x_slot = self
+            .builder
+            .build_slot(tir_element_ty.clone(), Some(&f.binding))?;
         self.builder.build_store(x_slot, element_val)?;
-        self.locals.insert(f.binding.clone(), (x_slot, tir_element_ty, false));
+        self.locals
+            .insert(f.binding.clone(), (x_slot, tir_element_ty, false));
 
         // Lower body statements
         for stmt in &f.body.statements {
             self.lower_statement(stmt)?;
         }
-        
+
         // Restore locals scope
         self.locals = old_locals;
 
@@ -522,7 +622,9 @@ impl<'a> LowerContext<'a> {
         if let Some(v) = last_val {
             Ok(v)
         } else {
-            self.builder.build_const(TirConst::Unit).map_err(|e| e.into())
+            self.builder
+                .build_const(TirConst::Unit)
+                .map_err(|e| e.into())
         }
     }
 
@@ -535,20 +637,27 @@ impl<'a> LowerContext<'a> {
             ));
         }
 
-        let element_ty = match &iterable_ty {
-            Type::Array(inner) | Type::Slice(inner) => inner.as_ref().clone(),
-            _ => return Err(TirLowerError::UnsupportedExpr(
-                format!("for-expr currently only supports Array/Slice in experimental VM, found {}", iterable_ty),
-                f.iterable.span(),
-            )),
-        };
-        
+        let element_ty =
+            match &iterable_ty {
+                Type::Array(inner) | Type::Slice(inner) => inner.as_ref().clone(),
+                _ => return Err(TirLowerError::UnsupportedExpr(
+                    format!(
+                        "for-expr currently only supports Array/Slice in experimental VM, found {}",
+                        iterable_ty
+                    ),
+                    f.iterable.span(),
+                )),
+            };
+
         let tir_element_ty = map_type(&element_ty)?;
 
         // 1. Temporarily insert binding for inference of result array type
         let old_locals_for_inf = self.locals.clone();
         // Use a dummy TirValueId(0) as it's not used during inference
-        self.locals.insert(f.binding.clone(), (TirSlotId(0), tir_element_ty.clone(), false));
+        self.locals.insert(
+            f.binding.clone(),
+            (TirSlotId(0), tir_element_ty.clone(), false),
+        );
         let body_ty = self.infer_block_type(&f.body)?;
         self.locals = old_locals_for_inf;
 
@@ -556,25 +665,36 @@ impl<'a> LowerContext<'a> {
         let result_array_ty = TirType::Array(Box::new(tir_body_ty));
 
         // 2. Initialize result accumulator slot with empty array
-        let empty_arr = self.builder.build_make(result_array_ty.clone(), None, vec![])?;
-        let res_slot = self.builder.build_slot(result_array_ty, Some(&format!("$for_res_{}", f.span.start)))?;
+        let empty_arr = self
+            .builder
+            .build_make(result_array_ty.clone(), None, vec![])?;
+        let res_slot = self
+            .builder
+            .build_slot(result_array_ty, Some(&format!("$for_res_{}", f.span.start)))?;
         self.builder.build_store(res_slot, empty_arr)?;
 
         // 3. Lower iterable and store in a hidden slot
         let iter_val = self.lower_expression(&f.iterable)?;
         let tir_iterable_ty = map_type(&iterable_ty)?;
-        let iter_obj_slot = self.builder.build_slot(tir_iterable_ty, Some(&format!("$iter_obj_{}", f.span.start)))?;
+        let iter_obj_slot = self.builder.build_slot(
+            tir_iterable_ty,
+            Some(&format!("$iter_obj_{}", f.span.start)),
+        )?;
         self.builder.build_store(iter_obj_slot, iter_val)?;
 
         // 4. Initialize index slot
         let zero = self.builder.build_const(TirConst::Int64(0))?;
-        let idx_slot = self.builder.build_slot(TirType::Int64, Some(&format!("$idx_{}", f.span.start)))?;
+        let idx_slot = self
+            .builder
+            .build_slot(TirType::Int64, Some(&format!("$idx_{}", f.span.start)))?;
         self.builder.build_store(idx_slot, zero)?;
 
         // 5. Initialize length slot
         let loaded_iter = self.builder.build_load(iter_obj_slot)?;
         let len_val = self.builder.build_len(loaded_iter)?;
-        let len_slot = self.builder.build_slot(TirType::Int64, Some(&format!("$len_{}", f.span.start)))?;
+        let len_slot = self
+            .builder
+            .build_slot(TirType::Int64, Some(&format!("$len_{}", f.span.start)))?;
         self.builder.build_store(len_slot, len_val)?;
 
         // 6. Create blocks
@@ -594,18 +714,23 @@ impl<'a> LowerContext<'a> {
 
         // 8. Body Block
         self.builder.set_current_block(body_block);
-        
+
         // Load element
         let iter_obj_for_get = self.builder.build_load(iter_obj_slot)?;
         let idx_for_get = self.builder.build_load(idx_slot)?;
-        let element_val = self.builder.build_get_index(iter_obj_for_get, idx_for_get)?;
-        
+        let element_val = self
+            .builder
+            .build_get_index(iter_obj_for_get, idx_for_get)?;
+
         // Scope for loop variable
         let old_locals = self.locals.clone();
-        
-        let x_slot = self.builder.build_slot(tir_element_ty.clone(), Some(&f.binding))?;
+
+        let x_slot = self
+            .builder
+            .build_slot(tir_element_ty.clone(), Some(&f.binding))?;
         self.builder.build_store(x_slot, element_val)?;
-        self.locals.insert(f.binding.clone(), (x_slot, tir_element_ty, false));
+        self.locals
+            .insert(f.binding.clone(), (x_slot, tir_element_ty, false));
 
         // Lower body statements
         let mut last_val = None;
@@ -620,18 +745,20 @@ impl<'a> LowerContext<'a> {
                 self.lower_statement(stmt)?;
             }
         }
-        
+
         let body_val = if let Some(v) = last_val {
             v
         } else {
-            self.builder.build_const(TirConst::Unit).map_err(TirLowerError::from)?
+            self.builder
+                .build_const(TirConst::Unit)
+                .map_err(TirLowerError::from)?
         };
-        
+
         // Push result to accumulator
         let cur_res = self.builder.build_load(res_slot)?;
         let next_res = self.builder.build_array_push(cur_res, body_val)?;
         self.builder.build_store(res_slot, next_res)?;
-        
+
         // Restore locals scope
         self.locals = old_locals;
 
@@ -646,38 +773,52 @@ impl<'a> LowerContext<'a> {
 
         // 9. Exit Block
         self.builder.set_current_block(exit_block);
-        self.builder.build_load(res_slot).map_err(TirLowerError::from)
+        self.builder
+            .build_load(res_slot)
+            .map_err(TirLowerError::from)
     }
 
     pub fn lower_expression(&mut self, expr: &HirExpression) -> Result<TirValueId, TirLowerError> {
         match expr {
             HirExpression::Integer(span, s) => {
-                let val = s.parse::<i64>().map_err(|_| TirLowerError::UnsupportedExpr("Invalid Int64 literal".into(), *span))?;
-                self.builder.build_const(TirConst::Int64(val)).map_err(|e| e.into())
+                let val = s.parse::<i64>().map_err(|_| {
+                    TirLowerError::UnsupportedExpr("Invalid Int64 literal".into(), *span)
+                })?;
+                self.builder
+                    .build_const(TirConst::Int64(val))
+                    .map_err(|e| e.into())
             }
-            HirExpression::Bool(_, b) => {
-                self.builder.build_const(TirConst::Bool(*b)).map_err(|e| e.into())
-            }
+            HirExpression::Bool(_, b) => self
+                .builder
+                .build_const(TirConst::Bool(*b))
+                .map_err(|e| e.into()),
             HirExpression::String(_, s) => {
                 let unquoted = if s.starts_with('"') && s.ends_with('"') && s.len() >= 2 {
                     &s[1..s.len() - 1]
                 } else {
                     s.as_str()
                 };
-                self.builder.build_const(TirConst::String(unquoted.to_string())).map_err(|e| e.into())
+                self.builder
+                    .build_const(TirConst::String(unquoted.to_string()))
+                    .map_err(|e| e.into())
             }
             HirExpression::Name(span, name) => {
                 if name == "None" {
                     let ty = self.infer_expr_type(expr)?;
                     let tir_ty = map_type(&ty)?;
-                    return self.builder.build_make(tir_ty, Some("None".to_string()), vec![])
+                    return self
+                        .builder
+                        .build_make(tir_ty, Some("None".to_string()), vec![])
                         .map_err(|e| e.into());
                 }
                 if let Some((slot, _ty, _)) = self.locals.get(name) {
                     self.builder.build_load(*slot).map_err(|e| e.into())
                 } else {
                     let keys: Vec<_> = self.locals.keys().cloned().collect();
-                    Err(TirLowerError::UnsupportedExpr(format!("Unknown local: {}. Available: {:?}", name, keys), *span))
+                    Err(TirLowerError::UnsupportedExpr(
+                        format!("Unknown local: {}. Available: {:?}", name, keys),
+                        *span,
+                    ))
                 }
             }
             HirExpression::Binary(b) => {
@@ -690,12 +831,18 @@ impl<'a> LowerContext<'a> {
                         };
 
                         if !mutable {
-                            return Err(TirLowerError::UnsupportedStmt("cannot assign to let binding".into(), *span));
+                            return Err(TirLowerError::UnsupportedStmt(
+                                "cannot assign to let binding".into(),
+                                *span,
+                            ));
                         }
 
                         let val = self.lower_expression(&b.right)?;
                         self.builder.build_store(slot, val)?;
-                        return self.builder.build_const(TirConst::Unit).map_err(|e| e.into());
+                        return self
+                            .builder
+                            .build_const(TirConst::Unit)
+                            .map_err(|e| e.into());
                     } else if let HirExpression::Member(m) = &*b.left {
                         if let HirExpression::Name(span, name) = &*m.object {
                             let (slot, _ty, mutable) = if let Some(info) = self.locals.get(name) {
@@ -704,24 +851,40 @@ impl<'a> LowerContext<'a> {
                                 return Err(TirLowerError::UnknownLocal(name.clone(), *span));
                             };
                             if !mutable {
-                                return Err(TirLowerError::UnsupportedStmt("cannot assign to let binding".into(), *span));
+                                return Err(TirLowerError::UnsupportedStmt(
+                                    "cannot assign to let binding".into(),
+                                    *span,
+                                ));
                             }
                             let val = self.lower_expression(&b.right)?;
                             let obj = self.lower_expression(&m.object)?;
-                            let new_obj = self.builder.build_set(obj, tempra_tir::ir::TirKey::Field(m.field.clone()), val)?;
+                            let new_obj = self.builder.build_set(
+                                obj,
+                                tempra_tir::ir::TirKey::Field(m.field.clone()),
+                                val,
+                            )?;
                             self.builder.build_store(slot, new_obj)?;
-                            return self.builder.build_const(TirConst::Unit).map_err(|e| e.into());
+                            return self
+                                .builder
+                                .build_const(TirConst::Unit)
+                                .map_err(|e| e.into());
                         } else {
-                            return Err(TirLowerError::UnsupportedStmt("nested struct assignment not supported in v0".into(), b.span));
+                            return Err(TirLowerError::UnsupportedStmt(
+                                "nested struct assignment not supported in v0".into(),
+                                b.span,
+                            ));
                         }
                     } else {
-                        return Err(TirLowerError::UnsupportedStmt("non-local/non-member assignment not supported".into(), b.span));
+                        return Err(TirLowerError::UnsupportedStmt(
+                            "non-local/non-member assignment not supported".into(),
+                            b.span,
+                        ));
                     }
                 }
-                
+
                 let left = self.lower_expression(&b.left)?;
                 let right = self.lower_expression(&b.right)?;
-                
+
                 match b.op {
                     HirBinaryOp::Add => self.builder.build_add(left, right).map_err(|e| e.into()),
                     HirBinaryOp::Sub => self.builder.build_sub(left, right).map_err(|e| e.into()),
@@ -733,7 +896,9 @@ impl<'a> LowerContext<'a> {
                         self.builder.build_not(eq).map_err(|e| e.into())
                     }
                     HirBinaryOp::Less => self.builder.build_lt(left, right).map_err(|e| e.into()),
-                    HirBinaryOp::Greater => self.builder.build_gt(left, right).map_err(|e| e.into()),
+                    HirBinaryOp::Greater => {
+                        self.builder.build_gt(left, right).map_err(|e| e.into())
+                    }
                     HirBinaryOp::LessEq => {
                         let gt = self.builder.build_gt(left, right)?;
                         self.builder.build_not(gt).map_err(|e| e.into())
@@ -744,7 +909,10 @@ impl<'a> LowerContext<'a> {
                     }
                     HirBinaryOp::And => self.builder.build_and(left, right).map_err(|e| e.into()),
                     HirBinaryOp::Or => self.builder.build_or(left, right).map_err(|e| e.into()),
-                    _ => Err(TirLowerError::UnsupportedExpr(format!("Binary {:?}", b.op), b.span)),
+                    _ => Err(TirLowerError::UnsupportedExpr(
+                        format!("Binary {:?}", b.op),
+                        b.span,
+                    )),
                 }
             }
             HirExpression::Unary(u) => {
@@ -764,9 +932,9 @@ impl<'a> LowerContext<'a> {
                 let cond = self.lower_expression(&i.condition)?;
                 let mut t_block = self.builder.new_block();
                 let mut f_block = self.builder.new_block();
-                
+
                 self.builder.build_condbr(cond, t_block, f_block)?;
-                
+
                 // Then block
                 self.builder.set_current_block(t_block);
                 for stmt in &i.then_block.statements {
@@ -785,7 +953,10 @@ impl<'a> LowerContext<'a> {
                     } else if let HirExpression::If(_nested_if) = &**else_expr {
                         self.lower_expression(else_expr)?;
                     } else {
-                        return Err(TirLowerError::UnsupportedExpr("Else is not a block or if".into(), else_expr.span()));
+                        return Err(TirLowerError::UnsupportedExpr(
+                            "Else is not a block or if".into(),
+                            else_expr.span(),
+                        ));
                     }
                 }
                 f_block = self.builder.get_current_block().unwrap();
@@ -800,7 +971,7 @@ impl<'a> LowerContext<'a> {
                     Ok(TirValueId(0))
                 } else {
                     let end_block = self.builder.new_block();
-                    
+
                     if !t_terminated {
                         self.builder.set_current_block(t_block);
                         self.builder.build_br(end_block)?;
@@ -809,9 +980,11 @@ impl<'a> LowerContext<'a> {
                         self.builder.set_current_block(f_block);
                         self.builder.build_br(end_block)?;
                     }
-                    
+
                     self.builder.set_current_block(end_block);
-                    self.builder.build_const(TirConst::Unit).map_err(|e| e.into())
+                    self.builder
+                        .build_const(TirConst::Unit)
+                        .map_err(|e| e.into())
                 }
             }
             HirExpression::Call(c) => {
@@ -838,13 +1011,16 @@ impl<'a> LowerContext<'a> {
                     }
 
                     // Static method call resolution
-                    if let Some(sig) = self.type_ctx.lookup_direct_method_signature(&obj_ty, &m.field) {
+                    if let Some(sig) = self
+                        .type_ctx
+                        .lookup_direct_method_signature(&obj_ty, &m.field)
+                    {
                         let full_name = format!("{}.{}", obj_ty.get_name(), m.field);
                         let mut arg_values = Vec::new();
-                        
+
                         // 1. First argument is the receiver
                         arg_values.push(self.lower_expression(&m.object)?);
-                        
+
                         // 2. Following arguments
                         for arg in &c.args {
                             let arg_expr = match arg {
@@ -855,18 +1031,32 @@ impl<'a> LowerContext<'a> {
                         }
 
                         if sig.params.len() != arg_values.len() {
-                            return Err(TirLowerError::UnsupportedExpr(format!("wrong arity for method {}: expected {}, found {}", full_name, sig.params.len(), arg_values.len()), c.span));
+                            return Err(TirLowerError::UnsupportedExpr(
+                                format!(
+                                    "wrong arity for method {}: expected {}, found {}",
+                                    full_name,
+                                    sig.params.len(),
+                                    arg_values.len()
+                                ),
+                                c.span,
+                            ));
                         }
 
                         let func_id = self.module_builder.declare_function(&full_name);
-                        return self.builder.build_call(func_id, arg_values).map_err(|e| e.into());
+                        return self
+                            .builder
+                            .build_call(func_id, arg_values)
+                            .map_err(|e| e.into());
                     }
                 }
 
                 if let HirExpression::Name(span, name) = &*c.callee {
                     if matches!(name.as_str(), "Some" | "Ok" | "Err") {
                         if c.args.len() != 1 {
-                            return Err(TirLowerError::UnsupportedExpr(format!("wrong arity for {}", name), *span));
+                            return Err(TirLowerError::UnsupportedExpr(
+                                format!("wrong arity for {}", name),
+                                *span,
+                            ));
                         }
                         let arg_expr = match &c.args[0] {
                             HirCallArgument::Positional(e) => e,
@@ -880,14 +1070,25 @@ impl<'a> LowerContext<'a> {
                         } else {
                             TirType::Result(Box::new(arg_tir_ty), Box::new(TirType::Unit))
                         };
-                        return self.builder.build_make(ty, Some(name.clone()), vec![arg_val]).map_err(|e| e.into());
+                        return self
+                            .builder
+                            .build_make(ty, Some(name.clone()), vec![arg_val])
+                            .map_err(|e| e.into());
                     }
 
                     if let Some(sig) = self.type_ctx.functions.get(name) {
                         if sig.params.len() != c.args.len() {
-                            return Err(TirLowerError::UnsupportedExpr(format!("wrong arity for call to {}: expected {}, found {}", name, sig.params.len(), c.args.len()), c.span));
+                            return Err(TirLowerError::UnsupportedExpr(
+                                format!(
+                                    "wrong arity for call to {}: expected {}, found {}",
+                                    name,
+                                    sig.params.len(),
+                                    c.args.len()
+                                ),
+                                c.span,
+                            ));
                         }
-                        
+
                         let mut arg_values = Vec::new();
                         for arg in &c.args {
                             let arg_expr = match arg {
@@ -896,14 +1097,20 @@ impl<'a> LowerContext<'a> {
                             };
                             arg_values.push(self.lower_expression(arg_expr)?);
                         }
-                        
+
                         let func_id = self.module_builder.declare_function(name);
-                        return self.builder.build_call(func_id, arg_values).map_err(|e| e.into());
+                        return self
+                            .builder
+                            .build_call(func_id, arg_values)
+                            .map_err(|e| e.into());
                     } else {
                         return Err(TirLowerError::UnknownFunction(name.clone(), *span));
                     }
                 }
-                Err(TirLowerError::UnsupportedExpr("Complex call resolution not supported in Phase 12.2".into(), c.span))
+                Err(TirLowerError::UnsupportedExpr(
+                    "Complex call resolution not supported in Phase 12.2".into(),
+                    c.span,
+                ))
             }
             HirExpression::Try(e) => {
                 // Desugar expr? into: tag/eq/condbr/unwrap/make/ret
@@ -911,13 +1118,18 @@ impl<'a> LowerContext<'a> {
                 let r_val = self.lower_expression(&e.expr)?;
 
                 // Step 2: Store in a slot so both branches can access it
-                let tmp_slot = self.builder.build_slot(TirType::Result(Box::new(TirType::Unit), Box::new(TirType::Unit)), Some("__try_tmp"))?;
+                let tmp_slot = self.builder.build_slot(
+                    TirType::Result(Box::new(TirType::Unit), Box::new(TirType::Unit)),
+                    Some("__try_tmp"),
+                )?;
                 self.builder.build_store(tmp_slot, r_val)?;
 
                 // Step 3: Tag the result and compare to "Err"
                 let r_for_tag = self.builder.build_load(tmp_slot)?;
                 let tag_val = self.builder.build_tag(r_for_tag)?;
-                let err_str = self.builder.build_const(TirConst::String("Err".to_string()))?;
+                let err_str = self
+                    .builder
+                    .build_const(TirConst::String("Err".to_string()))?;
                 let is_err = self.builder.build_eq(tag_val, err_str)?;
 
                 // Step 4: Create err_block and ok_block
@@ -931,7 +1143,11 @@ impl<'a> LowerContext<'a> {
                 let err_payload = self.builder.build_unwrap(r_err, "Err".to_string(), 0)?;
                 // Use the enclosing function's return type for the Make
                 let fn_ret_ty = self.builder.func.return_type.clone();
-                let err_out = self.builder.build_make(fn_ret_ty, Some("Err".to_string()), vec![err_payload])?;
+                let err_out = self.builder.build_make(
+                    fn_ret_ty,
+                    Some("Err".to_string()),
+                    vec![err_payload],
+                )?;
                 self.builder.build_ret(Some(err_out))?;
 
                 // Step 6: ok_block — unwrap Ok payload, continue
@@ -950,9 +1166,16 @@ impl<'a> LowerContext<'a> {
                 }
                 let struct_name = match &s.ty {
                     tempra_hir::hir::HirType::Named(_, n) => n.clone(),
-                    _ => return Err(TirLowerError::UnsupportedExpr("StructLiteral with non-struct type".into(), s.span)),
+                    _ => {
+                        return Err(TirLowerError::UnsupportedExpr(
+                            "StructLiteral with non-struct type".into(),
+                            s.span,
+                        ))
+                    }
                 };
-                self.builder.build_make_struct(struct_name, field_vals).map_err(|e| e.into())
+                self.builder
+                    .build_make_struct(struct_name, field_vals)
+                    .map_err(|e| e.into())
             }
             HirExpression::IsPattern(i) => self.lower_is_pattern(i),
             HirExpression::Array(_, elements) => {
@@ -962,12 +1185,17 @@ impl<'a> LowerContext<'a> {
                 }
                 let hir_ty = self.infer_expr_type(expr)?;
                 let tir_ty = map_type(&hir_ty)?;
-                self.builder.build_make(tir_ty, None, vals).map_err(|e| e.into())
+                self.builder
+                    .build_make(tir_ty, None, vals)
+                    .map_err(|e| e.into())
             }
             HirExpression::Index(i) => {
                 let obj_ty = self.infer_expr_type(&i.object)?;
                 if matches!(obj_ty, Type::String) {
-                    return Err(TirLowerError::UnsupportedExpr("String indexing is not supported in the experimental VM".into(), i.span));
+                    return Err(TirLowerError::UnsupportedExpr(
+                        "String indexing is not supported in the experimental VM".into(),
+                        i.span,
+                    ));
                 }
                 let obj = self.lower_expression(&i.object)?;
                 let idx = self.lower_expression(&i.index)?;
@@ -976,12 +1204,17 @@ impl<'a> LowerContext<'a> {
             HirExpression::Slice(s) => {
                 let obj_ty = self.infer_expr_type(&s.object)?;
                 if matches!(obj_ty, Type::String) {
-                    return Err(TirLowerError::UnsupportedExpr("String slicing is not supported in the experimental VM".into(), s.span));
+                    return Err(TirLowerError::UnsupportedExpr(
+                        "String slicing is not supported in the experimental VM".into(),
+                        s.span,
+                    ));
                 }
                 let obj = self.lower_expression(&s.object)?;
                 let start = self.lower_expression(&s.start)?;
                 let end = self.lower_expression(&s.end)?;
-                self.builder.build_slice(obj, start, end).map_err(|e| e.into())
+                self.builder
+                    .build_slice(obj, start, end)
+                    .map_err(|e| e.into())
             }
             HirExpression::Member(m) => {
                 let obj_ty = self.infer_expr_type(&m.object)?;
@@ -996,19 +1229,31 @@ impl<'a> LowerContext<'a> {
                         return self.builder.build_size(obj).map_err(|e| e.into());
                     }
                 }
-                
+
                 // If it's a struct field access
                 if let tempra_hir::types::Type::Struct(_, _) = obj_ty {
                     let obj = self.lower_expression(&m.object)?;
-                    return self.builder.build_get(obj, tempra_tir::ir::TirKey::Field(m.field.clone())).map_err(|e| e.into());
+                    return self
+                        .builder
+                        .build_get(obj, tempra_tir::ir::TirKey::Field(m.field.clone()))
+                        .map_err(|e| e.into());
                 }
-                
-                Err(TirLowerError::UnsupportedExpr(format!("Member access: {}", m.field), m.span))
+
+                Err(TirLowerError::UnsupportedExpr(
+                    format!("Member access: {}", m.field),
+                    m.span,
+                ))
             }
             HirExpression::Block(b) => self.lower_block_expr(b),
             HirExpression::For(f) => self.lower_for_expr(f),
             HirExpression::Match(m) => self.lower_match(m),
-            _ => Err(TirLowerError::UnsupportedExpr(format!("Expression of type {:?} is not yet supported in experimental VM lowering", expr), expr.span())),
+            _ => Err(TirLowerError::UnsupportedExpr(
+                format!(
+                    "Expression of type {:?} is not yet supported in experimental VM lowering",
+                    expr
+                ),
+                expr.span(),
+            )),
         }
     }
 
@@ -1024,10 +1269,16 @@ impl<'a> LowerContext<'a> {
         let subject_val = self.lower_expression(&i.value)?;
         let tag_val = self.builder.build_tag(subject_val)?;
         let wanted_tag = self.builder.build_const(TirConst::String(variant_name))?;
-        self.builder.build_eq(tag_val, wanted_tag).map_err(|e| e.into())
+        self.builder
+            .build_eq(tag_val, wanted_tag)
+            .map_err(|e| e.into())
     }
 
-    fn lower_narrowing_if(&mut self, i: &HirIf, is_pat: &HirIsPatternExpr) -> Result<TirValueId, TirLowerError> {
+    fn lower_narrowing_if(
+        &mut self,
+        i: &HirIf,
+        is_pat: &HirIsPatternExpr,
+    ) -> Result<TirValueId, TirLowerError> {
         let (variant_name, binding_name) = self.extract_simple_pattern(&is_pat.pattern)?;
 
         // Subject must be a name for narrowing in this smoke phase
@@ -1040,7 +1291,9 @@ impl<'a> LowerContext<'a> {
 
         let subject_val = self.lower_expression(&is_pat.value)?;
         let tag_val = self.builder.build_tag(subject_val)?;
-        let wanted_tag = self.builder.build_const(TirConst::String(variant_name.clone()))?;
+        let wanted_tag = self
+            .builder
+            .build_const(TirConst::String(variant_name.clone()))?;
         let is_match = self.builder.build_eq(tag_val, wanted_tag)?;
 
         let mut t_block = self.builder.new_block();
@@ -1053,7 +1306,9 @@ impl<'a> LowerContext<'a> {
         // Then block
         self.builder.set_current_block(t_block);
         if let Some(binding) = binding_name {
-            let payload = self.builder.build_unwrap(subject_val, variant_name.clone(), 0)?;
+            let payload = self
+                .builder
+                .build_unwrap(subject_val, variant_name.clone(), 0)?;
 
             // Infer type of payload
             let subject_ty = self.infer_expr_type(&is_pat.value)?;
@@ -1070,7 +1325,9 @@ impl<'a> LowerContext<'a> {
             };
             let tir_payload_ty = map_type(&payload_ty)?;
 
-            let slot = self.builder.build_slot(tir_payload_ty.clone(), Some(&binding))?;
+            let slot = self
+                .builder
+                .build_slot(tir_payload_ty.clone(), Some(&binding))?;
             self.builder.build_store(slot, payload)?;
             self.locals.insert(binding, (slot, tir_payload_ty, false));
         }
@@ -1121,11 +1378,16 @@ impl<'a> LowerContext<'a> {
             }
 
             self.builder.set_current_block(end_block);
-            self.builder.build_const(TirConst::Unit).map_err(|e| e.into())
+            self.builder
+                .build_const(TirConst::Unit)
+                .map_err(|e| e.into())
         }
     }
 
-    fn extract_simple_pattern(&self, pattern: &HirPattern) -> Result<(String, Option<String>), TirLowerError> {
+    fn extract_simple_pattern(
+        &self,
+        pattern: &HirPattern,
+    ) -> Result<(String, Option<String>), TirLowerError> {
         match pattern {
             HirPattern::EnumCase(_, name, args) => {
                 if args.is_empty() {
@@ -1172,7 +1434,10 @@ impl<'a> LowerContext<'a> {
         }
     }
 
-    pub fn lower_expression_base(&mut self, expr: &HirExpression) -> Result<TirValueId, TirLowerError> {
+    pub fn lower_expression_base(
+        &mut self,
+        expr: &HirExpression,
+    ) -> Result<TirValueId, TirLowerError> {
         // This is just a marker for where the original code ended
         self.lower_expression(expr)
     }
@@ -1185,19 +1450,25 @@ impl<'a> LowerContext<'a> {
         let mut match_ty = Type::Unknown;
         for arm in &m.arms {
             if arm.guard.is_some() {
-                return Err(TirLowerError::UnsupportedExpr("match guards are not yet supported in experimental VM".into(), arm.value.span()));
+                return Err(TirLowerError::UnsupportedExpr(
+                    "match guards are not yet supported in experimental VM".into(),
+                    arm.value.span(),
+                ));
             }
 
             // Temporary bindings for inference
             let old_locals_inf = self.locals.clone();
             self.bind_pattern_for_inference(&arm.pattern, &scrutinee_ty)?;
-            
+
             let arm_body_ty = self.infer_expr_type(&arm.value)?;
             self.locals = old_locals_inf;
 
             if match_ty == Type::Unknown {
                 match_ty = arm_body_ty;
-            } else if arm_body_ty != match_ty && arm_body_ty != Type::Never && match_ty != Type::Never {
+            } else if arm_body_ty != match_ty
+                && arm_body_ty != Type::Never
+                && match_ty != Type::Never
+            {
                 return Err(TirLowerError::TypeMismatch {
                     expected: match_ty.to_string(),
                     found: arm_body_ty.to_string(),
@@ -1207,13 +1478,18 @@ impl<'a> LowerContext<'a> {
                 match_ty = arm_body_ty;
             }
         }
-        
+
         if match_ty == Type::Unknown {
-             return Err(TirLowerError::UnsupportedExpr("Match must have at least one arm".into(), m.span));
+            return Err(TirLowerError::UnsupportedExpr(
+                "Match must have at least one arm".into(),
+                m.span,
+            ));
         }
 
         let tir_match_ty = map_type(&match_ty)?;
-        let res_slot = self.builder.build_slot(tir_match_ty.clone(), Some("__match_result"))?;
+        let res_slot = self
+            .builder
+            .build_slot(tir_match_ty.clone(), Some("__match_result"))?;
         let exit_block = self.builder.new_block();
 
         // 2. Track exhaustiveness
@@ -1222,7 +1498,9 @@ impl<'a> LowerContext<'a> {
 
         // 3. Sequential checks
         for arm in &m.arms {
-            if has_wildcard { break; }
+            if has_wildcard {
+                break;
+            }
 
             let then_block = self.builder.new_block();
             let next_arm_block = self.builder.new_block();
@@ -1239,27 +1517,40 @@ impl<'a> LowerContext<'a> {
                 HirPattern::Literal(_, lit_expr) => {
                     let lit_val = self.lower_expression(lit_expr)?;
                     let cond = self.builder.build_eq(scrutinee_val, lit_val)?;
-                    self.builder.build_condbr(cond, then_block, next_arm_block)?;
-                    
+                    self.builder
+                        .build_condbr(cond, then_block, next_arm_block)?;
+
                     if let HirExpression::Bool(_, b) = &**lit_expr {
                         seen_variants.insert(b.to_string());
                     }
                 }
                 HirPattern::EnumConstructor(e) => {
                     let tag = self.builder.build_tag(scrutinee_val)?;
-                    let wanted = self.builder.build_const(TirConst::String(e.variant_name.clone()))?;
+                    let wanted = self
+                        .builder
+                        .build_const(TirConst::String(e.variant_name.clone()))?;
                     let cond = self.builder.build_eq(tag, wanted)?;
-                    self.builder.build_condbr(cond, then_block, next_arm_block)?;
+                    self.builder
+                        .build_condbr(cond, then_block, next_arm_block)?;
                     seen_variants.insert(e.variant_name.clone());
                 }
                 HirPattern::EnumCase(_, name, _) => {
                     let tag = self.builder.build_tag(scrutinee_val)?;
                     let wanted = self.builder.build_const(TirConst::String(name.clone()))?;
                     let cond = self.builder.build_eq(tag, wanted)?;
-                    self.builder.build_condbr(cond, then_block, next_arm_block)?;
+                    self.builder
+                        .build_condbr(cond, then_block, next_arm_block)?;
                     seen_variants.insert(name.clone());
                 }
-                _ => return Err(TirLowerError::UnsupportedPattern(format!("Pattern {:?} is not yet supported in experimental VM", arm.pattern), arm.pattern.span())),
+                _ => {
+                    return Err(TirLowerError::UnsupportedPattern(
+                        format!(
+                            "Pattern {:?} is not yet supported in experimental VM",
+                            arm.pattern
+                        ),
+                        arm.pattern.span(),
+                    ))
+                }
             }
 
             // Body
@@ -1270,9 +1561,12 @@ impl<'a> LowerContext<'a> {
             match &arm.pattern {
                 HirPattern::Identifier(_span, name) => {
                     let tir_scrutinee_ty = map_type(&scrutinee_ty)?;
-                    let slot = self.builder.build_slot(tir_scrutinee_ty.clone(), Some(name))?;
+                    let slot = self
+                        .builder
+                        .build_slot(tir_scrutinee_ty.clone(), Some(name))?;
                     self.builder.build_store(slot, scrutinee_val)?;
-                    self.locals.insert(name.clone(), (slot, tir_scrutinee_ty, false));
+                    self.locals
+                        .insert(name.clone(), (slot, tir_scrutinee_ty, false));
                 }
                 HirPattern::EnumConstructor(e) => {
                     for (i, payload_pat) in e.payloads.iter().enumerate() {
@@ -1334,7 +1628,12 @@ impl<'a> LowerContext<'a> {
         self.builder.build_load(res_slot).map_err(|e| e.into())
     }
 
-    fn infer_payload_type(&self, enum_ty: &Type, variant_name: &str, index: usize) -> Result<Type, TirLowerError> {
+    fn infer_payload_type(
+        &self,
+        enum_ty: &Type,
+        variant_name: &str,
+        index: usize,
+    ) -> Result<Type, TirLowerError> {
         match enum_ty {
             Type::Option(inner) => {
                 if variant_name == "Some" && index == 0 {
@@ -1355,7 +1654,7 @@ impl<'a> LowerContext<'a> {
                         return Ok(args[0].clone());
                     }
                     if variant_name == "None" {
-                         return Ok(Type::Unit);
+                        return Ok(Type::Unit);
                     }
                 }
                 if name == "Result" && args.len() == 2 {
@@ -1377,53 +1676,89 @@ impl<'a> LowerContext<'a> {
             }
             _ => {}
         }
-        Err(TirLowerError::UnsupportedType(format!("cannot infer payload type for {}::{} at index {}", enum_ty, variant_name, index)))
+        Err(TirLowerError::UnsupportedType(format!(
+            "cannot infer payload type for {}::{} at index {}",
+            enum_ty, variant_name, index
+        )))
     }
 
-    fn check_match_exhaustiveness(&self, ty: &Type, seen: &std::collections::HashSet<String>, has_wildcard: bool, span: tempra_span::Span) -> Result<(), TirLowerError> {
-        if has_wildcard { return Ok(()); }
+    fn check_match_exhaustiveness(
+        &self,
+        ty: &Type,
+        seen: &std::collections::HashSet<String>,
+        has_wildcard: bool,
+        span: tempra_span::Span,
+    ) -> Result<(), TirLowerError> {
+        if has_wildcard {
+            return Ok(());
+        }
 
         match ty {
             Type::Bool => {
                 if seen.contains("true") && seen.contains("false") {
                     return Ok(());
                 }
-                Err(TirLowerError::UnsupportedExpr("Match on Bool must be exhaustive (true AND false, or wildcard)".into(), span))
+                Err(TirLowerError::UnsupportedExpr(
+                    "Match on Bool must be exhaustive (true AND false, or wildcard)".into(),
+                    span,
+                ))
             }
             Type::Option(_) => {
                 if seen.contains("Some") && seen.contains("None") {
                     return Ok(());
                 }
-                Err(TirLowerError::UnsupportedExpr("Match on Option must be exhaustive (Some AND None, or wildcard)".into(), span))
+                Err(TirLowerError::UnsupportedExpr(
+                    "Match on Option must be exhaustive (Some AND None, or wildcard)".into(),
+                    span,
+                ))
             }
             Type::Result(_, _) => {
                 if seen.contains("Ok") && seen.contains("Err") {
                     return Ok(());
                 }
-                Err(TirLowerError::UnsupportedExpr("Match on Result must be exhaustive (Ok AND Err, or wildcard)".into(), span))
+                Err(TirLowerError::UnsupportedExpr(
+                    "Match on Result must be exhaustive (Ok AND Err, or wildcard)".into(),
+                    span,
+                ))
             }
-            _ => {
-                Err(TirLowerError::UnsupportedExpr(format!("Non-exhaustive match for type {}; wildcard '_' is required", ty), span))
-            }
+            _ => Err(TirLowerError::UnsupportedExpr(
+                format!(
+                    "Non-exhaustive match for type {}; wildcard '_' is required",
+                    ty
+                ),
+                span,
+            )),
         }
     }
 
-    fn bind_pattern_for_inference(&mut self, pattern: &HirPattern, scrutinee_ty: &Type) -> Result<(), TirLowerError> {
+    fn bind_pattern_for_inference(
+        &mut self,
+        pattern: &HirPattern,
+        scrutinee_ty: &Type,
+    ) -> Result<(), TirLowerError> {
         match pattern {
             HirPattern::Identifier(_, name) => {
                 let tir_ty = map_type(scrutinee_ty)?;
-                self.locals.insert(name.clone(), (TirSlotId(0), tir_ty, false));
+                self.locals
+                    .insert(name.clone(), (TirSlotId(0), tir_ty, false));
             }
             HirPattern::EnumConstructor(e) => {
                 for (i, payload_pat) in e.payloads.iter().enumerate() {
                     match payload_pat {
                         HirPattern::Identifier(_, name) => {
-                            let payload_ty = self.infer_payload_type(scrutinee_ty, &e.variant_name, i)?;
+                            let payload_ty =
+                                self.infer_payload_type(scrutinee_ty, &e.variant_name, i)?;
                             let tir_payload_ty = map_type(&payload_ty)?;
-                            self.locals.insert(name.clone(), (TirSlotId(0), tir_payload_ty, false));
+                            self.locals
+                                .insert(name.clone(), (TirSlotId(0), tir_payload_ty, false));
                         }
                         HirPattern::Wildcard(_) => {}
-                        _ => return Err(TirLowerError::UnsupportedPattern("Nested patterns are not yet supported in experimental VM".into(), payload_pat.span())),
+                        _ => {
+                            return Err(TirLowerError::UnsupportedPattern(
+                                "Nested patterns are not yet supported in experimental VM".into(),
+                                payload_pat.span(),
+                            ))
+                        }
                     }
                 }
             }
@@ -1431,12 +1766,19 @@ impl<'a> LowerContext<'a> {
                 for (i, payload_pat) in payloads.iter().enumerate() {
                     match payload_pat {
                         HirPattern::Identifier(_, name) => {
-                            let payload_ty = self.infer_payload_type(scrutinee_ty, variant_name, i)?;
+                            let payload_ty =
+                                self.infer_payload_type(scrutinee_ty, variant_name, i)?;
                             let tir_payload_ty = map_type(&payload_ty)?;
-                            self.locals.insert(name.clone(), (TirSlotId(0), tir_payload_ty, false));
+                            self.locals
+                                .insert(name.clone(), (TirSlotId(0), tir_payload_ty, false));
                         }
                         HirPattern::Wildcard(_) => {}
-                        _ => return Err(TirLowerError::UnsupportedPattern("Nested patterns are not yet supported in experimental VM".into(), payload_pat.span())),
+                        _ => {
+                            return Err(TirLowerError::UnsupportedPattern(
+                                "Nested patterns are not yet supported in experimental VM".into(),
+                                payload_pat.span(),
+                            ))
+                        }
                     }
                 }
             }
@@ -1446,7 +1788,12 @@ impl<'a> LowerContext<'a> {
     }
 }
 
-pub fn lower_function(func: &HirFunction, type_ctx: &TypeContext, module_builder: &mut ModuleBuilder, self_ty: Option<Type>) -> Result<TirFunction, TirLowerError> {
+pub fn lower_function(
+    func: &HirFunction,
+    type_ctx: &TypeContext,
+    module_builder: &mut ModuleBuilder,
+    self_ty: Option<Type>,
+) -> Result<TirFunction, TirLowerError> {
     let ret_ty = if let Some(rt) = &func.return_type {
         let ty = resolve_hir_type(rt, type_ctx, self_ty.as_ref())?;
         map_type(&ty)?
@@ -1456,26 +1803,26 @@ pub fn lower_function(func: &HirFunction, type_ctx: &TypeContext, module_builder
 
     let builder = module_builder.new_function(&func.name, ret_ty);
     let mut ctx = LowerContext::new(builder, type_ctx, module_builder, self_ty.clone());
-    
+
     // Create entry block
     let entry_block = ctx.builder.new_block();
     ctx.builder.set_current_block(entry_block);
-    
+
     for p in &func.parameters {
         let ty = resolve_hir_type(&p.ty, type_ctx, self_ty.as_ref())?;
         let tir_ty = map_type(&ty)?;
         let val_id = ctx.builder.add_param(tir_ty.clone());
-        
+
         let slot = ctx.builder.build_slot(tir_ty.clone(), Some(&p.name))?;
         ctx.builder.build_store(slot, val_id)?;
         // Parameters are immutable by default in Phase 12.2 lowering
         ctx.locals.insert(p.name.clone(), (slot, tir_ty, false));
     }
-    
+
     for stmt in &func.body.statements {
         ctx.lower_statement(stmt)?;
     }
-    
+
     if !ctx.builder.is_terminated() {
         if ctx.builder.func.return_type == TirType::Unit {
             ctx.builder.build_ret(None)?;
@@ -1492,6 +1839,6 @@ pub fn lower_function(func: &HirFunction, type_ctx: &TypeContext, module_builder
             }
         }
     }
-    
+
     Ok(ctx.builder.build())
 }

@@ -1,5 +1,5 @@
-use crate::ir::*;
 use crate::error::TirBuildError;
+use crate::ir::*;
 use std::collections::HashMap;
 
 pub struct ModuleBuilder {
@@ -41,7 +41,7 @@ impl ModuleBuilder {
             self.module.functions.push(func);
         }
     }
-    
+
     pub fn add_declaration(&mut self, name: &str, params: Vec<TirType>, return_type: TirType) {
         let id = self.declare_function(name);
         // Only add if not already defined/declared
@@ -126,7 +126,12 @@ impl FunctionBuilder {
 
     pub fn push_instr(&mut self, instr: TirInstr) -> Result<(), TirBuildError> {
         let block_id = self.current_block.ok_or(TirBuildError::NoCurrentBlock)?;
-        let block = self.func.blocks.iter_mut().find(|b| b.id == block_id).unwrap();
+        let block = self
+            .func
+            .blocks
+            .iter_mut()
+            .find(|b| b.id == block_id)
+            .unwrap();
         if block.terminator.is_some() {
             return Err(TirBuildError::BlockAlreadyTerminated(block_id));
         }
@@ -136,7 +141,12 @@ impl FunctionBuilder {
 
     pub fn set_terminator(&mut self, term: TirTerminator) -> Result<(), TirBuildError> {
         let block_id = self.current_block.ok_or(TirBuildError::NoCurrentBlock)?;
-        let block = self.func.blocks.iter_mut().find(|b| b.id == block_id).unwrap();
+        let block = self
+            .func
+            .blocks
+            .iter_mut()
+            .find(|b| b.id == block_id)
+            .unwrap();
         if block.terminator.is_some() {
             return Err(TirBuildError::BlockAlreadyTerminated(block_id));
         }
@@ -152,7 +162,7 @@ impl FunctionBuilder {
         }
         false
     }
-    
+
     pub fn current_block_terminated(&self) -> bool {
         self.is_terminated()
     }
@@ -194,7 +204,7 @@ impl FunctionBuilder {
         self.push_instr(TirInstr::Add(id, a, b))?;
         Ok(id)
     }
-    
+
     pub fn build_sub(&mut self, a: TirValueId, b: TirValueId) -> Result<TirValueId, TirBuildError> {
         let id = self.next_value();
         self.push_instr(TirInstr::Sub(id, a, b))?;
@@ -270,7 +280,11 @@ impl FunctionBuilder {
         Ok(id)
     }
 
-    pub fn build_get(&mut self, target: TirValueId, key: TirKey) -> Result<TirValueId, TirBuildError> {
+    pub fn build_get(
+        &mut self,
+        target: TirValueId,
+        key: TirKey,
+    ) -> Result<TirValueId, TirBuildError> {
         let id = self.next_value();
         self.push_instr(TirInstr::Get(id, target, key))?;
         Ok(id)
@@ -293,19 +307,32 @@ impl FunctionBuilder {
         Ok(id)
     }
 
-    pub fn build_unwrap(&mut self, target: TirValueId, variant: String, index: u16) -> Result<TirValueId, TirBuildError> {
+    pub fn build_unwrap(
+        &mut self,
+        target: TirValueId,
+        variant: String,
+        index: u16,
+    ) -> Result<TirValueId, TirBuildError> {
         let id = self.next_value();
         self.push_instr(TirInstr::Unwrap(id, target, variant, index))?;
         Ok(id)
     }
-    
-    pub fn build_call(&mut self, target: TirFunctionId, args: Vec<TirValueId>) -> Result<TirValueId, TirBuildError> {
+
+    pub fn build_call(
+        &mut self,
+        target: TirFunctionId,
+        args: Vec<TirValueId>,
+    ) -> Result<TirValueId, TirBuildError> {
         let id = self.next_value();
         self.push_instr(TirInstr::Call(id, target, args))?;
         Ok(id)
     }
 
-    pub fn build_slot(&mut self, ty: TirType, name: Option<&str>) -> Result<TirSlotId, TirBuildError> {
+    pub fn build_slot(
+        &mut self,
+        ty: TirType,
+        name: Option<&str>,
+    ) -> Result<TirSlotId, TirBuildError> {
         let slot = self.next_slot(name);
         self.push_instr(TirInstr::Slot(slot, ty))?;
         Ok(slot)
@@ -322,7 +349,12 @@ impl FunctionBuilder {
         Ok(id)
     }
 
-    pub fn build_condbr(&mut self, cond: TirValueId, t: TirBlockId, f: TirBlockId) -> Result<(), TirBuildError> {
+    pub fn build_condbr(
+        &mut self,
+        cond: TirValueId,
+        t: TirBlockId,
+        f: TirBlockId,
+    ) -> Result<(), TirBuildError> {
         self.set_terminator(TirTerminator::CondBr(cond, t, f))?;
         Ok(())
     }
@@ -342,13 +374,22 @@ impl FunctionBuilder {
         Ok(())
     }
 
-    pub fn build_get_index(&mut self, object: TirValueId, index: TirValueId) -> Result<TirValueId, TirBuildError> {
+    pub fn build_get_index(
+        &mut self,
+        object: TirValueId,
+        index: TirValueId,
+    ) -> Result<TirValueId, TirBuildError> {
         let id = self.next_value();
         self.push_instr(TirInstr::GetIndex(id, object, index))?;
         Ok(id)
     }
 
-    pub fn build_slice(&mut self, object: TirValueId, start: TirValueId, end: TirValueId) -> Result<TirValueId, TirBuildError> {
+    pub fn build_slice(
+        &mut self,
+        object: TirValueId,
+        start: TirValueId,
+        end: TirValueId,
+    ) -> Result<TirValueId, TirBuildError> {
         let id = self.next_value();
         self.push_instr(TirInstr::Slice(id, object, start, end))?;
         Ok(id)
@@ -372,7 +413,11 @@ impl FunctionBuilder {
         Ok(id)
     }
 
-    pub fn build_array_push(&mut self, array: TirValueId, value: TirValueId) -> Result<TirValueId, TirBuildError> {
+    pub fn build_array_push(
+        &mut self,
+        array: TirValueId,
+        value: TirValueId,
+    ) -> Result<TirValueId, TirBuildError> {
         let id = self.next_value();
         self.push_instr(TirInstr::ArrayPush(id, array, value))?;
         Ok(id)

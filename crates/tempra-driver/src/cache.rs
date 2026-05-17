@@ -1,9 +1,9 @@
-use tempra_bytecode::BytecodeCacheArtifact;
-use tempra_bytecode::serialize::{decode_and_verify_artifact, encode_artifact};
 use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
+use tempra_bytecode::serialize::{decode_and_verify_artifact, encode_artifact};
+use tempra_bytecode::BytecodeCacheArtifact;
 
 /// Computes a v0 non-cryptographic source hash.
 /// This is not stable across compiler/runtime versions.
@@ -12,7 +12,7 @@ pub fn compute_source_hash(source: &str) -> [u8; 32] {
     let mut hasher = DefaultHasher::new();
     source.hash(&mut hasher);
     let hash = hasher.finish();
-    
+
     let mut key = [0u8; 32];
     let bytes = hash.to_le_bytes();
     for i in 0..4 {
@@ -33,7 +33,9 @@ pub fn hash_to_hex(hash: &[u8; 32]) -> String {
 
 pub fn get_cache_path(hash: &[u8; 32]) -> PathBuf {
     let hex_str = hash_to_hex(hash);
-    Path::new(".tempra").join("cache").join(format!("{}.tbc", hex_str))
+    Path::new(".tempra")
+        .join("cache")
+        .join(format!("{}.tbc", hex_str))
 }
 
 pub fn read_cache_artifact(path: &Path) -> Result<BytecodeCacheArtifact, String> {

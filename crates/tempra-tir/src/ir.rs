@@ -55,7 +55,7 @@ pub enum TirInstr {
     Make(TirValueId, TirType, Option<String>, Vec<TirValueId>),
     MakeStruct(TirValueId, String, Vec<(String, TirValueId)>), // dest, struct_name, fields
     Get(TirValueId, TirValueId, TirKey),
-    Set(TirValueId, TirValueId, TirKey, TirValueId),         // dest, object, key, value
+    Set(TirValueId, TirValueId, TirKey, TirValueId), // dest, object, key, value
     Tag(TirValueId, TirValueId),
     Unwrap(TirValueId, TirValueId, String, u16),
 
@@ -64,7 +64,7 @@ pub enum TirInstr {
     Store(TirSlotId, TirValueId),
 
     Call(TirValueId, TirFunctionId, Vec<TirValueId>),
-    
+
     Add(TirValueId, TirValueId, TirValueId),
     Sub(TirValueId, TirValueId, TirValueId),
     Mul(TirValueId, TirValueId, TirValueId),
@@ -77,12 +77,12 @@ pub enum TirInstr {
     Not(TirValueId, TirValueId),
 
     // Array/Slice dynamic operations
-    GetIndex(TirValueId, TirValueId, TirValueId),      // dest, object, index
+    GetIndex(TirValueId, TirValueId, TirValueId), // dest, object, index
     Slice(TirValueId, TirValueId, TirValueId, TirValueId), // dest, object, start, end
-    Len(TirValueId, TirValueId),                       // dest, object
-    Size(TirValueId, TirValueId),                      // dest, object
-    Bytes(TirValueId, TirValueId),                     // dest, object
-    ArrayPush(TirValueId, TirValueId, TirValueId),     // dest, array, value — produces new array with value appended
+    Len(TirValueId, TirValueId),                  // dest, object
+    Size(TirValueId, TirValueId),                 // dest, object
+    Bytes(TirValueId, TirValueId),                // dest, object
+    ArrayPush(TirValueId, TirValueId, TirValueId), // dest, array, value — produces new array with value appended
 }
 
 #[derive(Debug, Clone)]

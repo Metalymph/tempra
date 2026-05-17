@@ -1,7 +1,7 @@
-use tempra_tir::ir::*;
+use crate::lower::lower_tir_module;
 use tempra_bytecode::disasm::disassemble_module;
 use tempra_bytecode::verify::verify_module;
-use crate::lower::lower_tir_module;
+use tempra_tir::ir::*;
 
 #[test]
 fn test_lower_const_return_i64() {
@@ -17,14 +17,12 @@ fn test_lower_const_return_i64() {
         next_slot_id: 0,
         debug_slots: Default::default(),
     };
-    
+
     let b0 = TirBlockId(0);
     let v0 = TirValueId(0);
     let block = TirBlock {
         id: b0,
-        instrs: vec![
-            TirInstr::Const(v0, TirConst::Int64(42)),
-        ],
+        instrs: vec![TirInstr::Const(v0, TirConst::Int64(42))],
         terminator: Some(TirTerminator::Ret(Some(v0))),
     };
     func.blocks.push(block);
@@ -33,10 +31,10 @@ fn test_lower_const_return_i64() {
     let bc_module = lower_tir_module(&module).unwrap();
     verify_module(&bc_module).unwrap();
     let disasm = disassemble_module(&bc_module);
-    
+
     assert!(disasm.contains("ConstI64 #0"));
     assert!(!disasm.contains("StoreLocal $0")); // Optimized away
-    assert!(!disasm.contains("LoadLocal $0"));  // Optimized away
+    assert!(!disasm.contains("LoadLocal $0")); // Optimized away
     assert!(disasm.contains("Return"));
 }
 
@@ -62,9 +60,7 @@ fn test_lower_add_i64() {
     let v2 = TirValueId(2);
     let block = TirBlock {
         id: b0,
-        instrs: vec![
-            TirInstr::Add(v2, TirValueId(0), TirValueId(1)),
-        ],
+        instrs: vec![TirInstr::Add(v2, TirValueId(0), TirValueId(1))],
         terminator: Some(TirTerminator::Ret(Some(v2))),
     };
     func.blocks.push(block);
@@ -75,7 +71,7 @@ fn test_lower_add_i64() {
 
     assert!(disasm.contains("AddI64LL $0 $1"));
     assert!(!disasm.contains("StoreLocal $2")); // Optimized away
-    assert!(!disasm.contains("LoadLocal $2"));  // Optimized away
+    assert!(!disasm.contains("LoadLocal $2")); // Optimized away
     assert!(disasm.contains("Return"));
 }
 
@@ -98,7 +94,11 @@ fn test_lower_if_condbr() {
     func.blocks.push(TirBlock {
         id: TirBlockId(0),
         instrs: vec![],
-        terminator: Some(TirTerminator::CondBr(TirValueId(0), TirBlockId(1), TirBlockId(2))),
+        terminator: Some(TirTerminator::CondBr(
+            TirValueId(0),
+            TirBlockId(1),
+            TirBlockId(2),
+        )),
     });
 
     // Block 1: Ret 1
@@ -143,12 +143,17 @@ fn test_unsupported_make_error() {
         next_slot_id: 0,
         debug_slots: Default::default(),
     };
-    
+
     // Get is still unsupported in Phase 14.3 lowering (Make is now supported)
     func.blocks.push(TirBlock {
         id: TirBlockId(0),
         instrs: vec![
-            TirInstr::Make(TirValueId(0), TirType::Enum("Foo".into()), Some("Bar".into()), vec![]),
+            TirInstr::Make(
+                TirValueId(0),
+                TirType::Enum("Foo".into()),
+                Some("Bar".into()),
+                vec![],
+            ),
             TirInstr::Get(TirValueId(1), TirValueId(0), TirKey::Index(0)),
         ],
         terminator: Some(TirTerminator::Ret(None)),
@@ -173,11 +178,11 @@ fn test_peephole_preserves_user_slots() {
         next_slot_id: 1,
         debug_slots: Default::default(),
     };
-    
+
     let s0 = TirSlotId(0);
     let v0 = TirValueId(0);
     let v1 = TirValueId(1);
-    
+
     func.blocks.push(TirBlock {
         id: TirBlockId(0),
         instrs: vec![
@@ -192,7 +197,7 @@ fn test_peephole_preserves_user_slots() {
 
     let bc_module = lower_tir_module(&module).unwrap();
     let disasm = disassemble_module(&bc_module);
-    
+
     // Slots are NOT optimized away because they are user-visible
     assert!(disasm.contains("StoreLocal $0"));
     assert!(disasm.contains("LoadLocal $0"));
@@ -200,16 +205,19 @@ fn test_peephole_preserves_user_slots() {
 
 #[test]
 fn test_peephole_fuses_superinstructions() {
-    use tempra_tir::*;
     use crate::lower_tir_module;
-    use tempra_bytecode::verify::verify_module;
     use tempra_bytecode::disasm::disassemble_module;
+    use tempra_bytecode::verify::verify_module;
+    use tempra_tir::*;
 
     let mut module = TirModule::default();
     let mut func = TirFunction {
         id: TirFunctionId(0),
         name: "test_fusion".into(),
-        params: vec![(TirValueId(0), TirType::Int64), (TirValueId(1), TirType::Int64)],
+        params: vec![
+            (TirValueId(0), TirType::Int64),
+            (TirValueId(1), TirType::Int64),
+        ],
         return_type: TirType::Int64,
         blocks: vec![],
         next_value_id: 3,
@@ -226,7 +234,7 @@ fn test_peephole_fuses_superinstructions() {
     let v2 = TirValueId(2);
     let v3 = TirValueId(3);
     let v4 = TirValueId(4);
-    
+
     func.blocks.push(TirBlock {
         id: TirBlockId(0),
         instrs: vec![
@@ -242,7 +250,7 @@ fn test_peephole_fuses_superinstructions() {
     let bc_module = lower_tir_module(&module).unwrap();
     verify_module(&bc_module).unwrap();
     let disasm = disassemble_module(&bc_module);
-    
+
     println!("{}", disasm);
 
     // Should contain superinstructions

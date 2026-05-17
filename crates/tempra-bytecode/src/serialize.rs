@@ -99,22 +99,24 @@ pub fn encode_module(module: &BytecodeModule) -> Result<Vec<u8>, BytecodeSeriali
     encode_artifact(&artifact)
 }
 
-pub fn encode_artifact(artifact: &BytecodeCacheArtifact) -> Result<Vec<u8>, BytecodeSerializeError> {
+pub fn encode_artifact(
+    artifact: &BytecodeCacheArtifact,
+) -> Result<Vec<u8>, BytecodeSerializeError> {
     let mut buf = Vec::new();
-    
+
     // Magic
     buf.write_all(MAGIC)?;
-    
+
     // Header
     write_u32(&mut buf, artifact.header.format_version)?;
     write_string(&mut buf, &artifact.header.compiler_fingerprint)?;
     buf.write_all(&artifact.header.source_hash)?;
     write_string(&mut buf, &artifact.header.language_version)?;
     write_string(&mut buf, &artifact.header.stdlib_abi_version)?;
-    
+
     // Module
     write_u32(&mut buf, artifact.module.version)?;
-    
+
     // Constants
     write_u32(&mut buf, artifact.module.constants.len() as u32)?;
     for c in &artifact.module.constants {
@@ -149,32 +151,32 @@ pub fn encode_artifact(artifact: &BytecodeCacheArtifact) -> Result<Vec<u8>, Byte
             }
         }
     }
-    
+
     // Functions
     write_u32(&mut buf, artifact.module.functions.len() as u32)?;
     for f in &artifact.module.functions {
         write_string(&mut buf, &f.name)?;
-        
+
         write_u32(&mut buf, f.params.len() as u32)?;
         for p in &f.params {
             write_type(&mut buf, p)?;
         }
-        
+
         write_type(&mut buf, &f.ret)?;
-        
+
         write_u32(&mut buf, f.locals.len() as u32)?;
         for l in &f.locals {
             write_type(&mut buf, l)?;
         }
-        
+
         write_u32(&mut buf, f.max_stack)?;
-        
+
         write_u32(&mut buf, f.code.len() as u32)?;
         for instr in &f.code {
             write_instr(&mut buf, instr)?;
         }
     }
-    
+
     Ok(buf)
 }
 
@@ -213,9 +215,7 @@ fn write_type(w: &mut impl Write, ty: &BytecodeType) -> io::Result<()> {
 fn write_instr(w: &mut impl Write, instr: &BytecodeInstr) -> io::Result<()> {
     match instr {
         BytecodeInstr::ConstUnit => w.write_all(&[0]),
-        BytecodeInstr::ConstBool(b) => {
-            w.write_all(&[1, *b as u8])
-        }
+        BytecodeInstr::ConstBool(b) => w.write_all(&[1, *b as u8]),
         BytecodeInstr::ConstI64(id) => {
             w.write_all(&[2])?;
             write_u32(w, id.0)
@@ -332,14 +332,14 @@ fn write_instr(w: &mut impl Write, instr: &BytecodeInstr) -> io::Result<()> {
 
 pub fn decode_artifact(bytes: &[u8]) -> Result<BytecodeCacheArtifact, BytecodeSerializeError> {
     let mut cursor = io::Cursor::new(bytes);
-    
+
     // Magic
     let mut magic = [0u8; 4];
     cursor.read_exact(&mut magic)?;
     if &magic != MAGIC {
         return Err(BytecodeSerializeError::InvalidMagic);
     }
-    
+
     // Header
     let format_version = read_u32(&mut cursor)?;
     if format_version != FORMAT_VERSION {
@@ -350,7 +350,7 @@ pub fn decode_artifact(bytes: &[u8]) -> Result<BytecodeCacheArtifact, BytecodeSe
     cursor.read_exact(&mut source_hash)?;
     let language_version = read_string(&mut cursor)?;
     let stdlib_abi_version = read_string(&mut cursor)?;
-    
+
     let header = BytecodeCacheHeader {
         format_version,
         compiler_fingerprint,
@@ -358,14 +358,14 @@ pub fn decode_artifact(bytes: &[u8]) -> Result<BytecodeCacheArtifact, BytecodeSe
         language_version,
         stdlib_abi_version,
     };
-    
+
     // Module
     let mut module = BytecodeModule::new();
     module.version = read_u32(&mut cursor)?;
     if module.version != 1 {
         return Err(BytecodeSerializeError::UnsupportedVersion);
     }
-    
+
     // Constants
     let const_len = read_u32(&mut cursor)?;
     for _ in 0..const_len {
@@ -394,46 +394,48 @@ pub fn decode_artifact(bytes: &[u8]) -> Result<BytecodeCacheArtifact, BytecodeSe
         };
         module.constants.push(c);
     }
-    
+
     // Functions
     let fn_len = read_u32(&mut cursor)?;
     for _ in 0..fn_len {
         let name = read_string(&mut cursor)?;
-        
+
         let param_len = read_u32(&mut cursor)?;
         let mut params = Vec::with_capacity(param_len as usize);
         for _ in 0..param_len {
             params.push(read_type(&mut cursor)?);
         }
-        
+
         let ret = read_type(&mut cursor)?;
-        
+
         let mut f = BytecodeFunction::new(name, params, ret);
-        
+
         let local_len = read_u32(&mut cursor)?;
         for _ in 0..local_len {
             f.locals.push(read_type(&mut cursor)?);
         }
-        
+
         f.max_stack = read_u32(&mut cursor)?;
-        
+
         let code_len = read_u32(&mut cursor)?;
         for _ in 0..code_len {
             f.code.push(read_instr(&mut cursor)?);
         }
-        
+
         module.functions.push(f);
     }
-    
+
     // Check trailing bytes
     if cursor.position() < bytes.len() as u64 {
         return Err(BytecodeSerializeError::TrailingBytes);
     }
-    
+
     Ok(BytecodeCacheArtifact { header, module })
 }
 
-pub fn decode_and_verify_artifact(bytes: &[u8]) -> Result<BytecodeCacheArtifact, BytecodeSerializeError> {
+pub fn decode_and_verify_artifact(
+    bytes: &[u8],
+) -> Result<BytecodeCacheArtifact, BytecodeSerializeError> {
     let artifact = decode_artifact(bytes)?;
     verify_module(&artifact.module)?;
     Ok(artifact)
@@ -521,7 +523,9 @@ fn read_instr(r: &mut impl Read) -> Result<BytecodeInstr, BytecodeSerializeError
         30 => Ok(BytecodeInstr::And),
         31 => Ok(BytecodeInstr::Or),
         32 => Ok(BytecodeInstr::Jump(InstrOffset(read_u32(r)? as usize))),
-        33 => Ok(BytecodeInstr::JumpIfFalse(InstrOffset(read_u32(r)? as usize))),
+        33 => Ok(BytecodeInstr::JumpIfFalse(InstrOffset(
+            read_u32(r)? as usize
+        ))),
         34 => Ok(BytecodeInstr::Return),
         35 => Ok(BytecodeInstr::Unreachable),
         36 => {

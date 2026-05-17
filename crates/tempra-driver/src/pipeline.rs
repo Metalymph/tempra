@@ -4,9 +4,9 @@ use std::path::Path;
 use tempra_hir::lower_file;
 use tempra_hir::HirItem;
 use tempra_interpreter::run;
+use tempra_interpreter::value::Value;
 use tempra_parser::parse_source;
 use tempra_typeck::check_file as typeck_check_file;
-use tempra_interpreter::value::Value;
 use tempra_vm::value::VmValue;
 
 pub fn run_source(source: &str) -> Result<(), DriverError> {
@@ -24,9 +24,15 @@ pub fn run_source_vm(source: &str, args: &[String]) -> Result<VmValue, DriverErr
     run_source_vm_with_options(source, args, tempra_vm::profile::VmOptions::default())
 }
 
-pub fn run_source_vm_with_options(source: &str, args: &[String], options: tempra_vm::profile::VmOptions) -> Result<VmValue, DriverError> {
+pub fn run_source_vm_with_options(
+    source: &str,
+    args: &[String],
+    options: tempra_vm::profile::VmOptions,
+) -> Result<VmValue, DriverError> {
     if !args.is_empty() {
-        return Err(DriverError::UnsupportedExperimentalVm("CLI arguments are not yet supported in experimental VM".into()));
+        return Err(DriverError::UnsupportedExperimentalVm(
+            "CLI arguments are not yet supported in experimental VM".into(),
+        ));
     }
 
     let hash = crate::cache::compute_source_hash(source);
@@ -34,7 +40,9 @@ pub fn run_source_vm_with_options(source: &str, args: &[String], options: tempra
     let fingerprint = format!("tempra-{}", env!("CARGO_PKG_VERSION"));
 
     let module = if let Ok(artifact) = crate::cache::read_cache_artifact(&cache_path) {
-        if artifact.header.compiler_fingerprint == fingerprint && artifact.header.source_hash == hash {
+        if artifact.header.compiler_fingerprint == fingerprint
+            && artifact.header.source_hash == hash
+        {
             artifact.module
         } else {
             compile_and_cache_module(source, &hash, &cache_path, &fingerprint)?
@@ -45,21 +53,27 @@ pub fn run_source_vm_with_options(source: &str, args: &[String], options: tempra
 
     let has_main = module.functions.iter().any(|f| f.name == "main");
     if !has_main {
-        return Err(DriverError::UnsupportedExperimentalVm("experimental VM currently requires main()".into()));
+        return Err(DriverError::UnsupportedExperimentalVm(
+            "experimental VM currently requires main()".into(),
+        ));
     }
 
     tempra_vm::run_function_with_options(&module, "main", vec![], options)
         .map_err(|e| DriverError::VmError(format!("{:?}", e)))
 }
 
-pub fn run_source_vm_profiled(source: &str, options: tempra_vm::VmOptions) -> Result<(tempra_vm::VmValue, tempra_vm::VmProfile), DriverError> {
-
+pub fn run_source_vm_profiled(
+    source: &str,
+    options: tempra_vm::VmOptions,
+) -> Result<(tempra_vm::VmValue, tempra_vm::VmProfile), DriverError> {
     let hash = crate::cache::compute_source_hash(source);
     let cache_path = crate::cache::get_cache_path(&hash);
     let fingerprint = format!("tempra-{}", env!("CARGO_PKG_VERSION"));
 
     let module = if let Ok(artifact) = crate::cache::read_cache_artifact(&cache_path) {
-        if artifact.header.compiler_fingerprint == fingerprint && artifact.header.source_hash == hash {
+        if artifact.header.compiler_fingerprint == fingerprint
+            && artifact.header.source_hash == hash
+        {
             artifact.module
         } else {
             compile_and_cache_module(source, &hash, &cache_path, &fingerprint)?
@@ -70,26 +84,44 @@ pub fn run_source_vm_profiled(source: &str, options: tempra_vm::VmOptions) -> Re
 
     let has_main = module.functions.iter().any(|f| f.name == "main");
     if !has_main {
-        return Err(DriverError::UnsupportedExperimentalVm("experimental VM currently requires main()".into()));
+        return Err(DriverError::UnsupportedExperimentalVm(
+            "experimental VM currently requires main()".into(),
+        ));
     }
 
     tempra_vm::run_function_profiled(&module, "main", vec![], options)
         .map_err(|e| DriverError::VmError(format!("{:?}", e)))
 }
 
-fn compile_and_cache_module(source: &str, hash: &[u8; 32], cache_path: &std::path::Path, fingerprint: &str) -> Result<tempra_bytecode::BytecodeModule, DriverError> {
-    let ast = tempra_parser::parse_source(source).map_err(|e| DriverError::ParseError(format!("{:?}", e)))?;
+fn compile_and_cache_module(
+    source: &str,
+    hash: &[u8; 32],
+    cache_path: &std::path::Path,
+    fingerprint: &str,
+) -> Result<tempra_bytecode::BytecodeModule, DriverError> {
+    let ast = tempra_parser::parse_source(source)
+        .map_err(|e| DriverError::ParseError(format!("{:?}", e)))?;
     let mut hir = tempra_hir::lower_file(source, &ast);
-    let type_ctx = tempra_typeck::check_file_with_context(&mut hir).map_err(|errs| DriverError::TypeError(format!("{:?}", errs)))?;
+    let type_ctx = tempra_typeck::check_file_with_context(&mut hir)
+        .map_err(|errs| DriverError::TypeError(format!("{:?}", errs)))?;
 
     let mut module_builder = tempra_tir::builder::ModuleBuilder::new();
     let mut errors = Vec::new();
     for item in &hir.items {
         match item {
             tempra_hir::HirItem::Function(func) => {
-                match tempra_tir_lower::lower::lower_function(func, &type_ctx, &mut module_builder, None) {
-                    Ok(tir_func) => { module_builder.add_function(tir_func); }
-                    Err(e) => { errors.push(format!("unsupported in fn '{}': {}", func.name, e)); }
+                match tempra_tir_lower::lower::lower_function(
+                    func,
+                    &type_ctx,
+                    &mut module_builder,
+                    None,
+                ) {
+                    Ok(tir_func) => {
+                        module_builder.add_function(tir_func);
+                    }
+                    Err(e) => {
+                        errors.push(format!("unsupported in fn '{}': {}", func.name, e));
+                    }
                 }
             }
             tempra_hir::HirItem::Extend(extend) => {
@@ -117,9 +149,21 @@ fn compile_and_cache_module(source: &str, hash: &[u8; 32], cache_path: &std::pat
                 for method in &extend.methods {
                     let mut method_clone = method.clone();
                     method_clone.name = format!("{}.{}", target_name, method.name);
-                    match tempra_tir_lower::lower::lower_function(&method_clone, &type_ctx, &mut module_builder, Some(target_ty.clone())) {
-                        Ok(tir_func) => { module_builder.add_function(tir_func); }
-                        Err(e) => { errors.push(format!("unsupported in method '{}': {}", method_clone.name, e)); }
+                    match tempra_tir_lower::lower::lower_function(
+                        &method_clone,
+                        &type_ctx,
+                        &mut module_builder,
+                        Some(target_ty.clone()),
+                    ) {
+                        Ok(tir_func) => {
+                            module_builder.add_function(tir_func);
+                        }
+                        Err(e) => {
+                            errors.push(format!(
+                                "unsupported in method '{}': {}",
+                                method_clone.name, e
+                            ));
+                        }
                     }
                 }
             }
@@ -130,11 +174,14 @@ fn compile_and_cache_module(source: &str, hash: &[u8; 32], cache_path: &std::pat
         return Err(DriverError::UnsupportedExperimentalVm(errors.join("\n")));
     }
 
-    let bc_module = tempra_bytecode_lower::lower_tir_module(&module_builder.module)
-        .map_err(|e| DriverError::UnsupportedExperimentalVm(format!("bytecode lowering error: {:?}", e)))?;
+    let bc_module =
+        tempra_bytecode_lower::lower_tir_module(&module_builder.module).map_err(|e| {
+            DriverError::UnsupportedExperimentalVm(format!("bytecode lowering error: {:?}", e))
+        })?;
 
-    tempra_bytecode::verify::verify_module(&bc_module)
-        .map_err(|e| DriverError::UnsupportedExperimentalVm(format!("verification error: {:?}", e)))?;
+    tempra_bytecode::verify::verify_module(&bc_module).map_err(|e| {
+        DriverError::UnsupportedExperimentalVm(format!("verification error: {:?}", e))
+    })?;
 
     let mut header = tempra_bytecode::BytecodeCacheHeader::default();
     header.compiler_fingerprint = fingerprint.to_string();
@@ -154,7 +201,10 @@ fn compile_and_cache_module(source: &str, hash: &[u8; 32], cache_path: &std::pat
 
 /// Internal helper for benchmarking and testing the experimental VM pipeline.
 /// This is not a stable API and may change or be removed in future versions.
-pub fn compile_to_bytecode(source: &str, cache_path: &Path) -> Result<tempra_bytecode::BytecodeModule, DriverError> {
+pub fn compile_to_bytecode(
+    source: &str,
+    cache_path: &Path,
+) -> Result<tempra_bytecode::BytecodeModule, DriverError> {
     let hash = crate::cache::compute_source_hash(source);
     let fingerprint = format!("tempra-{}", env!("CARGO_PKG_VERSION"));
     compile_and_cache_module(source, &hash, cache_path, &fingerprint)
@@ -193,12 +243,20 @@ pub fn run_file_with_experimental_vm(path: &Path, args: &[String]) -> Result<(),
     run_file_with_experimental_vm_jit(path, args, false)
 }
 
-pub fn run_file_with_experimental_vm_jit(path: &Path, args: &[String], jit_enabled: bool) -> Result<(), DriverError> {
+pub fn run_file_with_experimental_vm_jit(
+    path: &Path,
+    args: &[String],
+    jit_enabled: bool,
+) -> Result<(), DriverError> {
     let source = fs::read_to_string(path)?;
     run_source_with_experimental_vm_jit(&source, args, jit_enabled)
 }
 
-pub fn run_source_with_experimental_vm_jit(source: &str, args: &[String], jit_enabled: bool) -> Result<(), DriverError> {
+pub fn run_source_with_experimental_vm_jit(
+    source: &str,
+    args: &[String],
+    jit_enabled: bool,
+) -> Result<(), DriverError> {
     let mut options = tempra_vm::profile::VmOptions::default();
     options.jit_enabled = jit_enabled;
     match run_source_vm_with_options(source, args, options) {
@@ -232,7 +290,8 @@ pub fn emit_tir_source(source: &str) -> Result<String, DriverError> {
 
     let mut hir = lower_file(source, &ast);
 
-    let type_ctx = tempra_typeck::check_file_with_context(&mut hir).map_err(|errs| DriverError::TypeError(format!("{:?}", errs)))?;
+    let type_ctx = tempra_typeck::check_file_with_context(&mut hir)
+        .map_err(|errs| DriverError::TypeError(format!("{:?}", errs)))?;
 
     let mut module_builder = tempra_tir::builder::ModuleBuilder::new();
 
@@ -240,7 +299,12 @@ pub fn emit_tir_source(source: &str) -> Result<String, DriverError> {
 
     for item in &hir.items {
         if let HirItem::Function(func) = item {
-            match tempra_tir_lower::lower::lower_function(func, &type_ctx, &mut module_builder, None) {
+            match tempra_tir_lower::lower::lower_function(
+                func,
+                &type_ctx,
+                &mut module_builder,
+                None,
+            ) {
                 Ok(tir_func) => {
                     module_builder.add_function(tir_func);
                 }
@@ -258,7 +322,10 @@ pub fn emit_tir_source(source: &str) -> Result<String, DriverError> {
     let module = module_builder.module;
 
     if let Err(verifier_errors) = tempra_tir::verifier::verify_module(&module) {
-        let msgs: Vec<String> = verifier_errors.iter().map(|e| format!("internal TIR verifier error: {:?}", e)).collect();
+        let msgs: Vec<String> = verifier_errors
+            .iter()
+            .map(|e| format!("internal TIR verifier error: {:?}", e))
+            .collect();
         return Err(DriverError::TirLowerError(msgs.join("\n")));
     }
 
@@ -277,14 +344,20 @@ pub fn interpret_tir_source(
 ) -> Result<tempra_tir_interp::TirRuntimeValue, DriverError> {
     let ast = parse_source(source).map_err(|e| DriverError::ParseError(format!("{:?}", e)))?;
     let mut hir = lower_file(source, &ast);
-    let type_ctx = tempra_typeck::check_file_with_context(&mut hir).map_err(|errs| DriverError::TypeError(format!("{:?}", errs)))?;
+    let type_ctx = tempra_typeck::check_file_with_context(&mut hir)
+        .map_err(|errs| DriverError::TypeError(format!("{:?}", errs)))?;
 
     let mut module_builder = tempra_tir::builder::ModuleBuilder::new();
     let mut errors = Vec::new();
 
     for item in &hir.items {
         if let HirItem::Function(func) = item {
-            match tempra_tir_lower::lower::lower_function(func, &type_ctx, &mut module_builder, None) {
+            match tempra_tir_lower::lower::lower_function(
+                func,
+                &type_ctx,
+                &mut module_builder,
+                None,
+            ) {
                 Ok(tir_func) => {
                     module_builder.add_function(tir_func);
                 }
@@ -429,7 +502,11 @@ mod tests {
         }
         ";
         let result = emit_tir_source(source);
-        assert!(result.is_ok(), "Expected TIR output, got {:?}", result.err().unwrap());
+        assert!(
+            result.is_ok(),
+            "Expected TIR output, got {:?}",
+            result.err().unwrap()
+        );
         let tir = result.unwrap();
         assert!(tir.contains("fn add"));
         assert!(tir.contains("add %"));
@@ -454,7 +531,10 @@ mod tests {
         let source = "fn main() -> Int64 { return 42 }";
         let result = interpret_tir_source(source, "main", vec![]);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), tempra_tir_interp::TirRuntimeValue::Int64(42));
+        assert_eq!(
+            result.unwrap(),
+            tempra_tir_interp::TirRuntimeValue::Int64(42)
+        );
     }
 
     #[test]
@@ -469,15 +549,25 @@ mod tests {
         ";
         let result = interpret_tir_source(source, "main", vec![]);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), tempra_tir_interp::TirRuntimeValue::Int64(42));
+        assert_eq!(
+            result.unwrap(),
+            tempra_tir_interp::TirRuntimeValue::Int64(42)
+        );
     }
 
     #[test]
     fn test_tir_interp_source_param_identity() {
         let source = "fn id(x: Int64) -> Int64 { return x }";
-        let result = interpret_tir_source(source, "id", vec![tempra_tir_interp::TirRuntimeValue::Int64(99)]);
+        let result = interpret_tir_source(
+            source,
+            "id",
+            vec![tempra_tir_interp::TirRuntimeValue::Int64(99)],
+        );
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), tempra_tir_interp::TirRuntimeValue::Int64(99));
+        assert_eq!(
+            result.unwrap(),
+            tempra_tir_interp::TirRuntimeValue::Int64(99)
+        );
     }
 
     #[test]
@@ -491,10 +581,18 @@ mod tests {
             }
         }
         ";
-        let res_t = interpret_tir_source(source, "test", vec![tempra_tir_interp::TirRuntimeValue::Bool(true)]);
+        let res_t = interpret_tir_source(
+            source,
+            "test",
+            vec![tempra_tir_interp::TirRuntimeValue::Bool(true)],
+        );
         assert_eq!(res_t.unwrap(), tempra_tir_interp::TirRuntimeValue::Int64(1));
-        
-        let res_f = interpret_tir_source(source, "test", vec![tempra_tir_interp::TirRuntimeValue::Bool(false)]);
+
+        let res_f = interpret_tir_source(
+            source,
+            "test",
+            vec![tempra_tir_interp::TirRuntimeValue::Bool(false)],
+        );
         assert_eq!(res_f.unwrap(), tempra_tir_interp::TirRuntimeValue::Int64(0));
     }
 
@@ -508,7 +606,10 @@ mod tests {
         }
         ";
         let result = interpret_tir_source(source, "test", vec![]);
-        assert_eq!(result.unwrap(), tempra_tir_interp::TirRuntimeValue::Int64(20));
+        assert_eq!(
+            result.unwrap(),
+            tempra_tir_interp::TirRuntimeValue::Int64(20)
+        );
     }
 
     #[test]
@@ -518,7 +619,10 @@ mod tests {
         fn test() -> Int64 { return double(21) }
         ";
         let result = interpret_tir_source(source, "test", vec![]);
-        assert_eq!(result.unwrap(), tempra_tir_interp::TirRuntimeValue::Int64(42));
+        assert_eq!(
+            result.unwrap(),
+            tempra_tir_interp::TirRuntimeValue::Int64(42)
+        );
     }
 
     #[test]
@@ -536,6 +640,11 @@ mod tests {
     fn test_tir_interp_unknown_function_error() {
         let source = "fn main() {}";
         let result = interpret_tir_source(source, "ghost", vec![]);
-        assert!(matches!(result, Err(DriverError::TirInterpError(tempra_tir_interp::TirInterpError::UnknownFunction(_)))));
+        assert!(matches!(
+            result,
+            Err(DriverError::TirInterpError(
+                tempra_tir_interp::TirInterpError::UnknownFunction(_)
+            ))
+        ));
     }
 }

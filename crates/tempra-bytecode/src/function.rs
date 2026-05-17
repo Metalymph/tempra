@@ -1,5 +1,5 @@
-use std::fmt;
 use crate::opcode::BytecodeInstr;
+use std::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FunctionId(pub u32);

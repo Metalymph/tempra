@@ -1,7 +1,7 @@
 //! JIT ABI and Value representation for Phase 16.0+.
 
 /// An opaque token representing a heap-allocated value in the VM.
-/// 
+///
 /// The JIT and native code must treat this as an opaque u64.
 /// It must NOT be dereferenced directly from native code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -9,7 +9,7 @@
 pub struct HeapHandle(pub u64);
 
 /// The status code returned by fallible JIT helpers.
-/// 
+///
 /// 0 means Success.
 /// Non-zero values represent specific runtime errors.
 pub type JitStatus = i64;
@@ -27,7 +27,7 @@ pub const JIT_STATUS_ERROR_WRONG_VARIANT: JitStatus = 8;
 pub const JIT_STATUS_ERROR_ALLOCATION_FAILED: JitStatus = 9;
 
 /// A representation of a value passed across the JIT/VM boundary.
-/// 
+///
 /// Note: HeapHandle(0) is reserved as the invalid/null handle.
 #[derive(Debug, Clone, Copy)]
 pub enum JitValueAbi {

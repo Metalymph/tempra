@@ -1,8 +1,8 @@
+use crate::error::JitRuntimeError;
 use cranelift::prelude::*;
 use cranelift_jit::{JITBuilder, JITModule};
 use tempra_bytecode::bytecode::BytecodeModule;
-use tempra_bytecode::function::{FunctionId, BytecodeType};
-use crate::error::JitRuntimeError;
+use tempra_bytecode::function::{BytecodeType, FunctionId};
 
 pub struct JitEngine {
     pub(crate) builder_context: FunctionBuilderContext,
@@ -16,12 +16,14 @@ impl JitEngine {
         // On AArch64, we often need to disable PIC/PLT for simple JIT usage
         // or ensure the ISA is correctly configured.
         flag_builder.set("use_colocated_libcalls", "false").unwrap();
-        
+
         let isa_builder = cranelift_native::builder().unwrap_or_else(|msg| {
             panic!("host machine is not supported: {}", msg);
         });
-        let isa = isa_builder.finish(settings::Flags::new(flag_builder)).unwrap();
-        
+        let isa = isa_builder
+            .finish(settings::Flags::new(flag_builder))
+            .unwrap();
+
         let builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
         let module = JITModule::new(builder);
         Self {
@@ -45,7 +47,11 @@ impl JitFunctionI64 {
 
     pub fn call_i64(&self, args: &[i64]) -> Result<i64, JitRuntimeError> {
         if args.len() != self.arity {
-            return Err(JitRuntimeError::Message(format!("Wrong arity: expected {}, got {}", self.arity, args.len())));
+            return Err(JitRuntimeError::Message(format!(
+                "Wrong arity: expected {}, got {}",
+                self.arity,
+                args.len()
+            )));
         }
 
         unsafe {
@@ -62,7 +68,10 @@ impl JitFunctionI64 {
                     let func: fn(i64, i64) -> i64 = std::mem::transmute(self.ptr);
                     Ok(func(args[0], args[1]))
                 }
-                _ => Err(JitRuntimeError::Message(format!("Arity {} not yet supported by JIT caller", self.arity))),
+                _ => Err(JitRuntimeError::Message(format!(
+                    "Arity {} not yet supported by JIT caller",
+                    self.arity
+                ))),
             }
         }
     }
@@ -79,29 +88,51 @@ impl JitFunctionI64HeapAware {
         Self { ptr, arity }
     }
 
-    pub fn call_with_ctx(&self, ctx_ptr: *mut crate::helpers::JitRuntimeContext, args: &[i64]) -> Result<i64, JitRuntimeError> {
+    pub fn call_with_ctx(
+        &self,
+        ctx_ptr: *mut crate::helpers::JitRuntimeContext,
+        args: &[i64],
+    ) -> Result<i64, JitRuntimeError> {
         if args.len() != self.arity {
-            return Err(JitRuntimeError::Message(format!("Wrong arity: expected {}, got {}", self.arity, args.len())));
+            return Err(JitRuntimeError::Message(format!(
+                "Wrong arity: expected {}, got {}",
+                self.arity,
+                args.len()
+            )));
         }
 
         let res = unsafe {
             match self.arity {
                 0 => {
-                    let func: fn(*mut crate::helpers::JitRuntimeContext) -> crate::abi::JitHelperResult = std::mem::transmute(self.ptr);
+                    let func: fn(
+                        *mut crate::helpers::JitRuntimeContext,
+                    ) -> crate::abi::JitHelperResult = std::mem::transmute(self.ptr);
                     func(ctx_ptr)
                 }
                 1 => {
-                    let func: fn(*mut crate::helpers::JitRuntimeContext, i64) -> crate::abi::JitHelperResult = std::mem::transmute(self.ptr);
+                    let func: fn(
+                        *mut crate::helpers::JitRuntimeContext,
+                        i64,
+                    ) -> crate::abi::JitHelperResult = std::mem::transmute(self.ptr);
                     func(ctx_ptr, args[0])
                 }
                 2 => {
-                    let func: fn(*mut crate::helpers::JitRuntimeContext, i64, i64) -> crate::abi::JitHelperResult = std::mem::transmute(self.ptr);
+                    let func: fn(
+                        *mut crate::helpers::JitRuntimeContext,
+                        i64,
+                        i64,
+                    ) -> crate::abi::JitHelperResult = std::mem::transmute(self.ptr);
                     func(ctx_ptr, args[0], args[1])
                 }
-                _ => return Err(JitRuntimeError::Message(format!("Arity {} not yet supported by JIT caller", self.arity))),
+                _ => {
+                    return Err(JitRuntimeError::Message(format!(
+                        "Arity {} not yet supported by JIT caller",
+                        self.arity
+                    )))
+                }
             }
         };
-        
+
         res.to_i64_result()
     }
 }
@@ -119,19 +150,26 @@ impl std::fmt::Display for JitEligibility {
         match self {
             Self::Eligible => write!(f, "Eligible"),
             Self::UnsupportedSignature(s) => write!(f, "Unsupported signature: {}", s),
-            Self::UnsupportedInstr { offset, instr } => write!(f, "Unsupported instruction '{}' at offset {}", instr, offset),
+            Self::UnsupportedInstr { offset, instr } => write!(
+                f,
+                "Unsupported instruction '{}' at offset {}",
+                instr, offset
+            ),
             Self::UnsupportedType(t) => write!(f, "Unsupported type: {}", t),
         }
     }
 }
 
 fn explain_jit_eligibility_internal(
-    module: &BytecodeModule, 
+    module: &BytecodeModule,
     function_id: FunctionId,
-    visited: &mut std::collections::HashSet<FunctionId>
+    visited: &mut std::collections::HashSet<FunctionId>,
 ) -> JitEligibility {
     if visited.contains(&function_id) {
-        return JitEligibility::UnsupportedInstr { offset: 0, instr: "Call target not JIT eligible (recursion)".into() };
+        return JitEligibility::UnsupportedInstr {
+            offset: 0,
+            instr: "Call target not JIT eligible (recursion)".into(),
+        };
     }
     visited.insert(function_id);
 
@@ -148,8 +186,17 @@ fn explain_jit_eligibility_internal(
         if *p != BytecodeType::Int64 && *p != BytecodeType::String && *p != BytecodeType::Any {
             visited.remove(&function_id);
             match p {
-                BytecodeType::Bool => return JitEligibility::UnsupportedType("Bool signatures are not supported by JIT v1".into()),
-                _ => return JitEligibility::UnsupportedType(format!("Parameter {} has unsupported type {:?}", i, p)),
+                BytecodeType::Bool => {
+                    return JitEligibility::UnsupportedType(
+                        "Bool signatures are not supported by JIT v1".into(),
+                    )
+                }
+                _ => {
+                    return JitEligibility::UnsupportedType(format!(
+                        "Parameter {} has unsupported type {:?}",
+                        i, p
+                    ))
+                }
             }
         }
     }
@@ -157,16 +204,29 @@ fn explain_jit_eligibility_internal(
     if func.ret != BytecodeType::Int64 {
         visited.remove(&function_id);
         match &func.ret {
-            BytecodeType::Bool => return JitEligibility::UnsupportedType("Bool signatures are not supported by JIT v1".into()),
+            BytecodeType::Bool => {
+                return JitEligibility::UnsupportedType(
+                    "Bool signatures are not supported by JIT v1".into(),
+                )
+            }
             BytecodeType::String | BytecodeType::Any => {
                 return JitEligibility::UnsupportedType("Returning heap values is not supported by JIT v1 (heap-producing functions not allowed)".into());
             }
-            _ => return JitEligibility::UnsupportedType(format!("Return has unsupported type {:?}", func.ret)),
+            _ => {
+                return JitEligibility::UnsupportedType(format!(
+                    "Return has unsupported type {:?}",
+                    func.ret
+                ))
+            }
         }
     }
     // Locals must be Int64, Bool, String, Any
     for (i, l) in func.locals.iter().enumerate() {
-        if *l != BytecodeType::Int64 && *l != BytecodeType::Bool && *l != BytecodeType::String && *l != BytecodeType::Any {
+        if *l != BytecodeType::Int64
+            && *l != BytecodeType::Bool
+            && *l != BytecodeType::String
+            && *l != BytecodeType::Any
+        {
             visited.remove(&function_id);
             return JitEligibility::UnsupportedType(format!("Local {} has unsupported type {:?}. JIT v1 only supports Int64, internal Bool, and read-only heap locals.", i, l));
         }
@@ -178,12 +238,22 @@ fn explain_jit_eligibility_internal(
             let target_eligibility = explain_jit_eligibility_internal(module, *target_id, visited);
             if target_eligibility != JitEligibility::Eligible {
                 visited.remove(&function_id);
-                if let JitEligibility::UnsupportedInstr { instr: ref target_instr, .. } = target_eligibility {
+                if let JitEligibility::UnsupportedInstr {
+                    instr: ref target_instr,
+                    ..
+                } = target_eligibility
+                {
                     if target_instr.contains("recursion") {
-                        return JitEligibility::UnsupportedInstr { offset, instr: "Call target not JIT eligible (recursion)".into() };
+                        return JitEligibility::UnsupportedInstr {
+                            offset,
+                            instr: "Call target not JIT eligible (recursion)".into(),
+                        };
                     }
                 }
-                return JitEligibility::UnsupportedInstr { offset, instr: format!("Call target not JIT eligible: {}", target_eligibility) };
+                return JitEligibility::UnsupportedInstr {
+                    offset,
+                    instr: format!("Call target not JIT eligible: {}", target_eligibility),
+                };
             }
         } else if !crate::lower::is_instr_supported(instr) {
             visited.remove(&function_id);
@@ -195,9 +265,9 @@ fn explain_jit_eligibility_internal(
                 BytecodeInstr::MakeArray(_) | BytecodeInstr::Slice | BytecodeInstr::ArrayPush => {
                     "Heap mutation/production requires Phase 17.1+".into()
                 }
-                BytecodeInstr::MakeEnum(_, _, _) | BytecodeInstr::Tag | BytecodeInstr::Unwrap(_, _) => {
-                    "Enum heap operation requires Phase 17.2+".into()
-                }
+                BytecodeInstr::MakeEnum(_, _, _)
+                | BytecodeInstr::Tag
+                | BytecodeInstr::Unwrap(_, _) => "Enum heap operation requires Phase 17.2+".into(),
                 _ => format!("{:?}", instr),
             };
             return JitEligibility::UnsupportedInstr { offset, instr: msg };
@@ -214,5 +284,8 @@ pub fn explain_jit_eligibility(module: &BytecodeModule, function_id: FunctionId)
 }
 
 pub fn can_jit_function(module: &BytecodeModule, function_id: FunctionId) -> bool {
-    matches!(explain_jit_eligibility(module, function_id), JitEligibility::Eligible)
+    matches!(
+        explain_jit_eligibility(module, function_id),
+        JitEligibility::Eligible
+    )
 }

@@ -1,4 +1,4 @@
-use tempra_driver::{run_source, check_source};
+use tempra_driver::{check_source, run_source};
 
 #[test]
 fn test_associated_type_multiple() {
@@ -73,7 +73,9 @@ fn first(type T, value: T) -> T.Output {
     let res = check_source(code);
     assert!(res.is_err());
     let err = format!("{:?}", res.err().unwrap());
-    assert!(err.contains("associated type projection is only valid on constrained generic parameters"));
+    assert!(
+        err.contains("associated type projection is only valid on constrained generic parameters")
+    );
 }
 
 #[test]
@@ -104,7 +106,9 @@ fn main() {
     let res = check_source(code);
     assert!(res.is_err());
     let err = format!("{:?}", res.err().unwrap());
-    assert!(err.contains("associated type projection is only valid on constrained generic parameters"));
+    assert!(
+        err.contains("associated type projection is only valid on constrained generic parameters")
+    );
 }
 
 #[test]

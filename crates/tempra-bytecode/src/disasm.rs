@@ -1,12 +1,12 @@
 use crate::bytecode::BytecodeModule;
-use crate::function::FunctionId;
 use crate::error::BytecodeError;
+use crate::function::FunctionId;
 use crate::opcode::BytecodeInstr;
 
 pub fn disassemble_module(module: &BytecodeModule) -> String {
     let mut out = String::new();
     out.push_str(&format!("Module v{}\n", module.version));
-    
+
     out.push_str("\nConstants:\n");
     for (i, c) in module.constants.iter().enumerate() {
         out.push_str(&format!("  #{}: {}\n", i, c));
@@ -23,14 +23,21 @@ pub fn disassemble_module(module: &BytecodeModule) -> String {
     out
 }
 
-pub fn disassemble_function(module: &BytecodeModule, func_id: FunctionId) -> Result<String, BytecodeError> {
-    let func = module.functions.get(func_id.0 as usize)
+pub fn disassemble_function(
+    module: &BytecodeModule,
+    func_id: FunctionId,
+) -> Result<String, BytecodeError> {
+    let func = module
+        .functions
+        .get(func_id.0 as usize)
         .ok_or(BytecodeError::InvalidFunctionId(func_id))?;
 
     let mut out = String::new();
     out.push_str(&format!("fn {} (", func.name));
     for (i, p) in func.params.iter().enumerate() {
-        if i > 0 { out.push_str(", "); }
+        if i > 0 {
+            out.push_str(", ");
+        }
         out.push_str(&format!("{}", p));
     }
     out.push_str(&format!(") -> {}\n", func.ret));
@@ -85,7 +92,10 @@ pub fn disassemble_function(module: &BytecodeModule, func_id: FunctionId) -> Res
                 out.push_str(&format!("Call @{} ({}) // {}\n", id.0, argc, name));
             }
             BytecodeInstr::MakeEnum(enum_id, variant_id, count) => {
-                out.push_str(&format!("MakeEnum #{} #{} count={}\n", enum_id.0, variant_id.0, count));
+                out.push_str(&format!(
+                    "MakeEnum #{} #{} count={}\n",
+                    enum_id.0, variant_id.0, count
+                ));
             }
             BytecodeInstr::Tag => out.push_str("Tag\n"),
             BytecodeInstr::Unwrap(variant_id, idx) => {
@@ -99,7 +109,10 @@ pub fn disassemble_function(module: &BytecodeModule, func_id: FunctionId) -> Res
             BytecodeInstr::Bytes => out.push_str("Bytes\n"),
             BytecodeInstr::ArrayPush => out.push_str("ArrayPush\n"),
             BytecodeInstr::MakeStruct(name, fields, count) => {
-                out.push_str(&format!("MakeStruct #{} #{} count={}\n", name.0, fields.0, count));
+                out.push_str(&format!(
+                    "MakeStruct #{} #{} count={}\n",
+                    name.0, fields.0, count
+                ));
             }
             BytecodeInstr::GetField(name) => {
                 out.push_str(&format!("GetField #{}\n", name.0));

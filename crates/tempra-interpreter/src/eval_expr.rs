@@ -122,7 +122,9 @@ impl Interpreter {
         match ty {
             HirType::Named(_, n) => n.clone(),
             HirType::Apply(_, callee, _) => Self::get_type_name(callee),
-            HirType::Projection(_, base, member) => format!("{}.{}", Self::get_type_name(base), member),
+            HirType::Projection(_, base, member) => {
+                format!("{}.{}", Self::get_type_name(base), member)
+            }
             _ => "Unknown".to_string(),
         }
     }
@@ -378,12 +380,11 @@ impl Interpreter {
                                         }
                                         match &slice.parent {
                                             crate::value::SliceParent::Values(v) => {
-                                                v.borrow_mut()[slice.start + idx] =
-                                                    right.clone();
+                                                v.borrow_mut()[slice.start + idx] = right.clone();
                                             }
                                             crate::value::SliceParent::Bytes(_) => {
                                                 return Err(
-                                                    "Cannot assign to byte slice element".into(),
+                                                    "Cannot assign to byte slice element".into()
                                                 );
                                             }
                                         }
@@ -464,7 +465,9 @@ impl Interpreter {
                                         if end > arr_mut.len() {
                                             return Ok(ControlFlow::Crash(format!(
                                                 "Slice bounds out of range: [{}..{}] for length {}",
-                                                start, end, arr_mut.len()
+                                                start,
+                                                end,
+                                                arr_mut.len()
                                             )));
                                         }
                                         for (j, val) in rhs_values.into_iter().enumerate() {
@@ -519,16 +522,12 @@ impl Interpreter {
                                         match &slice.parent {
                                             crate::value::SliceParent::Values(v) => {
                                                 let mut v_mut = v.borrow_mut();
-                                                for (j, val) in
-                                                    rhs_values.into_iter().enumerate()
-                                                {
+                                                for (j, val) in rhs_values.into_iter().enumerate() {
                                                     v_mut[slice.start + start + j] = val;
                                                 }
                                             }
                                             crate::value::SliceParent::Bytes(_) => {
-                                                return Err(
-                                                    "Cannot assign to byte slice".into()
-                                                );
+                                                return Err("Cannot assign to byte slice".into());
                                             }
                                         }
                                         return Ok(ControlFlow::Value(right));
@@ -972,22 +971,28 @@ impl Interpreter {
                                 if !call.args.is_empty() {
                                     return Err("Method 'len' expects 0 arguments".into());
                                 }
-                                return Ok(ControlFlow::Value(Value::Int64(arr.borrow().len() as i64)));
+                                return Ok(ControlFlow::Value(Value::Int64(
+                                    arr.borrow().len() as i64
+                                )));
                             }
                             if member.field == "is_empty" {
                                 if !call.args.is_empty() {
                                     return Err("Method 'is_empty' expects 0 arguments".into());
                                 }
-                                return Ok(ControlFlow::Value(Value::Bool(arr.borrow().is_empty())));
+                                return Ok(ControlFlow::Value(Value::Bool(
+                                    arr.borrow().is_empty(),
+                                )));
                             }
                             if member.field == "iter" {
                                 if !call.args.is_empty() {
                                     return Err("Method 'iter' expects 0 arguments".into());
                                 }
-                                return Ok(ControlFlow::Value(Value::ArrayIter(crate::value::ArrayIterValue {
-                                    array: arr.clone(),
-                                    index: std::rc::Rc::new(std::cell::RefCell::new(0)),
-                                })));
+                                return Ok(ControlFlow::Value(Value::ArrayIter(
+                                    crate::value::ArrayIterValue {
+                                        array: arr.clone(),
+                                        index: std::rc::Rc::new(std::cell::RefCell::new(0)),
+                                    },
+                                )));
                             }
                             return Err(format!("Unknown method '{}' on Array", member.field));
                         }
@@ -1008,10 +1013,12 @@ impl Interpreter {
                                 if !call.args.is_empty() {
                                     return Err("Method 'iter' expects 0 arguments".into());
                                 }
-                                return Ok(ControlFlow::Value(Value::SliceIter(crate::value::SliceIterValue {
-                                    slice: slice.clone(),
-                                    index: std::rc::Rc::new(std::cell::RefCell::new(0)),
-                                })));
+                                return Ok(ControlFlow::Value(Value::SliceIter(
+                                    crate::value::SliceIterValue {
+                                        slice: slice.clone(),
+                                        index: std::rc::Rc::new(std::cell::RefCell::new(0)),
+                                    },
+                                )));
                             }
                             return Err(format!("Unknown method '{}' on Slice", member.field));
                         }
@@ -1025,9 +1032,13 @@ impl Interpreter {
                                 if *idx < arr.len() {
                                     let val = arr[*idx].clone();
                                     *idx += 1;
-                                    return Ok(ControlFlow::Value(Value::Option(crate::value::OptionValue::Some(Box::new(val)))));
+                                    return Ok(ControlFlow::Value(Value::Option(
+                                        crate::value::OptionValue::Some(Box::new(val)),
+                                    )));
                                 } else {
-                                    return Ok(ControlFlow::Value(Value::Option(crate::value::OptionValue::None)));
+                                    return Ok(ControlFlow::Value(Value::Option(
+                                        crate::value::OptionValue::None,
+                                    )));
                                 }
                             }
                             return Err(format!("Unknown method '{}' on ArrayIter", member.field));
@@ -1041,9 +1052,13 @@ impl Interpreter {
                                 if *idx < iter.slice.len() {
                                     let val = iter.slice.get(*idx).unwrap();
                                     *idx += 1;
-                                    return Ok(ControlFlow::Value(Value::Option(crate::value::OptionValue::Some(Box::new(val)))));
+                                    return Ok(ControlFlow::Value(Value::Option(
+                                        crate::value::OptionValue::Some(Box::new(val)),
+                                    )));
                                 } else {
-                                    return Ok(ControlFlow::Value(Value::Option(crate::value::OptionValue::None)));
+                                    return Ok(ControlFlow::Value(Value::Option(
+                                        crate::value::OptionValue::None,
+                                    )));
                                 }
                             }
                             return Err(format!("Unknown method '{}' on SliceIter", member.field));
@@ -1387,9 +1402,13 @@ impl Interpreter {
 
                     for v in positional_values {
                         // Determine if we should skip 'type' parameters
-                        while param_idx < func.parameters.len() && func.parameters[param_idx].kind == ParameterKind::Type {
+                        while param_idx < func.parameters.len()
+                            && func.parameters[param_idx].kind == ParameterKind::Type
+                        {
                             let already_satisfied = call.type_args.is_some();
-                            let not_enough_args = (num_positional_args - (param_idx - type_params_skipped)) < (func.parameters.len() - param_idx);
+                            let not_enough_args = (num_positional_args
+                                - (param_idx - type_params_skipped))
+                                < (func.parameters.len() - param_idx);
 
                             if already_satisfied || not_enough_args {
                                 param_idx += 1;
@@ -1494,7 +1513,9 @@ impl Interpreter {
                     Value::Command(c) => match member.field.as_str() {
                         "program" => Ok(ControlFlow::Value(Value::String(c.program.clone()))),
                         "args" => Ok(ControlFlow::Value(Value::Array(std::rc::Rc::new(
-                            std::cell::RefCell::new(c.args.iter().map(|s| Value::String(s.clone())).collect()),
+                            std::cell::RefCell::new(
+                                c.args.iter().map(|s| Value::String(s.clone())).collect(),
+                            ),
                         )))),
                         _ => Err(format!("Field {} not found on Command", member.field)),
                     },
@@ -1710,10 +1731,11 @@ impl Interpreter {
                         // Custom Iterable: call iter() method
                         let method_name = format!("{}.iter", s.name);
                         if let Some(func) = self.functions.get(&method_name).cloned() {
-                            let iter_val = match self.call_function(&func, None, vec![iterable.clone()])? {
-                                ControlFlow::Value(v) => v,
-                                cf => return Ok(cf),
-                            };
+                            let iter_val =
+                                match self.call_function(&func, None, vec![iterable.clone()])? {
+                                    ControlFlow::Value(v) => v,
+                                    cf => return Ok(cf),
+                                };
                             iterator = Some(iter_val);
                         } else {
                             return Err(format!(
@@ -1817,7 +1839,9 @@ impl Interpreter {
                                 // Use call_function_with_env to recover the mutated self from the env.
                                 let method_name = format!("{}.next", s.name);
                                 if let Some(func) = self.functions.get(&method_name).cloned() {
-                                    let self_param_name = func.parameters.first()
+                                    let self_param_name = func
+                                        .parameters
+                                        .first()
                                         .map(|p| p.name.clone())
                                         .unwrap_or_else(|| "self".to_string());
                                     let (cf, post_env) = self.call_function_with_env(
@@ -2609,7 +2633,9 @@ impl Interpreter {
                         .split(p)
                         .map(|part| Value::String(part.to_string()))
                         .collect();
-                    Ok(Value::Array(std::rc::Rc::new(std::cell::RefCell::new(parts))))
+                    Ok(Value::Array(std::rc::Rc::new(std::cell::RefCell::new(
+                        parts,
+                    ))))
                 } else {
                     Err("split expects String".into())
                 }
@@ -2750,7 +2776,13 @@ impl Interpreter {
         let type_name = match &receiver {
             Value::Struct(s) => s.name.clone(),
             Value::Enum(e) => e.enum_name.clone(),
-            _ => return Err(format!("type {} has no method '{}'", receiver.type_name(), method_name)),
+            _ => {
+                return Err(format!(
+                    "type {} has no method '{}'",
+                    receiver.type_name(),
+                    method_name
+                ))
+            }
         };
         let mangled = format!("{}.{}", type_name, method_name);
         if let Some(func) = self.functions.get(&mangled).cloned() {
@@ -2758,7 +2790,10 @@ impl Interpreter {
             call_args.extend(args);
             self.call_function(&func, None, call_args)
         } else {
-            Err(format!("no method '{}' found on type '{}'", method_name, type_name))
+            Err(format!(
+                "no method '{}' found on type '{}'",
+                method_name, type_name
+            ))
         }
     }
 
@@ -2778,7 +2813,13 @@ impl Interpreter {
         let type_name = match &receiver {
             Value::Struct(s) => s.name.clone(),
             Value::Enum(e) => e.enum_name.clone(),
-            _ => return Err(format!("type {} has no method '{}'", receiver.type_name(), method_name)),
+            _ => {
+                return Err(format!(
+                    "type {} has no method '{}'",
+                    receiver.type_name(),
+                    method_name
+                ))
+            }
         };
         let mangled = format!("{}.{}", type_name, method_name);
         if let Some(func) = self.functions.get(&mangled).cloned() {
@@ -2791,7 +2832,10 @@ impl Interpreter {
             }
             Ok(result)
         } else {
-            Err(format!("no method '{}' found on type '{}'", method_name, type_name))
+            Err(format!(
+                "no method '{}' found on type '{}'",
+                method_name, type_name
+            ))
         }
     }
 

@@ -11,15 +11,22 @@ pub fn format_tir_module(module: &TirModule) -> String {
 
 pub fn format_tir_function(func: &TirFunction) -> String {
     let mut out = String::new();
-    let params: Vec<String> = func.params.iter()
+    let params: Vec<String> = func
+        .params
+        .iter()
         .map(|(id, ty)| format!("%{}: {}", id.0, format_type(ty)))
         .collect();
-    
-    out.push_str(&format!("fn {} ({}) -> {} {{\n", func.name, params.join(", "), format_type(&func.return_type)));
-    
+
+    out.push_str(&format!(
+        "fn {} ({}) -> {} {{\n",
+        func.name,
+        params.join(", "),
+        format_type(&func.return_type)
+    ));
+
     let mut sorted_slots: Vec<_> = func.debug_slots.iter().collect();
     sorted_slots.sort_by_key(|(id, _)| id.0);
-    
+
     for (slot_id, name) in sorted_slots {
         out.push_str(&format!("  // slot ${} = {}\n", slot_id.0, name));
     }
@@ -52,7 +59,10 @@ pub fn format_type(ty: &TirType) -> String {
         TirType::Tag => "Tag".to_string(),
         TirType::Array(t) => format!("[{}]", format_type(t)),
         TirType::Slice(t) => format!("&[{}]", format_type(t)),
-        TirType::Tuple(ts) => format!("({})", ts.iter().map(format_type).collect::<Vec<_>>().join(", ")),
+        TirType::Tuple(ts) => format!(
+            "({})",
+            ts.iter().map(format_type).collect::<Vec<_>>().join(", ")
+        ),
         TirType::Struct(name) => name.clone(),
         TirType::Enum(name) => name.clone(),
         TirType::Option(t) => format!("Option<{}>", format_type(t)),
@@ -67,16 +77,43 @@ pub fn format_type(ty: &TirType) -> String {
 pub fn format_instr(instr: &TirInstr) -> String {
     match instr {
         TirInstr::Const(res, val) => format!("%{} = const {}", res.0, format_const(val)),
-        TirInstr::Make(res, ty, variant, args) => format!("%{} = make {}::{:?} ({})", res.0, format_type(ty), variant, format_args(args)),
-        TirInstr::MakeStruct(res, name, fields) => format!("%{} = make struct {} {{ {} }}", res.0, name, fields.iter().map(|(n, v)| format!("{}: %{}", n, v.0)).collect::<Vec<_>>().join(", ")),
-        TirInstr::Get(res, target, key) => format!("%{} = get %{}, {}", res.0, target.0, format_key(key)),
-        TirInstr::Set(res, target, key, val) => format!("%{} = set %{}, {}, %{}", res.0, target.0, format_key(key), val.0),
+        TirInstr::Make(res, ty, variant, args) => format!(
+            "%{} = make {}::{:?} ({})",
+            res.0,
+            format_type(ty),
+            variant,
+            format_args(args)
+        ),
+        TirInstr::MakeStruct(res, name, fields) => format!(
+            "%{} = make struct {} {{ {} }}",
+            res.0,
+            name,
+            fields
+                .iter()
+                .map(|(n, v)| format!("{}: %{}", n, v.0))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        TirInstr::Get(res, target, key) => {
+            format!("%{} = get %{}, {}", res.0, target.0, format_key(key))
+        }
+        TirInstr::Set(res, target, key, val) => format!(
+            "%{} = set %{}, {}, %{}",
+            res.0,
+            target.0,
+            format_key(key),
+            val.0
+        ),
         TirInstr::Tag(res, target) => format!("%{} = tag %{}", res.0, target.0),
-        TirInstr::Unwrap(res, target, variant, idx) => format!("%{} = unwrap %{} as {}.{}", res.0, target.0, variant, idx),
+        TirInstr::Unwrap(res, target, variant, idx) => {
+            format!("%{} = unwrap %{} as {}.{}", res.0, target.0, variant, idx)
+        }
         TirInstr::Slot(slot, ty) => format!("slot ${}: {}", slot.0, format_type(ty)),
         TirInstr::Load(res, slot) => format!("%{} = load ${}", res.0, slot.0),
         TirInstr::Store(slot, val) => format!("store ${}, %{}", slot.0, val.0),
-        TirInstr::Call(res, func, args) => format!("%{} = call @{} ({})", res.0, func.0, format_args(args)),
+        TirInstr::Call(res, func, args) => {
+            format!("%{} = call @{} ({})", res.0, func.0, format_args(args))
+        }
         TirInstr::Add(res, a, b) => format!("%{} = add %{}, %{}", res.0, a.0, b.0),
         TirInstr::Sub(res, a, b) => format!("%{} = sub %{}, %{}", res.0, a.0, b.0),
         TirInstr::Mul(res, a, b) => format!("%{} = mul %{}, %{}", res.0, a.0, b.0),
@@ -87,17 +124,26 @@ pub fn format_instr(instr: &TirInstr) -> String {
         TirInstr::And(res, a, b) => format!("%{} = and %{}, %{}", res.0, a.0, b.0),
         TirInstr::Or(res, a, b) => format!("%{} = or %{}, %{}", res.0, a.0, b.0),
         TirInstr::Not(res, a) => format!("%{} = not %{}", res.0, a.0),
-        TirInstr::GetIndex(res, obj, idx) => format!("%{} = get_index %{}, %{}", res.0, obj.0, idx.0),
-        TirInstr::Slice(res, obj, s, e) => format!("%{} = slice %{}, %{}..%{}", res.0, obj.0, s.0, e.0),
+        TirInstr::GetIndex(res, obj, idx) => {
+            format!("%{} = get_index %{}, %{}", res.0, obj.0, idx.0)
+        }
+        TirInstr::Slice(res, obj, s, e) => {
+            format!("%{} = slice %{}, %{}..%{}", res.0, obj.0, s.0, e.0)
+        }
         TirInstr::Len(res, obj) => format!("%{} = len %{}", res.0, obj.0),
         TirInstr::Size(res, obj) => format!("%{} = size %{}", res.0, obj.0),
         TirInstr::Bytes(res, obj) => format!("%{} = bytes %{}", res.0, obj.0),
-        TirInstr::ArrayPush(res, arr, val) => format!("%{} = array_push %{}, %{}", res.0, arr.0, val.0),
+        TirInstr::ArrayPush(res, arr, val) => {
+            format!("%{} = array_push %{}, %{}", res.0, arr.0, val.0)
+        }
     }
 }
 
 pub fn format_args(args: &[TirValueId]) -> String {
-    args.iter().map(|a| format!("%{}", a.0)).collect::<Vec<_>>().join(", ")
+    args.iter()
+        .map(|a| format!("%{}", a.0))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 pub fn format_key(key: &TirKey) -> String {
@@ -121,7 +167,9 @@ pub fn format_const(val: &TirConst) -> String {
 pub fn format_terminator(term: &TirTerminator) -> String {
     match term {
         TirTerminator::Br(target) => format!("br ^block{}", target.0),
-        TirTerminator::CondBr(cond, t, f) => format!("condbr %{}, ^block{}, ^block{}", cond.0, t.0, f.0),
+        TirTerminator::CondBr(cond, t, f) => {
+            format!("condbr %{}, ^block{}, ^block{}", cond.0, t.0, f.0)
+        }
         TirTerminator::Ret(Some(val)) => format!("ret %{}", val.0),
         TirTerminator::Ret(None) => "ret".to_string(),
         TirTerminator::Unreachable => "unreachable".to_string(),

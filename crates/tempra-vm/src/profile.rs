@@ -33,7 +33,7 @@ pub struct FunctionProfile {
     pub backedge_count: u64,
     pub is_hot: bool,
     pub top_opcodes: Vec<(&'static str, u64)>,
-    
+
     // JIT Stats
     pub jit_compile_attempts: u64,
     pub jit_compile_successes: u64,
@@ -44,7 +44,15 @@ pub struct FunctionProfile {
     pub jit_compile_time_ns: u64,
     pub jit_total_native_time_ns: u64,
     pub jit_rejected_count: u64,
-    
+
+    // JIT Heap Stats
+    pub jit_heap_runtime_calls: u64,
+    pub jit_heap_helper_calls: u64,
+    pub jit_heap_handle_allocations: u64,
+    pub jit_heap_context_objects: u64,
+    pub jit_heap_fallbacks: u64,
+    pub jit_heap_errors: u64,
+
     // JIT Policy Stats
     pub jit_skipped_below_threshold: u64,
     pub jit_skipped_too_small: u64,
@@ -68,14 +76,20 @@ impl VmProfile {
         writeln!(s, "Hot Functions:").unwrap();
         let mut hot_funcs: Vec<_> = self.function_stats.iter().filter(|f| f.is_hot).collect();
         hot_funcs.sort_by_key(|f| std::cmp::Reverse(f.instruction_count));
-        
+
         for f in hot_funcs {
-            writeln!(s, "  {} calls={} instrs={} backedges={} hot=true", 
-                f.function_name, f.call_count, f.instruction_count, f.backedge_count).unwrap();
+            writeln!(
+                s,
+                "  {} calls={} instrs={} backedges={} hot=true",
+                f.function_name, f.call_count, f.instruction_count, f.backedge_count
+            )
+            .unwrap();
         }
 
         writeln!(s, "\nGlobal Top Opcodes:").unwrap();
-        let mut opcodes: Vec<_> = self.global_opcode_counts.iter()
+        let mut opcodes: Vec<_> = self
+            .global_opcode_counts
+            .iter()
             .enumerate()
             .filter(|(_, &count)| count > 0)
             .collect();
@@ -86,16 +100,48 @@ impl VmProfile {
             writeln!(s, "  {}: {}", name, count).unwrap();
         }
 
-        let total_attempts: u64 = self.function_stats.iter().map(|f| f.jit_compile_attempts).sum();
+        let total_attempts: u64 = self
+            .function_stats
+            .iter()
+            .map(|f| f.jit_compile_attempts)
+            .sum();
         if total_attempts > 0 {
             writeln!(s, "\nJIT Summary:").unwrap();
-            let total_successes: u64 = self.function_stats.iter().map(|f| f.jit_compile_successes).sum();
-            let total_failures: u64 = self.function_stats.iter().map(|f| f.jit_compile_failures).sum();
-            let total_runtime: u64 = self.function_stats.iter().map(|f| f.jit_runtime_calls).sum();
-            let total_fallback: u64 = self.function_stats.iter().map(|f| f.jit_fallback_calls).sum();
-            let total_compile_time_ns: u64 = self.function_stats.iter().map(|f| f.jit_compile_time_ns).sum();
-            let total_native_time_ns: u64 = self.function_stats.iter().map(|f| f.jit_total_native_time_ns).sum();
-            let total_rejected_count: u64 = self.function_stats.iter().map(|f| f.jit_rejected_count).sum();
+            let total_successes: u64 = self
+                .function_stats
+                .iter()
+                .map(|f| f.jit_compile_successes)
+                .sum();
+            let total_failures: u64 = self
+                .function_stats
+                .iter()
+                .map(|f| f.jit_compile_failures)
+                .sum();
+            let total_runtime: u64 = self
+                .function_stats
+                .iter()
+                .map(|f| f.jit_runtime_calls)
+                .sum();
+            let total_fallback: u64 = self
+                .function_stats
+                .iter()
+                .map(|f| f.jit_fallback_calls)
+                .sum();
+            let total_compile_time_ns: u64 = self
+                .function_stats
+                .iter()
+                .map(|f| f.jit_compile_time_ns)
+                .sum();
+            let total_native_time_ns: u64 = self
+                .function_stats
+                .iter()
+                .map(|f| f.jit_total_native_time_ns)
+                .sum();
+            let total_rejected_count: u64 = self
+                .function_stats
+                .iter()
+                .map(|f| f.jit_rejected_count)
+                .sum();
 
             writeln!(s, "  Compile attempts: {}", total_attempts).unwrap();
             writeln!(s, "  Successes:        {}", total_successes).unwrap();
@@ -106,29 +152,97 @@ impl VmProfile {
             writeln!(s, "  Compile time:     {} ns", total_compile_time_ns).unwrap();
             writeln!(s, "  Native runtime:   {} ns", total_native_time_ns).unwrap();
 
-            let rejected: Vec<_> = self.function_stats.iter()
+            let total_heap_runtime: u64 = self
+                .function_stats
+                .iter()
+                .map(|f| f.jit_heap_runtime_calls)
+                .sum();
+            let total_heap_helper: u64 = self
+                .function_stats
+                .iter()
+                .map(|f| f.jit_heap_helper_calls)
+                .sum();
+            let total_heap_allocations: u64 = self
+                .function_stats
+                .iter()
+                .map(|f| f.jit_heap_handle_allocations)
+                .sum();
+            let total_heap_objects: u64 = self
+                .function_stats
+                .iter()
+                .map(|f| f.jit_heap_context_objects)
+                .sum();
+            let total_heap_fallbacks: u64 = self
+                .function_stats
+                .iter()
+                .map(|f| f.jit_heap_fallbacks)
+                .sum();
+            let total_heap_errors: u64 =
+                self.function_stats.iter().map(|f| f.jit_heap_errors).sum();
+
+            writeln!(s, "  Heap runtime:     {}", total_heap_runtime).unwrap();
+            writeln!(s, "  Heap helper:      {}", total_heap_helper).unwrap();
+            writeln!(s, "  Heap allocations: {}", total_heap_allocations).unwrap();
+            writeln!(s, "  Heap context objs:{}", total_heap_objects).unwrap();
+            writeln!(s, "  Heap fallbacks:   {}", total_heap_fallbacks).unwrap();
+            writeln!(s, "  Heap errors:      {}", total_heap_errors).unwrap();
+
+            let rejected: Vec<_> = self
+                .function_stats
+                .iter()
                 .filter(|f| f.jit_rejection_reason.is_some())
                 .collect();
-            
+
             if !rejected.is_empty() {
                 writeln!(s, "\nJIT Rejections:").unwrap();
                 for f in rejected {
-                    writeln!(s, "  function {}: {}", f.function_name, f.jit_rejection_reason.as_ref().unwrap()).unwrap();
+                    writeln!(
+                        s,
+                        "  function {}: {}",
+                        f.function_name,
+                        f.jit_rejection_reason.as_ref().unwrap()
+                    )
+                    .unwrap();
                 }
             }
         }
-        
-        let total_skipped_threshold: u64 = self.function_stats.iter().map(|f| f.jit_skipped_below_threshold).sum();
-        let total_skipped_small: u64 = self.function_stats.iter().map(|f| f.jit_skipped_too_small).sum();
-        let total_skipped_retry: u64 = self.function_stats.iter().map(|f| f.jit_skipped_retry_limit).sum();
-        let total_permanent_rejections: u64 = self.function_stats.iter().map(|f| f.jit_permanent_rejections).sum();
-        
-        if total_skipped_threshold > 0 || total_skipped_small > 0 || total_skipped_retry > 0 || total_permanent_rejections > 0 {
+
+        let total_skipped_threshold: u64 = self
+            .function_stats
+            .iter()
+            .map(|f| f.jit_skipped_below_threshold)
+            .sum();
+        let total_skipped_small: u64 = self
+            .function_stats
+            .iter()
+            .map(|f| f.jit_skipped_too_small)
+            .sum();
+        let total_skipped_retry: u64 = self
+            .function_stats
+            .iter()
+            .map(|f| f.jit_skipped_retry_limit)
+            .sum();
+        let total_permanent_rejections: u64 = self
+            .function_stats
+            .iter()
+            .map(|f| f.jit_permanent_rejections)
+            .sum();
+
+        if total_skipped_threshold > 0
+            || total_skipped_small > 0
+            || total_skipped_retry > 0
+            || total_permanent_rejections > 0
+        {
             writeln!(s, "\nJIT Policy:").unwrap();
             writeln!(s, "  skipped below threshold: {}", total_skipped_threshold).unwrap();
             writeln!(s, "  skipped too small:       {}", total_skipped_small).unwrap();
             writeln!(s, "  retry-limit skips:       {}", total_skipped_retry).unwrap();
-            writeln!(s, "  permanent rejections:    {}", total_permanent_rejections).unwrap();
+            writeln!(
+                s,
+                "  permanent rejections:    {}",
+                total_permanent_rejections
+            )
+            .unwrap();
         }
 
         s
@@ -202,7 +316,7 @@ pub(crate) struct FunctionStats {
     pub instruction_count: u64,
     pub backedge_count: u64,
     pub opcode_counts: Vec<u64>,
-    
+
     // JIT Stats
     pub jit_compile_attempts: u64,
     pub jit_compile_successes: u64,
@@ -213,7 +327,15 @@ pub(crate) struct FunctionStats {
     pub jit_compile_time_ns: u64,
     pub jit_total_native_time_ns: u64,
     pub jit_rejected_count: u64,
-    
+
+    // JIT Heap Stats
+    pub jit_heap_runtime_calls: u64,
+    pub jit_heap_helper_calls: u64,
+    pub jit_heap_handle_allocations: u64,
+    pub jit_heap_context_objects: u64,
+    pub jit_heap_fallbacks: u64,
+    pub jit_heap_errors: u64,
+
     // JIT Policy Stats
     pub jit_skipped_below_threshold: u64,
     pub jit_skipped_too_small: u64,
@@ -239,6 +361,12 @@ impl Default for FunctionStats {
             jit_compile_time_ns: 0,
             jit_total_native_time_ns: 0,
             jit_rejected_count: 0,
+            jit_heap_runtime_calls: 0,
+            jit_heap_helper_calls: 0,
+            jit_heap_handle_allocations: 0,
+            jit_heap_context_objects: 0,
+            jit_heap_fallbacks: 0,
+            jit_heap_errors: 0,
             jit_skipped_below_threshold: 0,
             jit_skipped_too_small: 0,
             jit_skipped_retry_limit: 0,
@@ -263,5 +391,4 @@ impl ProfilingState {
             options,
         }
     }
-
 }

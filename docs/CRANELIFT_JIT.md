@@ -33,12 +33,28 @@ The prototype currently supports an `Int64 + internal Bool + Heap Read-Only Subs
 ### Unsupported Features (Fallback to VM)
 Any function using the following features is currently rejected by the JIT and will execute via the standard stack interpreter:
 - **Bool in ABI**: Boolean parameters or return types are rejected (ABI mismatch). Bools are only supported as internal locals.
-- **Heap Mutation**: `ArrayPush`, `String.concat` (mutation or production of new heap handles is isolated to interpreter until Phase 18).
+- **Heap Mutation**: `ArrayPush`, `MakeArray`, `Slice` (mutation or production of new heap handles is isolated to interpreter until Phase 18).
 - Structs, Enums.
 - Option, Result.
 - Recursion (recursive function calls are currently rejected to prevent compilation loops).
 - Closures and methods.
 - Floating point or unsigned arithmetic.
+- Functions returning heap handles (`String`, `Any`).
+
+## Source-Level JIT Operation Status (v0.2)
+
+| Operation       | Source-level JIT | Behavior on rejection     |
+|-----------------|------------------|---------------------------|
+| `String.len`    | ✅ Supported      | —                         |
+| `String.size`   | ✅ Supported      | —                         |
+| `Array.len`     | ✅ Supported      | —                         |
+| `Array.get_i64` | ✅ Supported      | —                         |
+| `String.concat` | ❌ Rejected       | VM fallback (interpreter) |
+| `Array.push`    | ❌ Rejected       | VM fallback (interpreter) |
+| `Struct.get`    | ❌ Rejected       | VM fallback (interpreter) |
+| `Struct.set`    | ❌ Rejected       | VM fallback (interpreter) |
+| `Enum.tag`      | ❌ Rejected       | VM fallback (interpreter) |
+| `Enum.unwrap`   | ❌ Rejected       | VM fallback (interpreter) |
 
 ## Implementation Details
 

@@ -268,16 +268,40 @@ fn explain_jit_eligibility_internal(
             visited.remove(&function_id);
             use tempra_bytecode::opcode::BytecodeInstr;
             let msg = match instr {
-                BytecodeInstr::GetField(_) | BytecodeInstr::SetField(_) => {
-                    "Struct heap operation requires Phase 17.2+".into()
+                BytecodeInstr::ArrayPush => {
+                    "Array.push is not supported in source-level JIT v1 (heap mutation rejected)"
+                        .into()
                 }
-                BytecodeInstr::MakeArray(_) | BytecodeInstr::Slice | BytecodeInstr::ArrayPush => {
-                    "Heap mutation/production requires Phase 17.1+".into()
+                BytecodeInstr::MakeArray(_) => {
+                    "MakeArray is not supported in source-level JIT v1 (heap production rejected)"
+                        .into()
                 }
-                BytecodeInstr::MakeEnum(_, _, _)
-                | BytecodeInstr::Tag
-                | BytecodeInstr::Unwrap(_, _) => "Enum heap operation requires Phase 17.2+".into(),
-                _ => format!("{:?}", instr),
+                BytecodeInstr::Slice => {
+                    "Slice is not supported in source-level JIT v1 (heap production rejected)"
+                        .into()
+                }
+                BytecodeInstr::GetField(_) => {
+                    "Struct.get (GetField) is not supported in source-level JIT v1".into()
+                }
+                BytecodeInstr::SetField(_) => {
+                    "Struct.set (SetField) is not supported in source-level JIT v1".into()
+                }
+                BytecodeInstr::MakeStruct(_, _, _) => {
+                    "Struct construction is not supported in source-level JIT v1".into()
+                }
+                BytecodeInstr::MakeEnum(_, _, _) => {
+                    "Enum construction is not supported in source-level JIT v1".into()
+                }
+                BytecodeInstr::Tag => {
+                    "Enum.tag is not supported in source-level JIT v1".into()
+                }
+                BytecodeInstr::Unwrap(_, _) => {
+                    "Enum.unwrap is not supported in source-level JIT v1".into()
+                }
+                BytecodeInstr::Bytes => {
+                    "Bytes (raw byte extraction) is not supported in source-level JIT v1".into()
+                }
+                _ => format!("Unsupported instruction '{:?}' in JIT v1", instr),
             };
             return JitEligibility::UnsupportedInstr { offset, instr: msg };
         }

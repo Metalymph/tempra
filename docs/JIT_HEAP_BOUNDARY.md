@@ -117,6 +117,11 @@ To ensure memory safety and maintain the integrity of the VM garbage collector (
 - **Phase 17.5**: Heap-aware JIT Generic Helper Intrinsics. [COMPLETE]
     - **Intrinsic Layer**: Introduced generic dispatcher intrinsics (`tmpr_jit_generic_len`, `tmpr_jit_generic_size`, `tmpr_jit_generic_get_i64`) to route JIT operations securely across distinct heap types at runtime.
     - **Source Level Integration**: Bound language-level generic bytecode (`Size`, `Len`, `GetIndex`) to these intrinsics instead of directly hardcoding type-specific helpers. Specialized helpers are retained purely as granular lower-level building blocks.
+- **Phase 17.6**: Heap-aware JIT Rejection & Fallback Hardening. [COMPLETE]
+    - **Named Diagnostics**: All eligibility rejection messages are now operation-specific (e.g. `"Array.push is not supported"`, `"Enum.tag is not supported"`) — no more phase-number-only messages.
+    - **Fallback Safety**: Verified no panics on unsupported operations; VM interpreter fallback is transparent and correct.
+    - **Profile Visibility**: `VmProfile::summary()` now always shows `permanent rejections:` when any function is rejected.
+    - **Operation Status Table**: Added canonical operation-status table to `CRANELIFT_JIT.md`.
 
 ## Integrated JIT Telemetry & Lifetime Scoping (Phase 17.2)
 

@@ -256,16 +256,6 @@ fn jit_nested_if_else() {
     assert_eq!(jit_fn.call_i64(&[15]).unwrap(), 3);
 }
 
-#[test]
-fn jit_rejects_string_function() {
-    let mut module = BytecodeModule::new();
-    let mut func = BytecodeFunction::new("test".into(), vec![BytecodeType::String], BytecodeType::Int64);
-    func.locals = vec![BytecodeType::String];
-    func.code.push(BytecodeInstr::Return);
-    let id = module.add_function(func);
-
-    assert!(!can_jit_function(&module, id));
-}
 
 #[test]
 fn jit_call_add_function() {
@@ -340,25 +330,6 @@ fn jit_call_chain() {
     assert_eq!(jit_twice.call_i64(&[40]).unwrap(), 42);
 }
 
-#[test]
-fn jit_rejects_call_to_string_function() {
-    let mut module = BytecodeModule::new();
-    
-    // fn bad(s: String) -> Int64
-    let bad_fn = BytecodeFunction::new("bad".into(), vec![BytecodeType::String], BytecodeType::Int64);
-    let bad_id = module.add_function(bad_fn);
-
-    // fn main() -> Int64 { bad("...") }
-    let mut main_fn = BytecodeFunction::new("main".into(), vec![], BytecodeType::Int64);
-    main_fn.code.push(BytecodeInstr::Call(bad_id, 1));
-    main_fn.code.push(BytecodeInstr::Return);
-    let main_id = module.add_function(main_fn);
-
-    let eligibility = crate::engine::explain_jit_eligibility(&module, main_id);
-    assert!(matches!(eligibility, crate::engine::JitEligibility::UnsupportedInstr { .. }));
-    let err_str = eligibility.to_string();
-    assert!(err_str.contains("Call target not JIT eligible"));
-}
 
 #[test]
 fn jit_rejects_recursive_function_v1() {
@@ -382,40 +353,7 @@ fn jit_rejects_recursive_function_v1() {
     assert!(eligibility.to_string().contains("recursion"));
 }
 
-#[test]
-fn jit_rejects_string_signature_with_heap_boundary_message() {
-    let mut module = BytecodeModule::new();
-    let func = BytecodeFunction::new("test".into(), vec![BytecodeType::String], BytecodeType::Int64);
-    let id = module.add_function(func);
-    
-    let eligibility = crate::engine::explain_jit_eligibility(&module, id);
-    assert!(eligibility.to_string().contains("heap value signatures are not supported by JIT v1"));
-}
 
-#[test]
-fn jit_rejects_array_instruction_with_heap_boundary_message() {
-    let mut module = BytecodeModule::new();
-    let mut func = BytecodeFunction::new("test".into(), vec![BytecodeType::Int64], BytecodeType::Int64);
-    func.code.push(BytecodeInstr::MakeArray(0));
-    func.code.push(BytecodeInstr::Return);
-    let id = module.add_function(func);
-    
-    let eligibility = crate::engine::explain_jit_eligibility(&module, id);
-    assert!(eligibility.to_string().contains("heap operation requires runtime helper boundary"));
-}
-
-#[test]
-fn jit_rejects_struct_getfield_with_helper_message() {
-    let mut module = BytecodeModule::new();
-    let mut func = BytecodeFunction::new("test".into(), vec![BytecodeType::Int64], BytecodeType::Int64);
-    let c_name = module.add_constant(BytecodeConstant::String("field".into()));
-    func.code.push(BytecodeInstr::GetField(c_name));
-    func.code.push(BytecodeInstr::Return);
-    let id = module.add_function(func);
-    
-    let eligibility = crate::engine::explain_jit_eligibility(&module, id);
-    assert!(eligibility.to_string().contains("heap operation requires runtime helper boundary"));
-}
 
 #[test]
 fn jit_int64_functions_still_eligible() {
@@ -1591,4 +1529,145 @@ fn jit_helper_array_push_i64_errors() {
     // 3. Null context
     let res = tmpr_jit_array_push_i64(std::ptr::null_mut(), string_handle.0, 42);
     assert_eq!(res.to_result(), Err(JitRuntimeError::InvalidContext));
+}
+
+// =====================================================================
+// Phase 17.0: First Heap-aware JIT Eligibility Slice
+// =====================================================================
+
+#[test]
+fn jit_heap_string_len_source_or_bytecode() {
+    use tempra_bytecode::bytecode::BytecodeModule;
+    use tempra_bytecode::function::{BytecodeFunction, BytecodeType, FunctionId};
+    use tempra_bytecode::opcode::BytecodeInstr;
+    use tempra_bytecode::function::LocalId;
+    use crate::engine::{JitEngine, explain_jit_eligibility, JitEligibility};
+    use crate::lower::compile_function_heap_aware;
+    use crate::helpers::JitRuntimeContext;
+    use std::collections::HashMap;
+
+    let mut module = BytecodeModule::new();
+    let mut func = BytecodeFunction::new("test".to_string(), vec![BytecodeType::String], BytecodeType::Int64);
+    func.locals.push(BytecodeType::String);
+    
+    // 0: LoadLocal(0) -> handle
+    func.code.push(BytecodeInstr::LoadLocal(LocalId(0)));
+    // 1: StringLen
+    func.code.push(BytecodeInstr::Len);
+    // 2: Return
+    func.code.push(BytecodeInstr::Return);
+    
+    module.functions.push(func);
+    let func_id = FunctionId(0);
+
+    // Check eligibility
+    let eligibility = explain_jit_eligibility(&module, func_id);
+    assert_eq!(eligibility, JitEligibility::Eligible);
+
+    let mut engine = JitEngine::new();
+    let mut jit_cache = HashMap::new();
+    let mut compiling = std::collections::HashSet::new();
+
+    let compiled = compile_function_heap_aware(&mut engine, &module, func_id, &mut jit_cache, &mut compiling).unwrap();
+
+    let mut ctx = JitRuntimeContext::new();
+    let handle = ctx.alloc_string("hello".to_string());
+    
+    let res = compiled.call_with_ctx(&mut ctx, &[handle.0 as i64]);
+    assert_eq!(res, Ok(5));
+}
+
+#[test]
+fn jit_heap_array_get_i64_source_or_bytecode() {
+    use tempra_bytecode::bytecode::BytecodeModule;
+    use tempra_bytecode::function::{BytecodeFunction, BytecodeType, FunctionId};
+    use tempra_bytecode::opcode::BytecodeInstr;
+    use tempra_bytecode::function::LocalId;
+    use crate::engine::{JitEngine, explain_jit_eligibility, JitEligibility};
+    use crate::lower::compile_function_heap_aware;
+    use crate::helpers::{JitRuntimeContext, JitHeapScalar};
+    use std::collections::HashMap;
+
+    let mut module = BytecodeModule::new();
+    let mut func = BytecodeFunction::new("test".to_string(), vec![BytecodeType::Any, BytecodeType::Int64], BytecodeType::Int64);
+    func.locals.push(BytecodeType::Any);
+    func.locals.push(BytecodeType::Int64);
+    
+    // 0: LoadLocal(0) -> handle
+    func.code.push(BytecodeInstr::LoadLocal(LocalId(0)));
+    // 1: LoadLocal(1) -> index
+    func.code.push(BytecodeInstr::LoadLocal(LocalId(1)));
+    // 2: GetIndex
+    func.code.push(BytecodeInstr::GetIndex);
+    // 3: Return
+    func.code.push(BytecodeInstr::Return);
+    
+    module.functions.push(func);
+    let func_id = FunctionId(0);
+
+    let eligibility = explain_jit_eligibility(&module, func_id);
+    assert_eq!(eligibility, JitEligibility::Eligible);
+
+    let mut engine = JitEngine::new();
+    let mut jit_cache = HashMap::new();
+    let mut compiling = std::collections::HashSet::new();
+
+    let compiled = compile_function_heap_aware(&mut engine, &module, func_id, &mut jit_cache, &mut compiling).unwrap();
+
+    let mut ctx = JitRuntimeContext::new();
+    let handle = ctx.alloc_array(vec![
+        JitHeapScalar::Int64(10),
+        JitHeapScalar::Int64(20),
+        JitHeapScalar::Int64(-5)
+    ]);
+    
+    // OK cases
+    assert_eq!(compiled.call_with_ctx(&mut ctx, &[handle.0 as i64, 0]), Ok(10));
+    assert_eq!(compiled.call_with_ctx(&mut ctx, &[handle.0 as i64, 1]), Ok(20));
+    assert_eq!(compiled.call_with_ctx(&mut ctx, &[handle.0 as i64, 2]), Ok(-5));
+    
+    // Error cases are mapped by the wrapper!
+    let err_res = compiled.call_with_ctx(&mut ctx, &[handle.0 as i64, 99]);
+    assert_eq!(err_res, Err(crate::error::JitRuntimeError::OutOfBounds));
+}
+
+#[test]
+fn jit_heap_rejects_unsupported_heap_ops_source_level() {
+    use tempra_bytecode::bytecode::BytecodeModule;
+    use tempra_bytecode::function::{BytecodeFunction, BytecodeType, FunctionId};
+    use tempra_bytecode::opcode::BytecodeInstr;
+    use tempra_bytecode::function::LocalId;
+    use crate::engine::{explain_jit_eligibility, JitEligibility};
+
+    let mut module = BytecodeModule::new();
+    
+    // 1. Array Push (mutation/production)
+    let mut func_push = BytecodeFunction::new("push".to_string(), vec![BytecodeType::Any, BytecodeType::Int64], BytecodeType::Any);
+    func_push.locals.push(BytecodeType::Any);
+    func_push.locals.push(BytecodeType::Int64);
+    func_push.code.push(BytecodeInstr::LoadLocal(LocalId(0)));
+    func_push.code.push(BytecodeInstr::LoadLocal(LocalId(1)));
+    func_push.code.push(BytecodeInstr::ArrayPush);
+    func_push.code.push(BytecodeInstr::Return);
+    module.functions.push(func_push);
+    let id_push = FunctionId(0);
+    
+    match explain_jit_eligibility(&module, id_push) {
+        JitEligibility::UnsupportedType(msg) => assert!(msg.contains("Returning heap values is not supported")),
+        _ => panic!("Should reject returning array"),
+    }
+
+    // 2. Struct GetField (not supported in 17.0)
+    let mut func_struct = BytecodeFunction::new("getfield".to_string(), vec![BytecodeType::Any], BytecodeType::Int64);
+    func_struct.locals.push(BytecodeType::Any);
+    func_struct.code.push(BytecodeInstr::LoadLocal(LocalId(0)));
+    func_struct.code.push(BytecodeInstr::GetField(tempra_bytecode::constant::ConstId(0)));
+    func_struct.code.push(BytecodeInstr::Return);
+    module.functions.push(func_struct);
+    let id_struct = FunctionId(1);
+
+    match explain_jit_eligibility(&module, id_struct) {
+        JitEligibility::UnsupportedInstr { instr, .. } => assert!(instr.contains("Struct heap operation requires Phase 17.2+")),
+        _ => panic!("Should reject GetField"),
+    }
 }

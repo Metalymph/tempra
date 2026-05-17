@@ -130,6 +130,8 @@ fn run_benchmark(name: &str, source: &str) -> PerfMetrics {
         hot_call_threshold: 1, // Capture everything for small benchmarks
         hot_backedge_threshold: 1,
         jit_enabled: false,
+        jit_min_instruction_count: 8,
+        jit_retry_limit: 1,
     };
     let (_, profile) = tempra_vm::run_function_profiled(&module, "main", vec![], options).unwrap();
     println!("\n--- Profiling Summary: {} ---", name);
@@ -201,7 +203,14 @@ fn run_jit_benchmark(name: &str, source: &str, threshold: u64) -> Vec<JitPerfRow
     });
 
     // 2. VM No JIT
-    let mut options = tempra_vm::VmOptions { profiling: true, jit_enabled: false, hot_call_threshold: threshold, hot_backedge_threshold: threshold };
+    let mut options = tempra_vm::VmOptions {
+        profiling: true,
+        jit_enabled: false,
+        hot_call_threshold: threshold,
+        hot_backedge_threshold: threshold,
+        jit_min_instruction_count: 8,
+        jit_retry_limit: 1,
+    };
     let start_vm = Instant::now();
     for _ in 0..ITERATIONS {
         let _ = tempra_vm::run_function_profiled(&module, "main", vec![], options).unwrap();

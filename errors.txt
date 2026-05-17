@@ -1,0 +1,236 @@
+   Compiling tempra-jit-cranelift v0.1.0 (/Users/lorenzopirro/coding/rust/tempra/crates/tempra-jit-cranelift)
+error[E0603]: struct `LocalId` is private
+    --> crates/tempra-jit-cranelift/src/tests.rs:1604:50
+     |
+1604 |     use tempra_bytecode::opcode::{BytecodeInstr, LocalId};
+     |                                                  ^^^^^^^ private struct
+     |
+note: the struct `LocalId` is defined here
+    --> crates/tempra-bytecode/src/opcode.rs:2:35
+     |
+   2 | use crate::function::{FunctionId, LocalId, BytecodeFunction, BytecodeType};
+     |                                   ^^^^^^^
+help: import `LocalId` directly
+     |
+1604 |     use tempra_bytecode::opcode::{BytecodeInstr, tempra_bytecode::function::LocalId};
+     |                                                  +++++++++++++++++++++++++++
+
+error[E0603]: struct `LocalId` is private
+    --> crates/tempra-jit-cranelift/src/tests.rs:1648:50
+     |
+1648 |     use tempra_bytecode::opcode::{BytecodeInstr, LocalId};
+     |                                                  ^^^^^^^ private struct
+     |
+note: the struct `LocalId` is defined here
+    --> crates/tempra-bytecode/src/opcode.rs:2:35
+     |
+   2 | use crate::function::{FunctionId, LocalId, BytecodeFunction, BytecodeType};
+     |                                   ^^^^^^^
+help: import `LocalId` directly
+     |
+1648 |     use tempra_bytecode::opcode::{BytecodeInstr, tempra_bytecode::function::LocalId};
+     |                                                  +++++++++++++++++++++++++++
+
+error[E0603]: struct `LocalId` is private
+    --> crates/tempra-jit-cranelift/src/tests.rs:1704:50
+     |
+1704 |     use tempra_bytecode::opcode::{BytecodeInstr, LocalId};
+     |                                                  ^^^^^^^ private struct
+     |
+note: the struct `LocalId` is defined here
+    --> crates/tempra-bytecode/src/opcode.rs:2:35
+     |
+   2 | use crate::function::{FunctionId, LocalId, BytecodeFunction, BytecodeType};
+     |                                   ^^^^^^^
+help: import `LocalId` directly
+     |
+1704 |     use tempra_bytecode::opcode::{BytecodeInstr, tempra_bytecode::function::LocalId};
+     |                                                  +++++++++++++++++++++++++++
+
+warning: unused import: `JitHeapScalar`
+    --> crates/tempra-jit-cranelift/src/tests.rs:1327:45
+     |
+1327 |     use crate::helpers::{JitRuntimeContext, JitHeapScalar, tmpr_jit_enum_tag};
+     |                                             ^^^^^^^^^^^^^
+     |
+     = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+error[E0599]: no variant or associated item named `Array` found for enum `BytecodeType` in the current scope
+   --> crates/tempra-jit-cranelift/src/engine.rs:148:91
+    |
+148 |         if *p != BytecodeType::Int64 && *p != BytecodeType::String && *p != BytecodeType::Array {
+    |                                                                                           ^^^^^ variant or associated item not found in `BytecodeType`
+
+error[E0599]: no variant or associated item named `Array` found for enum `BytecodeType` in the current scope
+   --> crates/tempra-jit-cranelift/src/engine.rs:161:70
+    |
+161 |             BytecodeType::String | BytecodeType::Any | BytecodeType::Array => {
+    |                                                                      ^^^^^ variant or associated item not found in `BytecodeType`
+
+error[E0599]: no variant or associated item named `Array` found for enum `BytecodeType` in the current scope
+   --> crates/tempra-jit-cranelift/src/engine.rs:169:119
+    |
+169 |         if *l != BytecodeType::Int64 && *l != BytecodeType::Bool && *l != BytecodeType::String && *l != BytecodeType::Array {
+    |                                                                                                                       ^^^^^ variant or associated item not found in `BytecodeType`
+
+error[E0599]: no variant or associated item named `Push` found for enum `BytecodeInstr` in the current scope
+   --> crates/tempra-jit-cranelift/src/engine.rs:195:85
+    |
+195 |                 BytecodeInstr::MakeArray(_) | BytecodeInstr::Slice | BytecodeInstr::Push => {
+    |                                                                                     ^^^^ variant or associated item not found in `BytecodeInstr`
+
+error[E0599]: no variant or associated item named `StringLen` found for enum `BytecodeInstr` in the current scope
+  --> crates/tempra-jit-cranelift/src/lower.rs:22:24
+   |
+22 |         BytecodeInstr::StringLen | BytecodeInstr::StringSize | BytecodeInstr::ArrayLen | BytecodeInstr::GetIndex => true,
+   |                        ^^^^^^^^^ variant or associated item not found in `BytecodeInstr`
+
+error[E0599]: no variant or associated item named `StringSize` found for enum `BytecodeInstr` in the current scope
+  --> crates/tempra-jit-cranelift/src/lower.rs:22:51
+   |
+22 |         BytecodeInstr::StringLen | BytecodeInstr::StringSize | BytecodeInstr::ArrayLen | BytecodeInstr::GetIndex => true,
+   |                                                   ^^^^^^^^^^ variant or associated item not found in `BytecodeInstr`
+
+error[E0599]: no variant or associated item named `ArrayLen` found for enum `BytecodeInstr` in the current scope
+  --> crates/tempra-jit-cranelift/src/lower.rs:22:79
+   |
+22 |         BytecodeInstr::StringLen | BytecodeInstr::StringSize | BytecodeInstr::ArrayLen | BytecodeInstr::GetIndex => true,
+   |                                                                               ^^^^^^^^ variant or associated item not found in `BytecodeInstr`
+
+error[E0599]: no variant or associated item named `StringLen` found for enum `BytecodeInstr` in the current scope
+   --> crates/tempra-jit-cranelift/src/lower.rs:511:28
+    |
+511 |             BytecodeInstr::StringLen => {
+    |                            ^^^^^^^^^ variant or associated item not found in `BytecodeInstr`
+
+error[E0599]: no variant or associated item named `StringSize` found for enum `BytecodeInstr` in the current scope
+   --> crates/tempra-jit-cranelift/src/lower.rs:515:28
+    |
+515 |             BytecodeInstr::StringSize => {
+    |                            ^^^^^^^^^^ variant or associated item not found in `BytecodeInstr`
+
+error[E0599]: no variant or associated item named `ArrayLen` found for enum `BytecodeInstr` in the current scope
+   --> crates/tempra-jit-cranelift/src/lower.rs:519:28
+    |
+519 |             BytecodeInstr::ArrayLen => {
+    |                            ^^^^^^^^ variant or associated item not found in `BytecodeInstr`
+
+error[E0061]: this function takes 3 arguments but 0 arguments were supplied
+    --> crates/tempra-jit-cranelift/src/tests.rs:1611:20
+     |
+1611 |     let mut func = BytecodeFunction::new();
+     |                    ^^^^^^^^^^^^^^^^^^^^^-- three arguments of type `std::string::String`, `Vec<BytecodeType>`, and `BytecodeType` are missing
+     |
+note: associated function defined here
+    --> crates/tempra-bytecode/src/function.rs:63:12
+     |
+  63 |     pub fn new(name: String, params: Vec<BytecodeType>, ret: BytecodeType) -> Self {
+     |            ^^^
+help: provide the arguments
+     |
+1611 |     let mut func = BytecodeFunction::new(/* std::string::String */, /* Vec<BytecodeType> */, /* BytecodeType */);
+     |                                          ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+error[E0599]: no variant or associated item named `StringLen` found for enum `BytecodeInstr` in the current scope
+    --> crates/tempra-jit-cranelift/src/tests.rs:1620:35
+     |
+1620 |     func.code.push(BytecodeInstr::StringLen);
+     |                                   ^^^^^^^^^ variant or associated item not found in `BytecodeInstr`
+
+error[E0061]: this function takes 3 arguments but 0 arguments were supplied
+    --> crates/tempra-jit-cranelift/src/tests.rs:1655:20
+     |
+1655 |     let mut func = BytecodeFunction::new();
+     |                    ^^^^^^^^^^^^^^^^^^^^^-- three arguments of type `std::string::String`, `Vec<BytecodeType>`, and `BytecodeType` are missing
+     |
+note: associated function defined here
+    --> crates/tempra-bytecode/src/function.rs:63:12
+     |
+  63 |     pub fn new(name: String, params: Vec<BytecodeType>, ret: BytecodeType) -> Self {
+     |            ^^^
+help: provide the arguments
+     |
+1655 |     let mut func = BytecodeFunction::new(/* std::string::String */, /* Vec<BytecodeType> */, /* BytecodeType */);
+     |                                          ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+error[E0599]: no variant or associated item named `Array` found for enum `BytecodeType` in the current scope
+    --> crates/tempra-jit-cranelift/src/tests.rs:1658:36
+     |
+1658 |     func.params.push(BytecodeType::Array);
+     |                                    ^^^^^ variant or associated item not found in `BytecodeType`
+
+error[E0061]: this function takes 3 arguments but 0 arguments were supplied
+    --> crates/tempra-jit-cranelift/src/tests.rs:1710:25
+     |
+1710 |     let mut func_push = BytecodeFunction::new();
+     |                         ^^^^^^^^^^^^^^^^^^^^^-- three arguments of type `std::string::String`, `Vec<BytecodeType>`, and `BytecodeType` are missing
+     |
+note: associated function defined here
+    --> crates/tempra-bytecode/src/function.rs:63:12
+     |
+  63 |     pub fn new(name: String, params: Vec<BytecodeType>, ret: BytecodeType) -> Self {
+     |            ^^^
+help: provide the arguments
+     |
+1710 |     let mut func_push = BytecodeFunction::new(/* std::string::String */, /* Vec<BytecodeType> */, /* BytecodeType */);
+     |                                               ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+error[E0599]: no variant or associated item named `Array` found for enum `BytecodeType` in the current scope
+    --> crates/tempra-jit-cranelift/src/tests.rs:1711:41
+     |
+1711 |     func_push.params.push(BytecodeType::Array);
+     |                                         ^^^^^ variant or associated item not found in `BytecodeType`
+
+error[E0599]: no variant or associated item named `Array` found for enum `BytecodeType` in the current scope
+    --> crates/tempra-jit-cranelift/src/tests.rs:1713:35
+     |
+1713 |     func_push.ret = BytecodeType::Array; // Return type alone is rejected
+     |                                   ^^^^^ variant or associated item not found in `BytecodeType`
+
+error[E0599]: no variant or associated item named `Push` found for enum `BytecodeInstr` in the current scope
+    --> crates/tempra-jit-cranelift/src/tests.rs:1716:40
+     |
+1716 |     func_push.code.push(BytecodeInstr::Push);
+     |                                        ^^^^ variant or associated item not found in `BytecodeInstr`
+
+error[E0061]: this function takes 3 arguments but 0 arguments were supplied
+    --> crates/tempra-jit-cranelift/src/tests.rs:1727:27
+     |
+1727 |     let mut func_struct = BytecodeFunction::new();
+     |                           ^^^^^^^^^^^^^^^^^^^^^-- three arguments of type `std::string::String`, `Vec<BytecodeType>`, and `BytecodeType` are missing
+     |
+note: associated function defined here
+    --> crates/tempra-bytecode/src/function.rs:63:12
+     |
+  63 |     pub fn new(name: String, params: Vec<BytecodeType>, ret: BytecodeType) -> Self {
+     |            ^^^
+help: provide the arguments
+     |
+1727 |     let mut func_struct = BytecodeFunction::new(/* std::string::String */, /* Vec<BytecodeType> */, /* BytecodeType */);
+     |                                                 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `tempra-jit-cranelift` (lib) due to 10 previous errors
+warning: build failed, waiting for other jobs to finish...
+error[E0308]: mismatched types
+    --> crates/tempra-jit-cranelift/src/tests.rs:1731:51
+     |
+1731 |     func_struct.code.push(BytecodeInstr::GetField(0));
+     |                           ----------------------- ^ expected `ConstId`, found integer
+     |                           |
+     |                           arguments to this enum variant are incorrect
+     |
+note: tuple variant defined here
+    --> crates/tempra-bytecode/src/opcode.rs:66:5
+     |
+  66 |     GetField(ConstId),               // field_name_id
+     |     ^^^^^^^^
+help: try wrapping the expression in `tempra_bytecode::ConstId`
+     |
+1731 |     func_struct.code.push(BytecodeInstr::GetField(tempra_bytecode::ConstId(0)));
+     |                                                   +++++++++++++++++++++++++ +
+
+Some errors have detailed explanations: E0061, E0308, E0599, E0603.
+For more information about an error, try `rustc --explain E0061`.
+warning: `tempra-jit-cranelift` (lib test) generated 1 warning
+error: could not compile `tempra-jit-cranelift` (lib test) due to 23 previous errors; 1 warning emitted

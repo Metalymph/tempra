@@ -73,9 +73,7 @@ fn test_lower_add_i64() {
     verify_module(&bc_module).unwrap();
     let disasm = disassemble_module(&bc_module);
 
-    assert!(disasm.contains("LoadLocal $0"));
-    assert!(disasm.contains("LoadLocal $1"));
-    assert!(disasm.contains("AddI64"));
+    assert!(disasm.contains("AddI64LL $0 $1"));
     assert!(!disasm.contains("StoreLocal $2")); // Optimized away
     assert!(!disasm.contains("LoadLocal $2"));  // Optimized away
     assert!(disasm.contains("Return"));

@@ -293,9 +293,9 @@ fn test_is_pattern_naked_foo_rejected() {
     expect_err(
         r#"
         fn main() {
-            let x: Int? = Some(1);
-            if x is Some {
-                print("ok")
+            let value = "hello";
+            if value is foo {
+                print("foo");
             }
         }
     "#,

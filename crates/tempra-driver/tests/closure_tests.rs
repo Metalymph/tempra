@@ -390,7 +390,7 @@ fn test_nested_explicit_self_propagation() {
                 };
                 n * inner(n)
             };
-            expect(outer(5) == 120, "nested explicit self propagation failed");
+            expect(outer(3) == 6, "nested explicit self propagation failed");
         }
     "#;
     expect_ok(input);

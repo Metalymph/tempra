@@ -143,8 +143,8 @@ fn test_jit_observability_stats() {
 #[cfg(feature = "jit-cranelift")]
 fn test_jit_rejection_reason() {
     let mut module = BytecodeModule::new();
-    let mut func = BytecodeFunction::new("unsupported".into(), vec![BytecodeType::String], BytecodeType::Int64);
-    func.locals = vec![BytecodeType::String];
+    let mut func = BytecodeFunction::new("unsupported".into(), vec![BytecodeType::Bool], BytecodeType::Int64);
+    func.locals = vec![BytecodeType::Bool];
     func.code.push(BytecodeInstr::ConstI64(module.add_constant(BytecodeConstant::Int64(42))));
     func.code.push(BytecodeInstr::Return);
     func.max_stack = 1;
@@ -159,9 +159,9 @@ fn test_jit_rejection_reason() {
     let mut interp = Interpreter::with_options(&module, options);
     
     // Trigger JIT check
-    interp.run_function_id(func_id, vec![VmValue::String("hi".into())]).unwrap();
+    interp.run_function_id(func_id, vec![VmValue::Bool(true)]).unwrap();
     // Try again, should not increment attempts (cached rejection)
-    interp.run_function_id(func_id, vec![VmValue::String("hi".into())]).unwrap();
+    interp.run_function_id(func_id, vec![VmValue::Bool(true)]).unwrap();
     
     let profile = interp.build_profile();
     let stats = &profile.function_stats[func_id.0 as usize];

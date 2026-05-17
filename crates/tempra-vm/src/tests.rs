@@ -403,6 +403,8 @@ fn profile_summary_contains_hot_function() {
             jit_heap_context_objects: 0,
             jit_heap_fallbacks: 0,
             jit_heap_errors: 0,
+            jit_heap_handle_cache_hits: 0,
+            jit_heap_handle_cache_misses: 0,
             jit_skipped_below_threshold: 0,
             jit_skipped_too_small: 0,
             jit_skipped_retry_limit: 0,

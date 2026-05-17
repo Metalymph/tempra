@@ -779,3 +779,225 @@ fn test_heap_jit_array_get_oob_fallback_or_error() {
     assert_eq!(stats.jit_heap_fallbacks, 1);
     assert_eq!(stats.jit_heap_errors, 1);
 }
+
+fn build_two_strings_func(module: &mut BytecodeModule) -> tempra_bytecode::function::FunctionId {
+    let mut func = BytecodeFunction::new(
+        "two_strings".into(),
+        vec![BytecodeType::String, BytecodeType::String],
+        BytecodeType::Int64,
+    );
+    func.locals = vec![BytecodeType::String, BytecodeType::String];
+    func.code.push(BytecodeInstr::LoadLocal(LocalId(0)));
+    func.code.push(BytecodeInstr::Len);
+    func.code.push(BytecodeInstr::Return);
+    func.max_stack = 2;
+    module.add_function(func)
+}
+
+fn build_two_arrays_func(module: &mut BytecodeModule) -> tempra_bytecode::function::FunctionId {
+    let c0 = module.add_constant(tempra_bytecode::BytecodeConstant::Int64(0));
+    let mut func = BytecodeFunction::new(
+        "two_arrays".into(),
+        vec![BytecodeType::Any, BytecodeType::Any],
+        BytecodeType::Int64,
+    );
+    func.locals = vec![BytecodeType::Any, BytecodeType::Any];
+    func.code.push(BytecodeInstr::LoadLocal(LocalId(0)));
+    func.code.push(BytecodeInstr::ConstI64(c0));
+    func.code.push(BytecodeInstr::GetIndex);
+    func.code.push(BytecodeInstr::Return);
+    func.max_stack = 3;
+    module.add_function(func)
+}
+
+#[test]
+#[cfg(feature = "jit-cranelift")]
+fn test_jit_context_string_handle_dedup() {
+    let mut ctx = tempra_jit_cranelift::helpers::JitRuntimeContext::new();
+    let h1 = ctx.alloc_or_get_string("hello");
+    let h2 = ctx.alloc_or_get_string("hello");
+    assert_eq!(h1, h2);
+    assert_eq!(ctx.cache_hits, 1);
+    assert_eq!(ctx.cache_misses, 1);
+    assert_eq!(ctx.allocation_count(), 1);
+    assert_eq!(ctx.object_count(), 1);
+
+    let h3 = ctx.alloc_or_get_string("world");
+    assert_ne!(h1, h3);
+    assert_eq!(ctx.cache_hits, 1);
+    assert_eq!(ctx.cache_misses, 2);
+    assert_eq!(ctx.allocation_count(), 2);
+    assert_eq!(ctx.object_count(), 2);
+}
+
+#[test]
+#[cfg(feature = "jit-cranelift")]
+fn test_jit_context_array_i64_handle_dedup() {
+    let mut ctx = tempra_jit_cranelift::helpers::JitRuntimeContext::new();
+    let h1 = ctx.alloc_or_get_array_int64(&[1, 2, 3]);
+    let h2 = ctx.alloc_or_get_array_int64(&[1, 2, 3]);
+    assert_eq!(h1, h2);
+    assert_eq!(ctx.cache_hits, 1);
+    assert_eq!(ctx.cache_misses, 1);
+    assert_eq!(ctx.allocation_count(), 1);
+    assert_eq!(ctx.object_count(), 1);
+
+    let h3 = ctx.alloc_or_get_array_int64(&[1, 2, 4]);
+    assert_ne!(h1, h3);
+    assert_eq!(ctx.cache_hits, 1);
+    assert_eq!(ctx.cache_misses, 2);
+    assert_eq!(ctx.allocation_count(), 2);
+    assert_eq!(ctx.object_count(), 2);
+}
+
+#[test]
+#[cfg(feature = "jit-cranelift")]
+fn test_jit_context_clear_resets_dedup_cache() {
+    let mut ctx = tempra_jit_cranelift::helpers::JitRuntimeContext::new();
+    ctx.alloc_or_get_string("hello");
+    ctx.alloc_or_get_array_int64(&[1, 2, 3]);
+    assert_eq!(ctx.allocation_count(), 2);
+
+    ctx.clear();
+    assert_eq!(ctx.allocation_count(), 0);
+    assert_eq!(ctx.object_count(), 0);
+    assert_eq!(ctx.cache_hits, 0);
+    assert_eq!(ctx.cache_misses, 0);
+
+    // Allocating again should miss
+    let _h1 = ctx.alloc_or_get_string("hello");
+    assert_eq!(ctx.cache_misses, 1);
+    assert_eq!(ctx.allocation_count(), 1);
+}
+
+#[test]
+#[cfg(feature = "jit-cranelift")]
+fn test_jit_vm_repeated_string_arg_reuses_handle() {
+    let mut module = BytecodeModule::new();
+    let func_id = build_two_strings_func(&mut module);
+
+    let mut options = VmOptions::default();
+    options.jit_enabled = true;
+    options.hot_call_threshold = 0;
+    options.profiling = true;
+    options.jit_min_instruction_count = 0;
+
+    let mut interp = Interpreter::with_options(&module, options);
+
+    // Call 1: compiles JIT immediately, runs interpretively
+    interp
+        .run_function_id(
+            func_id,
+            vec![
+                VmValue::String("hello".into()),
+                VmValue::String("hello".into()),
+            ],
+        )
+        .unwrap();
+
+    // Call 2: JIT is warm. Call with the same string twice.
+    interp
+        .run_function_id(
+            func_id,
+            vec![
+                VmValue::String("hello".into()),
+                VmValue::String("hello".into()),
+            ],
+        )
+        .unwrap();
+
+    let p = interp.build_profile();
+    let stats = &p.function_stats[func_id.0 as usize];
+    assert_eq!(stats.jit_heap_runtime_calls, 1);
+    assert_eq!(stats.jit_heap_handle_cache_hits, 1);
+    assert_eq!(stats.jit_heap_handle_cache_misses, 1);
+    // Since there's one miss, only 1 string is allocated at the boundary (which goes into context objects)
+    assert_eq!(stats.jit_heap_context_objects, 1);
+    // No allocations occur during JIT native run execution
+    assert_eq!(stats.jit_heap_handle_allocations, 0);
+}
+
+#[test]
+#[cfg(feature = "jit-cranelift")]
+fn test_jit_vm_repeated_array_arg_reuses_handle() {
+    let mut module = BytecodeModule::new();
+    let func_id = build_two_arrays_func(&mut module);
+
+    let mut options = VmOptions::default();
+    options.jit_enabled = true;
+    options.hot_call_threshold = 0;
+    options.profiling = true;
+    options.jit_min_instruction_count = 0;
+
+    let mut interp = Interpreter::with_options(&module, options);
+
+    let arr1 = VmValue::Array(std::rc::Rc::new(vec![VmValue::Int64(10), VmValue::Int64(20)]));
+    let arr2 = VmValue::Array(std::rc::Rc::new(vec![VmValue::Int64(10), VmValue::Int64(20)]));
+
+    // Call 1: compiles JIT
+    interp
+        .run_function_id(func_id, vec![arr1.clone(), arr2.clone()])
+        .unwrap();
+
+    // Call 2: JIT warm
+    interp
+        .run_function_id(func_id, vec![arr1, arr2])
+        .unwrap();
+
+    let p = interp.build_profile();
+    let stats = &p.function_stats[func_id.0 as usize];
+    assert_eq!(stats.jit_heap_runtime_calls, 1);
+    assert_eq!(stats.jit_heap_handle_cache_hits, 1);
+    assert_eq!(stats.jit_heap_handle_cache_misses, 1);
+    // Since there's one miss, only 1 array is allocated at the boundary (context object)
+    assert_eq!(stats.jit_heap_context_objects, 1);
+    // No allocations occur during JIT native run execution
+    assert_eq!(stats.jit_heap_handle_allocations, 0);
+}
+
+#[test]
+#[cfg(feature = "jit-cranelift")]
+fn test_jit_vm_unsupported_array_no_dedup_or_fallback() {
+    let mut module = BytecodeModule::new();
+    let func_id = build_two_arrays_func(&mut module);
+
+    let mut options = VmOptions::default();
+    options.jit_enabled = true;
+    options.hot_call_threshold = 0;
+    options.profiling = true;
+    options.jit_min_instruction_count = 0;
+
+    let mut interp = Interpreter::with_options(&module, options);
+
+    let arr_supported = VmValue::Array(std::rc::Rc::new(vec![VmValue::Int64(10), VmValue::Int64(20)]));
+
+    // Call 1: compiles JIT
+    interp
+        .run_function_id(func_id, vec![arr_supported.clone(), arr_supported.clone()])
+        .unwrap();
+
+    // Heterogeneous array with Boolean element, which is unsupported for Array JIT
+    let arr_unsupported = VmValue::Array(std::rc::Rc::new(vec![
+        VmValue::Int64(10),
+        VmValue::Bool(true),
+    ]));
+
+    // Marshalling should return None (unsupported), and VM should fall back to interpreter.
+    let res = interp.run_function_id(
+        func_id,
+        vec![arr_unsupported.clone(), arr_unsupported.clone()],
+    );
+    assert!(res.is_ok()); // Should fall back and succeed in pure interpreter
+
+    let p = interp.build_profile();
+    let stats = &p.function_stats[func_id.0 as usize];
+    // Should fall back since marshalling returned None
+    assert_eq!(stats.jit_heap_fallbacks, 1);
+    // Dedup cache hits and misses should be 0 for this call because marshalling didn't use the JIT helper context
+    // The previous call to JIT was compiled but not executed natively because it compiled during Call 1.
+    // So the stats are:
+    assert_eq!(stats.jit_heap_handle_cache_hits, 0);
+    assert_eq!(stats.jit_heap_handle_cache_misses, 0);
+}
+
+

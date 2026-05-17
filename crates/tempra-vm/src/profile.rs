@@ -52,6 +52,8 @@ pub struct FunctionProfile {
     pub jit_heap_context_objects: u64,
     pub jit_heap_fallbacks: u64,
     pub jit_heap_errors: u64,
+    pub jit_heap_handle_cache_hits: u64,
+    pub jit_heap_handle_cache_misses: u64,
 
     // JIT Policy Stats
     pub jit_skipped_below_threshold: u64,
@@ -179,6 +181,16 @@ impl VmProfile {
                 .sum();
             let total_heap_errors: u64 =
                 self.function_stats.iter().map(|f| f.jit_heap_errors).sum();
+            let total_heap_hits: u64 = self
+                .function_stats
+                .iter()
+                .map(|f| f.jit_heap_handle_cache_hits)
+                .sum();
+            let total_heap_misses: u64 = self
+                .function_stats
+                .iter()
+                .map(|f| f.jit_heap_handle_cache_misses)
+                .sum();
 
             writeln!(s, "  Heap runtime:     {}", total_heap_runtime).unwrap();
             writeln!(s, "  Heap helper:      {}", total_heap_helper).unwrap();
@@ -186,6 +198,8 @@ impl VmProfile {
             writeln!(s, "  Heap context objs:{}", total_heap_objects).unwrap();
             writeln!(s, "  Heap fallbacks:   {}", total_heap_fallbacks).unwrap();
             writeln!(s, "  Heap errors:      {}", total_heap_errors).unwrap();
+            writeln!(s, "  Heap cache hits:  {}", total_heap_hits).unwrap();
+            writeln!(s, "  Heap cache misses:{}", total_heap_misses).unwrap();
 
             let rejected: Vec<_> = self
                 .function_stats
@@ -335,6 +349,8 @@ pub(crate) struct FunctionStats {
     pub jit_heap_context_objects: u64,
     pub jit_heap_fallbacks: u64,
     pub jit_heap_errors: u64,
+    pub jit_heap_handle_cache_hits: u64,
+    pub jit_heap_handle_cache_misses: u64,
 
     // JIT Policy Stats
     pub jit_skipped_below_threshold: u64,
@@ -367,6 +383,8 @@ impl Default for FunctionStats {
             jit_heap_context_objects: 0,
             jit_heap_fallbacks: 0,
             jit_heap_errors: 0,
+            jit_heap_handle_cache_hits: 0,
+            jit_heap_handle_cache_misses: 0,
             jit_skipped_below_threshold: 0,
             jit_skipped_too_small: 0,
             jit_skipped_retry_limit: 0,

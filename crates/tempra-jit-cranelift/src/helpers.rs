@@ -139,12 +139,23 @@ impl JitHelperRegistry {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum JitHandleKey {
+    String(String),
+    ArrayInt64(Vec<i64>),
+    ArrayUInt8(Vec<u8>),
+    ArrayBool(Vec<bool>),
+}
+
 /// A prototype runtime context for JIT heap operations.
 pub struct JitRuntimeContext {
     heap_handles: HashMap<u64, JitHeapObject>,
     next_handle: u64,
     pub total_allocations: u64,
     pub helper_calls: u64,
+    pub handle_cache: HashMap<JitHandleKey, HeapHandle>,
+    pub cache_hits: u64,
+    pub cache_misses: u64,
 }
 
 /// Prototype heap objects visible to JIT.
@@ -184,6 +195,9 @@ impl JitRuntimeContext {
             next_handle: 1000,
             total_allocations: 0,
             helper_calls: 0,
+            handle_cache: HashMap::new(),
+            cache_hits: 0,
+            cache_misses: 0,
         }
     }
 
@@ -211,6 +225,36 @@ impl JitRuntimeContext {
         self.next_handle += 1;
         self.total_allocations += 1;
         HeapHandle(handle)
+    }
+
+    pub fn alloc_or_get_string(&mut self, value: &str) -> HeapHandle {
+        let key = JitHandleKey::String(value.to_string());
+        println!("alloc_or_get_string: {:?}", value);
+        if let Some(&handle) = self.handle_cache.get(&key) {
+            println!("alloc_or_get_string: HIT!");
+            self.cache_hits += 1;
+            handle
+        } else {
+            println!("alloc_or_get_string: MISS!");
+            self.cache_misses += 1;
+            let handle = self.alloc_string(value.to_string());
+            self.handle_cache.insert(key, handle);
+            handle
+        }
+    }
+
+    pub fn alloc_or_get_array_int64(&mut self, values: &[i64]) -> HeapHandle {
+        let key = JitHandleKey::ArrayInt64(values.to_vec());
+        if let Some(&handle) = self.handle_cache.get(&key) {
+            self.cache_hits += 1;
+            handle
+        } else {
+            self.cache_misses += 1;
+            let scalars = values.iter().map(|&i| JitHeapScalar::Int64(i)).collect();
+            let handle = self.alloc_array(scalars);
+            self.handle_cache.insert(key, handle);
+            handle
+        }
     }
 
     pub fn alloc_struct(
@@ -329,6 +373,9 @@ impl JitRuntimeContext {
         self.next_handle = 1000;
         self.total_allocations = 0;
         self.helper_calls = 0;
+        self.handle_cache.clear();
+        self.cache_hits = 0;
+        self.cache_misses = 0;
     }
 }
 

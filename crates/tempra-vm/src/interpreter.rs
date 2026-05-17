@@ -128,7 +128,7 @@ impl<'a> Interpreter<'a> {
                 if marshal_ok {
                     let before_helpers = ctx.helper_calls;
                     let before_allocs = ctx.allocation_count();
-
+ 
                     let start_native = std::time::Instant::now();
                     match jit_fn.call_with_ctx(&mut ctx as *mut JitRuntimeContext, &i64_args) {
                         Ok(res) => {
@@ -142,6 +142,8 @@ impl<'a> Interpreter<'a> {
                                 stats.jit_heap_helper_calls += delta_helpers;
                                 stats.jit_heap_handle_allocations += delta_allocs;
                                 stats.jit_heap_context_objects += ctx.object_count() as u64;
+                                stats.jit_heap_handle_cache_hits += ctx.cache_hits;
+                                stats.jit_heap_handle_cache_misses += ctx.cache_misses;
                                 stats.jit_total_native_time_ns += elapsed;
                             }
                             return Ok(VmValue::Int64(res));
@@ -287,6 +289,8 @@ impl<'a> Interpreter<'a> {
                 jit_heap_context_objects: s.jit_heap_context_objects,
                 jit_heap_fallbacks: s.jit_heap_fallbacks,
                 jit_heap_errors: s.jit_heap_errors,
+                jit_heap_handle_cache_hits: s.jit_heap_handle_cache_hits,
+                jit_heap_handle_cache_misses: s.jit_heap_handle_cache_misses,
                 jit_skipped_below_threshold: s.jit_skipped_below_threshold,
                 jit_skipped_too_small: s.jit_skipped_too_small,
                 jit_skipped_retry_limit: s.jit_skipped_retry_limit,
@@ -425,6 +429,7 @@ impl<'a> Interpreter<'a> {
 
         // Determine compile path: heap-aware or pure-i64
         let heap_required = is_heap_requiring(&self.module.functions[function_id.0 as usize]);
+
 
         if let Some(ref mut engine) = self.jit_engine {
             let mut compiling = std::collections::HashSet::new();
@@ -824,6 +829,8 @@ impl<'a> Interpreter<'a> {
                                     stats.jit_heap_helper_calls += delta_helpers;
                                     stats.jit_heap_handle_allocations += delta_allocs;
                                     stats.jit_heap_context_objects += final_objects;
+                                    stats.jit_heap_handle_cache_hits += ctx.cache_hits;
+                                    stats.jit_heap_handle_cache_misses += ctx.cache_misses;
                                 } else {
                                     stats.jit_fallback_calls += 1;
                                     stats.jit_heap_fallbacks += 1;
@@ -1310,18 +1317,18 @@ fn vm_value_to_jit_handle(value: &VmValue, ctx: &mut JitRuntimeContext) -> Optio
     match value {
         VmValue::Int64(i) => Some(*i),
         VmValue::String(s) => {
-            let handle = ctx.alloc_string(s.clone());
+            let handle = ctx.alloc_or_get_string(s);
             Some(handle.0 as i64)
         }
         VmValue::Array(arr) => {
-            let mut scalars = Vec::with_capacity(arr.len());
+            let mut values = Vec::with_capacity(arr.len());
             for elem in arr.iter() {
                 match elem {
-                    VmValue::Int64(i) => scalars.push(JitHeapScalar::Int64(*i)),
+                    VmValue::Int64(i) => values.push(*i),
                     _ => return None, // heterogeneous or unsupported element type
                 }
             }
-            let handle = ctx.alloc_array(scalars);
+            let handle = ctx.alloc_or_get_array_int64(&values);
             Some(handle.0 as i64)
         }
         _ => None,

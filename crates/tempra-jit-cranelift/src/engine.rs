@@ -124,6 +124,15 @@ impl JitFunctionI64HeapAware {
                     ) -> crate::abi::JitHelperResult = std::mem::transmute(self.ptr);
                     func(ctx_ptr, args[0], args[1])
                 }
+                3 => {
+                    let func: fn(
+                        *mut crate::helpers::JitRuntimeContext,
+                        i64,
+                        i64,
+                        i64,
+                    ) -> crate::abi::JitHelperResult = std::mem::transmute(self.ptr);
+                    func(ctx_ptr, args[0], args[1], args[2])
+                }
                 _ => {
                     return Err(JitRuntimeError::Message(format!(
                         "Arity {} not yet supported by JIT caller",

@@ -21,6 +21,7 @@ pub struct JitHelperInfo {
 pub enum JitHelperSignature {
     /// (ctx: *mut JitRuntimeContext, HeapHandle) -> JitHelperResult (value=len, status)
     StringLen,
+    GenericLen,
     /// (ctx: *mut JitRuntimeContext, HeapHandle) -> JitHelperResult (value=byte_count, status)
     StringSize,
     /// (ctx: *mut JitRuntimeContext, HeapHandle) -> JitHelperResult (value=len, status)
@@ -51,6 +52,15 @@ impl JitHelperRegistry {
                 name: "tmpr_jit_string_len",
                 signature: JitHelperSignature::StringLen,
                 ptr: tmpr_jit_string_len as *const (),
+            },
+        );
+
+        helpers.insert(
+            "tmpr_jit_generic_len",
+            JitHelperInfo {
+                name: "tmpr_jit_generic_len",
+                signature: JitHelperSignature::GenericLen,
+                ptr: tmpr_jit_generic_len as *const (),
             },
         );
 
@@ -419,6 +429,15 @@ where
             status: JIT_STATUS_ERROR_INVALID_HANDLE,
         }
     }
+}
+
+/// Helper implementation for generic Len (String or Array)
+pub extern "C" fn tmpr_jit_generic_len(ctx: *mut JitRuntimeContext, handle: u64) -> JitHelperResult {
+    with_handle(ctx, handle, |obj| match obj {
+        JitHeapObject::String(s) => Ok(s.chars().count() as u64),
+        JitHeapObject::Array(arr) => Ok(arr.len() as u64),
+        _ => Err(crate::abi::JIT_STATUS_ERROR_TYPE),
+    })
 }
 
 /// Helper implementation for String.len() (Unicode scalar count)

@@ -690,7 +690,7 @@ pub fn compile_function_heap_aware(
                     .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
                 current_block_terminated = emit_helper_call(
                     &mut builder,
-                    crate::helpers::tmpr_jit_string_len as *const (),
+                    crate::helpers::tmpr_jit_generic_len as *const (),
                     &[ctx_val, handle],
                     &mut stack,
                 )?;

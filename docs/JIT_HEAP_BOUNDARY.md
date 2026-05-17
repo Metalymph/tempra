@@ -106,14 +106,16 @@ To ensure memory safety and maintain the integrity of the VM garbage collector (
     - **Type Marshalling**: Bi-directional type conversion (from VM values to JIT handles on entry, and back to VM values on exit).
     - **Fallback Execution**: Elegant fallback to the standard interpreter when JIT execution traps or returns error status.
 - **Phase 17.2**: Heap-aware JIT Performance & Lifetime Validation. [COMPLETE]
-    - **Heap Telemetry**: Extended `JitRuntimeContext` tracking and VM profiling stats to capture:
-        - `jit_heap_runtime_calls`: Native heap JIT dispatches.
-        - `jit_heap_fallbacks`: Recoverable deoptimizations back to interpreter.
-        - `jit_heap_helper_calls`: Runtime helper invocations from Cranelift.
-        - `jit_heap_handle_allocations`: Churn count of allocated heap handles.
-        - `jit_heap_context_objects`: Active objects residing in the handle context.
-        - `jit_heap_errors`: JIT runtime traps / error status returned from C helpers.
-    - **Performance Benchmarks**: Documented significant speedups (up to **2x speedup** on warm JIT reuse) and very fast profitability thresholds (approx. **1.2 runs**).
+    - **Heap Telemetry**: Extended `JitRuntimeContext` tracking and VM profiling stats.
+    - **Performance Benchmarks**: Documented significant speedups (up to **2x speedup** on warm JIT reuse).
+- **Phase 17.3**: Heap Handle Deduplication & Context Reuse. [COMPLETE]
+    - **Deduplication**: Implemented `handle_cache` to deduplicate identical values passed into the JIT within the same context lifetime.
+    - **Metrics**: Added `cache_hits` and `cache_misses` tracking.
+- **Phase 17.4**: Heap-aware JIT Source-level Expansion. [COMPLETE]
+    - **End-to-end Integration**: Connected `String.len`, `String.size`, `Array.len`, and `Array.get_i64` down to the source-level JIT execution pipeline.
+    - **Generic Dispatch**: Lowered `BytecodeInstr::Len` to dynamically dispatch to `tmpr_jit_generic_len` to support both strings and arrays correctly.
+    - **Arity Support**: Extended JIT caller `call_with_ctx` to support arity 3 functions.
+    - **Differential Testing**: Implemented source-level differential test suites (`heap_jit_source_tests.rs`) to ensure parity between interpreter and JIT paths.
 
 ## Integrated JIT Telemetry & Lifetime Scoping (Phase 17.2)
 

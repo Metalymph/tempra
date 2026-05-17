@@ -12,8 +12,9 @@ The goal of this prototype is to demonstrate the ability to compile hot bytecode
 
 ## Supported Scope (v0.1)
 
-The prototype currently supports an `Int64 + internal Bool` subset:
-- **Types**: `Int64` parameters, return values, and locals. `Bool` local variables (internal only).
+The prototype currently supports an `Int64 + internal Bool + Heap Read-Only Subset`:
+- **Types**: `Int64` parameters, return values, and locals. `Bool` local variables (internal only). Heap handles (`String`, `Array`) passed opaquely via Context Marshalling.
+- **Heap Operations (v0.2)**: `String.len`, `String.size`, `Array.len`, `Array.get_i64`.
 - **Arithmetic**: `Add`, `Sub`, `Mul`, `Div` (signed).
 - **Comparisons**: `Eq`, `Lt`, `Gt`.
 - **Boolean Logic**: `Not`, `And`, `Or` (logical/bitwise).
@@ -32,7 +33,7 @@ The prototype currently supports an `Int64 + internal Bool` subset:
 ### Unsupported Features (Fallback to VM)
 Any function using the following features is currently rejected by the JIT and will execute via the standard stack interpreter:
 - **Bool in ABI**: Boolean parameters or return types are rejected (ABI mismatch). Bools are only supported as internal locals.
-- Strings, Arrays, Slices.
+- **Heap Mutation**: `ArrayPush`, `String.concat` (mutation or production of new heap handles is isolated to interpreter until Phase 18).
 - Structs, Enums.
 - Option, Result.
 - Recursion (recursive function calls are currently rejected to prevent compilation loops).

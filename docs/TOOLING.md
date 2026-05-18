@@ -150,22 +150,33 @@ just tooling-check  # Runs both compiler and CLI integration suites
 just tooling-smoke  # Smoke-tests the JSON output from the command line
 ```
 
----
-
 ## 6. In-Memory Analysis Session Layer
 
-To power upcoming Language Server implementations (`tempra-lsp`) and facilitate low-latency IDE features without heavy disk read/write loops, **Phase 18.1A** introduces an in-memory document state manager: `tempra-analysis`.
+To power upcoming Language Server implementations (`tempra-lsp`) and facilitate low-latency IDE features without heavy disk read/write loops, **Phase 18.1A** and **Phase 18.1B** introduce an in-memory document state manager: `tempra-analysis`.
 
 This crate acts as the "brain" for editor features and exposes highly efficient, cached query-driven compiler pipelines completely decoupled from standard JSON-RPC or network transports.
 
-### Document Lifecycle management
+### Document Lifecycle Management
 - `open_document(uri, content, version)`: Registers a document in-memory, triggers parses/checks, and caches diagnostics & symbols.
 - `update_document(uri, content, version)`: Updates in-memory snapshots and invalidates/refreshes caches.
 - `close_document(uri)`: Evicts active session states to release memory.
 
-### Stable IDE Query APIs
-- `diagnostics(&self, uri)`: Retrieves cached diagnostics.
-- `document_symbols(&self, uri)`: Outlines symbols and their complete formatted signatures.
-- `hover(&self, uri, line, character)`: Identifies structural definitions at the cursor coordinates and exposes their signature strings.
-- `goto_definition(&self, uri, line, character)`: Resolves structural symbol locations for rapid navigation.
+### Dual Coordinate System
+To avoid coordinate shift debt, Tempra splits positions into internal-first UTF-8 representations and outer LSP-style UTF-16 representations:
+1. **Internal Positions (`TextPosition`)**:
+   - `line`: 0-indexed line.
+   - `byte_character`: 0-indexed UTF-8 byte offset within the line.
+   - All core semantic lookup queries (`hover_at_position`, `definition_at_position`) use internal UTF-8 coordinates.
+2. **External Positions (`LspPosition`)**:
+   - `line`: 0-indexed line.
+   - `character`: 0-indexed UTF-16 code-unit offset within the line (LSP standard).
+   - Conversions (`lsp_to_text_position`, `text_to_lsp_position`) handle Unicode mapping rules flawlessly: Accents (`è`), CJK ideographs, and Emojis (`🐶` taking 2 code units in UTF-16 but 4 bytes in UTF-8).
+
+### Outer LSP Adapter Queries
+Outside callers and LSP servers can query the engine directly using external UTF-16 coordinates through adapter query wrappers:
+- `hover_at_lsp_position(uri, pos)`
+- `definition_at_lsp_position(uri, pos)`
+- `symbol_at_lsp_position(uri, pos)`
+These translate positions, execute lookups against the cached spatial and lexical symbol indexes (`SymbolIndex`), and return results without exposing UTF-16 complexities to the semantic core.
+
 

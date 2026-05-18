@@ -208,6 +208,7 @@ jit-phase17:
 # Run all tooling and diagnostics integration tests
 tooling-check:
     cargo test -p tempra-driver --test tooling_integration_tests
+    cargo test -p tempra-analysis --test analysis_tests
     cargo test -p tempra-cli --test tooling_cli_tests
 
 # Run smoke test for CLI diagnostics and symbol extraction commands

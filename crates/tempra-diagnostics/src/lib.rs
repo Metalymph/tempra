@@ -27,7 +27,7 @@ pub struct Label {
 }
 
 /// A structured compiler diagnostic message.
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, Error)]
 #[error("{severity:?} at {span:?}: {message}")]
 pub struct Diagnostic {
     pub severity: Severity,
@@ -71,7 +71,8 @@ impl Diagnostic {
 
     /// Convert the diagnostic to a public JSON representation without exposing Span internals.
     pub fn to_json_value(&self, file_path: Option<&str>) -> serde_json::Value {
-        let labels_json: Vec<serde_json::Value> = self.labels
+        let labels_json: Vec<serde_json::Value> = self
+            .labels
             .iter()
             .map(|label| {
                 serde_json::json!({

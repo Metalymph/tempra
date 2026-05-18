@@ -422,72 +422,85 @@ fn format_hir_type(ty: &tempra_hir::HirType) -> String {
             format!("{}<{}>", format_hir_type(name), arg_strs.join(", "))
         }
         tempra_hir::HirType::Optional(_, inner) => format!("Option({})", format_hir_type(inner)),
-        tempra_hir::HirType::Result(_, ok, err) => format!("Result({}, {})", format_hir_type(ok), format_hir_type(err)),
+        tempra_hir::HirType::Result(_, ok, err) => {
+            format!("Result({}, {})", format_hir_type(ok), format_hir_type(err))
+        }
         tempra_hir::HirType::Function(_, params, ret) => {
             let param_strs: Vec<String> = params.iter().map(format_hir_type).collect();
             format!("fn({}) -> {}", param_strs.join(", "), format_hir_type(ret))
         }
         tempra_hir::HirType::SelfType(_) => "Self".to_string(),
-        tempra_hir::HirType::Projection(_, base, name) => format!("{}.{}", format_hir_type(base), name),
+        tempra_hir::HirType::Projection(_, base, name) => {
+            format!("{}.{}", format_hir_type(base), name)
+        }
     }
 }
 
 fn format_function_signature(func: &tempra_hir::HirFunction) -> String {
-    let params: Vec<String> = func.parameters.iter().map(|p| {
-        let inout_str = if p.is_inout { "inout " } else { "" };
-        format!("{}{}: {}", inout_str, p.name, format_hir_type(&p.ty))
-    }).collect();
+    let params: Vec<String> = func
+        .parameters
+        .iter()
+        .map(|p| {
+            let inout_str = if p.is_inout { "inout " } else { "" };
+            format!("{}{}: {}", inout_str, p.name, format_hir_type(&p.ty))
+        })
+        .collect();
     let ret_str = if let Some(ret) = &func.return_type {
         format!(" -> {}", format_hir_type(ret))
     } else {
         "".to_string()
     };
     let fallible_str = if func.is_fallible { "!" } else { "" };
-    format!("fn {}{}({}){}", func.name, fallible_str, params.join(", "), ret_str)
+    format!(
+        "fn {}{}({}){}",
+        func.name,
+        fallible_str,
+        params.join(", "),
+        ret_str
+    )
 }
 
-pub fn diagnose_file(path: &Path) -> Vec<tempra_diagnostics::Diagnostic> {
+pub fn diagnose_source(source: &str) -> Vec<tempra_diagnostics::Diagnostic> {
     let mut diagnostics = Vec::new();
-    let source = match fs::read_to_string(path) {
-        Ok(s) => s,
-        Err(e) => {
-            diagnostics.push(tempra_diagnostics::Diagnostic::error(
-                tempra_span::Span::new(0, 0),
-                format!("Failed to read file: {}", e),
-            ));
-            return diagnostics;
-        }
-    };
-
-    let ast = match tempra_parser::parse_source(&source) {
+    let ast = match tempra_parser::parse_source(source) {
         Ok(ast) => ast,
         Err(e) => {
-            diagnostics.push(tempra_diagnostics::Diagnostic::error(
-                e.span,
-                e.message,
-            ));
+            diagnostics.push(tempra_diagnostics::Diagnostic::error(e.span, e.message));
             return diagnostics;
         }
     };
 
-    let mut hir = tempra_hir::lower_file(&source, &ast);
+    let mut hir = tempra_hir::lower_file(source, &ast);
 
     if let Err(type_errors) = tempra_typeck::check_file_with_context(&mut hir) {
         for err in type_errors {
-            diagnostics.push(tempra_diagnostics::Diagnostic::error(
-                err.span,
-                err.message,
-            ));
+            diagnostics.push(tempra_diagnostics::Diagnostic::error(err.span, err.message));
         }
     }
 
     diagnostics
 }
 
-pub fn extract_symbols(path: &Path) -> Result<Vec<tempra_diagnostics::Symbol>, DriverError> {
-    let source = fs::read_to_string(path)?;
-    let ast = tempra_parser::parse_source(&source).map_err(|e| DriverError::ParseError(e.message))?;
-    let hir = tempra_hir::lower_file(&source, &ast);
+pub fn diagnose_file(path: &Path) -> Vec<tempra_diagnostics::Diagnostic> {
+    match fs::read_to_string(path) {
+        Ok(s) => diagnose_source(&s),
+        Err(e) => {
+            let mut diagnostics = Vec::new();
+            diagnostics.push(tempra_diagnostics::Diagnostic::error(
+                tempra_span::Span::new(0, 0),
+                format!("Failed to read file: {}", e),
+            ));
+            diagnostics
+        }
+    }
+}
+
+pub fn extract_symbols_from_source(
+    source: &str,
+) -> Result<Vec<tempra_diagnostics::Symbol>, DriverError> {
+    let ast =
+        tempra_parser::parse_source(source).map_err(|e| DriverError::ParseError(e.message))?;
+    let hir = tempra_hir::lower_file(source, &ast);
 
     let mut symbols = Vec::new();
     for item in &hir.items {
@@ -540,6 +553,11 @@ pub fn extract_symbols(path: &Path) -> Result<Vec<tempra_diagnostics::Symbol>, D
         }
     }
     Ok(symbols)
+}
+
+pub fn extract_symbols(path: &Path) -> Result<Vec<tempra_diagnostics::Symbol>, DriverError> {
+    let source = fs::read_to_string(path)?;
+    extract_symbols_from_source(&source)
 }
 
 #[cfg(test)]

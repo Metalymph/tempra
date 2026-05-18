@@ -1,5 +1,5 @@
-use std::process::Command;
 use std::fs;
+use std::process::Command;
 
 #[test]
 fn test_cli_check_json_valid() {
@@ -8,7 +8,15 @@ fn test_cli_check_json_valid() {
     fs::write(&file_path, "fn main() { let x = 123; }").unwrap();
 
     let output = Command::new("cargo")
-        .args(&["run", "--bin", "tempra", "--", "check", "--json", &file_path.to_string_lossy()])
+        .args(&[
+            "run",
+            "--bin",
+            "tempra",
+            "--",
+            "check",
+            "--json",
+            &file_path.to_string_lossy(),
+        ])
         .output()
         .expect("failed to execute tempra");
 
@@ -28,7 +36,15 @@ fn test_cli_diagnostics_json_invalid() {
     fs::write(&file_path, "fn main() { let x: String = 123; }").unwrap();
 
     let output = Command::new("cargo")
-        .args(&["run", "--bin", "tempra", "--", "diagnostics", "--json", &file_path.to_string_lossy()])
+        .args(&[
+            "run",
+            "--bin",
+            "tempra",
+            "--",
+            "diagnostics",
+            "--json",
+            &file_path.to_string_lossy(),
+        ])
         .output()
         .expect("failed to execute tempra");
 
@@ -51,7 +67,15 @@ fn test_cli_symbols_json() {
     fs::write(&file_path, "struct Point { x: Int64 } fn add(a: Int64) {}").unwrap();
 
     let output = Command::new("cargo")
-        .args(&["run", "--bin", "tempra", "--", "symbols", "--json", &file_path.to_string_lossy()])
+        .args(&[
+            "run",
+            "--bin",
+            "tempra",
+            "--",
+            "symbols",
+            "--json",
+            &file_path.to_string_lossy(),
+        ])
         .output()
         .expect("failed to execute tempra");
 

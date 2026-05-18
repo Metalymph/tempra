@@ -15,7 +15,9 @@ fn main() {
             args.experimental_jit,
         ),
         Commands::Check(args) => commands::check::check_command(args.path, args.json),
-        Commands::Diagnostics(args) => commands::diagnostics::diagnostics_command(args.path, args.json),
+        Commands::Diagnostics(args) => {
+            commands::diagnostics::diagnostics_command(args.path, args.json)
+        }
         Commands::Symbols(args) => commands::symbols::symbols_command(args.path, args.json),
         Commands::Test(args) => commands::test::test_command(args.path),
         Commands::Repl => commands::repl::repl_command(),

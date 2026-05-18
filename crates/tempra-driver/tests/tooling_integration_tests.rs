@@ -1,5 +1,5 @@
-use tempra_driver::pipeline::{diagnose_file, extract_symbols};
 use std::fs;
+use tempra_driver::pipeline::{diagnose_file, extract_symbols};
 
 #[test]
 fn test_diagnose_valid_file() {
@@ -8,7 +8,11 @@ fn test_diagnose_valid_file() {
     fs::write(&file_path, "fn main() { let x = 123; }").unwrap();
 
     let diags = diagnose_file(&file_path);
-    assert!(diags.is_empty(), "expected no diagnostics but got: {:?}", diags);
+    assert!(
+        diags.is_empty(),
+        "expected no diagnostics but got: {:?}",
+        diags
+    );
     let _ = fs::remove_file(file_path);
 }
 
@@ -22,7 +26,10 @@ fn test_diagnose_parse_error() {
     assert!(!diags.is_empty(), "expected parse error diagnostic");
     let diag = &diags[0];
     assert!(matches!(diag.severity, tempra_diagnostics::Severity::Error));
-    assert!(diag.message.to_lowercase().contains("expected") || diag.message.to_lowercase().contains("parse"));
+    assert!(
+        diag.message.to_lowercase().contains("expected")
+            || diag.message.to_lowercase().contains("parse")
+    );
 
     // Verify JSON serialization format
     let file_str = file_path.to_string_lossy();
@@ -84,7 +91,10 @@ fn test_extract_symbols_valid() {
 
     // Check Struct
     let s_struct = symbols.iter().find(|s| s.name == "Point").unwrap();
-    assert!(matches!(s_struct.kind, tempra_diagnostics::SymbolKind::Struct));
+    assert!(matches!(
+        s_struct.kind,
+        tempra_diagnostics::SymbolKind::Struct
+    ));
     assert_eq!(s_struct.signature.as_deref().unwrap(), "struct Point");
 
     // Check Enum
@@ -94,17 +104,32 @@ fn test_extract_symbols_valid() {
 
     // Check fn
     let s_fn = symbols.iter().find(|s| s.name == "add").unwrap();
-    assert!(matches!(s_fn.kind, tempra_diagnostics::SymbolKind::Function));
-    assert_eq!(s_fn.signature.as_deref().unwrap(), "fn add(a: Int64, b: Int64) -> Int64");
+    assert!(matches!(
+        s_fn.kind,
+        tempra_diagnostics::SymbolKind::Function
+    ));
+    assert_eq!(
+        s_fn.signature.as_deref().unwrap(),
+        "fn add(a: Int64, b: Int64) -> Int64"
+    );
 
     // Check Extension
     let s_ext = symbols.iter().find(|s| s.name == "extend Point").unwrap();
-    assert!(matches!(s_ext.kind, tempra_diagnostics::SymbolKind::Extension));
+    assert!(matches!(
+        s_ext.kind,
+        tempra_diagnostics::SymbolKind::Extension
+    ));
 
     // Check Method
     let s_method = symbols.iter().find(|s| s.name == "Point.distance").unwrap();
-    assert!(matches!(s_method.kind, tempra_diagnostics::SymbolKind::Method));
-    assert_eq!(s_method.signature.as_deref().unwrap(), "fn distance(self: Self) -> Int64");
+    assert!(matches!(
+        s_method.kind,
+        tempra_diagnostics::SymbolKind::Method
+    ));
+    assert_eq!(
+        s_method.signature.as_deref().unwrap(),
+        "fn distance(self: Self) -> Int64"
+    );
 
     let _ = fs::remove_file(file_path);
 }

@@ -515,6 +515,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "61c41af27dd6d1e27b1b16b489db798443478cef1f06a660c96db617ba5de3b1"
 
 [[package]]
+name = "tempra-analysis"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "tempra-diagnostics",
+ "tempra-driver",
+ "tempra-span",
+]
+
+[[package]]
 name = "tempra-ast"
 version = "0.1.0"
 dependencies = [

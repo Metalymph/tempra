@@ -25,6 +25,7 @@ members = [
   "crates/tempra-package",
   "crates/tempra-repl",
   "crates/tempra-lsp",
+  "crates/tempra-analysis",
   "crates/tempra-testing",
   "crates/tempra-tir",
   "crates/tempra-tir-lower",
@@ -70,6 +71,7 @@ tempra-linker = { path = "crates/tempra-linker" }
 tempra-package = { path = "crates/tempra-package" }
 tempra-repl = { path = "crates/tempra-repl" }
 tempra-lsp = { path = "crates/tempra-lsp" }
+tempra-analysis = { path = "crates/tempra-analysis" }
 tempra-testing = { path = "crates/tempra-testing" }
 tempra-driver = { path = "crates/tempra-driver" }
 tempra-tir = { path = "crates/tempra-tir" }

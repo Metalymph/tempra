@@ -149,3 +149,23 @@ Verify all components and command structures using the `tooling-check` and `tool
 just tooling-check  # Runs both compiler and CLI integration suites
 just tooling-smoke  # Smoke-tests the JSON output from the command line
 ```
+
+---
+
+## 6. In-Memory Analysis Session Layer
+
+To power upcoming Language Server implementations (`tempra-lsp`) and facilitate low-latency IDE features without heavy disk read/write loops, **Phase 18.1A** introduces an in-memory document state manager: `tempra-analysis`.
+
+This crate acts as the "brain" for editor features and exposes highly efficient, cached query-driven compiler pipelines completely decoupled from standard JSON-RPC or network transports.
+
+### Document Lifecycle management
+- `open_document(uri, content, version)`: Registers a document in-memory, triggers parses/checks, and caches diagnostics & symbols.
+- `update_document(uri, content, version)`: Updates in-memory snapshots and invalidates/refreshes caches.
+- `close_document(uri)`: Evicts active session states to release memory.
+
+### Stable IDE Query APIs
+- `diagnostics(&self, uri)`: Retrieves cached diagnostics.
+- `document_symbols(&self, uri)`: Outlines symbols and their complete formatted signatures.
+- `hover(&self, uri, line, character)`: Identifies structural definitions at the cursor coordinates and exposes their signature strings.
+- `goto_definition(&self, uri, line, character)`: Resolves structural symbol locations for rapid navigation.
+

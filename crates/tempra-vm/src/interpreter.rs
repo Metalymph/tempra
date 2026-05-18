@@ -128,7 +128,7 @@ impl<'a> Interpreter<'a> {
                 if marshal_ok {
                     let before_helpers = ctx.helper_calls;
                     let before_allocs = ctx.allocation_count();
- 
+
                     let start_native = std::time::Instant::now();
                     match jit_fn.call_with_ctx(&mut ctx as *mut JitRuntimeContext, &i64_args) {
                         Ok(res) => {
@@ -429,7 +429,6 @@ impl<'a> Interpreter<'a> {
 
         // Determine compile path: heap-aware or pure-i64
         let heap_required = is_heap_requiring(&self.module.functions[function_id.0 as usize]);
-
 
         if let Some(ref mut engine) = self.jit_engine {
             let mut compiling = std::collections::HashSet::new();

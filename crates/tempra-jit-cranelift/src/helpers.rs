@@ -452,7 +452,10 @@ where
 }
 
 /// Helper implementation for generic Len (String or Array)
-pub extern "C" fn tmpr_jit_generic_len(ctx: *mut JitRuntimeContext, handle: u64) -> JitHelperResult {
+pub extern "C" fn tmpr_jit_generic_len(
+    ctx: *mut JitRuntimeContext,
+    handle: u64,
+) -> JitHelperResult {
     with_handle(ctx, handle, |obj| match obj {
         JitHeapObject::String(s) => Ok(s.chars().count() as u64),
         JitHeapObject::Array(arr) => Ok(arr.len() as u64),

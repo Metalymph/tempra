@@ -509,17 +509,18 @@ impl<'a> LowerContext<'a> {
             ));
         }
 
-        let element_ty =
-            match &iterable_ty {
-                Type::Array(inner) | Type::Slice(inner) => inner.as_ref().clone(),
-                _ => return Err(TirLowerError::UnsupportedExpr(
+        let element_ty = match &iterable_ty {
+            Type::Array(inner) | Type::Slice(inner) => inner.as_ref().clone(),
+            _ => {
+                return Err(TirLowerError::UnsupportedExpr(
                     format!(
                         "for-in currently only supports Array/Slice in experimental VM, found {}",
                         iterable_ty
                     ),
                     f.iterable.span(),
-                )),
-            };
+                ))
+            }
+        };
 
         // 1. Lower iterable and store in a hidden slot
         let iter_val = self.lower_expression(&f.iterable)?;
@@ -637,17 +638,18 @@ impl<'a> LowerContext<'a> {
             ));
         }
 
-        let element_ty =
-            match &iterable_ty {
-                Type::Array(inner) | Type::Slice(inner) => inner.as_ref().clone(),
-                _ => return Err(TirLowerError::UnsupportedExpr(
+        let element_ty = match &iterable_ty {
+            Type::Array(inner) | Type::Slice(inner) => inner.as_ref().clone(),
+            _ => {
+                return Err(TirLowerError::UnsupportedExpr(
                     format!(
                         "for-expr currently only supports Array/Slice in experimental VM, found {}",
                         iterable_ty
                     ),
                     f.iterable.span(),
-                )),
-            };
+                ))
+            }
+        };
 
         let tir_element_ty = map_type(&element_ty)?;
 
@@ -1575,7 +1577,6 @@ impl<'a> LowerContext<'a> {
                                 let payload_val = self.builder.build_unwrap(scrutinee_val, e.variant_name.clone(), i as u16)?;
                                 let payload_ty = self.infer_payload_type(&scrutinee_ty, &e.variant_name, i)?;
                                 let tir_payload_ty = map_type(&payload_ty)?;
-                                
                                 let slot = self.builder.build_slot(tir_payload_ty.clone(), Some(name))?;
                                 self.builder.build_store(slot, payload_val)?;
                                 self.locals.insert(name.clone(), (slot, tir_payload_ty, false));
@@ -1592,7 +1593,6 @@ impl<'a> LowerContext<'a> {
                                 let payload_val = self.builder.build_unwrap(scrutinee_val, variant_name.clone(), i as u16)?;
                                 let payload_ty = self.infer_payload_type(&scrutinee_ty, variant_name, i)?;
                                 let tir_payload_ty = map_type(&payload_ty)?;
-                                
                                 let slot = self.builder.build_slot(tir_payload_ty.clone(), Some(name))?;
                                 self.builder.build_store(slot, payload_val)?;
                                 self.locals.insert(name.clone(), (slot, tir_payload_ty, false));

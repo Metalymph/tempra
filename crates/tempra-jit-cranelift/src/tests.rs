@@ -2121,7 +2121,10 @@ fn jit_heap_rejects_unsupported_heap_ops_source_level() {
     match explain_jit_eligibility(&module, id_struct) {
         JitEligibility::UnsupportedInstr { instr, .. } => {
             assert!(instr.contains("Struct"), "Expected 'Struct' in: {instr}");
-            assert!(instr.contains("not supported"), "Expected 'not supported' in: {instr}");
+            assert!(
+                instr.contains("not supported"),
+                "Expected 'not supported' in: {instr}"
+            );
         }
         _ => panic!("Should reject GetField"),
     }
@@ -2215,7 +2218,7 @@ fn jit_rejects_array_push_explicit_msg() {
     // ret: Int64 so return-type check passes; ArrayPush is the trigger
     let mut func = BytecodeFunction::new("f".into(), vec![], BytecodeType::Int64);
     func.max_stack = 2;
-    func.code.push(BytecodeInstr::MakeArray(0));  // will trigger MakeArray first
+    func.code.push(BytecodeInstr::MakeArray(0)); // will trigger MakeArray first
     func.code.push(BytecodeInstr::ConstUnit);
     func.code.push(BytecodeInstr::ArrayPush);
     func.code.push(BytecodeInstr::Return);
@@ -2226,7 +2229,10 @@ fn jit_rejects_array_push_explicit_msg() {
         msg.contains("Array.push") || msg.contains("MakeArray"),
         "Expected 'Array.push' or 'MakeArray' in: {msg}"
     );
-    assert!(msg.contains("not supported"), "Expected 'not supported' in: {msg}");
+    assert!(
+        msg.contains("not supported"),
+        "Expected 'not supported' in: {msg}"
+    );
 }
 
 #[test]
@@ -2241,7 +2247,10 @@ fn jit_rejects_make_array_explicit_msg() {
     let id = module.add_function(func);
     let msg = explain_jit_eligibility(&module, id).to_string();
     assert!(msg.contains("MakeArray"), "Expected 'MakeArray' in: {msg}");
-    assert!(msg.contains("not supported"), "Expected 'not supported' in: {msg}");
+    assert!(
+        msg.contains("not supported"),
+        "Expected 'not supported' in: {msg}"
+    );
 }
 
 #[test]
@@ -2249,17 +2258,24 @@ fn jit_rejects_struct_get_explicit_msg() {
     use crate::engine::explain_jit_eligibility;
     use tempra_bytecode::constant::ConstId;
     let mut module = BytecodeModule::new();
-    let field_id = module.add_constant(tempra_bytecode::constant::BytecodeConstant::String("age".into()));
+    let field_id = module.add_constant(tempra_bytecode::constant::BytecodeConstant::String(
+        "age".into(),
+    ));
     let mut func = BytecodeFunction::new("f".into(), vec![BytecodeType::Any], BytecodeType::Int64);
     func.locals = vec![BytecodeType::Any];
     func.max_stack = 1;
-    func.code.push(BytecodeInstr::LoadLocal(tempra_bytecode::function::LocalId(0)));
+    func.code.push(BytecodeInstr::LoadLocal(
+        tempra_bytecode::function::LocalId(0),
+    ));
     func.code.push(BytecodeInstr::GetField(field_id));
     func.code.push(BytecodeInstr::Return);
     let id = module.add_function(func);
     let msg = explain_jit_eligibility(&module, id).to_string();
     assert!(msg.contains("Struct"), "Expected 'Struct' in: {msg}");
-    assert!(msg.contains("not supported"), "Expected 'not supported' in: {msg}");
+    assert!(
+        msg.contains("not supported"),
+        "Expected 'not supported' in: {msg}"
+    );
 }
 
 #[test]
@@ -2269,30 +2285,45 @@ fn jit_rejects_enum_tag_explicit_msg() {
     let mut func = BytecodeFunction::new("f".into(), vec![BytecodeType::Any], BytecodeType::Int64);
     func.locals = vec![BytecodeType::Any];
     func.max_stack = 1;
-    func.code.push(BytecodeInstr::LoadLocal(tempra_bytecode::function::LocalId(0)));
+    func.code.push(BytecodeInstr::LoadLocal(
+        tempra_bytecode::function::LocalId(0),
+    ));
     func.code.push(BytecodeInstr::Tag);
     func.code.push(BytecodeInstr::Return);
     let id = module.add_function(func);
     let msg = explain_jit_eligibility(&module, id).to_string();
     assert!(msg.contains("Enum.tag"), "Expected 'Enum.tag' in: {msg}");
-    assert!(msg.contains("not supported"), "Expected 'not supported' in: {msg}");
+    assert!(
+        msg.contains("not supported"),
+        "Expected 'not supported' in: {msg}"
+    );
 }
 
 #[test]
 fn jit_rejects_enum_unwrap_explicit_msg() {
     use crate::engine::explain_jit_eligibility;
     let mut module = BytecodeModule::new();
-    let variant_id = module.add_constant(tempra_bytecode::constant::BytecodeConstant::String("Some".into()));
+    let variant_id = module.add_constant(tempra_bytecode::constant::BytecodeConstant::String(
+        "Some".into(),
+    ));
     let mut func = BytecodeFunction::new("f".into(), vec![BytecodeType::Any], BytecodeType::Int64);
     func.locals = vec![BytecodeType::Any];
     func.max_stack = 1;
-    func.code.push(BytecodeInstr::LoadLocal(tempra_bytecode::function::LocalId(0)));
+    func.code.push(BytecodeInstr::LoadLocal(
+        tempra_bytecode::function::LocalId(0),
+    ));
     func.code.push(BytecodeInstr::Unwrap(variant_id, 0));
     func.code.push(BytecodeInstr::Return);
     let id = module.add_function(func);
     let msg = explain_jit_eligibility(&module, id).to_string();
-    assert!(msg.contains("Enum.unwrap"), "Expected 'Enum.unwrap' in: {msg}");
-    assert!(msg.contains("not supported"), "Expected 'not supported' in: {msg}");
+    assert!(
+        msg.contains("Enum.unwrap"),
+        "Expected 'Enum.unwrap' in: {msg}"
+    );
+    assert!(
+        msg.contains("not supported"),
+        "Expected 'not supported' in: {msg}"
+    );
 }
 
 #[test]
@@ -2302,13 +2333,18 @@ fn jit_rejects_slice_explicit_msg() {
     let mut func = BytecodeFunction::new("f".into(), vec![BytecodeType::Any], BytecodeType::Int64);
     func.locals = vec![BytecodeType::Any];
     func.max_stack = 1;
-    func.code.push(BytecodeInstr::LoadLocal(tempra_bytecode::function::LocalId(0)));
+    func.code.push(BytecodeInstr::LoadLocal(
+        tempra_bytecode::function::LocalId(0),
+    ));
     func.code.push(BytecodeInstr::Slice);
     func.code.push(BytecodeInstr::Return);
     let id = module.add_function(func);
     let msg = explain_jit_eligibility(&module, id).to_string();
     assert!(msg.contains("Slice"), "Expected 'Slice' in: {msg}");
-    assert!(msg.contains("not supported"), "Expected 'not supported' in: {msg}");
+    assert!(
+        msg.contains("not supported"),
+        "Expected 'not supported' in: {msg}"
+    );
 }
 
 #[test]
@@ -2321,7 +2357,10 @@ fn jit_rejects_heap_returning_fn() {
     let eligibility = explain_jit_eligibility(&module, id);
     let msg = eligibility.to_string();
     assert!(
-        matches!(eligibility, crate::engine::JitEligibility::UnsupportedType(_)),
+        matches!(
+            eligibility,
+            crate::engine::JitEligibility::UnsupportedType(_)
+        ),
         "Expected UnsupportedType, got: {msg}"
     );
     assert!(

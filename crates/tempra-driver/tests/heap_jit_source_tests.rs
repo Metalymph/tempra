@@ -1,8 +1,8 @@
-use tempra_vm::profile::VmOptions;
-use tempra_vm::value::VmValue;
 use tempra_bytecode::function::{BytecodeFunction, BytecodeType};
 use tempra_bytecode::opcode::BytecodeInstr;
 use tempra_bytecode::BytecodeModule;
+use tempra_vm::profile::VmOptions;
+use tempra_vm::value::VmValue;
 
 fn run_differential_test(source: &str, expected: VmValue) {
     let mut options_no_jit = VmOptions::default();
@@ -15,7 +15,8 @@ fn run_differential_test(source: &str, expected: VmValue) {
     options_jit.jit_min_instruction_count = 0; // Enable short functions
 
     // 1. Run without JIT
-    let res_no_jit = tempra_driver::run_source_vm_with_options(source, &[], options_no_jit).unwrap();
+    let res_no_jit =
+        tempra_driver::run_source_vm_with_options(source, &[], options_no_jit).unwrap();
     assert_eq!(res_no_jit, expected, "Interpreter result mismatch");
 
     // 2. Run with JIT
@@ -24,8 +25,19 @@ fn run_differential_test(source: &str, expected: VmValue) {
 
     // 3. Verify JIT executed successfully and tracked heap runtime calls
     let summary = profile.summary();
-    assert!(summary.contains("Compile attempts:"), "Summary should contain JIT metrics:\n{}", summary);
-    assert!(profile.function_stats.iter().any(|f| f.jit_heap_runtime_calls > 0), "Should have executed JIT heap calls:\n{}", summary);
+    assert!(
+        summary.contains("Compile attempts:"),
+        "Summary should contain JIT metrics:\n{}",
+        summary
+    );
+    assert!(
+        profile
+            .function_stats
+            .iter()
+            .any(|f| f.jit_heap_runtime_calls > 0),
+        "Should have executed JIT heap calls:\n{}",
+        summary
+    );
 }
 
 fn run_differential_error_test(source: &str) {
@@ -47,7 +59,10 @@ fn run_differential_error_test(source: &str) {
     // Verify the error message matches in both paths
     let err_no_jit = format!("{:?}", res_no_jit.err().unwrap());
     let err_jit = format!("{:?}", res_jit.err().unwrap());
-    assert_eq!(err_no_jit, err_jit, "Error message mismatch between interpreter and JIT fallback");
+    assert_eq!(
+        err_no_jit, err_jit,
+        "Error message mismatch between interpreter and JIT fallback"
+    );
 }
 
 #[test]
@@ -147,7 +162,7 @@ fn heap_jit_source_array_get_negative_i64() {
     "#;
     // Actually, if we do two calls and the first returns error, the program stops.
     // That's fine, we just verify it correctly errors. Wait, if it errors on first call,
-    // JIT isn't executed natively? That's true. But the first call compiles it. 
+    // JIT isn't executed natively? That's true. But the first call compiles it.
     // Is that enough? We can't catch errors in Tempra right now.
     // Let's just leave it as one call, it will error in the interpreter anyway and match.
     run_differential_error_test(source);
@@ -228,10 +243,14 @@ fn heap_jit_source_profile_summary_mentions_heap() {
 
     let (_, profile) = tempra_driver::run_source_vm_profiled(source, options_jit).unwrap();
     let summary = profile.summary();
-    
+
     assert!(summary.contains("Heap runtime:"));
-    
-    let fn_stats = profile.function_stats.iter().find(|f| f.function_name == "strlen").unwrap();
+
+    let fn_stats = profile
+        .function_stats
+        .iter()
+        .find(|f| f.function_name == "strlen")
+        .unwrap();
     assert!(fn_stats.jit_heap_runtime_calls > 0);
     assert!(fn_stats.jit_heap_context_objects > 0 || fn_stats.jit_heap_helper_calls > 0);
 }
@@ -253,7 +272,7 @@ fn heap_jit_source_rejects_struct_get() {
             return r1 + r2
         }
     "#;
-    
+
     let mut options = VmOptions::default();
     options.jit_enabled = true;
     options.profiling = true;
@@ -262,9 +281,13 @@ fn heap_jit_source_rejects_struct_get() {
 
     let (res, profile) = tempra_driver::run_source_vm_profiled(source, options).unwrap();
     assert_eq!(res, VmValue::Int64(84));
-    
+
     // Structs are not supported in source-level JIT, so get_age should be rejected.
-    let get_age_stats = profile.function_stats.iter().find(|f| f.function_name == "get_age").unwrap();
+    let get_age_stats = profile
+        .function_stats
+        .iter()
+        .find(|f| f.function_name == "get_age")
+        .unwrap();
     assert!(get_age_stats.jit_is_permanently_rejected);
     assert_eq!(get_age_stats.jit_compile_successes, 0);
 }
@@ -287,7 +310,7 @@ fn heap_jit_source_rejects_enum_tag() {
             return r1 + r2
         }
     "#;
-    
+
     let mut options = VmOptions::default();
     options.jit_enabled = true;
     options.profiling = true;
@@ -296,9 +319,13 @@ fn heap_jit_source_rejects_enum_tag() {
 
     let (res, profile) = tempra_driver::run_source_vm_profiled(source, options).unwrap();
     assert_eq!(res, VmValue::Int64(2));
-    
+
     // Enums are not supported in JIT, so `check` should be rejected.
-    let check_stats = profile.function_stats.iter().find(|f| f.function_name == "check").unwrap();
+    let check_stats = profile
+        .function_stats
+        .iter()
+        .find(|f| f.function_name == "check")
+        .unwrap();
     assert!(check_stats.jit_is_permanently_rejected);
     assert_eq!(check_stats.jit_compile_successes, 0);
 }
@@ -314,21 +341,22 @@ fn heap_jit_source_rejects_array_push() {
     func.code.push(BytecodeInstr::ConstUnit);
     func.code.push(BytecodeInstr::ArrayPush);
     func.code.push(BytecodeInstr::Return);
-    
+
     let module = BytecodeModule {
         version: 0,
         functions: vec![func],
         constants: vec![],
     };
-    
+
     let mut options = VmOptions::default();
     options.jit_enabled = true;
     options.profiling = true;
     options.hot_call_threshold = 0;
     options.jit_min_instruction_count = 0;
 
-    let (_, profile) = tempra_vm::run_function_profiled(&module, "test_push", vec![], options).unwrap();
-    
+    let (_, profile) =
+        tempra_vm::run_function_profiled(&module, "test_push", vec![], options).unwrap();
+
     let stats = profile.function_stats.first().unwrap();
     // In pure-interpreter/dummy run with a missing function, it will fail to compile.
     assert!(stats.jit_is_permanently_rejected || stats.jit_compile_successes == 0);
@@ -403,7 +431,9 @@ fn heap_jit_rejection_array_push_message_is_named() {
     // Confirm rejection reason is recorded and names the operation
     let reason = stats.jit_rejection_reason.as_deref().unwrap_or("");
     assert!(
-        reason.contains("Array.push") || reason.contains("MakeArray") || reason.contains("not supported"),
+        reason.contains("Array.push")
+            || reason.contains("MakeArray")
+            || reason.contains("not supported"),
         "Expected named rejection reason, got: {reason}"
     );
 }
@@ -417,7 +447,11 @@ fn heap_jit_rejection_struct_get_message_is_named() {
 
     let mut module = BytecodeModule::new();
     let field_id = module.add_constant(BytecodeConstant::String("age".into()));
-    let mut func = BytecodeFunction::new("f".to_string(), vec![BytecodeType::Any], BytecodeType::Int64);
+    let mut func = BytecodeFunction::new(
+        "f".to_string(),
+        vec![BytecodeType::Any],
+        BytecodeType::Int64,
+    );
     func.locals = vec![BytecodeType::Any];
     func.max_stack = 1;
     func.code.push(BytecodeInstr::LoadLocal(LocalId(0)));
@@ -436,11 +470,19 @@ fn heap_jit_rejection_struct_get_message_is_named() {
     options.jit_min_instruction_count = 0;
 
     // Run may fail in VM interpreter (Struct type mismatch) — that's fine.
-    let result = tempra_vm::run_function_profiled(&module, "f", vec![tempra_vm::value::VmValue::Int64(0)], options);
+    let result = tempra_vm::run_function_profiled(
+        &module,
+        "f",
+        vec![tempra_vm::value::VmValue::Int64(0)],
+        options,
+    );
     match result {
         Ok((_, profile)) => {
             let stats = profile.function_stats.first().unwrap();
-            assert!(stats.jit_is_permanently_rejected, "Struct.get function should be permanently rejected");
+            assert!(
+                stats.jit_is_permanently_rejected,
+                "Struct.get function should be permanently rejected"
+            );
             let reason = stats.jit_rejection_reason.as_deref().unwrap_or("");
             assert!(
                 reason.contains("Struct") || reason.contains("not supported"),
@@ -461,7 +503,11 @@ fn heap_jit_rejection_enum_tag_message_is_named() {
     use tempra_bytecode::function::LocalId;
 
     let mut module = BytecodeModule::new();
-    let mut func = BytecodeFunction::new("f".to_string(), vec![BytecodeType::Any], BytecodeType::Int64);
+    let mut func = BytecodeFunction::new(
+        "f".to_string(),
+        vec![BytecodeType::Any],
+        BytecodeType::Int64,
+    );
     func.locals = vec![BytecodeType::Any];
     func.max_stack = 1;
     func.code.push(BytecodeInstr::LoadLocal(LocalId(0)));
@@ -476,11 +522,19 @@ fn heap_jit_rejection_enum_tag_message_is_named() {
     options.jit_min_instruction_count = 0;
 
     // Run may fail in the verifier/VM — that's fine, rejection is what we care about.
-    let result = tempra_vm::run_function_profiled(&module, "f", vec![tempra_vm::value::VmValue::Int64(0)], options);
+    let result = tempra_vm::run_function_profiled(
+        &module,
+        "f",
+        vec![tempra_vm::value::VmValue::Int64(0)],
+        options,
+    );
     match result {
         Ok((_, profile)) => {
             let stats = profile.function_stats.first().unwrap();
-            assert!(stats.jit_is_permanently_rejected, "Enum.tag function should be permanently rejected");
+            assert!(
+                stats.jit_is_permanently_rejected,
+                "Enum.tag function should be permanently rejected"
+            );
             let reason = stats.jit_rejection_reason.as_deref().unwrap_or("");
             assert!(
                 reason.contains("Enum.tag") || reason.contains("not supported"),

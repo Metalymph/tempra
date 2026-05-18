@@ -292,9 +292,7 @@ fn explain_jit_eligibility_internal(
                 BytecodeInstr::MakeEnum(_, _, _) => {
                     "Enum construction is not supported in source-level JIT v1".into()
                 }
-                BytecodeInstr::Tag => {
-                    "Enum.tag is not supported in source-level JIT v1".into()
-                }
+                BytecodeInstr::Tag => "Enum.tag is not supported in source-level JIT v1".into(),
                 BytecodeInstr::Unwrap(_, _) => {
                     "Enum.unwrap is not supported in source-level JIT v1".into()
                 }

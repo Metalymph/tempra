@@ -931,8 +931,14 @@ fn test_jit_vm_repeated_array_arg_reuses_handle() {
 
     let mut interp = Interpreter::with_options(&module, options);
 
-    let arr1 = VmValue::Array(std::rc::Rc::new(vec![VmValue::Int64(10), VmValue::Int64(20)]));
-    let arr2 = VmValue::Array(std::rc::Rc::new(vec![VmValue::Int64(10), VmValue::Int64(20)]));
+    let arr1 = VmValue::Array(std::rc::Rc::new(vec![
+        VmValue::Int64(10),
+        VmValue::Int64(20),
+    ]));
+    let arr2 = VmValue::Array(std::rc::Rc::new(vec![
+        VmValue::Int64(10),
+        VmValue::Int64(20),
+    ]));
 
     // Call 1: compiles JIT
     interp
@@ -940,9 +946,7 @@ fn test_jit_vm_repeated_array_arg_reuses_handle() {
         .unwrap();
 
     // Call 2: JIT warm
-    interp
-        .run_function_id(func_id, vec![arr1, arr2])
-        .unwrap();
+    interp.run_function_id(func_id, vec![arr1, arr2]).unwrap();
 
     let p = interp.build_profile();
     let stats = &p.function_stats[func_id.0 as usize];
@@ -969,7 +973,10 @@ fn test_jit_vm_unsupported_array_no_dedup_or_fallback() {
 
     let mut interp = Interpreter::with_options(&module, options);
 
-    let arr_supported = VmValue::Array(std::rc::Rc::new(vec![VmValue::Int64(10), VmValue::Int64(20)]));
+    let arr_supported = VmValue::Array(std::rc::Rc::new(vec![
+        VmValue::Int64(10),
+        VmValue::Int64(20),
+    ]));
 
     // Call 1: compiles JIT
     interp
@@ -999,5 +1006,3 @@ fn test_jit_vm_unsupported_array_no_dedup_or_fallback() {
     assert_eq!(stats.jit_heap_handle_cache_hits, 0);
     assert_eq!(stats.jit_heap_handle_cache_misses, 0);
 }
-
-

@@ -196,3 +196,12 @@ jit-heap-smoke:
 # Run heap-aware JIT performance harness
 jit-heap-perf:
     cargo test -p tempra-driver --test heap_jit_perf --features jit-cranelift -- --ignored --nocapture
+
+# Phase 17 JIT verification gate: runs formatting, compiler checks, workspace test suite, heap JIT tests and CLI smoke tests
+jit-phase17:
+    cargo fmt --all -- --check
+    cargo check --workspace --features jit-cranelift
+    cargo test --workspace --features jit-cranelift
+    just jit-heap
+    just jit-heap-smoke
+

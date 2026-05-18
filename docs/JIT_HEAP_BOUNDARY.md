@@ -127,6 +127,10 @@ To ensure memory safety and maintain the integrity of the VM garbage collector (
     - **Justfile commands**: `just jit-heap`, `just jit-heap-smoke`, `just jit-heap-perf`.
     - **CLI Smoke**: All 5 examples run via `tempra run --experimental-vm --experimental-jit` and exit with code 0.
     - **Documentation**: README Experimental JIT section expanded with subset table, build instructions, and `just` commands. `CRANELIFT_JIT.md` has a full *Running Heap-aware JIT Examples* section.
+- **Phase 17.8**: Heap-aware JIT Phase Closure & Roadmap Gate. [COMPLETE]
+    - **Milestone freezing**: Formally closed Phase 17 JIT slice. Created phase closure document `docs/JIT_PHASE_17_CLOSURE.md` and added Phase 18 Options Gate to the project roadmap.
+    - **Verification automation**: Integrated the unified validation gate `just jit-phase17`.
+    - **Docs consistency**: Guaranteed 100% consistent references to the read-only JIT subset (`String.len`, `String.size`, `Array.len`, `Array.get_i64`).
 
 ## Integrated JIT Telemetry & Lifetime Scoping (Phase 17.2)
 

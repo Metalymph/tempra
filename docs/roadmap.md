@@ -52,7 +52,29 @@ This document outlines the implementation strategy and developmental phases for 
 
 ## 3. Explicitly Out of Scope (Non-Goals)
 
-- **JIT Compilation:** Tempra prioritizes low cold-start (interpreter) and predictable performance (AOT) over JIT complexity.
+- **Production-wide JIT Compilation:** While a fully-featured, production-wide JIT is not a core goal for standard v0.2 releases, a robust experimental, opt-in Cranelift JIT prototype has been established (Phases 15-17) specifically for performance exploration on hot `Int64` and read-only heap workloads.
 - **Heavy VM Runtime:** No GC pause or heavy virtual machine environments.
 - **Async/Await Sprawl:** Avoiding the "colored function" problem; preferring lightweight concurrency or explicit event-loop management.
 - **Nominal Trait Hierarchies:** No complex inheritance or rigid trait implementations.
+
+---
+
+## 4. Experimental JIT Development & Decision Gates
+
+### Phase 17: Heap-Aware JIT Prototype Slice (COMPLETE)
+Established a highly secure, isolated type-safe JIT boundary:
+- **Lifetime Isolation**: Context-based heap object tracking (`JitRuntimeContext`), preventing handle identifier leaks.
+- **Generic Intrinsics**: Dynamic routing of core operations (`Len`, `Size`, `GetIndex`) through runtime Rust dispatch helper boundaries.
+- **Rejection & Fallback Hardening**: Formulated descriptive per-opcode rejection diagnostics and guaranteed transparent fallback execution to the stack interpreter on unsupported operations.
+
+### Phase 18 Decision Gate: Next Pathways
+With Phase 17 consolidated, the development team faces a choice of four potential pipelines for Phase 18:
+- **Option 18A: Heap Mutation & Allocation Support**
+  - Add source-level heap-producing operations to the JIT (e.g. `String.concat`, `Array.push`, `Struct` construction, and dynamic variant payloads).
+- **Option 18B: Advanced Diagnostics & IDE Tooling**
+  - Integrate structural JIT checks inside LSP/tooling to warn developers of bytecode functions rejected by JIT, and output tracing tools for deoptimization analysis.
+- **Option 18C: Language Semantics & Method Dispatch**
+  - Implement full method calls, generic functions, and external module calls across the JIT execution boundary.
+- **Option 18D: Unified Native AOT & WebAssembly Pipelines**
+  - Standardize lowering pipelines so AOT native compilations share optimal Cranelift IR optimizations and target-independent bytecode translations.
+

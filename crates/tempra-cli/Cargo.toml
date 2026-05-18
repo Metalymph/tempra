@@ -13,6 +13,8 @@ tempra-driver.workspace = true
 tempra-session.workspace = true
 tempra-repl.workspace = true
 tempra-interpreter.workspace = true
+tempra-diagnostics.workspace = true
+serde_json.workspace = true
 clap.workspace = true
 anyhow.workspace = true
 

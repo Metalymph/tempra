@@ -409,6 +409,139 @@ pub fn test_file(path: &Path) -> Result<(), DriverError> {
     test_source(&source)
 }
 
+fn format_hir_type(ty: &tempra_hir::HirType) -> String {
+    match ty {
+        tempra_hir::HirType::Named(_, name) => name.clone(),
+        tempra_hir::HirType::Array(_, inner) => format!("Array({})", format_hir_type(inner)),
+        tempra_hir::HirType::Tuple(_, elements) => {
+            let el_strs: Vec<String> = elements.iter().map(format_hir_type).collect();
+            format!("({})", el_strs.join(", "))
+        }
+        tempra_hir::HirType::Apply(_, name, args) => {
+            let arg_strs: Vec<String> = args.iter().map(format_hir_type).collect();
+            format!("{}<{}>", format_hir_type(name), arg_strs.join(", "))
+        }
+        tempra_hir::HirType::Optional(_, inner) => format!("Option({})", format_hir_type(inner)),
+        tempra_hir::HirType::Result(_, ok, err) => format!("Result({}, {})", format_hir_type(ok), format_hir_type(err)),
+        tempra_hir::HirType::Function(_, params, ret) => {
+            let param_strs: Vec<String> = params.iter().map(format_hir_type).collect();
+            format!("fn({}) -> {}", param_strs.join(", "), format_hir_type(ret))
+        }
+        tempra_hir::HirType::SelfType(_) => "Self".to_string(),
+        tempra_hir::HirType::Projection(_, base, name) => format!("{}.{}", format_hir_type(base), name),
+    }
+}
+
+fn format_function_signature(func: &tempra_hir::HirFunction) -> String {
+    let params: Vec<String> = func.parameters.iter().map(|p| {
+        let inout_str = if p.is_inout { "inout " } else { "" };
+        format!("{}{}: {}", inout_str, p.name, format_hir_type(&p.ty))
+    }).collect();
+    let ret_str = if let Some(ret) = &func.return_type {
+        format!(" -> {}", format_hir_type(ret))
+    } else {
+        "".to_string()
+    };
+    let fallible_str = if func.is_fallible { "!" } else { "" };
+    format!("fn {}{}({}){}", func.name, fallible_str, params.join(", "), ret_str)
+}
+
+pub fn diagnose_file(path: &Path) -> Vec<tempra_diagnostics::Diagnostic> {
+    let mut diagnostics = Vec::new();
+    let source = match fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) => {
+            diagnostics.push(tempra_diagnostics::Diagnostic::error(
+                tempra_span::Span::new(0, 0),
+                format!("Failed to read file: {}", e),
+            ));
+            return diagnostics;
+        }
+    };
+
+    let ast = match tempra_parser::parse_source(&source) {
+        Ok(ast) => ast,
+        Err(e) => {
+            diagnostics.push(tempra_diagnostics::Diagnostic::error(
+                e.span,
+                e.message,
+            ));
+            return diagnostics;
+        }
+    };
+
+    let mut hir = tempra_hir::lower_file(&source, &ast);
+
+    if let Err(type_errors) = tempra_typeck::check_file_with_context(&mut hir) {
+        for err in type_errors {
+            diagnostics.push(tempra_diagnostics::Diagnostic::error(
+                err.span,
+                err.message,
+            ));
+        }
+    }
+
+    diagnostics
+}
+
+pub fn extract_symbols(path: &Path) -> Result<Vec<tempra_diagnostics::Symbol>, DriverError> {
+    let source = fs::read_to_string(path)?;
+    let ast = tempra_parser::parse_source(&source).map_err(|e| DriverError::ParseError(e.message))?;
+    let hir = tempra_hir::lower_file(&source, &ast);
+
+    let mut symbols = Vec::new();
+    for item in &hir.items {
+        match item {
+            tempra_hir::HirItem::Function(func) => {
+                let signature = format_function_signature(func);
+                symbols.push(tempra_diagnostics::Symbol {
+                    name: func.name.clone(),
+                    kind: tempra_diagnostics::SymbolKind::Function,
+                    span: func.span,
+                    signature: Some(signature),
+                });
+            }
+            tempra_hir::HirItem::Struct(s) => {
+                symbols.push(tempra_diagnostics::Symbol {
+                    name: s.name.clone(),
+                    kind: tempra_diagnostics::SymbolKind::Struct,
+                    span: s.span,
+                    signature: Some(format!("struct {}", s.name)),
+                });
+            }
+            tempra_hir::HirItem::Enum(e) => {
+                symbols.push(tempra_diagnostics::Symbol {
+                    name: e.name.clone(),
+                    kind: tempra_diagnostics::SymbolKind::Enum,
+                    span: e.span,
+                    signature: Some(format!("enum {}", e.name)),
+                });
+            }
+            tempra_hir::HirItem::Extend(ext) => {
+                let target_name = format_hir_type(&ext.target);
+                symbols.push(tempra_diagnostics::Symbol {
+                    name: format!("extend {}", target_name),
+                    kind: tempra_diagnostics::SymbolKind::Extension,
+                    span: ext.span,
+                    signature: Some(format!("extend {}", target_name)),
+                });
+
+                for method in &ext.methods {
+                    let signature = format_function_signature(method);
+                    symbols.push(tempra_diagnostics::Symbol {
+                        name: format!("{}.{}", target_name, method.name),
+                        kind: tempra_diagnostics::SymbolKind::Method,
+                        span: method.span,
+                        signature: Some(signature),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(symbols)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

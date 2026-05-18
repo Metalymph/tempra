@@ -71,13 +71,15 @@ Tempra keeps the language small, consistent, and practical:
 ## Main Commands
 
 ```bash
-tempra run file.tempra      # Execute script via interpreter
-tempra check file.tempra    # Verify syntax and types
-tempra build file.tempra    # Compile to binary/Wasm
-tempra install file.tempra  # Install native binary to path
-tempra test               # Run package tests
-tempra fmt                # Format source code
-tempra repl               # Start interactive session
+tempra run file.tempra         # Execute script via interpreter
+tempra check file.tempra       # Verify syntax and types (supports --json)
+tempra diagnostics file.tmpr   # Emit structured compiler diagnostics (supports --json)
+tempra symbols file.tmpr       # Outline structural code symbols (supports --json)
+tempra build file.tempra       # Compile to binary/Wasm
+tempra install file.tempra     # Install native binary to path
+tempra test                  # Run package tests
+tempra fmt                   # Format source code
+tempra repl                  # Start interactive session
 ```
 
 ### Experimental JIT (Heap-aware, opt-in)
@@ -218,6 +220,7 @@ Detailed language documentation:
 - [Surface Syntax Spec](file:///Users/lorenzopirro/coding/rust/tempra/docs/TEMPRA_SURFACE_SPEC_v0.1.md)
 - [Grammar](file:///Users/lorenzopirro/coding/rust/tempra/docs/GRAMMAR.md)
 - [Developer Guide](file:///Users/lorenzopirro/coding/rust/tempra/docs/DEV_GUIDE.md)
+- [Tooling & Diagnostics Guide](file:///Users/lorenzopirro/coding/rust/tempra/docs/TOOLING.md)
 
 ---
 

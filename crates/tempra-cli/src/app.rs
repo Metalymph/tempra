@@ -13,6 +13,8 @@ pub struct Cli {
 pub enum Commands {
     Run(RunArgs),
     Check(CheckArgs),
+    Diagnostics(DiagnosticsArgs),
+    Symbols(SymbolsArgs),
     Test(TestArgs),
     Repl,
     /// Emit TIR (Tempra Intermediate Representation) for a source file [experimental]
@@ -34,6 +36,22 @@ pub struct RunArgs {
 
 #[derive(Parser)]
 pub struct CheckArgs {
+    #[arg(long, help = "Output diagnostics in JSON format")]
+    pub json: bool,
+    pub path: PathBuf,
+}
+
+#[derive(Parser)]
+pub struct DiagnosticsArgs {
+    #[arg(long, help = "Output diagnostics in JSON format")]
+    pub json: bool,
+    pub path: PathBuf,
+}
+
+#[derive(Parser)]
+pub struct SymbolsArgs {
+    #[arg(long, help = "Output symbols in JSON format")]
+    pub json: bool,
     pub path: PathBuf,
 }
 

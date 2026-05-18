@@ -205,3 +205,14 @@ jit-phase17:
     just jit-heap
     just jit-heap-smoke
 
+# Run all tooling and diagnostics integration tests
+tooling-check:
+    cargo test -p tempra-driver --test tooling_integration_tests
+    cargo test -p tempra-cli --test tooling_cli_tests
+
+# Run smoke test for CLI diagnostics and symbol extraction commands
+tooling-smoke:
+    cargo run -p tempra-cli -- check --json examples/jit_heap/string_len.tmpr
+    cargo run -p tempra-cli -- diagnostics --json examples/jit_heap/string_len.tmpr
+    cargo run -p tempra-cli -- symbols --json examples/jit_heap/string_len.tmpr
+

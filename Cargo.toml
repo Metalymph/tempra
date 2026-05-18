@@ -45,6 +45,8 @@ authors = ["Lorenzo Pirro"]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 thiserror = "1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 tempra-session = { path = "crates/tempra-session" }
 tempra-span = { path = "crates/tempra-span" }
 tempra-diagnostics = { path = "crates/tempra-diagnostics" }

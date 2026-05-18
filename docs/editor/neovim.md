@@ -40,4 +40,5 @@ Open `examples/lsp_smoke.tmpr` in Neovim:
 - [ ] Hover over `Point` and `add` (usually `K`) to see Markdown hover information.
 - [ ] Use Goto Definition (usually `gd`) on `p.x` or `add` to jump to their declarations.
 - [ ] Open document symbols (e.g., using Telescope `lsp_document_symbols` or the native picker) to see the outline.
+- [ ] Trigger omnifunc (`<C-x><C-o>`) or your completion plugin to test auto-completion.
 - [ ] Uncomment the `broken()` function at the bottom and verify that diagnostics appear (virtual text and signs).

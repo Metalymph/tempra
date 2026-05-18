@@ -242,7 +242,9 @@ Editor --JSON-RPC--> tempra-lsp --> tempra-analysis --> tempra-driver
 | `textDocument/hover` | ✅ Markdown |
 | `textDocument/definition` | ✅ Goto Definition |
 | `textDocument/documentSymbol` | ✅ Flat symbol list |
-| Completion, Rename, References | 🚫 Not implemented |
+| `textDocument/completion` | ✅ Context-aware MVP |
+| Rename, References | 🚫 Not implemented |
+| Semantic tokens | 🚫 Not implemented |
 | Incremental text sync | 🚫 Not implemented |
 
 ### UTF-16 coordinate safety

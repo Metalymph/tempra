@@ -345,3 +345,74 @@ fn test_semantic_resolution_struct_fields() {
     let def_field = session.goto_definition(&uri, 7, 24).unwrap();
     assert!(def_field.start > 0);
 }
+
+#[test]
+fn test_completion_keywords_and_types() {
+    let mut session = AnalysisSession::new();
+    let uri = DocumentUri::new("file:///completion_test1.tmpr");
+
+    let source = "fn main() {  }".to_string();
+    session.open_document(uri.clone(), source, 1);
+
+    // Complete inside main function
+    let completions = session.completions_at_position(&uri, 0, 13);
+
+    // Check some keywords
+    assert!(completions.iter().any(|c| c.label == "fn"));
+    assert!(completions.iter().any(|c| c.label == "let"));
+    assert!(completions.iter().any(|c| c.label == "if"));
+
+    // Check some types
+    assert!(completions.iter().any(|c| c.label == "Int64"));
+    assert!(completions.iter().any(|c| c.label == "String"));
+    assert!(completions.iter().any(|c| c.label == "Result"));
+
+    // Check namespaces
+    assert!(completions.iter().any(|c| c.label == "fs"));
+}
+
+#[test]
+fn test_completion_local_bindings() {
+    let mut session = AnalysisSession::new();
+    let uri = DocumentUri::new("file:///completion_test2.tmpr");
+
+    let source = r#"
+        fn foo() {}
+        fn main() {
+            let my_var = 123
+            
+        }
+    "#
+    .to_string();
+    session.open_document(uri.clone(), source, 1);
+
+    // Complete on line 4 (after my_var)
+    let completions = session.completions_at_position(&uri, 4, 12);
+
+    // Should see top level function
+    assert!(completions.iter().any(|c| c.label == "foo"));
+
+    // Should see local variable
+    assert!(completions.iter().any(|c| c.label == "my_var"));
+}
+
+#[test]
+fn test_completion_member_fallback_empty() {
+    let mut session = AnalysisSession::new();
+    let uri = DocumentUri::new("file:///completion_test3.tmpr");
+
+    let source = r#"
+        fn main() {
+            let obj = 123
+            obj.
+        }
+    "#
+    .to_string();
+    session.open_document(uri.clone(), source, 1);
+
+    // Complete right after dot (line 3, char 16)
+    let completions = session.completions_at_position(&uri, 3, 16);
+
+    // Should be empty for MVP member completion
+    assert!(completions.is_empty());
+}

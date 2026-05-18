@@ -21,7 +21,6 @@ fn severity_to_lsp(sev: tempra_diagnostics::Severity) -> Option<DiagnosticSeveri
     }
 }
 
-/// Converts a Tempra `SymbolKind` to an LSP `SymbolKind`.
 pub fn symbol_kind_to_lsp(kind: tempra_diagnostics::SymbolKind) -> SymbolKind {
     match kind {
         tempra_diagnostics::SymbolKind::Function => SymbolKind::FUNCTION,
@@ -30,6 +29,21 @@ pub fn symbol_kind_to_lsp(kind: tempra_diagnostics::SymbolKind) -> SymbolKind {
         tempra_diagnostics::SymbolKind::Method => SymbolKind::METHOD,
         tempra_diagnostics::SymbolKind::Extension => SymbolKind::MODULE,
         tempra_diagnostics::SymbolKind::Variable => SymbolKind::VARIABLE,
+    }
+}
+
+/// Converts a Tempra `CompletionKind` to an LSP `CompletionItemKind`.
+pub fn completion_kind_to_lsp(kind: tempra_analysis::CompletionKind) -> CompletionItemKind {
+    match kind {
+        tempra_analysis::CompletionKind::Keyword => CompletionItemKind::KEYWORD,
+        tempra_analysis::CompletionKind::Function => CompletionItemKind::FUNCTION,
+        tempra_analysis::CompletionKind::Struct => CompletionItemKind::STRUCT,
+        tempra_analysis::CompletionKind::Enum => CompletionItemKind::ENUM,
+        tempra_analysis::CompletionKind::Variable => CompletionItemKind::VARIABLE,
+        tempra_analysis::CompletionKind::Method => CompletionItemKind::METHOD,
+        tempra_analysis::CompletionKind::Type => CompletionItemKind::CLASS,
+        tempra_analysis::CompletionKind::Module => CompletionItemKind::MODULE,
+        tempra_analysis::CompletionKind::Field => CompletionItemKind::FIELD,
     }
 }
 
@@ -163,6 +177,7 @@ impl LanguageServer for Backend {
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 definition_provider: Some(OneOf::Left(true)),
                 document_symbol_provider: Some(OneOf::Left(true)),
+                completion_provider: Some(CompletionOptions::default()),
                 ..ServerCapabilities::default()
             },
             server_info: Some(ServerInfo {
@@ -269,6 +284,41 @@ impl LanguageServer for Backend {
             uri: url,
             range,
         })))
+    }
+
+    // -----------------------------------------------------------------------
+    // Completion
+    // -----------------------------------------------------------------------
+
+    async fn completion(&self, params: CompletionParams) -> LspResult<Option<CompletionResponse>> {
+        let td = params.text_document_position;
+        let url = td.text_document.uri.clone();
+        let doc_uri = DocumentUri::new(url.as_str());
+        let pos = to_analysis_pos(td.position);
+
+        let session = self.session.read().await;
+
+        let completions = session.completions_at_lsp_position(&doc_uri, pos);
+
+        let mut items = Vec::new();
+        for item in completions {
+            items.push(CompletionItem {
+                label: item.label,
+                kind: Some(completion_kind_to_lsp(item.kind)),
+                detail: item.detail,
+                insert_text: item.insert_text,
+                sort_text: item.sort_text,
+                documentation: item.documentation.map(|doc| {
+                    Documentation::MarkupContent(MarkupContent {
+                        kind: MarkupKind::Markdown,
+                        value: doc,
+                    })
+                }),
+                ..CompletionItem::default()
+            });
+        }
+
+        Ok(Some(CompletionResponse::Array(items)))
     }
 
     // -----------------------------------------------------------------------

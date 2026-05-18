@@ -217,3 +217,51 @@ fn test_integration_close_clears_document() {
     session.close_document(&uri);
     assert!(session.document_symbols(&uri).is_none());
 }
+
+// ---------------------------------------------------------------------------
+// Completion conversion
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_completion_conversion_kinds() {
+    use tempra_analysis::CompletionKind;
+    use tempra_lsp::server::completion_kind_to_lsp;
+    use tower_lsp::lsp_types::CompletionItemKind;
+
+    assert_eq!(
+        completion_kind_to_lsp(CompletionKind::Keyword),
+        CompletionItemKind::KEYWORD
+    );
+    assert_eq!(
+        completion_kind_to_lsp(CompletionKind::Function),
+        CompletionItemKind::FUNCTION
+    );
+    assert_eq!(
+        completion_kind_to_lsp(CompletionKind::Struct),
+        CompletionItemKind::STRUCT
+    );
+    assert_eq!(
+        completion_kind_to_lsp(CompletionKind::Enum),
+        CompletionItemKind::ENUM
+    );
+    assert_eq!(
+        completion_kind_to_lsp(CompletionKind::Variable),
+        CompletionItemKind::VARIABLE
+    );
+    assert_eq!(
+        completion_kind_to_lsp(CompletionKind::Method),
+        CompletionItemKind::METHOD
+    );
+    assert_eq!(
+        completion_kind_to_lsp(CompletionKind::Type),
+        CompletionItemKind::CLASS
+    );
+    assert_eq!(
+        completion_kind_to_lsp(CompletionKind::Module),
+        CompletionItemKind::MODULE
+    );
+    assert_eq!(
+        completion_kind_to_lsp(CompletionKind::Field),
+        CompletionItemKind::FIELD
+    );
+}

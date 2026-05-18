@@ -66,4 +66,5 @@ Open `examples/lsp_smoke.tmpr` in the editor:
 - [ ] Hover over `Point` and `add` to see Markdown hover information.
 - [ ] Use `Go to Definition` (F12) on `p.x` or `add` to jump to their declarations.
 - [ ] Open the Outline or run `Go to Symbol in Editor` to see the document symbols.
+- [ ] Type `Point.` or `re...` to verify auto-completion appears.
 - [ ] Uncomment the `broken()` function at the bottom and verify that a red squiggly line appears for type errors.

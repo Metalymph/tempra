@@ -13,6 +13,29 @@ use tempra_driver::pipeline::{diagnose_source_with_facts, extract_symbols_from_s
 )]
 pub struct DocumentUri(String);
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum CompletionKind {
+    Keyword,
+    Function,
+    Struct,
+    Enum,
+    Variable,
+    Method,
+    Type,
+    Module,
+    Field,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CompletionItem {
+    pub label: String,
+    pub kind: CompletionKind,
+    pub detail: Option<String>,
+    pub insert_text: Option<String>,
+    pub sort_text: Option<String>,
+    pub documentation: Option<String>,
+}
+
 impl DocumentUri {
     /// Create a new normalized URI.
     pub fn new(uri: &str) -> Self {
@@ -674,6 +697,159 @@ impl AnalysisSession {
         snapshot
             .line_index
             .span_to_lsp_range(&snapshot.content, span)
+    }
+
+    /// Retrieve completions at the given internal coordinate.
+    pub fn completions_at_position(
+        &self,
+        uri: &DocumentUri,
+        line: u32,
+        byte_character: u32,
+    ) -> Vec<CompletionItem> {
+        let normalized = DocumentUri::new(uri.as_str());
+        let snapshot = match self.documents.get(&normalized) {
+            Some(s) => s,
+            None => return vec![],
+        };
+        let result = match self.analysis_cache.get(&normalized) {
+            Some(r) => r,
+            None => return vec![],
+        };
+
+        let pos = TextPosition {
+            line,
+            byte_character,
+        };
+        let offset = match snapshot
+            .line_index
+            .text_position_to_byte_offset(&snapshot.content, pos)
+        {
+            Some(o) => o,
+            None => return vec![],
+        };
+
+        // Context detection: Member access vs Normal identifier
+        let is_member_access = {
+            let mut ptr = offset;
+            let bytes = snapshot.content.as_bytes();
+            // Skip the current word we might be typing
+            while ptr > 0 {
+                let ch = bytes[ptr - 1] as char;
+                if ch.is_alphanumeric() || ch == '_' {
+                    ptr -= 1;
+                } else {
+                    break;
+                }
+            }
+            // Skip spaces
+            while ptr > 0 {
+                let ch = bytes[ptr - 1] as char;
+                if ch.is_whitespace() {
+                    ptr -= 1;
+                } else {
+                    break;
+                }
+            }
+            ptr > 0 && bytes[ptr - 1] == b'.'
+        };
+
+        if is_member_access {
+            // MVP: Return empty for member access unless we have confident facts
+            // For now, always return empty as a conservative fallback.
+            return vec![];
+        }
+
+        let mut items = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+
+        let mut add_item = |label: &str, kind: CompletionKind, detail: Option<String>| {
+            if seen.insert(label.to_string()) {
+                items.push(CompletionItem {
+                    label: label.to_string(),
+                    kind,
+                    detail,
+                    insert_text: None,
+                    sort_text: None,
+                    documentation: None,
+                });
+            }
+        };
+
+        // 1. Keywords
+        let keywords = [
+            "fn", "let", "var", "struct", "enum", "extend", "if", "else", "match", "for", "in",
+            "return", "break", "continue", "true", "false", "comptime",
+        ];
+        for kw in keywords {
+            add_item(kw, CompletionKind::Keyword, None);
+        }
+
+        // 2. Builtin Types
+        let types = [
+            "Int8", "Int16", "Int32", "Int64", "UInt8", "UInt16", "UInt32", "UInt64", "Float32",
+            "Float64", "Bool", "String", "Never", "Option", "Result",
+        ];
+        for t in types {
+            add_item(t, CompletionKind::Type, None);
+        }
+
+        // 3. Root namespaces
+        let namespaces = ["fs", "os", "env", "cmd", "io"];
+        for ns in namespaces {
+            add_item(ns, CompletionKind::Module, None);
+        }
+
+        // 4. Local bindings from SemanticIndex
+        // Only include symbols defined before the current offset
+        for sym in &result.semantic_index.symbols {
+            if sym.definition_span.start <= offset as u32 {
+                let kind = match sym.kind {
+                    tempra_diagnostics::SymbolKind::Function => CompletionKind::Function,
+                    tempra_diagnostics::SymbolKind::Struct => CompletionKind::Struct,
+                    tempra_diagnostics::SymbolKind::Enum => CompletionKind::Enum,
+                    tempra_diagnostics::SymbolKind::Method => CompletionKind::Method,
+                    tempra_diagnostics::SymbolKind::Extension => CompletionKind::Module,
+                    tempra_diagnostics::SymbolKind::Variable => CompletionKind::Variable,
+                };
+                add_item(&sym.name, kind, sym.signature.clone());
+            }
+        }
+
+        // 5. Top-level symbols from SymbolIndex
+        for sym in &result.symbols {
+            let kind = match sym.kind {
+                tempra_diagnostics::SymbolKind::Function => CompletionKind::Function,
+                tempra_diagnostics::SymbolKind::Struct => CompletionKind::Struct,
+                tempra_diagnostics::SymbolKind::Enum => CompletionKind::Enum,
+                tempra_diagnostics::SymbolKind::Method => CompletionKind::Method,
+                tempra_diagnostics::SymbolKind::Extension => CompletionKind::Module,
+                tempra_diagnostics::SymbolKind::Variable => CompletionKind::Variable,
+            };
+            add_item(&sym.name, kind, sym.signature.clone());
+        }
+
+        items
+    }
+
+    /// Retrieve completions at the given external LSP coordinate.
+    pub fn completions_at_lsp_position(
+        &self,
+        uri: &DocumentUri,
+        pos: LspPosition,
+    ) -> Vec<CompletionItem> {
+        let normalized = DocumentUri::new(uri.as_str());
+        let snapshot = match self.documents.get(&normalized) {
+            Some(s) => s,
+            None => return vec![],
+        };
+        let text_pos = match snapshot
+            .line_index
+            .lsp_to_text_position(&snapshot.content, pos)
+        {
+            Some(p) => p,
+            None => return vec![],
+        };
+        self.completions_at_position(&normalized, text_pos.line, text_pos.byte_character)
     }
 
     fn run_and_cache_analysis(&mut self, uri: &DocumentUri, snapshot: DocumentSnapshot) {

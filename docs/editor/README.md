@@ -24,9 +24,9 @@ Currently supported LSP capabilities:
 - Hover (Rich markdown)
 - Goto Definition
 - Document Symbols
+- Completion (Keywords, Locals, Globals)
 
 Not yet implemented:
-- Completion
 - Rename
 - References
 - Semantic Tokens

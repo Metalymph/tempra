@@ -5,6 +5,7 @@
 //   - Goto-def    → jump to definition of Point, add, or greeting
 //   - Diagnostics → the BROKEN section at the bottom shows intentional errors
 //   - Symbols     → open the document symbol outline to see Point, add, greeting
+//   - Completion  → type `re` in a function to see `return`, or type inside `main` to see locals
 
 struct Point {
     x: Int64
@@ -30,6 +31,12 @@ fn main() {
     let result = add(3, 4)
     let msg    = greeting("Tempra")
     let sum    = describe(origin)
+    
+    // Type `res` below to test local completion
+    // 
+    
+    // Type `Point.` below to test member completion (should be empty for MVP)
+    // 
 }
 
 // ─── INTENTIONAL DIAGNOSTICS ───────────────────────────────────────────────

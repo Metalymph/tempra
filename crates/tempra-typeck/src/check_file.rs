@@ -70,3 +70,29 @@ pub fn check_file_with_context(file: &mut HirFile) -> Result<TypeContext, Vec<Ty
         Err(ctx.errors)
     }
 }
+
+/// Type-check a complete HIR file and return the populated TypeContext, even if there are type errors.
+pub fn check_file_with_context_always(file: &mut HirFile, source: Option<String>) -> TypeContext {
+    let mut ctx = TypeContext::new();
+    ctx.source_text = source;
+    ctx.interpreter = Some(tempra_interpreter::interpreter::Interpreter::new(file));
+
+    register_items(&mut ctx, &file.items);
+
+    for item in &mut file.items {
+        check_item(&mut ctx, item);
+    }
+
+    if !file.top_level_statements.is_empty() {
+        ctx.current_is_fallible = true;
+        ctx.current_return_type = None;
+        ctx.scopes.push_scope();
+        for stmt in &mut file.top_level_statements {
+            crate::check_stmt::check_statement(&mut ctx, stmt, None);
+        }
+        ctx.scopes.pop_scope();
+        ctx.current_is_fallible = false;
+    }
+
+    ctx
+}

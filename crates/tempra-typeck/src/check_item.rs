@@ -96,6 +96,9 @@ fn check_function(ctx: &mut TypeContext, f: &mut HirFunction) {
         } else {
             p.is_inout
         };
+        let param_name_span = ctx.find_name_span(&p.name, p.span);
+        ctx.facts.binding_types.insert(param_name_span, ty.clone());
+
         ctx.scopes.insert_info(
             p.name.clone(),
             ty,
@@ -136,8 +139,42 @@ fn check_function(ctx: &mut TypeContext, f: &mut HirFunction) {
     ctx.current_generic_params.clear();
 }
 
-/// Register all top-level items so that forward references work.
 pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
+    // Pre-populate declaration spans for TypecheckFacts mapping
+    for item in items {
+        match item {
+            HirItem::Struct(s) => {
+                let struct_name_span = ctx.find_name_span(&s.name, s.span);
+                ctx.function_spans.insert(s.name.clone(), struct_name_span);
+                for f in &s.fields {
+                    let name_span = ctx.find_name_span(&f.name, f.span);
+                    ctx.struct_field_spans.insert((s.name.clone(), f.name.clone()), name_span);
+                }
+            }
+            HirItem::Enum(e) => {
+                let enum_name_span = ctx.find_name_span(&e.name, e.span);
+                ctx.function_spans.insert(e.name.clone(), enum_name_span);
+                for v in &e.variants {
+                    let name_span = ctx.find_name_span(&v.name, v.span);
+                    ctx.enum_variant_spans.insert((e.name.clone(), v.name.clone()), name_span);
+                }
+            }
+            HirItem::Extend(ext) => {
+                let target_ty = ctx.resolve_hir_type(&ext.target);
+                let target_name = target_ty.get_name();
+                for m in &ext.methods {
+                    let name_span = ctx.find_name_span(&m.name, m.span);
+                    ctx.method_spans.insert((target_name.clone(), m.name.clone()), name_span);
+                }
+            }
+            HirItem::Function(f) => {
+                let name_span = ctx.find_name_span(&f.name, f.span);
+                ctx.function_spans.insert(f.name.clone(), name_span);
+            }
+            _ => {}
+        }
+    }
+
     // First pass: register names of all type items to support forward references in Extend
     for item in items {
         match item {

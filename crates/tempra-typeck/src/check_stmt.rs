@@ -49,6 +49,9 @@ pub fn check_statement(
                     ctx.error(format!("cannot shadow captured value '{}'", l.name), l.span);
                 }
             }
+            let name_span = ctx.find_name_span(&l.name, l.span);
+            ctx.facts.binding_types.insert(name_span, ty.clone());
+
             ctx.scopes
                 .insert_info(l.name.clone(), ty, false, false, ctx.is_comptime, false);
 
@@ -93,6 +96,9 @@ pub fn check_statement(
                     ctx.error(format!("cannot shadow captured value '{}'", v.name), v.span);
                 }
             }
+            let name_span = ctx.find_name_span(&v.name, v.span);
+            ctx.facts.binding_types.insert(name_span, ty.clone());
+
             ctx.scopes
                 .insert_info(v.name.clone(), ty, true, false, ctx.is_comptime, false);
 
@@ -175,8 +181,11 @@ pub fn check_statement(
             };
 
             ctx.scopes.push_scope();
+            let name_span = ctx.find_name_span(&f.binding, f.span);
+            ctx.facts.binding_types.insert(name_span, elem_ty.clone());
+
             ctx.scopes
-                .insert(f.binding.clone(), elem_ty, ctx.is_comptime);
+                .insert(f.binding.clone(), elem_ty.clone(), ctx.is_comptime);
 
             if let Some(ref mut filter) = f.filter {
                 let filter_ty = check_expression(ctx, filter, Some(&Type::Bool));

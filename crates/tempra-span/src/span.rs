@@ -6,7 +6,7 @@ pub type ByteOffset = u32;
 /// A range in the source code.
 ///
 /// Spans are inclusive of `start` and exclusive of `end`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Span {
     /// Start offset in bytes.
     pub start: ByteOffset,

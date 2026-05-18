@@ -481,6 +481,39 @@ pub fn diagnose_source(source: &str) -> Vec<tempra_diagnostics::Diagnostic> {
     diagnostics
 }
 
+#[derive(Debug, Clone)]
+pub struct AnalysisFactsResult {
+    pub diagnostics: Vec<tempra_diagnostics::Diagnostic>,
+    pub facts: Option<tempra_typeck::TypecheckFacts>,
+}
+
+pub fn diagnose_source_with_facts(source: &str) -> AnalysisFactsResult {
+    let mut diagnostics = Vec::new();
+    let ast = match tempra_parser::parse_source(source) {
+        Ok(ast) => ast,
+        Err(e) => {
+            diagnostics.push(tempra_diagnostics::Diagnostic::error(e.span, e.message));
+            return AnalysisFactsResult {
+                diagnostics,
+                facts: None,
+            };
+        }
+    };
+
+    let mut hir = tempra_hir::lower_file(source, &ast);
+
+    let ctx = tempra_typeck::check_file_with_context_always(&mut hir, Some(source.to_string()));
+
+    for err in ctx.errors {
+        diagnostics.push(tempra_diagnostics::Diagnostic::error(err.span, err.message));
+    }
+
+    AnalysisFactsResult {
+        diagnostics,
+        facts: Some(ctx.facts),
+    }
+}
+
 pub fn diagnose_file(path: &Path) -> Vec<tempra_diagnostics::Diagnostic> {
     match fs::read_to_string(path) {
         Ok(s) => diagnose_source(&s),

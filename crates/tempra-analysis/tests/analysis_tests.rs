@@ -224,3 +224,124 @@ fn test_lsp_queries_after_unicode() {
     let def_res = session.definition_at_lsp_position(&uri, pos).unwrap();
     assert!(def_res.start > 0);
 }
+
+#[test]
+fn test_semantic_resolution_shadowing() {
+    let mut session = AnalysisSession::new();
+    let uri = DocumentUri::new("file:///shadow.tmpr");
+
+    let source = r#"
+        fn main() {
+            let x = 10;
+            {
+                let x = 20;
+                let y = x;
+            }
+            let z = x;
+        }
+    "#
+    .to_string();
+
+    session.open_document(uri.clone(), source, 1);
+
+    // Let's test y = x reference resolution
+    // "let y = x;" is on line 5. y starts at character 20, x starts at character 24.
+    // The inner "x = 20" is on line 4, starting at character 20.
+    // The outer "x = 10" is on line 2, starting at character 16.
+
+    // Hover on 'x' in "let y = x" (line 5, character 24)
+    let hover_inner_x = session.hover(&uri, 5, 24).unwrap();
+    assert_eq!(hover_inner_x, "let x: Int"); // or let x, depends on parser
+
+    // Definition of 'x' in "let y = x" should jump to inner x definition on line 4
+    let def_inner_x = session.goto_definition(&uri, 5, 24).unwrap();
+
+    // Hover on 'x' in "let z = x" (line 7, character 20)
+    let hover_outer_x = session.hover(&uri, 7, 20).unwrap();
+    assert_eq!(hover_outer_x, "let x: Int");
+
+    // Definition of 'x' in "let z = x" should jump to outer x definition on line 2
+    let def_outer_x = session.goto_definition(&uri, 7, 20).unwrap();
+    assert_ne!(def_inner_x, def_outer_x);
+}
+
+#[test]
+fn test_semantic_resolution_parameters() {
+    let mut session = AnalysisSession::new();
+    let uri = DocumentUri::new("file:///params.tmpr");
+
+    let source = r#"
+        fn greet(name: String) -> String {
+            let msg = name;
+            return msg
+        }
+    "#
+    .to_string();
+
+    session.open_document(uri.clone(), source, 1);
+
+    // "let msg = name;" is on line 2.
+    // Hover on "name" reference (line 2, character 22)
+    let hover_param = session.hover(&uri, 2, 22).unwrap();
+    assert!(hover_param.contains("name: String"));
+
+    // Goto definition of "name" should jump to the parameter declaration on line 1, character 17
+    let def_param = session.goto_definition(&uri, 2, 22).unwrap();
+    assert!(def_param.start > 0);
+}
+
+#[test]
+fn test_semantic_resolution_for_loops() {
+    let mut session = AnalysisSession::new();
+    let uri = DocumentUri::new("file:///loops.tmpr");
+
+    let source = r#"
+        fn process() {
+            let items = [1, 2, 3];
+            for item in items {
+                let val = item;
+            }
+        }
+    "#
+    .to_string();
+
+    session.open_document(uri.clone(), source, 1);
+
+    // "let val = item;" is on line 4.
+    // Hover on "item" reference (line 4, character 26)
+    let hover_loop_var = session.hover(&uri, 4, 26).unwrap();
+    assert_eq!(hover_loop_var, "let item");
+
+    // Goto definition of "item" should jump to the loop binding on line 3, character 16
+    let def_loop_var = session.goto_definition(&uri, 4, 26).unwrap();
+    assert!(def_loop_var.start > 0);
+}
+
+#[test]
+fn test_semantic_resolution_struct_fields() {
+    let mut session = AnalysisSession::new();
+    let uri = DocumentUri::new("file:///fields.tmpr");
+
+    let source = r#"
+        struct Point {
+            x: Int64,
+            y: Int64,
+        }
+        fn test() {
+            let p = Point { x: 1, y: 2 };
+            let val = p.x;
+        }
+    "#
+    .to_string();
+
+    session.open_document(uri.clone(), source, 1);
+
+    // "let val = p.x;" is on line 7.
+    // Hover on "x" struct field access (line 7, character 24)
+    let hover_field = session.hover(&uri, 7, 24).unwrap();
+    assert!(hover_field.contains("Point.x"));
+
+    // Goto definition of "x" field should jump to struct field declaration on line 2
+    let def_field = session.goto_definition(&uri, 7, 24).unwrap();
+    assert!(def_field.start > 0);
+}

@@ -521,9 +521,13 @@ dependencies = [
  "anyhow",
  "serde",
  "serde_json",
+ "tempra-ast",
  "tempra-diagnostics",
  "tempra-driver",
+ "tempra-lexer",
+ "tempra-parser",
  "tempra-span",
+ "tempra-typeck",
 ]
 
 [[package]]

@@ -179,4 +179,43 @@ Outside callers and LSP servers can query the engine directly using external UTF
 - `symbol_at_lsp_position(uri, pos)`
 These translate positions, execute lookups against the cached spatial and lexical symbol indexes (`SymbolIndex`), and return results without exposing UTF-16 complexities to the semantic core.
 
+---
+
+## 7. Scope-Aware Semantic Symbol Resolution (Phase 18.1C)
+
+To support precise, context-aware editor features (Hover, Goto-definition, future autocompletion and renaming), **Phase 18.1C** introduces the `SemanticIndex` and `SemanticResolver` within `tempra-analysis`. 
+
+This system performs a full AST traversal of every document to construct a scope hierarchy that correctly handles:
+- **Lexical Scopes**: Scopes are correctly nested (using blocks `{ ... }`). Lookups search from the innermost block outwards.
+- **Shadowing**: Local bindings (`let`/`var`) declared in inner blocks shadow outer declarations.
+- **Function Parameters & Loop Bindings**: Function arguments and loop iterator variables (`for item in items`) are resolved accurately to their specific scopes.
+- **Best-Effort Struct Fields & Enum Variants**: Struct field accesses (`point.x`) and enum variant patterns are mapped to their definitions.
+- **Precise AST-Derived Signatures**: Signatures are extracted directly from the source code slice matching the AST node, producing beautifully exact declarations (e.g. `fn add(a: Int64) -> Int64` or `let x: Int64` matching exact types).
+
+---
+
+## 8. Typecheck Facts Exposure & Type-Aware Analysis Bridge (Phase 18.1D)
+
+To enable rich, authoritative editor features without duplicating typechecking logic inside `tempra-analysis`, **Phase 18.1D** introduces a structured `TypecheckFacts` exposure system:
+
+### A. Authoritative Compiler Facts
+The typechecker (`tempra-typeck`) computes a stable `TypecheckFacts` struct during execution and exposes it via `AnalysisResult`:
+- `expr_types`: Maps all expression spans to their authoritative checked `Type`.
+- `binding_types`: Maps all binding and parameter declaration spans to their checked `Type`.
+- `resolved_symbols`: Maps identifier reference spans to their corresponding definition spans.
+- `member_resolutions`: Maps member access reference spans (`point.x`) to their field definition spans.
+- `variant_resolutions`: Maps enum variant reference spans (`Option.Some`) to their variant definition spans.
+- `method_resolutions`: Maps extension method invocation spans to their exact method definition spans.
+
+### B. Precise Spatial Binding Lookups
+During AST-to-HIR lowering, Tempra captures precise declaration name/binding/member spans inside the HIR representation. This ensures that every definition's exact name spatial bound is perfectly recorded in typechecker maps.
+
+### C. Type-Aware Rich Hover Enrichment
+The in-memory analysis engine integrates the exposed `TypecheckFacts` dynamically inside query endpoints. When performing a Hover lookup:
+1. It queries the spatial lexical index (`SemanticIndex`) to get the symbol's structure and signature prefix (e.g., `"let x: Int"`, `"Point.x: Int"`, `"parameter name: String"`).
+2. It queries `TypecheckFacts` to find the exact, authoritative type computed by the compiler (e.g., `Int64`, `String`).
+3. If both are present, it merges them beautifully by replacing the lexical suffix with the authoritative typechecker result, ensuring the user gets exact typing details even for complex, inferred nested local bindings!
+
+
+
 

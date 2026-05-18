@@ -7,6 +7,12 @@ edition.workspace = true
 tempra-driver.workspace = true
 tempra-diagnostics.workspace = true
 tempra-span.workspace = true
+tempra-parser.workspace = true
+tempra-ast.workspace = true
+tempra-lexer.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+tempra-typeck.workspace = true
 anyhow.workspace = true
+
+

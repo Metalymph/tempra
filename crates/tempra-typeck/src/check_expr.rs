@@ -71,6 +71,17 @@ pub fn check_expression(
     expr: &mut HirExpression,
     expected: Option<&Type>,
 ) -> Type {
+    let span = expr.span();
+    let ty = check_expression_inner(ctx, expr, expected);
+    ctx.facts.expr_types.insert(span, ty.clone());
+    ty
+}
+
+fn check_expression_inner(
+    ctx: &mut TypeContext,
+    expr: &mut HirExpression,
+    expected: Option<&Type>,
+) -> Type {
     let name_info = if let HirExpression::Name(span, name) = expr {
         Some((*span, name.clone()))
     } else {
@@ -420,11 +431,23 @@ fn check_name(
     expected: Option<&Type>,
 ) -> Type {
     match resolve_name(ctx, name, expected) {
-        Ok(ResolvedName::LocalVariable(info)) => info.ty,
+        Ok(ResolvedName::LocalVariable(info)) => {
+            info.ty
+        }
         Ok(ResolvedName::Namespace(ns)) => Type::Namespace(ns),
         Ok(ResolvedName::Type(ty)) => Type::Meta(Box::new(ty)),
+        Ok(ResolvedName::Function(f)) => {
+            if let Some(def_span) = ctx.function_spans.get(&f) {
+                ctx.facts.resolved_symbols.insert(span, *def_span);
+            }
+            Type::Unknown
+        }
         Ok(ResolvedName::BuiltinConstant(ty)) => ty,
         Ok(ResolvedName::EnumConstructor(enum_name, variant_name)) => {
+            if let Some(variant_span) = ctx.enum_variant_spans.get(&(enum_name.clone(), variant_name.clone())) {
+                ctx.facts.variant_resolutions.insert(span, *variant_span);
+            }
+
             // Type Validation
             let info = &ctx.enums[&enum_name];
             let payload = &info.variants[&variant_name];
@@ -468,7 +491,6 @@ fn check_name(
             );
             Type::Error
         }
-        Ok(ResolvedName::Function(_)) => Type::Unknown,
         Ok(ResolvedName::Unknown) => {
             // Give a richer hint: if lowercase it might be a binding pattern misuse
             if name.starts_with(|c: char| c.is_uppercase()) {
@@ -502,10 +524,20 @@ fn resolve_callee(
     expected: Option<&Type>,
 ) -> ResolvedCallee {
     match callee {
-        HirExpression::Name(_, name) => match resolve_name(ctx, name, expected) {
-            Ok(ResolvedName::Function(f)) => ResolvedCallee::Function(f),
+        HirExpression::Name(span, name) => match resolve_name(ctx, name, expected) {
+            Ok(ResolvedName::Function(f)) => {
+                if let Some(def_span) = ctx.function_spans.get(&f) {
+                    ctx.facts.resolved_symbols.insert(*span, *def_span);
+                }
+                ResolvedCallee::Function(f)
+            }
             Ok(ResolvedName::BuiltinFunction(f)) => ResolvedCallee::BuiltinFunction(f),
-            Ok(ResolvedName::EnumConstructor(e, v)) => ResolvedCallee::EnumConstructor(e, v),
+            Ok(ResolvedName::EnumConstructor(e, v)) => {
+                if let Some(def_span) = ctx.enum_variant_spans.get(&(e.clone(), v.clone())) {
+                    ctx.facts.resolved_symbols.insert(*span, *def_span);
+                }
+                ResolvedCallee::EnumConstructor(e, v)
+            }
             Ok(ResolvedName::LocalVariable(info)) => {
                 if let Type::Function(params, ret) = info.ty {
                     ResolvedCallee::Closure(params, *ret)
@@ -1890,6 +1922,14 @@ fn check_call(ctx: &mut TypeContext, expr: &mut HirExpression, expected: Option<
         }
         ResolvedCallee::Method(receiver_ty, method) => {
             if let HirExpression::Call(ref mut c) = expr {
+                if let HirExpression::Member(ref m) = *c.callee {
+                    let receiver_name = receiver_ty.get_name();
+                    if let Some(method_span) = ctx.method_spans.get(&(receiver_name.clone(), method.clone())) {
+                        let method_name_span = ctx.find_name_span(&method, m.span);
+                        ctx.facts.method_resolutions.insert(method_name_span, *method_span);
+                    }
+                }
+
                 if let Some(sig) = ctx.lookup_method_signature(&receiver_ty, &method) {
                     // Check parameter count (excluding self)
                     if c.args.len() != sig.params.len() - 1 {
@@ -2339,6 +2379,11 @@ fn check_member(ctx: &mut TypeContext, m: &mut HirMember, _expected: Option<&Typ
     if let Type::Struct(name, args) = &object_ty {
         if let Some(info) = ctx.structs.get(name.as_str()).cloned() {
             if let Some(field_info) = info.fields.get(&m.field) {
+                if let Some(field_span) = ctx.struct_field_spans.get(&(name.clone(), m.field.clone())) {
+                    let member_span = ctx.find_name_span(&m.field, m.span);
+                    ctx.facts.member_resolutions.insert(member_span, *field_span);
+                }
+
                 let mut sub_map = std::collections::HashMap::new();
                 if info.generic_params.len() == args.len() {
                     for (param, arg) in info.generic_params.iter().zip(args.iter()) {
@@ -3429,6 +3474,8 @@ fn check_closure(ctx: &mut TypeContext, c: &mut HirClosure, expected: Option<&Ty
     let mut param_types = Vec::new();
     for (i, p) in c.parameters.iter().enumerate() {
         let ty = ctx.resolve_hir_type(&p.ty);
+        let param_name_span = ctx.find_name_span(&p.name, p.span);
+        ctx.facts.binding_types.insert(param_name_span, ty.clone());
         if let Some(exp_p) = expected_params.get(i) {
             if !types_compatible(exp_p, &ty) {
                 ctx.error(

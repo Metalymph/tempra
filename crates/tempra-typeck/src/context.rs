@@ -110,6 +110,14 @@ pub struct TypeContext {
     pub interpreter: Option<tempra_interpreter::interpreter::Interpreter>,
     /// Bookkeeping for specializations requested during typechecking.
     pub specialization_log: HashSet<SpecializationKey>,
+    /// Collected typecheck facts.
+    pub facts: crate::facts::TypecheckFacts,
+    /// Helper declaration span maps.
+    pub struct_field_spans: HashMap<(String, String), Span>,
+    pub enum_variant_spans: HashMap<(String, String), Span>,
+    pub method_spans: HashMap<(String, String), Span>,
+    pub function_spans: HashMap<String, Span>,
+    pub source_text: Option<String>,
 }
 
 impl TypeContext {
@@ -132,9 +140,30 @@ impl TypeContext {
             is_comptime: false,
             interpreter: None,
             specialization_log: HashSet::new(),
+            facts: crate::facts::TypecheckFacts::default(),
+            struct_field_spans: HashMap::new(),
+            enum_variant_spans: HashMap::new(),
+            method_spans: HashMap::new(),
+            function_spans: HashMap::new(),
+            source_text: None,
         };
         ctx.register_builtins();
         ctx
+    }
+
+    pub fn find_name_span(&self, name: &str, span: Span) -> Span {
+        if let Some(source) = &self.source_text {
+            let start = span.start as usize;
+            let end = span.end as usize;
+            if start < source.len() && end <= source.len() {
+                let sub = &source[start..end];
+                if let Some(pos) = sub.find(name) {
+                    let s = span.start + pos as u32;
+                    return Span::new(s, s + name.len() as u32);
+                }
+            }
+        }
+        Span::new(span.start, span.start + name.len() as u32)
     }
 
     pub fn register_builtins(&mut self) {

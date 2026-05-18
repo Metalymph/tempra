@@ -80,19 +80,48 @@ tempra fmt                # Format source code
 tempra repl               # Start interactive session
 ```
 
-### Experimental Features
+### Experimental JIT (Heap-aware, opt-in)
 
-Tempra includes an experimental Just-In-Time (JIT) compiler and a stack-based bytecode VM for performance testing. These are strictly opt-in:
+Tempra includes an experimental Cranelift-based JIT compiler activated via opt-in flags. The JIT targets hot `Int64` functions and a read-only heap subset.
 
+> [!WARNING]
+> **Experimental.** No stability guarantees. The JIT is strictly opt-in and falls back to the standard interpreter for unsupported operations.
+
+**Build with JIT support:**
 ```bash
-# Run using the experimental bytecode VM
+cargo build --features jit-cranelift
+```
+
+**Run with JIT enabled:**
+```bash
+# Experimental VM only
 tempra run script.tmpr --experimental-vm
 
-# Run using the experimental Cranelift JIT (requires feature-gate)
+# Experimental VM + Cranelift JIT
 tempra run script.tmpr --experimental-vm --experimental-jit
 ```
 
-See [docs/CRANELIFT_JIT.md](docs/CRANELIFT_JIT.md) for current support and limitations.
+**Run the heap-aware JIT examples:**
+```bash
+just jit-heap-smoke   # CLI smoke test (all 5 examples, exit code 0 = pass)
+just jit-heap         # Integration test suite
+just jit-heap-perf    # Performance harness
+```
+
+**Supported source-level subset:**
+
+| Operation       | JIT Status   |
+|-----------------|---------------|
+| `String.len`    | ✅ Supported  |
+| `String.size`   | ✅ Supported  |
+| `Array.len`     | ✅ Supported  |
+| `Array.get_i64` | ✅ Supported  |
+| `String.concat` | ❌ Fallback   |
+| `Array.push`    | ❌ Fallback   |
+| Structs         | ❌ Fallback   |
+| Enums           | ❌ Fallback   |
+
+See [docs/CRANELIFT_JIT.md](docs/CRANELIFT_JIT.md) for full technical details.
 
 ### Build Examples
 

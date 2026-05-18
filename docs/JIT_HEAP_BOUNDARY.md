@@ -122,6 +122,11 @@ To ensure memory safety and maintain the integrity of the VM garbage collector (
     - **Fallback Safety**: Verified no panics on unsupported operations; VM interpreter fallback is transparent and correct.
     - **Profile Visibility**: `VmProfile::summary()` now always shows `permanent rejections:` when any function is rejected.
     - **Operation Status Table**: Added canonical operation-status table to `CRANELIFT_JIT.md`.
+- **Phase 17.7**: Heap-aware JIT Docs, Examples & CLI Smoke. [COMPLETE]
+    - **Examples**: Added `examples/jit_heap/` with 5 `.tmpr` files (`string_len`, `string_size`, `array_len`, `array_get`, `mixed_heap_int`). Each includes an `// expected: N` comment.
+    - **Justfile commands**: `just jit-heap`, `just jit-heap-smoke`, `just jit-heap-perf`.
+    - **CLI Smoke**: All 5 examples run via `tempra run --experimental-vm --experimental-jit` and exit with code 0.
+    - **Documentation**: README Experimental JIT section expanded with subset table, build instructions, and `just` commands. `CRANELIFT_JIT.md` has a full *Running Heap-aware JIT Examples* section.
 
 ## Integrated JIT Telemetry & Lifetime Scoping (Phase 17.2)
 

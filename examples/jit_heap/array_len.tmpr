@@ -1,0 +1,6 @@
+// expected: 3
+// JIT-eligible: Array.len via tmpr_jit_generic_len
+fn main() -> Int64 {
+    let xs: [Int64] = [10, 20, 30]
+    return xs.len()
+}

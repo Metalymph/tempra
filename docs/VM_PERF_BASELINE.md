@@ -27,6 +27,12 @@ Measurements are averaged over 20 iterations after 2 warmup runs.
 
 ## Candidates for Optimization
 
+### Phase 17.7 — Heap-aware JIT Examples & CLI Smoke
+Introduced the `examples/jit_heap/` directory with 5 runnable source-level examples.
+- **Heap Perf Harness**: Run via `just jit-heap-perf` (alias: `cargo test -p tempra-driver --test heap_jit_perf --features jit-cranelift -- --ignored --nocapture`).
+- **Smoke Validation**: `just jit-heap-smoke` verifies all 5 examples exit 0 via the CLI JIT path.
+- **Integration Suite**: `just jit-heap` runs 19 tests covering Phases 17.4/17.5/17.6 correctness.
+
 ### Phase 17.5 — JIT Generic Helper Intrinsics
 Replaced hardcoded dispatch helpers with generic intrinsics (`generic_len`, `generic_size`, `generic_get_i64`). 
 - **Dynamic Dispatch**: Generic intrinsics resolve exact types at runtime without needing specialized bytecode, returning graceful fallbacks for unexpected object variants.

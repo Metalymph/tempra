@@ -1,0 +1,7 @@
+// expected: 2
+// JIT-eligible: String.len via tmpr_jit_generic_len
+// "hé" has 2 Unicode scalar values (h + é)
+fn main() -> Int64 {
+    let s = "hé"
+    return s.len()
+}

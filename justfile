@@ -176,3 +176,23 @@ jit-burnin:
 # Run JIT burn-in including ignored stress tests
 jit-burnin-all:
     cargo test -p tempra-driver --test jit_burnin_tests --features jit-cranelift -- --nocapture --include-ignored
+
+# --------------------------------------------------
+# HEAP-AWARE JIT
+# --------------------------------------------------
+
+# Run heap-aware JIT integration tests
+jit-heap:
+    cargo test -p tempra-driver --test heap_jit_source_tests --features jit-cranelift
+
+# Run heap-aware JIT CLI smoke tests (exit code 0 = pass)
+jit-heap-smoke:
+    cargo run -p tempra-cli --features jit-cranelift -- run examples/jit_heap/string_len.tmpr --experimental-vm --experimental-jit
+    cargo run -p tempra-cli --features jit-cranelift -- run examples/jit_heap/string_size.tmpr --experimental-vm --experimental-jit
+    cargo run -p tempra-cli --features jit-cranelift -- run examples/jit_heap/array_len.tmpr --experimental-vm --experimental-jit
+    cargo run -p tempra-cli --features jit-cranelift -- run examples/jit_heap/array_get.tmpr --experimental-vm --experimental-jit
+    cargo run -p tempra-cli --features jit-cranelift -- run examples/jit_heap/mixed_heap_int.tmpr --experimental-vm --experimental-jit
+
+# Run heap-aware JIT performance harness
+jit-heap-perf:
+    cargo test -p tempra-driver --test heap_jit_perf --features jit-cranelift -- --ignored --nocapture

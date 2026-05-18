@@ -1,0 +1,7 @@
+// expected: 3
+// JIT-eligible: String.size via tmpr_jit_generic_size
+// "hé" = 'h' (1 byte) + 'é' (2 bytes) = 3 UTF-8 bytes
+fn main() -> Int64 {
+    let s = "hé"
+    return s.size()
+}

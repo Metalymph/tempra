@@ -1,0 +1,11 @@
+// expected: 28
+// JIT-eligible: combined String.len + String.size + Array.len + Array.get_i64
+// f("hé", [10, 20, 30]) = 2 + 3 + 3 + 20 = 28
+fn f(s: String, xs: [Int64]) -> Int64 {
+    return s.len() + s.size() + xs.len() + xs[1]
+}
+
+fn main() -> Int64 {
+    let xs: [Int64] = [10, 20, 30]
+    return f("hé", xs)
+}

@@ -217,3 +217,40 @@ As the JIT expands beyond primitives, it adopts a strict **Heap Boundary** desig
 - **Generic Intrinsics (Phase 17.5)**: Source-level JIT execution routes generic instructions (`Len`, `Size`, `GetIndex`) through generic helper intrinsics (`tmpr_jit_generic_len`, `tmpr_jit_generic_size`, `tmpr_jit_generic_get_i64`). These dynamic dispatchers enforce language-level type correctness and routing, while specialized type-specific helpers act as granular building blocks.
 
 See [JIT_HEAP_BOUNDARY.md](file:///Users/lorenzopirro/coding/rust/tempra/docs/JIT_HEAP_BOUNDARY.md) for full details.
+
+## Running Heap-aware JIT Examples
+
+The `examples/jit_heap/` directory contains five source-level examples that exercise the supported read-only heap subset. Each file includes an `// expected: N` comment with the expected integer return value.
+
+| File | Operation tested | Expected |
+|---|---|---|
+| `string_len.tmpr` | `String.len` | `2` |
+| `string_size.tmpr` | `String.size` | `3` |
+| `array_len.tmpr` | `Array.len` | `3` |
+| `array_get.tmpr` | `Array.get_i64` | `20` |
+| `mixed_heap_int.tmpr` | All four combined | `28` |
+
+### Quick commands
+
+```bash
+# Run the integration test suite (19 tests, includes Phase 17.4/17.5/17.6)
+just jit-heap
+
+# CLI smoke test — runs all 5 examples; exit code 0 = pass
+just jit-heap-smoke
+
+# Performance harness (ignored by default, requires --ignored)
+just jit-heap-perf
+```
+
+### Manual run
+
+```bash
+cargo run -p tempra-cli --features jit-cranelift -- run \
+  examples/jit_heap/string_len.tmpr \
+  --experimental-vm --experimental-jit
+```
+
+> **Note:** Unsupported operations (Struct, Enum, `Array.push`, `String.concat`) trigger
+> a permanent JIT rejection and fall back transparently to the standard stack interpreter.
+> No panic occurs and no correctness is lost.

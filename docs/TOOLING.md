@@ -216,6 +216,59 @@ The in-memory analysis engine integrates the exposed `TypecheckFacts` dynamicall
 2. It queries `TypecheckFacts` to find the exact, authoritative type computed by the compiler (e.g., `Int64`, `String`).
 3. If both are present, it merges them beautifully by replacing the lexical suffix with the authoritative typechecker result, ensuring the user gets exact typing details even for complex, inferred nested local bindings!
 
+---
 
+## 9. Thin LSP Server Adapter (Phase 18.1E)
 
+**Phase 18.1E** ships the first real LSP binary for Tempra: `tempra-lsp`.
+
+### Architecture
+
+```text
+Editor --JSON-RPC--> tempra-lsp --> tempra-analysis --> tempra-driver
+                      (adapter)       (IDE brain)        (compiler)
+```
+
+- **`tempra-analysis`** = IDE brain. Contains all semantic intelligence, scope resolution, typechecker-facts queries, and coordinate conversion logic.
+- **`tempra-lsp`** = thin adapter. Forwards LSP requests to the brain and translates the results to LSP protocol types. Contains **zero compiler or typechecker logic**.
+
+### Supported capabilities (Phase 18.1E)
+
+| Capability | Status |
+|---|---|
+| `textDocument/didOpen` | ✅ Full sync |
+| `textDocument/didChange` | ✅ Full sync |
+| `textDocument/didClose` | ✅ Publishes empty diagnostics |
+| `textDocument/hover` | ✅ Markdown |
+| `textDocument/definition` | ✅ Goto Definition |
+| `textDocument/documentSymbol` | ✅ Flat symbol list |
+| Completion, Rename, References | 🚫 Not implemented |
+| Incremental text sync | 🚫 Not implemented |
+
+### UTF-16 coordinate safety
+
+All LSP positions from the editor pass through the `LspPosition` wrappers in `tempra-analysis`'s `LineIndex`. The adapter (`tempra-lsp`) **never** performs manual UTF-16/UTF-8 conversions. Span-to-range conversion for diagnostics, definition, and symbols uses the `session.span_to_lsp_range()` helper in `tempra-analysis`.
+
+### Running the server
+
+```bash
+# Standalone binary (add to PATH):
+tempra-lsp
+
+# Or via cargo during development:
+cargo run -p tempra-lsp
+```
+
+Communicates over **stdin / stdout** using the standard LSP JSON-RPC transport.
+
+### Adding to an editor (VS Code example)
+
+```json
+{
+  "languageClient": {
+    "command": "tempra-lsp",
+    "filenamePatterns": ["*.tmpr"]
+  }
+}
+```
 

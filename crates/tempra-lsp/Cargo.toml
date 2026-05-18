@@ -2,7 +2,25 @@
 name = "tempra-lsp"
 version.workspace = true
 edition.workspace = true
+description = "Thin JSON-RPC/LSP adapter over tempra-analysis"
+
+[[bin]]
+name = "tempra-lsp"
+path = "src/main.rs"
+
+[lib]
+name = "tempra_lsp"
+path = "src/lib.rs"
 
 [dependencies]
-tempra-driver.workspace = true
+tower-lsp.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 anyhow.workspace = true
+tempra-analysis.workspace = true
+tempra-diagnostics.workspace = true
+tempra-span.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros"] }

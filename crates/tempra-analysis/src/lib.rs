@@ -241,6 +241,19 @@ impl LineIndex {
             None
         }
     }
+
+    /// Convert a `tempra_span::Span` (byte offsets) to an external LSP `LspRange`.
+    ///
+    /// Returns `None` if either offset falls outside the document.
+    pub fn span_to_lsp_range(
+        &self,
+        text: &str,
+        span: tempra_span::Span,
+    ) -> Option<LspRange> {
+        let start = self.byte_offset_to_lsp_position(text, span.start as usize)?;
+        let end = self.byte_offset_to_lsp_position(text, span.end as usize)?;
+        Some(LspRange { start, end })
+    }
 }
 
 /// Monotonically increasing version counter for documents.
@@ -648,6 +661,21 @@ impl AnalysisSession {
         character: u32,
     ) -> Option<tempra_span::Span> {
         self.definition_at_position(uri, line, character)
+    }
+
+    /// Convert a `tempra_span::Span` to an `LspRange` using the document's line index.
+    ///
+    /// Returns `None` if the document is not open or if offsets are out of range.
+    pub fn span_to_lsp_range(
+        &self,
+        uri: &DocumentUri,
+        span: tempra_span::Span,
+    ) -> Option<LspRange> {
+        let normalized = DocumentUri::new(uri.as_str());
+        let snapshot = self.documents.get(&normalized)?;
+        snapshot
+            .line_index
+            .span_to_lsp_range(&snapshot.content, span)
     }
 
     fn run_and_cache_analysis(&mut self, uri: &DocumentUri, snapshot: DocumentSnapshot) {

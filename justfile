@@ -210,10 +210,28 @@ tooling-check:
     cargo test -p tempra-driver --test tooling_integration_tests
     cargo test -p tempra-analysis --test analysis_tests
     cargo test -p tempra-cli --test tooling_cli_tests
+    cargo test -p tempra-lsp
 
 # Run smoke test for CLI diagnostics and symbol extraction commands
 tooling-smoke:
     cargo run -p tempra-cli -- check --json examples/jit_heap/string_len.tmpr
     cargo run -p tempra-cli -- diagnostics --json examples/jit_heap/string_len.tmpr
     cargo run -p tempra-cli -- symbols --json examples/jit_heap/string_len.tmpr
+
+# --------------------------------------------------
+# LSP SERVER
+# --------------------------------------------------
+
+# Run tempra-lsp LSP server over stdio (for editor integration)
+lsp:
+    cargo run -p tempra-lsp
+
+# Build tempra-lsp and run its test suite
+lsp-check:
+    cargo build -p tempra-lsp
+    cargo test -p tempra-lsp
+
+# Run only tempra-lsp tests
+lsp-test:
+    cargo test -p tempra-lsp
 

@@ -15,13 +15,13 @@ pub mod check_stmt;
 pub mod context;
 pub mod env;
 pub mod error;
+pub mod facts;
 pub mod pattern;
 pub mod projection;
 pub mod types;
-pub mod facts;
 
 pub use check_file::{check_file, check_file_with_context, check_file_with_context_always};
 pub use env::VariableInfo;
 pub use error::TypeError;
-pub use types::Type;
 pub use facts::TypecheckFacts;
+pub use types::Type;

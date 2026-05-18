@@ -245,11 +245,7 @@ impl LineIndex {
     /// Convert a `tempra_span::Span` (byte offsets) to an external LSP `LspRange`.
     ///
     /// Returns `None` if either offset falls outside the document.
-    pub fn span_to_lsp_range(
-        &self,
-        text: &str,
-        span: tempra_span::Span,
-    ) -> Option<LspRange> {
+    pub fn span_to_lsp_range(&self, text: &str, span: tempra_span::Span) -> Option<LspRange> {
         let start = self.byte_offset_to_lsp_position(text, span.start as usize)?;
         let end = self.byte_offset_to_lsp_position(text, span.end as usize)?;
         Some(LspRange { start, end })
@@ -568,7 +564,9 @@ impl AnalysisSession {
 
             if authoritative_ty.is_none() {
                 // Check expression spans (innermost/smallest first)
-                let mut matched_exprs: Vec<(&tempra_span::Span, &tempra_typeck::Type)> = facts.expr_types.iter()
+                let mut matched_exprs: Vec<(&tempra_span::Span, &tempra_typeck::Type)> = facts
+                    .expr_types
+                    .iter()
                     .filter(|(&span, _)| span.start <= offset_u32 && offset_u32 <= span.end)
                     .collect();
                 matched_exprs.sort_by_key(|&(span, _)| span.end - span.start);

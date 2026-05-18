@@ -1,0 +1,41 @@
+// lsp_smoke.tmpr — Tempra LSP smoke test fixture
+//
+// Use this file to manually verify tempra-lsp features in your editor:
+//   - Hover       → hover over any identifier to see its type / signature
+//   - Goto-def    → jump to definition of Point, add, or greeting
+//   - Diagnostics → the BROKEN section at the bottom shows intentional errors
+//   - Symbols     → open the document symbol outline to see Point, add, greeting
+
+struct Point {
+    x: Int64
+    y: Int64
+}
+
+fn add(a: Int64, b: Int64) -> Int64 {
+    return a + b
+}
+
+fn greeting(name: String) -> String {
+    let prefix = "Hello, "
+    return prefix
+}
+
+fn describe(p: Point) -> Int64 {
+    let total = add(p.x, p.y)
+    return total
+}
+
+fn main() {
+    let origin = Point { x: 0, y: 0 }
+    let result = add(3, 4)
+    let msg    = greeting("Tempra")
+    let sum    = describe(origin)
+}
+
+// ─── INTENTIONAL DIAGNOSTICS ───────────────────────────────────────────────
+// Uncomment the section below to test that the editor shows real type errors.
+//
+// fn broken() {
+//     let x: String = 42          // type mismatch: expected String, found Int
+//     let y: Int64  = "hello"     // type mismatch: expected Int64, found String
+// }

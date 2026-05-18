@@ -431,9 +431,7 @@ fn check_name(
     expected: Option<&Type>,
 ) -> Type {
     match resolve_name(ctx, name, expected) {
-        Ok(ResolvedName::LocalVariable(info)) => {
-            info.ty
-        }
+        Ok(ResolvedName::LocalVariable(info)) => info.ty,
         Ok(ResolvedName::Namespace(ns)) => Type::Namespace(ns),
         Ok(ResolvedName::Type(ty)) => Type::Meta(Box::new(ty)),
         Ok(ResolvedName::Function(f)) => {
@@ -444,7 +442,10 @@ fn check_name(
         }
         Ok(ResolvedName::BuiltinConstant(ty)) => ty,
         Ok(ResolvedName::EnumConstructor(enum_name, variant_name)) => {
-            if let Some(variant_span) = ctx.enum_variant_spans.get(&(enum_name.clone(), variant_name.clone())) {
+            if let Some(variant_span) = ctx
+                .enum_variant_spans
+                .get(&(enum_name.clone(), variant_name.clone()))
+            {
                 ctx.facts.variant_resolutions.insert(span, *variant_span);
             }
 
@@ -1924,9 +1925,14 @@ fn check_call(ctx: &mut TypeContext, expr: &mut HirExpression, expected: Option<
             if let HirExpression::Call(ref mut c) = expr {
                 if let HirExpression::Member(ref m) = *c.callee {
                     let receiver_name = receiver_ty.get_name();
-                    if let Some(method_span) = ctx.method_spans.get(&(receiver_name.clone(), method.clone())) {
+                    if let Some(method_span) = ctx
+                        .method_spans
+                        .get(&(receiver_name.clone(), method.clone()))
+                    {
                         let method_name_span = ctx.find_name_span(&method, m.span);
-                        ctx.facts.method_resolutions.insert(method_name_span, *method_span);
+                        ctx.facts
+                            .method_resolutions
+                            .insert(method_name_span, *method_span);
                     }
                 }
 
@@ -2379,9 +2385,13 @@ fn check_member(ctx: &mut TypeContext, m: &mut HirMember, _expected: Option<&Typ
     if let Type::Struct(name, args) = &object_ty {
         if let Some(info) = ctx.structs.get(name.as_str()).cloned() {
             if let Some(field_info) = info.fields.get(&m.field) {
-                if let Some(field_span) = ctx.struct_field_spans.get(&(name.clone(), m.field.clone())) {
+                if let Some(field_span) =
+                    ctx.struct_field_spans.get(&(name.clone(), m.field.clone()))
+                {
                     let member_span = ctx.find_name_span(&m.field, m.span);
-                    ctx.facts.member_resolutions.insert(member_span, *field_span);
+                    ctx.facts
+                        .member_resolutions
+                        .insert(member_span, *field_span);
                 }
 
                 let mut sub_map = std::collections::HashMap::new();

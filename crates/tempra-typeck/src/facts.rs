@@ -1,6 +1,6 @@
+use crate::types::Type;
 use std::collections::HashMap;
 use tempra_span::Span;
-use crate::types::Type;
 
 /// Authoritative facts collected during structural typechecking.
 #[derive(Debug, Clone, Default)]

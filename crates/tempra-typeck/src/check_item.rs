@@ -148,7 +148,8 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
                 ctx.function_spans.insert(s.name.clone(), struct_name_span);
                 for f in &s.fields {
                     let name_span = ctx.find_name_span(&f.name, f.span);
-                    ctx.struct_field_spans.insert((s.name.clone(), f.name.clone()), name_span);
+                    ctx.struct_field_spans
+                        .insert((s.name.clone(), f.name.clone()), name_span);
                 }
             }
             HirItem::Enum(e) => {
@@ -156,7 +157,8 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
                 ctx.function_spans.insert(e.name.clone(), enum_name_span);
                 for v in &e.variants {
                     let name_span = ctx.find_name_span(&v.name, v.span);
-                    ctx.enum_variant_spans.insert((e.name.clone(), v.name.clone()), name_span);
+                    ctx.enum_variant_spans
+                        .insert((e.name.clone(), v.name.clone()), name_span);
                 }
             }
             HirItem::Extend(ext) => {
@@ -164,7 +166,8 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
                 let target_name = target_ty.get_name();
                 for m in &ext.methods {
                     let name_span = ctx.find_name_span(&m.name, m.span);
-                    ctx.method_spans.insert((target_name.clone(), m.name.clone()), name_span);
+                    ctx.method_spans
+                        .insert((target_name.clone(), m.name.clone()), name_span);
                 }
             }
             HirItem::Function(f) => {

@@ -59,8 +59,14 @@ fn to_analysis_pos(pos: Position) -> LspPosition {
 /// we have a diagnostic but the span cannot be mapped (e.g. empty source).
 fn fallback_range() -> Range {
     Range {
-        start: Position { line: 0, character: 0 },
-        end: Position { line: 0, character: 0 },
+        start: Position {
+            line: 0,
+            character: 0,
+        },
+        end: Position {
+            line: 0,
+            character: 0,
+        },
     }
 }
 
@@ -77,11 +83,7 @@ fn convert_diagnostics(
         .into_iter()
         .map(|d| {
             // Prefer primary label span; fall back to the main diagnostic span.
-            let span = d
-                .labels
-                .first()
-                .map(|l| l.span)
-                .unwrap_or(d.span);
+            let span = d.labels.first().map(|l| l.span).unwrap_or(d.span);
 
             let range = session
                 .span_to_lsp_range(uri, span)
@@ -212,9 +214,7 @@ impl LanguageServer for Backend {
         }
 
         // Clear diagnostics for the closed document.
-        self.client
-            .publish_diagnostics(uri, vec![], None)
-            .await;
+        self.client.publish_diagnostics(uri, vec![], None).await;
     }
 
     // -----------------------------------------------------------------------

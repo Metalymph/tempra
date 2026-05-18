@@ -4,7 +4,7 @@
 //! and span-to-range — without spinning up a real JSON-RPC transport.
 
 use tempra_analysis::{AnalysisSession, DocumentUri, LspPosition};
-use tempra_lsp::server::{symbol_kind_to_lsp};
+use tempra_lsp::server::symbol_kind_to_lsp;
 use tower_lsp::lsp_types::SymbolKind;
 
 // ---------------------------------------------------------------------------
@@ -101,7 +101,9 @@ fn test_span_to_lsp_range_ascii() {
 
     // Span covering "add" → bytes 3..6
     let span = tempra_span::Span::new(3, 6);
-    let range = session.span_to_lsp_range(&uri, span).expect("range should resolve");
+    let range = session
+        .span_to_lsp_range(&uri, span)
+        .expect("range should resolve");
 
     assert_eq!(range.start.line, 0);
     assert_eq!(range.start.character, 3); // UTF-16 == UTF-8 for ASCII
@@ -120,7 +122,9 @@ fn test_span_to_lsp_range_unicode() {
 
     // Span covering "fn" → bytes 5..7
     let span = tempra_span::Span::new(5, 7);
-    let range = session.span_to_lsp_range(&uri, span).expect("range should resolve");
+    let range = session
+        .span_to_lsp_range(&uri, span)
+        .expect("range should resolve");
 
     assert_eq!(range.start.line, 0);
     assert_eq!(range.start.character, 3); // 🐶=2 code units + ' '=1 → character 3
@@ -156,7 +160,10 @@ fn add(a: Int64) -> Int64 {
     session.open_document(uri.clone(), source, 1);
 
     // Hover on "Point" definition (line 1, character ~7)
-    let hover_pos = LspPosition { line: 1, character: 7 };
+    let hover_pos = LspPosition {
+        line: 1,
+        character: 7,
+    };
     let hover = session.hover_at_lsp_position(&uri, hover_pos);
     assert!(hover.is_some(), "hover on Point should return something");
     let hover_text = hover.unwrap();
@@ -167,9 +174,15 @@ fn add(a: Int64) -> Int64 {
     );
 
     // Symbols should list at least Point and add
-    let syms = session.document_symbols(&uri).expect("symbols should be available");
+    let syms = session
+        .document_symbols(&uri)
+        .expect("symbols should be available");
     let names: Vec<&str> = syms.iter().map(|s| s.name.as_str()).collect();
-    assert!(names.contains(&"Point"), "symbols missing Point: {:?}", names);
+    assert!(
+        names.contains(&"Point"),
+        "symbols missing Point: {:?}",
+        names
+    );
     assert!(names.contains(&"add"), "symbols missing add: {:?}", names);
 
     // All symbol spans should produce valid LSP ranges

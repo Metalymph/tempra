@@ -161,6 +161,11 @@ This crate acts as the "brain" for editor features and exposes highly efficient,
 - `update_document(uri, content, version)`: Updates in-memory snapshots and invalidates/refreshes caches.
 - `close_document(uri)`: Evicts active session states to release memory.
 
+### Workspace & Single-File Fallback (Phase 19.0A)
+To maintain stability across various single-file testing and editor environments while supporting multi-file workspaces:
+- **Single-File Fallback**: If a file is opened in isolation (e.g. without a workspace context or when module resolution is not configured/fails), the session layer falls back to a single-file compiler session. In this mode, cross-module imports and unresolved external symbols do not trigger blocking validation errors (best-effort resolution).
+- **Workspace Mode**: When a workspace is active, the session dynamically resolves the dependency graph and compiles with multi-file checks enabled.
+
 ### Dual Coordinate System
 To avoid coordinate shift debt, Tempra splits positions into internal-first UTF-8 representations and outer LSP-style UTF-16 representations:
 1. **Internal Positions (`TextPosition`)**:

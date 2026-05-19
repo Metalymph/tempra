@@ -118,6 +118,10 @@ pub struct TypeContext {
     pub method_spans: HashMap<(String, String), Span>,
     pub function_spans: HashMap<String, Span>,
     pub source_text: Option<String>,
+    pub current_module: String,
+    pub imports: HashMap<String, String>,
+    pub modules: HashSet<String>,
+    pub is_single_file_fallback: bool,
 }
 
 impl TypeContext {
@@ -146,9 +150,31 @@ impl TypeContext {
             method_spans: HashMap::new(),
             function_spans: HashMap::new(),
             source_text: None,
+            current_module: String::new(),
+            imports: HashMap::new(),
+            modules: HashSet::new(),
+            is_single_file_fallback: false,
         };
         ctx.register_builtins();
         ctx
+    }
+
+    pub fn is_module(&self, name: &str) -> bool {
+        if self.modules.contains(name) || self.imports.contains_key(name) {
+            return true;
+        }
+        let dot_prefix = format!("{}.", name);
+        for m in &self.modules {
+            if m.starts_with(&dot_prefix) {
+                return true;
+            }
+        }
+        for k in self.imports.keys() {
+            if k.starts_with(&dot_prefix) {
+                return true;
+            }
+        }
+        false
     }
 
     pub fn find_name_span(&self, name: &str, span: Span) -> Span {
@@ -262,6 +288,24 @@ impl TypeContext {
                 constraint: param.constraint.clone(),
             };
         }
+
+        if self.is_module(name) {
+            return Type::Namespace(name.to_string());
+        }
+
+        if !self.current_module.is_empty() {
+            let qualified = format!("{}.{}", self.current_module, name);
+            if self.structs.contains_key(&qualified) {
+                return Type::Struct(qualified, vec![]);
+            }
+            if self.enums.contains_key(&qualified) {
+                return Type::Enum(qualified, vec![]);
+            }
+            if self.interfaces.contains_key(&qualified) {
+                return Type::Interface(qualified);
+            }
+        }
+
         if self.structs.contains_key(name) {
             return Type::Struct(name.to_string(), vec![]);
         }
@@ -343,6 +387,59 @@ impl TypeContext {
             HirType::SelfType(_span) => Type::SelfType,
             HirType::Projection(span, base_hir, assoc) => {
                 let base_ty = self.resolve_hir_type(base_hir);
+                if let Type::Namespace(ns) = &base_ty {
+                    let qualified = format!("{}.{}", ns, assoc);
+                    if self.is_module(&qualified) {
+                        return Type::Namespace(qualified);
+                    }
+                    if self.structs.contains_key(&qualified) {
+                        let info = &self.structs[&qualified];
+                        if info.visibility == Visibility::Private && self.current_module != *ns {
+                            self.error(
+                                format!(
+                                    "cannot access private struct '{}' of module '{}'",
+                                    assoc, ns
+                                ),
+                                *span,
+                            );
+                        }
+                        return Type::Struct(qualified, vec![]);
+                    }
+                    if self.enums.contains_key(&qualified) {
+                        let info = &self.enums[&qualified];
+                        if info.visibility == Visibility::Private && self.current_module != *ns {
+                            self.error(
+                                format!(
+                                    "cannot access private enum '{}' of module '{}'",
+                                    assoc, ns
+                                ),
+                                *span,
+                            );
+                        }
+                        return Type::Enum(qualified, vec![]);
+                    }
+                    if self.interfaces.contains_key(&qualified) {
+                        let info = &self.interfaces[&qualified];
+                        if info.visibility == Visibility::Private && self.current_module != *ns {
+                            self.error(
+                                format!(
+                                    "cannot access private interface '{}' of module '{}'",
+                                    assoc, ns
+                                ),
+                                *span,
+                            );
+                        }
+                        return Type::Interface(qualified);
+                    }
+                    if self.is_single_file_fallback {
+                        return Type::Unknown;
+                    }
+                    self.error(
+                        format!("no type '{}' found in module '{}'", assoc, ns),
+                        *span,
+                    );
+                    return Type::Error;
+                }
                 if let Type::GenericParam {
                     id,
                     name,

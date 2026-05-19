@@ -15,6 +15,9 @@ File
 
 ```text
 Item
+  = ("pub")? ItemKind
+
+ItemKind
   = Import
   | Function
   | Struct
@@ -32,17 +35,16 @@ Import
   = "import" ImportPath
 
 ImportPath
-  = Identifier ("/" Identifier)*
-  | "." "/" Identifier ("/" Identifier)*
+  = Identifier ("." Identifier)*
+  | "." Identifier ("." Identifier)*
 ```
 
 Examples:
 
 ```tempra
-import std/fs
-import std/process
-import ./util
-import pkg/json
+import math
+import net.http
+import .helper
 ```
 
 ---

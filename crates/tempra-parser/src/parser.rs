@@ -110,10 +110,24 @@ impl<'src> Parser<'src> {
         let mut kind = ImportPathKind::Package;
         let mut is_first = true;
 
+        // Check if slash exists anywhere in the import statement before semicolon (to reject it early)
+        let mut pos = self.position;
+        while pos < self.tokens.len()
+            && self.tokens[pos].kind != TokenKind::Semicolon
+            && self.tokens[pos].kind != TokenKind::EndOfFile
+        {
+            if self.tokens[pos].kind == TokenKind::Slash {
+                return Err(ParseError {
+                    message: "slash imports are not supported; use dot-separated paths".to_string(),
+                    span: self.tokens[pos].span,
+                });
+            }
+            pos += 1;
+        }
+
         while !self.at(TokenKind::Semicolon) && !self.at(TokenKind::EndOfFile) {
             if is_first && self.at(TokenKind::Dot) {
-                let _dot = self.advance();
-                self.expect(TokenKind::Slash)?;
+                self.advance(); // consume '.'
                 kind = ImportPathKind::Relative;
                 is_first = false;
                 continue;
@@ -126,18 +140,28 @@ impl<'src> Parser<'src> {
             segments.push(seg);
             is_first = false;
 
-            if self.eat(TokenKind::Slash) {
+            if self.eat(TokenKind::Dot) {
                 continue;
             } else {
                 break;
             }
         }
 
-        let path_span = if let Some(last) = segments.last() {
-            Span::new(segments[0].span.start, last.span.end)
-        } else {
-            token.span
-        };
+        if segments.is_empty() {
+            return Err(ParseError {
+                message: "expected import path".to_string(),
+                span: self.current().span,
+            });
+        }
+
+        let path_span = Span::new(
+            if kind == ImportPathKind::Relative {
+                token.span.end
+            } else {
+                segments[0].span.start
+            },
+            segments.last().unwrap().span.end,
+        );
 
         let end_token = self.current();
         self.eat(TokenKind::Semicolon);
@@ -641,34 +665,35 @@ impl<'src> Parser<'src> {
                 span: name.span,
                 name: name.clone(),
             });
-            if self.at(TokenKind::LeftParen) {
-                let _start = self.advance();
-                let mut arguments = Vec::new();
-                while !self.at(TokenKind::RightParen) && !self.at(TokenKind::EndOfFile) {
-                    arguments.push(self.parse_type()?);
-                    if !self.eat(TokenKind::Comma) {
-                        break;
+            loop {
+                if self.at(TokenKind::LeftParen) {
+                    let _start = self.advance();
+                    let mut arguments = Vec::new();
+                    while !self.at(TokenKind::RightParen) && !self.at(TokenKind::EndOfFile) {
+                        arguments.push(self.parse_type()?);
+                        if !self.eat(TokenKind::Comma) {
+                            break;
+                        }
                     }
+                    let end = self.expect(TokenKind::RightParen)?;
+                    ty = TypeExpr::Apply(TypeApplyExpr {
+                        span: Span::new(ty.span().start, end.span.end),
+                        callee: Box::new(ty),
+                        arguments,
+                    });
+                } else if self.at(TokenKind::Dot) {
+                    self.advance();
+                    let member = self.expect_identifier()?;
+                    let span = Span::new(ty.span().start, member.span.end);
+                    ty = TypeExpr::Projection(TypeProjectionExpr {
+                        span,
+                        base: Box::new(ty),
+                        member,
+                    });
+                } else {
+                    break;
                 }
-                let end = self.expect(TokenKind::RightParen)?;
-                ty = TypeExpr::Apply(TypeApplyExpr {
-                    span: Span::new(name.span.start, end.span.end),
-                    callee: Box::new(ty),
-                    arguments,
-                });
             }
-
-            if self.at(TokenKind::Dot) {
-                self.advance();
-                let member = self.expect_identifier()?;
-                let span = Span::new(ty.span().start, member.span.end);
-                ty = TypeExpr::Projection(TypeProjectionExpr {
-                    span,
-                    base: Box::new(ty),
-                    member,
-                });
-            }
-
             Ok(ty)
         }
     }

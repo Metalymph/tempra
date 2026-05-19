@@ -45,9 +45,15 @@ fn verify_no_self(ctx: &mut TypeContext, ty: &HirType) {
 
 /// Check a function body against its declared signature.
 fn check_function(ctx: &mut TypeContext, f: &mut HirFunction) {
+    let qual_name = if ctx.current_module.is_empty() {
+        f.name.clone()
+    } else {
+        format!("{}.{}", ctx.current_module, f.name)
+    };
     let sig = ctx
         .functions
-        .get(&f.name)
+        .get(&qual_name)
+        .or_else(|| ctx.functions.get(&f.name))
         .cloned()
         .expect("Function signature missing");
     ctx.current_generic_params = sig.generic_params.iter().map(|p| p.id).collect();
@@ -140,25 +146,36 @@ fn check_function(ctx: &mut TypeContext, f: &mut HirFunction) {
 }
 
 pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
+    let qualify = |ctx: &TypeContext, name: &str| -> String {
+        if ctx.current_module.is_empty() {
+            name.to_string()
+        } else {
+            format!("{}.{}", ctx.current_module, name)
+        }
+    };
+
     // Pre-populate declaration spans for TypecheckFacts mapping
     for item in items {
         match item {
             HirItem::Struct(s) => {
+                let qual_name = qualify(ctx, &s.name);
                 let struct_name_span = ctx.find_name_span(&s.name, s.span);
-                ctx.function_spans.insert(s.name.clone(), struct_name_span);
+                ctx.function_spans
+                    .insert(qual_name.clone(), struct_name_span);
                 for f in &s.fields {
                     let name_span = ctx.find_name_span(&f.name, f.span);
                     ctx.struct_field_spans
-                        .insert((s.name.clone(), f.name.clone()), name_span);
+                        .insert((qual_name.clone(), f.name.clone()), name_span);
                 }
             }
             HirItem::Enum(e) => {
+                let qual_name = qualify(ctx, &e.name);
                 let enum_name_span = ctx.find_name_span(&e.name, e.span);
-                ctx.function_spans.insert(e.name.clone(), enum_name_span);
+                ctx.function_spans.insert(qual_name.clone(), enum_name_span);
                 for v in &e.variants {
                     let name_span = ctx.find_name_span(&v.name, v.span);
                     ctx.enum_variant_spans
-                        .insert((e.name.clone(), v.name.clone()), name_span);
+                        .insert((qual_name.clone(), v.name.clone()), name_span);
                 }
             }
             HirItem::Extend(ext) => {
@@ -171,8 +188,9 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
                 }
             }
             HirItem::Function(f) => {
+                let qual_name = qualify(ctx, &f.name);
                 let name_span = ctx.find_name_span(&f.name, f.span);
-                ctx.function_spans.insert(f.name.clone(), name_span);
+                ctx.function_spans.insert(qual_name, name_span);
             }
             _ => {}
         }
@@ -182,8 +200,9 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
     for item in items {
         match item {
             HirItem::Struct(s) => {
+                let qual_name = qualify(ctx, &s.name);
                 ctx.structs.insert(
-                    s.name.clone(),
+                    qual_name,
                     StructInfo {
                         visibility: s.visibility,
                         generic_params: Vec::new(),
@@ -193,8 +212,9 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
                 );
             }
             HirItem::Enum(e) => {
+                let qual_name = qualify(ctx, &e.name);
                 ctx.enums.insert(
-                    e.name.clone(),
+                    qual_name,
                     EnumInfo {
                         visibility: e.visibility,
                         generic_params: Vec::new(),
@@ -203,10 +223,11 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
                 );
             }
             HirItem::Interface(i) => {
+                let qual_name = qualify(ctx, &i.name);
                 ctx.interfaces.insert(
-                    i.name.clone(),
+                    qual_name.clone(),
                     InterfaceInfo {
-                        name: i.name.clone(),
+                        name: qual_name,
                         visibility: i.visibility,
                         methods: HashMap::new(),
                         associated_types: Vec::new(),
@@ -221,6 +242,7 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
     for item in items {
         match item {
             HirItem::Function(f) => {
+                let qual_name = qualify(ctx, &f.name);
                 let mut generic_params = Vec::new();
                 for p in &f.generic_parameters {
                     let id = crate::types::GenericParamId(ctx.next_generic_param_id);
@@ -264,7 +286,7 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
                     return_type = Type::Result(Box::new(return_type), Box::new(Type::BuiltinError));
                 }
                 ctx.functions.insert(
-                    f.name.clone(),
+                    qual_name,
                     FunctionSignature {
                         visibility: f.visibility,
                         generic_params,
@@ -276,6 +298,7 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
                 ctx.current_generic_params.clear();
             }
             HirItem::Struct(s) => {
+                let qual_name = qualify(ctx, &s.name);
                 let mut generic_params = Vec::new();
                 for p in &s.generic_params {
                     if let Some(_) = &p.constraint {
@@ -309,7 +332,7 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
                     field_order.push(field.name.clone());
                 }
                 ctx.structs.insert(
-                    s.name.clone(),
+                    qual_name,
                     StructInfo {
                         visibility: s.visibility,
                         generic_params,
@@ -320,6 +343,7 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
                 ctx.current_generic_params.clear();
             }
             HirItem::Enum(e) => {
+                let qual_name = qualify(ctx, &e.name);
                 let mut generic_params = Vec::new();
                 for p in &e.generic_params {
                     if let Some(_) = &p.constraint {
@@ -338,7 +362,7 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
 
                 // Pre-insert the enum to allow self-referential variants
                 ctx.enums.insert(
-                    e.name.clone(),
+                    qual_name.clone(),
                     EnumInfo {
                         visibility: e.visibility,
                         generic_params: generic_params.clone(),
@@ -360,17 +384,18 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
                     ctx.variant_to_enums
                         .entry(v.name.clone())
                         .or_default()
-                        .push(e.name.clone());
+                        .push(qual_name.clone());
                 }
 
                 // Update the enum with the resolved variants
-                if let Some(info) = ctx.enums.get_mut(&e.name) {
+                if let Some(info) = ctx.enums.get_mut(&qual_name) {
                     info.variants = resolved_variants;
                 }
                 ctx.current_generic_params.clear();
             }
             HirItem::Interface(i) => {
-                ctx.current_interface = Some(i.name.clone());
+                let qual_name = qualify(ctx, &i.name);
+                ctx.current_interface = Some(qual_name.clone());
 
                 let associated_types: Vec<String> = i
                     .associated_types
@@ -379,7 +404,7 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
                     .collect();
 
                 // Update interface with associated types first so resolve_hir_type can find them
-                if let Some(info) = ctx.interfaces.get_mut(&i.name) {
+                if let Some(info) = ctx.interfaces.get_mut(&qual_name) {
                     info.associated_types = associated_types.clone();
                 }
 
@@ -404,9 +429,9 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
                 }
 
                 ctx.interfaces.insert(
-                    i.name.clone(),
+                    qual_name.clone(),
                     crate::context::InterfaceInfo {
-                        name: i.name.clone(),
+                        name: qual_name.clone(),
                         visibility: i.visibility,
                         methods,
                         associated_types,

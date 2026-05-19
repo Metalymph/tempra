@@ -281,8 +281,43 @@ pub fn check_source(source: &str) -> Result<(), DriverError> {
 }
 
 pub fn check_file(path: &Path) -> Result<(), DriverError> {
-    let source = fs::read_to_string(path)?;
-    check_source(&source)
+    use crate::module_graph::{load_module_graph, DiskDocumentLoader};
+    use tempra_typeck::{check_modules, ModuleToCheck};
+
+    let mut diagnostics = Vec::new();
+    let mut graph = match load_module_graph(path, &DiskDocumentLoader, &mut diagnostics) {
+        Ok(g) => g,
+        Err(_) => {
+            let err_msgs: Vec<String> = diagnostics.iter().map(|d| format!("{:?}", d)).collect();
+            return Err(DriverError::TypeError(err_msgs.join("\n")));
+        }
+    };
+
+    let mut files = Vec::new();
+    for name in &graph.order {
+        if let Some(node) = graph.modules.get_mut(name) {
+            if let Some(hir) = node.hir.take() {
+                files.push((node.name.clone(), node.imports.clone(), hir));
+            }
+        }
+    }
+
+    let mut modules_to_check = Vec::new();
+    for (name, imports, hir) in &mut files {
+        modules_to_check.push(ModuleToCheck {
+            name: name.clone(),
+            imports: imports.clone(),
+            file: hir,
+        });
+    }
+
+    match check_modules(&mut modules_to_check, false) {
+        Ok(_) => Ok(()),
+        Err(errs) => {
+            let err_msgs: Vec<String> = errs.iter().map(|e| format!("{:?}", e)).collect();
+            Err(DriverError::TypeError(err_msgs.join("\n")))
+        }
+    }
 }
 
 pub fn emit_tir_source(source: &str) -> Result<String, DriverError> {
@@ -515,17 +550,42 @@ pub fn diagnose_source_with_facts(source: &str) -> AnalysisFactsResult {
 }
 
 pub fn diagnose_file(path: &Path) -> Vec<tempra_diagnostics::Diagnostic> {
-    match fs::read_to_string(path) {
-        Ok(s) => diagnose_source(&s),
-        Err(e) => {
-            let mut diagnostics = Vec::new();
-            diagnostics.push(tempra_diagnostics::Diagnostic::error(
-                tempra_span::Span::new(0, 0),
-                format!("Failed to read file: {}", e),
-            ));
-            diagnostics
+    use crate::module_graph::{load_module_graph, DiskDocumentLoader};
+    use std::collections::HashMap;
+    use tempra_typeck::{check_modules_always, ModuleToCheck};
+
+    let mut diagnostics = Vec::new();
+    let mut graph = match load_module_graph(path, &DiskDocumentLoader, &mut diagnostics) {
+        Ok(g) => g,
+        Err(_) => return diagnostics, // load_module_graph already populated diagnostics
+    };
+
+    let mut files = Vec::new();
+    let mut source_texts = HashMap::new();
+    for name in &graph.order {
+        if let Some(node) = graph.modules.get_mut(name) {
+            source_texts.insert(node.name.clone(), node.source.clone());
+            if let Some(hir) = node.hir.take() {
+                files.push((node.name.clone(), node.imports.clone(), hir));
+            }
         }
     }
+
+    let mut modules_to_check = Vec::new();
+    for (name, imports, hir) in &mut files {
+        modules_to_check.push(ModuleToCheck {
+            name: name.clone(),
+            imports: imports.clone(),
+            file: hir,
+        });
+    }
+
+    let ctx = check_modules_always(&mut modules_to_check, &source_texts, false);
+    for err in ctx.errors {
+        diagnostics.push(tempra_diagnostics::Diagnostic::error(err.span, err.message));
+    }
+
+    diagnostics
 }
 
 pub fn extract_symbols_from_source(

@@ -20,7 +20,10 @@ pub mod pattern;
 pub mod projection;
 pub mod types;
 
-pub use check_file::{check_file, check_file_with_context, check_file_with_context_always};
+pub use check_file::{
+    check_file, check_file_with_context, check_file_with_context_always, check_modules,
+    check_modules_always, ModuleToCheck,
+};
 pub use env::VariableInfo;
 pub use error::TypeError;
 pub use facts::TypecheckFacts;

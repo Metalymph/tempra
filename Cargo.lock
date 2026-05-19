@@ -1034,6 +1034,7 @@ name = "tempra-driver"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "tempra-ast",
  "tempra-backend-cranelift",
  "tempra-backend-wasm",
  "tempra-bytecode",

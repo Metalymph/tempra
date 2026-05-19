@@ -84,3 +84,14 @@ cargo run -- run examples/feature_name.tempra
 - **Value Semantics**: Tempra is value-oriented. Use `Rc` inside `Value` (like in `Value::Array`) for shared storage in slices.
 - **Control Flow**: The interpreter uses `ControlFlow` to handle `Return`, `Break`, `Continue`, `Exit`, and `Crash`. Ensure these are propagated correctly.
 - **Lexical Scoping**: Use `env.push_scope()` and `env.pop_scope()` in blocks and loops.
+
+---
+
+## 5. Module System & Resolution
+
+Tempra employs a filesystem-driven, dot-separated module system.
+- **Resolver**: The dependency graph is resolved via Depth-First Search (DFS) in `crates/tempra-driver/src/modules.rs`.
+- **Cyclic Imports**: Cyclic dependencies are explicitly forbidden and detected during resolution.
+- **Visibility**: Items are private by default; `pub` visibility modifier is required for cross-module access.
+- **Type Checking Namespace Qualification**: During type checking, namespaces and types from other modules are resolved dynamically via the dot-separated prefix matching (`TypeContext::is_module`).
+- **Relative Imports**: Imports starting with a dot (e.g. `import .helper`) are resolved relative to the directory of the current source file.

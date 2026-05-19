@@ -91,6 +91,7 @@ impl<'src> Lowerer<'src> {
                 .iter()
                 .map(|t| self.text(t.span))
                 .collect(),
+            kind: item.path.kind,
         }
     }
 

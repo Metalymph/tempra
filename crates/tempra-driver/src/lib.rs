@@ -1,5 +1,6 @@
 pub mod cache;
 pub mod error;
+pub mod module_graph;
 pub mod pipeline;
 
 pub use error::DriverError;

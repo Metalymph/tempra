@@ -125,9 +125,10 @@ fn test_match() {
 
 #[test]
 fn test_imports() {
-    assert_valid_parse("import std/fs");
-    assert_valid_parse("import ./util");
-    assert_valid_parse("import pkg/json");
+    assert_valid_parse("import std.fs");
+    assert_valid_parse("import .util");
+    assert_valid_parse("import pkg.json");
+    assert_invalid_parse("import std/fs");
 }
 
 #[test]

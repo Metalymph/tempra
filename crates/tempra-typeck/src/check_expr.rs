@@ -328,8 +328,29 @@ fn resolve_name(
         ));
     }
 
+    if ctx.is_module(name) {
+        let resolved = if let Some(alias) = ctx.imports.get(name) {
+            alias.clone()
+        } else {
+            name.to_string()
+        };
+        return Ok(ResolvedName::Namespace(resolved));
+    }
     if matches!(name, "fs" | "os" | "env" | "Regex") {
         return Ok(ResolvedName::Namespace(name.to_string()));
+    }
+
+    if !ctx.current_module.is_empty() {
+        let qualified = format!("{}.{}", ctx.current_module, name);
+        if let Some(_) = ctx.structs.get(&qualified) {
+            return Ok(ResolvedName::Type(Type::Struct(qualified, vec![])));
+        }
+        if let Some(_) = ctx.enums.get(&qualified) {
+            return Ok(ResolvedName::Type(Type::Enum(qualified, vec![])));
+        }
+        if let Some(_) = ctx.interfaces.get(&qualified) {
+            return Ok(ResolvedName::Type(Type::Interface(qualified)));
+        }
     }
 
     let ty = tempra_hir::types::resolve_named_type(name);
@@ -413,6 +434,13 @@ fn resolve_name(
     if let Err(e) = enum_res {
         if ctx.variant_to_enums.contains_key(name) {
             return Err(e);
+        }
+    }
+
+    if !ctx.current_module.is_empty() {
+        let qualified = format!("{}.{}", ctx.current_module, name);
+        if ctx.functions.contains_key(&qualified) {
+            return Ok(ResolvedName::Function(qualified));
         }
     }
 
@@ -1915,6 +1943,49 @@ fn check_call(ctx: &mut TypeContext, expr: &mut HirExpression, expected: Option<
                     "os" => return check_os_builtin(ctx, &method, &mut c.args, c.span),
                     "Regex" => return check_regex_constructor(ctx, &method, &mut c.args, c.span),
                     _ => {
+                        let qualified = format!("{}.{}", ns, method);
+                        if ctx.functions.contains_key(&qualified) {
+                            let sig = ctx.functions.get(&qualified).cloned().unwrap();
+                            if sig.visibility == Visibility::Private && ctx.current_module != *ns {
+                                ctx.error(
+                                    format!(
+                                        "cannot access private function '{}' of module '{}'",
+                                        method, ns
+                                    ),
+                                    c.span,
+                                );
+                            }
+
+                            if c.args.len() != sig.params.len() {
+                                ctx.error(
+                                    format!(
+                                        "expected {} arguments, found {}",
+                                        sig.params.len(),
+                                        c.args.len()
+                                    ),
+                                    c.span,
+                                );
+                            }
+                            for (i, arg) in c.args.iter_mut().enumerate() {
+                                let arg_expr = get_call_arg_mut_legacy(arg, ctx);
+                                let target_ty = sig.params.get(i).map(|p| &p.ty);
+                                let arg_ty = check_expression(ctx, arg_expr, target_ty);
+                                if let Some(target_ty) = target_ty {
+                                    if arg_ty != Type::Error
+                                        && !types_compatible(target_ty, &arg_ty)
+                                    {
+                                        ctx.error(
+                                            format!(
+                                                "argument type mismatch: expected {}, found {}",
+                                                target_ty, arg_ty
+                                            ),
+                                            arg_expr.span(),
+                                        );
+                                    }
+                                }
+                            }
+                            return sig.return_type;
+                        }
                         ctx.error(format!("Unknown namespace '{}'", ns), c.span);
                         return Type::Error;
                     }
@@ -2382,9 +2453,88 @@ fn evaluate_comptime_arg(
 
 fn check_member(ctx: &mut TypeContext, m: &mut HirMember, _expected: Option<&Type>) -> Type {
     let object_ty = check_expression(ctx, &mut m.object, None);
+    if let Type::Namespace(ns) = &object_ty {
+        let qualified = format!("{}.{}", ns, m.field);
+        if ctx.is_module(&qualified) {
+            return Type::Namespace(qualified);
+        }
+        if ctx.functions.contains_key(&qualified) {
+            let sig = &ctx.functions[&qualified];
+            if sig.visibility == Visibility::Private && ctx.current_module != *ns {
+                ctx.error(
+                    format!(
+                        "cannot access private function '{}' of module '{}'",
+                        m.field, ns
+                    ),
+                    m.span,
+                );
+            }
+            return Type::Unknown;
+        }
+        if ctx.structs.contains_key(&qualified) {
+            let info = &ctx.structs[&qualified];
+            if info.visibility == Visibility::Private && ctx.current_module != *ns {
+                ctx.error(
+                    format!(
+                        "cannot access private struct '{}' of module '{}'",
+                        m.field, ns
+                    ),
+                    m.span,
+                );
+            }
+            return Type::Meta(Box::new(Type::Struct(qualified, vec![])));
+        }
+        if ctx.enums.contains_key(&qualified) {
+            let info = &ctx.enums[&qualified];
+            if info.visibility == Visibility::Private && ctx.current_module != *ns {
+                ctx.error(
+                    format!(
+                        "cannot access private enum '{}' of module '{}'",
+                        m.field, ns
+                    ),
+                    m.span,
+                );
+            }
+            return Type::Meta(Box::new(Type::Enum(qualified, vec![])));
+        }
+        if ctx.interfaces.contains_key(&qualified) {
+            let info = &ctx.interfaces[&qualified];
+            if info.visibility == Visibility::Private && ctx.current_module != *ns {
+                ctx.error(
+                    format!(
+                        "cannot access private interface '{}' of module '{}'",
+                        m.field, ns
+                    ),
+                    m.span,
+                );
+            }
+            return Type::Meta(Box::new(Type::Interface(qualified)));
+        }
+        ctx.error(
+            format!("no member '{}' found in module '{}'", m.field, ns),
+            m.span,
+        );
+        return Type::Error;
+    }
+
     if let Type::Struct(name, args) = &object_ty {
         if let Some(info) = ctx.structs.get(name.as_str()).cloned() {
             if let Some(field_info) = info.fields.get(&m.field) {
+                if let Some(idx) = name.rfind('.') {
+                    let struct_module = &name[..idx];
+                    if field_info.visibility == Visibility::Private
+                        && ctx.current_module != struct_module
+                    {
+                        ctx.error(
+                            format!(
+                                "cannot access private field '{}' of struct '{}' from module '{}'",
+                                m.field, name, ctx.current_module
+                            ),
+                            m.span,
+                        );
+                    }
+                }
+
                 if let Some(field_span) =
                     ctx.struct_field_spans.get(&(name.clone(), m.field.clone()))
                 {
@@ -3384,6 +3534,23 @@ fn check_struct_literal(ctx: &mut TypeContext, s: &mut HirStructLiteral) -> Type
             return Type::Error;
         }
     };
+
+    if let Some(idx) = name.rfind('.') {
+        let struct_module = &name[..idx];
+        if ctx.current_module != struct_module {
+            for (f_name, f_info) in &info.fields {
+                if f_info.visibility == Visibility::Private {
+                    ctx.error(
+                        format!(
+                            "cannot construct struct '{}' from outside its module because it contains private field '{}'",
+                            name, f_name
+                        ),
+                        s.span,
+                    );
+                }
+            }
+        }
+    }
 
     // Prepare substitution map if generic
     let mut sub_map = std::collections::HashMap::new();

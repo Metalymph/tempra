@@ -4,7 +4,7 @@
 //! stripped of syntax-only details and tokens, making it easier
 //! to perform type checking and lowering to MIR.
 
-pub use tempra_ast::{ParameterKind, Visibility};
+pub use tempra_ast::{ImportPathKind, ParameterKind, Visibility};
 use tempra_span::Span;
 
 pub struct HirFile {
@@ -26,6 +26,7 @@ pub enum HirItem {
 pub struct HirImport {
     pub span: Span,
     pub path: Vec<String>,
+    pub kind: ImportPathKind,
 }
 
 #[derive(Debug, Clone)]

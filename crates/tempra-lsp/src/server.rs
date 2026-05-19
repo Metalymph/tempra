@@ -29,6 +29,7 @@ pub fn symbol_kind_to_lsp(kind: tempra_diagnostics::SymbolKind) -> SymbolKind {
         tempra_diagnostics::SymbolKind::Method => SymbolKind::METHOD,
         tempra_diagnostics::SymbolKind::Extension => SymbolKind::MODULE,
         tempra_diagnostics::SymbolKind::Variable => SymbolKind::VARIABLE,
+        tempra_diagnostics::SymbolKind::Field => SymbolKind::FIELD,
     }
 }
 

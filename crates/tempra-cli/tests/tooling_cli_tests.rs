@@ -84,11 +84,13 @@ fn test_cli_symbols_json() {
     let json_val: serde_json::Value = serde_json::from_str(&stdout).unwrap();
     assert!(json_val.get("symbols").is_some());
     let symbols = json_val["symbols"].as_array().unwrap();
-    assert_eq!(symbols.len(), 2);
+    assert_eq!(symbols.len(), 3);
     assert_eq!(symbols[0]["name"], "Point");
     assert_eq!(symbols[0]["kind"], "struct");
-    assert_eq!(symbols[1]["name"], "add");
-    assert_eq!(symbols[1]["kind"], "function");
+    assert_eq!(symbols[1]["name"], "Point.x");
+    assert_eq!(symbols[1]["kind"], "field");
+    assert_eq!(symbols[2]["name"], "add");
+    assert_eq!(symbols[2]["kind"], "function");
 
     let _ = fs::remove_file(file_path);
 }

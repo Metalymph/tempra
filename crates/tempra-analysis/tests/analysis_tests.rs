@@ -413,6 +413,50 @@ fn test_completion_member_fallback_empty() {
     // Complete right after dot (line 3, char 16)
     let completions = session.completions_at_position(&uri, 3, 16);
 
-    // Should be empty for MVP member completion
+    // Should be empty since Int64 has no fields or methods defined here
     assert!(completions.is_empty());
+}
+
+#[test]
+fn test_completion_member() {
+    let mut session = AnalysisSession::new();
+    let uri = DocumentUri::new("file:///completion_test4.tmpr");
+
+    let source = r#"
+        struct Point {
+            x: Int64
+            y: Int64
+        }
+        extend Point {
+            fn display(self) -> String { return "" }
+        }
+        fn main() {
+            let p = Point { x: 0, y: 0 }
+            p.
+        }
+    "#
+    .to_string();
+    session.open_document(uri.clone(), source, 1);
+
+    // Complete right after dot: line 10, char 14
+    let completions = session.completions_at_position(&uri, 10, 14);
+
+    assert!(!completions.is_empty(), "completions should not be empty");
+
+    // Check fields
+    assert!(completions
+        .iter()
+        .any(|c| c.label == "x" && c.kind == tempra_analysis::CompletionKind::Field));
+    assert!(completions
+        .iter()
+        .any(|c| c.label == "y" && c.kind == tempra_analysis::CompletionKind::Field));
+
+    // Check methods
+    assert!(completions
+        .iter()
+        .any(|c| c.label == "display" && c.kind == tempra_analysis::CompletionKind::Method));
+
+    // Should NOT contain random keywords or locals
+    assert!(!completions.iter().any(|c| c.label == "p"));
+    assert!(!completions.iter().any(|c| c.label == "fn"));
 }

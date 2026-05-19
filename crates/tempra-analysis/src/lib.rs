@@ -36,6 +36,43 @@ pub struct CompletionItem {
     pub documentation: Option<String>,
 }
 
+/// Extract base struct/enum/type name for completion lookups
+fn type_to_base_name(ty: &tempra_typeck::Type) -> Option<String> {
+    match ty {
+        tempra_typeck::Type::Struct(name, _) => Some(name.clone()),
+        tempra_typeck::Type::Enum(name, _) => Some(name.clone()),
+        tempra_typeck::Type::Interface(name) => Some(name.clone()),
+        tempra_typeck::Type::String => Some("String".to_string()),
+        tempra_typeck::Type::Bool => Some("Bool".to_string()),
+        tempra_typeck::Type::Int => Some("Int".to_string()),
+        tempra_typeck::Type::Int8 => Some("Int8".to_string()),
+        tempra_typeck::Type::Int16 => Some("Int16".to_string()),
+        tempra_typeck::Type::Int32 => Some("Int32".to_string()),
+        tempra_typeck::Type::Int64 => Some("Int64".to_string()),
+        tempra_typeck::Type::UInt8 => Some("UInt8".to_string()),
+        tempra_typeck::Type::UInt16 => Some("UInt16".to_string()),
+        tempra_typeck::Type::UInt32 => Some("UInt32".to_string()),
+        tempra_typeck::Type::UInt64 => Some("UInt64".to_string()),
+        tempra_typeck::Type::Float32 => Some("Float32".to_string()),
+        tempra_typeck::Type::Float64 => Some("Float64".to_string()),
+        tempra_typeck::Type::Array(_) => Some("Array".to_string()),
+        tempra_typeck::Type::Slice(_) => Some("Slice".to_string()),
+        tempra_typeck::Type::Result(_, _) => Some("Result".to_string()),
+        tempra_typeck::Type::Option(_) => Some("Option".to_string()),
+        tempra_typeck::Type::Unknown | tempra_typeck::Type::Error => None,
+        // Fallback to string representation for other complex types
+        other => {
+            let s = other.to_string();
+            // If it looks like a simple name, keep it, otherwise drop
+            if !s.contains('(') && !s.contains('<') {
+                Some(s)
+            } else {
+                None
+            }
+        }
+    }
+}
+
 impl DocumentUri {
     /// Create a new normalized URI.
     pub fn new(uri: &str) -> Self {
@@ -728,7 +765,7 @@ impl AnalysisSession {
             None => return vec![],
         };
 
-        // Context detection: Member access vs Normal identifier
+        let mut dot_idx = 0;
         let is_member_access = {
             let mut ptr = offset;
             let bytes = snapshot.content.as_bytes();
@@ -750,14 +787,13 @@ impl AnalysisSession {
                     break;
                 }
             }
-            ptr > 0 && bytes[ptr - 1] == b'.'
+            if ptr > 0 && bytes[ptr - 1] == b'.' {
+                dot_idx = ptr - 1;
+                true
+            } else {
+                false
+            }
         };
-
-        if is_member_access {
-            // MVP: Return empty for member access unless we have confident facts
-            // For now, always return empty as a conservative fallback.
-            return vec![];
-        }
 
         let mut items = Vec::new();
         let mut seen = std::collections::HashSet::new();
@@ -774,6 +810,48 @@ impl AnalysisSession {
                 });
             }
         };
+
+        if is_member_access {
+            let mut receiver_type = None;
+            if let Some(facts) = &result.facts {
+                // TODO: future TypecheckFacts should expose receiver_span/member_completion facts directly.
+                // Using expr_types span ending before '.' is an MVP strategy.
+                let mut matched_exprs: Vec<(&tempra_span::Span, &tempra_typeck::Type)> = facts
+                    .expr_types
+                    .iter()
+                    .filter(|(&span, _)| span.end <= dot_idx as u32)
+                    .collect();
+                matched_exprs.sort_by_key(|&(span, _)| dot_idx as u32 - span.end);
+
+                if let Some((_, ty)) = matched_exprs.first() {
+                    receiver_type = Some((*ty).clone());
+                }
+            }
+
+            if let Some(ty) = receiver_type {
+                if let Some(base_name) = type_to_base_name(&ty) {
+                    let prefix = format!("{}.", base_name);
+                    for sym in &result.symbols {
+                        if sym.name.starts_with(&prefix) {
+                            // Point.x -> label 'x'
+                            let label = &sym.name[prefix.len()..];
+                            let kind = match sym.kind {
+                                tempra_diagnostics::SymbolKind::Field => CompletionKind::Field,
+                                tempra_diagnostics::SymbolKind::Method => CompletionKind::Method,
+                                tempra_diagnostics::SymbolKind::Function => {
+                                    CompletionKind::Function
+                                }
+                                _ => CompletionKind::Method,
+                            };
+                            add_item(label, kind, sym.signature.clone());
+                        }
+                    }
+                }
+            }
+
+            // Empty Vec fallback
+            return items;
+        }
 
         // 1. Keywords
         let keywords = [
@@ -810,6 +888,7 @@ impl AnalysisSession {
                     tempra_diagnostics::SymbolKind::Method => CompletionKind::Method,
                     tempra_diagnostics::SymbolKind::Extension => CompletionKind::Module,
                     tempra_diagnostics::SymbolKind::Variable => CompletionKind::Variable,
+                    tempra_diagnostics::SymbolKind::Field => CompletionKind::Field,
                 };
                 add_item(&sym.name, kind, sym.signature.clone());
             }
@@ -824,6 +903,7 @@ impl AnalysisSession {
                 tempra_diagnostics::SymbolKind::Method => CompletionKind::Method,
                 tempra_diagnostics::SymbolKind::Extension => CompletionKind::Module,
                 tempra_diagnostics::SymbolKind::Variable => CompletionKind::Variable,
+                tempra_diagnostics::SymbolKind::Field => CompletionKind::Field,
             };
             add_item(&sym.name, kind, sym.signature.clone());
         }

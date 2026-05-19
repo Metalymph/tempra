@@ -997,7 +997,14 @@ impl<'src> Parser<'src> {
                 });
             } else if self.at(TokenKind::Dot) {
                 self.advance();
-                let member = self.expect_identifier()?;
+                let member = if self.at(TokenKind::Identifier) {
+                    self.advance()
+                } else {
+                    Token {
+                        kind: TokenKind::Identifier,
+                        span: Span::new(self.current().span.start, self.current().span.start),
+                    }
+                };
                 expr = Expression::Member(MemberExpr {
                     span: Span::new(expr.span().start, member.span.end),
                     object: Box::new(expr),

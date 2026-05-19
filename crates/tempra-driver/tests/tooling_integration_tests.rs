@@ -87,7 +87,7 @@ fn test_extract_symbols_valid() {
     .unwrap();
 
     let symbols = extract_symbols(&file_path).unwrap();
-    assert_eq!(symbols.len(), 5); // Struct Point, Enum Color, fn add, extend Point, method Point.distance
+    assert_eq!(symbols.len(), 7); // Struct Point, field Point.x, field Point.y, Enum Color, fn add, extend Point, method Point.distance
 
     // Check Struct
     let s_struct = symbols.iter().find(|s| s.name == "Point").unwrap();
@@ -96,6 +96,15 @@ fn test_extract_symbols_valid() {
         tempra_diagnostics::SymbolKind::Struct
     ));
     assert_eq!(s_struct.signature.as_deref().unwrap(), "struct Point");
+
+    // Check Fields
+    let s_x = symbols.iter().find(|s| s.name == "Point.x").unwrap();
+    assert!(matches!(s_x.kind, tempra_diagnostics::SymbolKind::Field));
+    assert_eq!(s_x.signature.as_deref().unwrap(), "x: Int64");
+
+    let s_y = symbols.iter().find(|s| s.name == "Point.y").unwrap();
+    assert!(matches!(s_y.kind, tempra_diagnostics::SymbolKind::Field));
+    assert_eq!(s_y.signature.as_deref().unwrap(), "y: Int64");
 
     // Check Enum
     let s_enum = symbols.iter().find(|s| s.name == "Color").unwrap();

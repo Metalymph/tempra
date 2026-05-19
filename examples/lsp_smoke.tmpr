@@ -35,7 +35,7 @@ fn main() {
     // Type `res` below to test local completion
     // 
     
-    // Type `Point.` below to test member completion (should be empty for MVP)
+    // Type `origin.` below to test member completion (should suggest x and y fields)
     // 
 }
 

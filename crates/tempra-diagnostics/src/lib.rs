@@ -111,6 +111,7 @@ pub enum SymbolKind {
     Method,
     Extension,
     Variable,
+    Field,
 }
 
 /// A symbol definition (function, struct, enum, etc.) extracted from source.

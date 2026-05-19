@@ -554,6 +554,15 @@ pub fn extract_symbols_from_source(
                     span: s.span,
                     signature: Some(format!("struct {}", s.name)),
                 });
+                for field in &s.fields {
+                    let ty_str = format_hir_type(&field.ty);
+                    symbols.push(tempra_diagnostics::Symbol {
+                        name: format!("{}.{}", s.name, field.name),
+                        kind: tempra_diagnostics::SymbolKind::Field,
+                        span: field.span,
+                        signature: Some(format!("{}: {}", field.name, ty_str)),
+                    });
+                }
             }
             tempra_hir::HirItem::Enum(e) => {
                 symbols.push(tempra_diagnostics::Symbol {

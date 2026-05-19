@@ -9,6 +9,7 @@
 //   - Highlighting → verify that keywords, types, functions, variables, parameters, and properties are highlighted via semantic tokens
 //   - References  → trigger 'Find References' on `a` in `add` or `origin` in `main` to see all references
 //   - Highlights  → place the cursor on `origin` or `a` to see all read/write occurrences highlighted
+//   - Rename      → trigger 'Rename Symbol' on `origin` or `a` to safely rename all occurrences
 //
 
 struct Point {

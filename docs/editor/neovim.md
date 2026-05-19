@@ -43,5 +43,6 @@ Open `examples/lsp_smoke.tmpr` in Neovim:
 - [ ] Trigger omnifunc (`<C-x><C-o>`), type `Point.` (triggering autocomplete on `.`), or use your completion plugin to test auto-completion with deterministic ordering.
 - [ ] Find references (usually `gr`) on parameter `a` or variable `origin` and verify all usage and definition locations are found.
 - [ ] Move cursor on variable `origin` or parameter `a` and verify all occurrences are highlighted if your highlight plugin is enabled.
+- [ ] Rename the variable `origin` or parameter `a` (usually via `lua vim.lsp.buf.rename()`) and verify that all references are updated accordingly.
 - [ ] Uncomment the `broken()` function at the bottom and verify that diagnostics appear (virtual text and signs).
 - [ ] Make incremental changes without saving the buffer and verify diagnostics / hover update immediately.

@@ -161,6 +161,90 @@ pub struct DocumentHighlight {
     pub kind: DocumentHighlightKind,
 }
 
+/// A text edit to be applied to a document.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TextEdit {
+    pub range: LspRange,
+    pub new_text: String,
+}
+
+/// A workspace edit representing changes to one or more documents.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct WorkspaceEdit {
+    pub changes: std::collections::HashMap<DocumentUri, Vec<TextEdit>>,
+}
+
+impl WorkspaceEdit {
+    /// Validates and cleans up the edits for each document:
+    /// - Checks for overlaps between edits.
+    /// - Deduplicates exact duplicate edits.
+    /// - Sorts the edits deterministically in reverse order (descending start offset).
+    /// Returns `Err` if there are overlapping edits.
+    pub fn validate_and_clean(&mut self) -> Result<(), String> {
+        for (uri, edits) in &mut self.changes {
+            // Sort by start position: first line, then character ascending.
+            // This is needed to check for overlaps and deduplicate properly.
+            edits.sort_by(|a, b| {
+                a.range
+                    .start
+                    .line
+                    .cmp(&b.range.start.line)
+                    .then_with(|| a.range.start.character.cmp(&b.range.start.character))
+                    .then_with(|| a.range.end.line.cmp(&b.range.end.line))
+                    .then_with(|| a.range.end.character.cmp(&b.range.end.character))
+                    .then_with(|| a.new_text.cmp(&b.new_text))
+            });
+
+            // Deduplicate exact duplicate edits (same range and text)
+            edits.dedup_by(|a, b| {
+                a.range.start.line == b.range.start.line
+                    && a.range.start.character == b.range.start.character
+                    && a.range.end.line == b.range.end.line
+                    && a.range.end.character == b.range.end.character
+                    && a.new_text == b.new_text
+            });
+
+            // Check for overlaps
+            for i in 0..edits.len().saturating_sub(1) {
+                let current = &edits[i];
+                let next = &edits[i + 1];
+
+                // Check overlap condition:
+                // An overlap occurs if the end position of `current` is greater than the start position of `next`.
+                let overlap = if current.range.end.line > next.range.start.line {
+                    true
+                } else if current.range.end.line == next.range.start.line {
+                    current.range.end.character > next.range.start.character
+                } else {
+                    false
+                };
+
+                if overlap {
+                    return Err(format!(
+                        "Overlapping edits detected in document {}: {:?} and {:?}",
+                        uri.as_str(),
+                        current,
+                        next
+                    ));
+                }
+            }
+
+            // Now sort in reverse order (descending by start position) so that they can be applied from bottom to top safely.
+            edits.sort_by(|a, b| {
+                b.range
+                    .start
+                    .line
+                    .cmp(&a.range.start.line)
+                    .then_with(|| b.range.start.character.cmp(&a.range.start.character))
+                    .then_with(|| b.range.end.line.cmp(&a.range.end.line))
+                    .then_with(|| b.range.end.character.cmp(&a.range.end.character))
+                    .then_with(|| b.new_text.cmp(&a.new_text))
+            });
+        }
+        Ok(())
+    }
+}
+
 /// Bidirectional index mapping coordinates to byte offsets.
 #[derive(Debug, Clone)]
 pub struct LineIndex {
@@ -1100,6 +1184,151 @@ impl AnalysisSession {
             .line_index
             .lsp_to_text_position(&snapshot.content, pos)?;
         self.document_highlights(&normalized, text_pos.line, text_pos.byte_character)
+    }
+
+    /// Prepare rename at the given internal coordinate.
+    /// Returns `Some(LspRange)` representing the identifier's range if it is safely renameable.
+    pub fn prepare_rename(
+        &mut self,
+        uri: &DocumentUri,
+        line: u32,
+        byte_character: u32,
+    ) -> Option<LspRange> {
+        let normalized = DocumentUri::new(uri.as_str());
+        self.ensure_analyzed(&normalized);
+        let snapshot = self.documents.get(&normalized)?;
+        let result = self.analysis_cache.get(&normalized)?;
+
+        let pos = TextPosition {
+            line,
+            byte_character,
+        };
+        let offset = snapshot
+            .line_index
+            .text_position_to_byte_offset(&snapshot.content, pos)?;
+
+        let sym = result.semantic_index.find_by_offset(offset)?;
+
+        // Only allow renaming local variables/parameters/loop bindings
+        if sym.kind != tempra_diagnostics::SymbolKind::Variable {
+            return None;
+        }
+
+        let mut target_span = None;
+        if sym.definition_span.start <= offset as u32 && offset as u32 <= sym.definition_span.end {
+            target_span = Some(sym.definition_span);
+        } else {
+            for &ref_span in &sym.reference_spans {
+                if ref_span.start <= offset as u32 && offset as u32 <= ref_span.end {
+                    target_span = Some(ref_span);
+                    break;
+                }
+            }
+        }
+
+        let span = target_span?;
+        snapshot
+            .line_index
+            .span_to_lsp_range(&snapshot.content, span)
+    }
+
+    /// Prepare rename at the given external LSP position.
+    pub fn prepare_rename_lsp(&mut self, uri: &DocumentUri, pos: LspPosition) -> Option<LspRange> {
+        let normalized = DocumentUri::new(uri.as_str());
+        let snapshot = self.documents.get(&normalized)?;
+        let text_pos = snapshot
+            .line_index
+            .lsp_to_text_position(&snapshot.content, pos)?;
+        self.prepare_rename(&normalized, text_pos.line, text_pos.byte_character)
+    }
+
+    /// Perform rename and return WorkspaceEdit containing all TextEdits for the rename.
+    pub fn rename_edits(
+        &mut self,
+        uri: &DocumentUri,
+        line: u32,
+        byte_character: u32,
+        new_name: &str,
+    ) -> Option<WorkspaceEdit> {
+        if !is_valid_identifier(new_name) {
+            return None;
+        }
+
+        let normalized = DocumentUri::new(uri.as_str());
+        self.ensure_analyzed(&normalized);
+        let snapshot = self.documents.get(&normalized)?;
+        let result = self.analysis_cache.get(&normalized)?;
+
+        let pos = TextPosition {
+            line,
+            byte_character,
+        };
+        let offset = snapshot
+            .line_index
+            .text_position_to_byte_offset(&snapshot.content, pos)?;
+
+        let sym = result.semantic_index.find_by_offset(offset)?;
+
+        // Only allow renaming local variables/parameters/loop bindings
+        if sym.kind != tempra_diagnostics::SymbolKind::Variable {
+            return None;
+        }
+
+        let mut edits = Vec::new();
+
+        // 1. Definition span
+        if let Some(range) = snapshot
+            .line_index
+            .span_to_lsp_range(&snapshot.content, sym.definition_span)
+        {
+            edits.push(TextEdit {
+                range,
+                new_text: new_name.to_string(),
+            });
+        }
+
+        // 2. Reference spans
+        for &ref_span in &sym.reference_spans {
+            if let Some(range) = snapshot
+                .line_index
+                .span_to_lsp_range(&snapshot.content, ref_span)
+            {
+                edits.push(TextEdit {
+                    range,
+                    new_text: new_name.to_string(),
+                });
+            }
+        }
+
+        let mut changes = std::collections::HashMap::new();
+        changes.insert(normalized, edits);
+
+        let mut ws_edit = WorkspaceEdit { changes };
+        if ws_edit.validate_and_clean().is_ok() {
+            Some(ws_edit)
+        } else {
+            None
+        }
+    }
+
+    /// Perform rename and return WorkspaceEdit containing all TextEdits at the LSP coordinate.
+    pub fn rename_edits_lsp(
+        &mut self,
+        uri: &DocumentUri,
+        pos: LspPosition,
+        new_name: &str,
+    ) -> Option<WorkspaceEdit> {
+        let normalized = DocumentUri::new(uri.as_str());
+        let snapshot = self.documents.get(&normalized)?;
+        let text_pos = snapshot
+            .line_index
+            .lsp_to_text_position(&snapshot.content, pos)?;
+        self.rename_edits(
+            &normalized,
+            text_pos.line,
+            text_pos.byte_character,
+            new_name,
+        )
     }
 
     /// Convert a `tempra_span::Span` to an `LspRange` using the document's line index.
@@ -2641,4 +2870,26 @@ impl AstTokenCollector {
             }
         }
     }
+}
+
+fn is_valid_identifier(s: &str) -> bool {
+    if s.is_empty() {
+        return false;
+    }
+    // Reject keywords
+    if tempra_lexer::token::keyword_kind(s).is_some() {
+        return false;
+    }
+    // Standard identifier format: [a-zA-Z_][a-zA-Z0-9_]*
+    let mut chars = s.chars();
+    let first = chars.next().unwrap();
+    if !first.is_ascii_alphabetic() && first != '_' {
+        return false;
+    }
+    for c in chars {
+        if !c.is_ascii_alphanumeric() && c != '_' {
+            return false;
+        }
+    }
+    true
 }

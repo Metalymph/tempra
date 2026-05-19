@@ -246,7 +246,7 @@ Editor --JSON-RPC--> tempra-lsp --> tempra-analysis --> tempra-driver
 | `textDocument/semanticTokens/full` | ✅ Full document semantic highlighting |
 | `textDocument/references` | ✅ Find references (Phase 18.3B) |
 | `textDocument/documentHighlight` | ✅ Highlight occurrences (Phase 18.3B) |
-| Rename | 🚫 Not implemented |
+| `textDocument/prepareRename` / `textDocument/rename` | ✅ Safe local rename (Phase 18.3C) |
 
 ### Semantic Tokens (Phase 18.2D)
 
@@ -297,6 +297,14 @@ The LSP server tracks identifier declarations and usages within the document's s
 - **References**: Triggers `textDocument/references` to lookup all definition/usage locations. Supports the `include_declaration` option to optionally exclude the declaration span.
 - **Document Highlights**: Triggers `textDocument/documentHighlight` to highlight matching references under the cursor. Declaration spans are assigned `Write` highlights, while usages/references are assigned `Read` highlights.
 - **Shadowing Correctness**: Accurately scope-resolves identifiers. If an inner scope local variable shadows an outer parameter/variable, looking up references/highlights for the inner variable does not include outer references, and vice-versa.
+
+### Workspace Edit & Rename (Phase 18.3C)
+
+The LSP server provides safe local variable and parameter renaming using a workspace edit planner:
+- **Rename Preparation**: `textDocument/prepareRename` verifies that the symbol under the cursor is safely renameable (only local variables, parameters, and loop bindings are allowed in the MVP) and returns the precise identifier span.
+- **Rename Execution**: `textDocument/rename` generates a `WorkspaceEdit` with a list of `TextEdit`s to update the declaration and all reference spans.
+- **Robust Verification**: Validates edits to prevent overlapping edits, filters duplicate spans, and reverse-sorts edits (descending start offset) for shift-free, safe application.
+- **Lexical Isolation**: Rejects keywords or invalid identifier formats (e.g. starting with digits) and restricts renaming strictly to semantic-index resolved local bindings.
 
 ### Running the server
 

@@ -806,3 +806,107 @@ fn test_references_and_highlights() {
     let refs_none = session.references_at_position(&uri, 0, 0, true);
     assert!(refs_none.is_none());
 }
+
+#[test]
+fn test_rename_local_variables_and_shadowing() {
+    let mut session = AnalysisSession::new();
+    let uri = DocumentUri::new("file:///rename_test.tmpr");
+
+    let source = r#"fn main(x: Int64) {
+    let y = x + 1;
+    let x = 10;
+    let z = x + 2;
+}"#
+    .to_string();
+
+    session.open_document(uri.clone(), source, 1);
+
+    // 1. Rename outer parameter 'x' (line 0, col 8)
+    let prep_outer = session.prepare_rename(&uri, 0, 8);
+    assert!(prep_outer.is_some(), "outer x should be renameable");
+    let prep_outer_range = prep_outer.unwrap();
+    assert_eq!(prep_outer_range.start.line, 0);
+    assert_eq!(prep_outer_range.start.character, 8);
+    assert_eq!(prep_outer_range.end.line, 0);
+    assert_eq!(prep_outer_range.end.character, 9);
+
+    let edits_outer = session.rename_edits(&uri, 0, 8, "outer_x").unwrap();
+    let text_edits_outer = edits_outer.changes.get(&uri).unwrap();
+    // Should rename parameter at (0, 8) and usage at (1, 12).
+    // Because they are sorted descending:
+    assert_eq!(text_edits_outer.len(), 2);
+    // Highest start offset first:
+    assert_eq!(text_edits_outer[0].range.start.line, 1);
+    assert_eq!(text_edits_outer[0].range.start.character, 12);
+    assert_eq!(text_edits_outer[1].range.start.line, 0);
+    assert_eq!(text_edits_outer[1].range.start.character, 8);
+
+    // 2. Rename inner shadowed variable 'x' (line 2, col 8)
+    let prep_inner = session.prepare_rename(&uri, 2, 8);
+    assert!(prep_inner.is_some(), "inner x should be renameable");
+    let edits_inner = session.rename_edits(&uri, 2, 8, "inner_x").unwrap();
+    let text_edits_inner = edits_inner.changes.get(&uri).unwrap();
+    // Should rename declaration at (2, 8) and usage at (3, 12)
+    assert_eq!(text_edits_inner.len(), 2);
+    assert_eq!(text_edits_inner[0].range.start.line, 3);
+    assert_eq!(text_edits_inner[0].range.start.character, 12);
+    assert_eq!(text_edits_inner[1].range.start.line, 2);
+    assert_eq!(text_edits_inner[1].range.start.character, 8);
+
+    // 3. Reject invalid identifier
+    let invalid_rename = session.rename_edits(&uri, 0, 8, "123invalid");
+    assert!(
+        invalid_rename.is_none(),
+        "should reject invalid identifier starting with digit"
+    );
+
+    let invalid_keyword = session.rename_edits(&uri, 0, 8, "struct");
+    assert!(invalid_keyword.is_none(), "should reject keyword");
+
+    // 4. Reject rename on non-variable symbol (like function 'main')
+    let prep_main = session.prepare_rename(&uri, 0, 4);
+    assert!(prep_main.is_none(), "should reject renaming function main");
+}
+
+#[test]
+fn test_rename_validation_and_overlap_rejection() {
+    use tempra_analysis::{LspRange, TextEdit, WorkspaceEdit};
+    let uri = DocumentUri::new("file:///overlap.tmpr");
+
+    let mut edits = Vec::new();
+    edits.push(TextEdit {
+        range: LspRange {
+            start: LspPosition {
+                line: 1,
+                character: 5,
+            },
+            end: LspPosition {
+                line: 1,
+                character: 10,
+            },
+        },
+        new_text: "foo".to_string(),
+    });
+    edits.push(TextEdit {
+        range: LspRange {
+            start: LspPosition {
+                line: 1,
+                character: 8,
+            },
+            end: LspPosition {
+                line: 1,
+                character: 15,
+            },
+        },
+        new_text: "bar".to_string(),
+    });
+
+    let mut changes = std::collections::HashMap::new();
+    changes.insert(uri, edits);
+    let mut ws_edit = WorkspaceEdit { changes };
+
+    // Should fail validation due to overlap (1:8 < 1:10)
+    let res = ws_edit.validate_and_clean();
+    assert!(res.is_err());
+    assert!(res.unwrap_err().contains("Overlapping"));
+}

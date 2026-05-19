@@ -553,3 +553,70 @@ async fn test_integration_references_and_highlights() {
     assert_eq!(highlights[0].kind, Some(DocumentHighlightKind::WRITE));
     assert_eq!(highlights[1].kind, Some(DocumentHighlightKind::READ));
 }
+
+#[tokio::test]
+async fn test_integration_rename() {
+    use tempra_lsp::server::Backend;
+    use tower_lsp::lsp_types::*;
+    use tower_lsp::LanguageServer;
+
+    let (service, _) = tower_lsp::LspService::new(Backend::new);
+    let backend = service.inner();
+
+    let uri = Url::parse("file:///test_rename.tmpr").unwrap();
+    let source = "fn main(x: Int64) {\n    let y = x + 1;\n}\n".to_string();
+
+    backend
+        .did_open(DidOpenTextDocumentParams {
+            text_document: TextDocumentItem {
+                uri: uri.clone(),
+                language_id: "tempra".to_string(),
+                version: 1,
+                text: source,
+            },
+        })
+        .await;
+
+    // 1. prepareRename on parameter 'x' (line 0, character 8)
+    let prep_params = TextDocumentPositionParams {
+        text_document: TextDocumentIdentifier { uri: uri.clone() },
+        position: Position {
+            line: 0,
+            character: 8,
+        },
+    };
+    let prep_result = backend.prepare_rename(prep_params).await.unwrap();
+    assert!(prep_result.is_some());
+    let range = match prep_result.unwrap() {
+        PrepareRenameResponse::Range(r) => r,
+        _ => panic!("expected Range response"),
+    };
+    assert_eq!(range.start.line, 0);
+    assert_eq!(range.start.character, 8);
+    assert_eq!(range.end.character, 9);
+
+    // 2. rename parameter 'x' to 'new_name' (line 0, character 8)
+    let rename_params = RenameParams {
+        text_document_position: TextDocumentPositionParams {
+            text_document: TextDocumentIdentifier { uri: uri.clone() },
+            position: Position {
+                line: 0,
+                character: 8,
+            },
+        },
+        new_name: "new_name".to_string(),
+        work_done_progress_params: WorkDoneProgressParams::default(),
+    };
+    let rename_result = backend.rename(rename_params).await.unwrap();
+    assert!(rename_result.is_some());
+    let ws_edit = rename_result.unwrap();
+    let changes = ws_edit.changes.unwrap();
+    let edits = changes.get(&uri).unwrap();
+    assert_eq!(edits.len(), 2);
+    assert_eq!(edits[0].range.start.line, 1);
+    assert_eq!(edits[0].range.start.character, 12);
+    assert_eq!(edits[0].new_text, "new_name");
+    assert_eq!(edits[1].range.start.line, 0);
+    assert_eq!(edits[1].range.start.character, 8);
+    assert_eq!(edits[1].new_text, "new_name");
+}

@@ -26,5 +26,6 @@ Once integrated, open `examples/lsp_smoke.tmpr` in Zed:
 - [ ] Type `Point.` (triggering autocomplete on `.`) or `re...` to verify auto-completion appears.
 - [ ] Find references (usually `alt-f8` or via context menu) on parameter `a` or variable `origin` and verify all usage and definition locations are found.
 - [ ] Place cursor on variable `origin` or parameter `a` and verify all occurrences are highlighted.
+- [ ] Rename variable `origin` or parameter `a` (usually via `cmd-r` or `f2` depending on bindings) and verify all references are updated accordingly.
 - [ ] Uncomment the `broken()` function at the bottom and verify that diagnostics appear for type errors.
 - [ ] Make incremental changes in the buffer and verify diagnostics / hover update immediately.

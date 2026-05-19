@@ -70,5 +70,6 @@ Open `examples/lsp_smoke.tmpr` in the editor:
 - [ ] Verify that keywords (`fn`, `struct`, etc.), strings, numbers, types, parameter/local variables, and members/properties are semantically highlighted via semantic tokens.
 - [ ] Find References (Shift+F12) on parameter `a` in `add` or variable `origin` in `main` and verify all usage and definition locations are found.
 - [ ] Place cursor on variable `origin` or parameter `a` and verify all occurrences are highlighted (definitions as Write highlights, usages as Read highlights).
+- [ ] Press `F2` to Rename variable `origin` or parameter `a` and verify all occurrences are updated correctly without affecting shadowed variables or unrelated bindings.
 - [ ] Uncomment the `broken()` function at the bottom and verify that a red squiggly line appears for type errors.
 - [ ] Edit the file incrementally (e.g. typing parameter types or changing values) and verify that diagnostics, hover, and completions refresh instantly without saving the file (incremental synchronization).

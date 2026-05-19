@@ -201,6 +201,10 @@ impl LanguageServer for Backend {
                 document_symbol_provider: Some(OneOf::Left(true)),
                 references_provider: Some(OneOf::Left(true)),
                 document_highlight_provider: Some(OneOf::Left(true)),
+                rename_provider: Some(OneOf::Right(RenameOptions {
+                    prepare_provider: Some(true),
+                    work_done_progress_options: WorkDoneProgressOptions::default(),
+                })),
                 completion_provider: Some(CompletionOptions {
                     trigger_characters: Some(vec![".".to_string()]),
                     ..CompletionOptions::default()
@@ -556,6 +560,60 @@ impl LanguageServer for Backend {
         }
 
         Ok(Some(lsp_highlights))
+    }
+
+    async fn prepare_rename(
+        &self,
+        params: TextDocumentPositionParams,
+    ) -> LspResult<Option<PrepareRenameResponse>> {
+        let url = params.text_document.uri.clone();
+        let doc_uri = DocumentUri::new(url.as_str());
+        let pos = to_analysis_pos(params.position);
+
+        let mut session = self.session.write().await;
+
+        let rename_range = match session.prepare_rename_lsp(&doc_uri, pos) {
+            Some(r) => r,
+            None => return Ok(None),
+        };
+
+        Ok(Some(PrepareRenameResponse::Range(analysis_range_to_lsp(
+            rename_range,
+        ))))
+    }
+
+    async fn rename(&self, params: RenameParams) -> LspResult<Option<WorkspaceEdit>> {
+        let td = params.text_document_position;
+        let url = td.text_document.uri.clone();
+        let doc_uri = DocumentUri::new(url.as_str());
+        let pos = to_analysis_pos(td.position);
+        let new_name = params.new_name;
+
+        let mut session = self.session.write().await;
+
+        let ws_edit = match session.rename_edits_lsp(&doc_uri, pos, &new_name) {
+            Some(e) => e,
+            None => return Ok(None),
+        };
+
+        let mut changes = std::collections::HashMap::new();
+        for (edit_uri, edits) in ws_edit.changes {
+            let edit_url = Url::parse(edit_uri.as_str()).unwrap();
+            let lsp_edits = edits
+                .into_iter()
+                .map(|e| tower_lsp::lsp_types::TextEdit {
+                    range: analysis_range_to_lsp(e.range),
+                    new_text: e.new_text,
+                })
+                .collect();
+            changes.insert(edit_url, lsp_edits);
+        }
+
+        Ok(Some(WorkspaceEdit {
+            changes: Some(changes),
+            document_changes: None,
+            change_annotations: None,
+        }))
     }
 }
 

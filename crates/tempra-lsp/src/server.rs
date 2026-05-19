@@ -178,7 +178,10 @@ impl LanguageServer for Backend {
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 definition_provider: Some(OneOf::Left(true)),
                 document_symbol_provider: Some(OneOf::Left(true)),
-                completion_provider: Some(CompletionOptions::default()),
+                completion_provider: Some(CompletionOptions {
+                    trigger_characters: Some(vec![".".to_string()]),
+                    ..CompletionOptions::default()
+                }),
                 ..ServerCapabilities::default()
             },
             server_info: Some(ServerInfo {

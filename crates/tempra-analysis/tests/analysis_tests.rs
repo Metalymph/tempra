@@ -358,17 +358,39 @@ fn test_completion_keywords_and_types() {
     let completions = session.completions_at_position(&uri, 0, 13);
 
     // Check some keywords
-    assert!(completions.iter().any(|c| c.label == "fn"));
+    let fn_item = completions.iter().find(|c| c.label == "fn").unwrap();
+    assert_eq!(fn_item.detail.as_deref().unwrap(), "keyword");
+    assert_eq!(fn_item.sort_text.as_deref().unwrap(), "01_keyword_fn");
     assert!(completions.iter().any(|c| c.label == "let"));
     assert!(completions.iter().any(|c| c.label == "if"));
 
     // Check some types
-    assert!(completions.iter().any(|c| c.label == "Int64"));
+    let int64_item = completions.iter().find(|c| c.label == "Int64").unwrap();
+    assert_eq!(int64_item.detail.as_deref().unwrap(), "type");
+    assert_eq!(int64_item.sort_text.as_deref().unwrap(), "06_type_Int64");
     assert!(completions.iter().any(|c| c.label == "String"));
     assert!(completions.iter().any(|c| c.label == "Result"));
 
     // Check namespaces
-    assert!(completions.iter().any(|c| c.label == "fs"));
+    let fs_item = completions.iter().find(|c| c.label == "fs").unwrap();
+    assert_eq!(fs_item.detail.as_deref().unwrap(), "module");
+    assert_eq!(fs_item.sort_text.as_deref().unwrap(), "07_module_fs");
+
+    // Check sorted order
+    for i in 0..completions.len() - 1 {
+        let a = completions[i].sort_text.as_deref().unwrap_or("");
+        let b = completions[i + 1].sort_text.as_deref().unwrap_or("");
+        if a == b {
+            assert!(
+                completions[i].label <= completions[i + 1].label,
+                "Expected label '{}' <= '{}'",
+                completions[i].label,
+                completions[i + 1].label
+            );
+        } else {
+            assert!(a < b, "Expected sort_text '{}' < '{}'", a, b);
+        }
+    }
 }
 
 #[test]
@@ -443,18 +465,23 @@ fn test_completion_member() {
 
     assert!(!completions.is_empty(), "completions should not be empty");
 
-    // Check fields
-    assert!(completions
-        .iter()
-        .any(|c| c.label == "x" && c.kind == tempra_analysis::CompletionKind::Field));
-    assert!(completions
-        .iter()
-        .any(|c| c.label == "y" && c.kind == tempra_analysis::CompletionKind::Field));
+    // Assert sorting: Fields (03) come before Methods (04)
+    assert_eq!(completions[0].label, "x");
+    assert_eq!(completions[0].kind, tempra_analysis::CompletionKind::Field);
+    assert_eq!(completions[0].sort_text.as_deref().unwrap(), "03_field_x");
+    assert_eq!(completions[0].detail.as_deref().unwrap(), "field: Int64");
 
-    // Check methods
-    assert!(completions
-        .iter()
-        .any(|c| c.label == "display" && c.kind == tempra_analysis::CompletionKind::Method));
+    assert_eq!(completions[1].label, "y");
+    assert_eq!(completions[1].kind, tempra_analysis::CompletionKind::Field);
+    assert_eq!(completions[1].sort_text.as_deref().unwrap(), "03_field_y");
+    assert_eq!(completions[1].detail.as_deref().unwrap(), "field: Int64");
+
+    assert_eq!(completions[2].label, "display");
+    assert_eq!(completions[2].kind, tempra_analysis::CompletionKind::Method);
+    assert_eq!(
+        completions[2].sort_text.as_deref().unwrap(),
+        "04_method_display"
+    );
 
     // Should NOT contain random keywords or locals
     assert!(!completions.iter().any(|c| c.label == "p"));

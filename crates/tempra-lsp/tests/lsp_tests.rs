@@ -265,3 +265,90 @@ fn test_completion_conversion_kinds() {
         CompletionItemKind::FIELD
     );
 }
+
+#[tokio::test]
+async fn test_completion_initialize_trigger() {
+    use tempra_lsp::server::Backend;
+    use tower_lsp::lsp_types::*;
+    use tower_lsp::LanguageServer;
+
+    let (service, _) = tower_lsp::LspService::new(Backend::new);
+    let backend = service.inner();
+
+    let params = InitializeParams::default();
+    let res = backend.initialize(params).await.unwrap();
+
+    let capabilities = res.capabilities;
+    let completion_provider = capabilities
+        .completion_provider
+        .expect("completion provider capability expected");
+    let trigger_chars = completion_provider
+        .trigger_characters
+        .expect("trigger characters expected");
+
+    assert_eq!(trigger_chars, vec![".".to_string()]);
+}
+
+#[tokio::test]
+async fn test_completion_conversion_fields() {
+    use tempra_lsp::server::Backend;
+    use tower_lsp::lsp_types::*;
+    use tower_lsp::LanguageServer;
+
+    let (service, _) = tower_lsp::LspService::new(Backend::new);
+    let backend = service.inner();
+
+    let uri = Url::parse("file:///test.tmpr").unwrap();
+    let source = r#"
+        struct Point {
+            x: Int64
+        }
+        fn main() {
+            let p = Point { x: 0 }
+            p.
+        }
+    "#
+    .to_string();
+
+    backend
+        .did_open(DidOpenTextDocumentParams {
+            text_document: TextDocumentItem {
+                uri: uri.clone(),
+                language_id: "tempra".to_string(),
+                version: 1,
+                text: source,
+            },
+        })
+        .await;
+
+    // Call completion at line 6 (index 6, character 14 - after the dot)
+    let params = CompletionParams {
+        text_document_position: TextDocumentPositionParams {
+            text_document: TextDocumentIdentifier { uri },
+            position: Position {
+                line: 6,
+                character: 14,
+            },
+        },
+        work_done_progress_params: WorkDoneProgressParams::default(),
+        partial_result_params: PartialResultParams::default(),
+        context: None,
+    };
+
+    let response = backend
+        .completion(params)
+        .await
+        .unwrap()
+        .expect("completions expected");
+    let items = match response {
+        CompletionResponse::Array(arr) => arr,
+        CompletionResponse::List(list) => list.items,
+    };
+
+    assert!(!items.is_empty());
+    let x_item = items.iter().find(|i| i.label == "x").unwrap();
+    assert_eq!(x_item.kind.unwrap(), CompletionItemKind::FIELD);
+    assert_eq!(x_item.detail.as_deref().unwrap(), "field: Int64");
+    assert_eq!(x_item.sort_text.as_deref().unwrap(), "03_field_x");
+    assert_eq!(x_item.insert_text.as_deref().unwrap(), "x");
+}

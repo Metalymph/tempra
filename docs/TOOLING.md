@@ -242,10 +242,34 @@ Editor --JSON-RPC--> tempra-lsp --> tempra-analysis --> tempra-driver
 | `textDocument/hover` | ✅ Markdown |
 | `textDocument/definition` | ✅ Goto Definition |
 | `textDocument/documentSymbol` | ✅ Flat symbol list |
-| `textDocument/completion` | ✅ Context-aware MVP |
+| `textDocument/completion` | ✅ Context-aware autocomplete & member completions (triggered by `.` and manual invocation). Features deterministic group sorting and detail formatting. |
 | Rename, References | 🚫 Not implemented |
 | Semantic tokens | 🚫 Not implemented |
 | Incremental text sync | 🚫 Not implemented |
+
+### Autocomplete & Member Completions (Phase 18.2C)
+
+The completion system supports trigger character `.` to invoke autocomplete when writing member access expressions (`instance.field` or `instance.method()`).
+
+To improve user experience, completions are:
+1. **Sorted Deterministically**: Ordered by group prefixes (`sort_text`) as follows:
+   - Keywords (`01_keyword_`)
+   - Local variables/bindings (`02_local_`)
+   - Struct fields (`03_field_`)
+   - Extension methods (`04_method_`)
+   - Functions (`05_function_`)
+   - Types (`06_type_`)
+   - Modules/namespaces (`07_module_`)
+   - Enums (`08_enum_`)
+   - Structs (`09_struct_`)
+2. **Context-Aware**: Member access autocompletes filter out irrelevant keywords, local bindings, and global symbols, only presenting fields and methods available on the receiver's type.
+3. **Formatted Presentation Details**:
+   - Keywords: `"keyword"`
+   - Types: `"type"`
+   - Modules: `"module"`
+   - Fields: `"field: Type"` (e.g. `field: Int64`)
+   - Methods/Functions: Signature if available
+   - Locals: Binding signature/type if available
 
 ### UTF-16 coordinate safety
 

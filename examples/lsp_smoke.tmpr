@@ -32,10 +32,11 @@ fn main() {
     let msg    = greeting("Tempra")
     let sum    = describe(origin)
     
-    // Type `res` below to test local completion
+    // Type `res` below to test local completion (e.g. `result`)
     // 
     
-    // Type `origin.` below to test member completion (should suggest x and y fields)
+    // Type `origin.` below to test member completion (triggered by `.`):
+    // Should suggest fields `x` and `y` (with `field: Int64` details) before any methods.
     // 
 }
 

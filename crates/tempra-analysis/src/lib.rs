@@ -800,12 +800,24 @@ impl AnalysisSession {
 
         let mut add_item = |label: &str, kind: CompletionKind, detail: Option<String>| {
             if seen.insert(label.to_string()) {
+                let prefix = match kind {
+                    CompletionKind::Keyword => "01_keyword_",
+                    CompletionKind::Variable => "02_local_",
+                    CompletionKind::Field => "03_field_",
+                    CompletionKind::Method => "04_method_",
+                    CompletionKind::Function => "05_function_",
+                    CompletionKind::Type => "06_type_",
+                    CompletionKind::Module => "07_module_",
+                    CompletionKind::Enum => "08_enum_",
+                    CompletionKind::Struct => "09_struct_",
+                };
+                let sort_text = format!("{}{}", prefix, label);
                 items.push(CompletionItem {
                     label: label.to_string(),
                     kind,
                     detail,
-                    insert_text: None,
-                    sort_text: None,
+                    insert_text: Some(label.to_string()),
+                    sort_text: Some(sort_text),
                     documentation: None,
                 });
             }
@@ -843,13 +855,32 @@ impl AnalysisSession {
                                 }
                                 _ => CompletionKind::Method,
                             };
-                            add_item(label, kind, sym.signature.clone());
+                            let detail = if kind == CompletionKind::Field {
+                                if let Some(sig) = &sym.signature {
+                                    let parts: Vec<&str> = sig.splitn(2, ':').collect();
+                                    if parts.len() == 2 {
+                                        Some(format!("field: {}", parts[1].trim()))
+                                    } else {
+                                        Some(format!("field: {}", sig.trim()))
+                                    }
+                                } else {
+                                    Some("field".to_string())
+                                }
+                            } else {
+                                sym.signature.clone()
+                            };
+                            add_item(label, kind, detail);
                         }
                     }
                 }
             }
 
-            // Empty Vec fallback
+            // Deterministic sort for member completions
+            items.sort_by(|a, b| {
+                let sort_a = a.sort_text.as_deref().unwrap_or("");
+                let sort_b = b.sort_text.as_deref().unwrap_or("");
+                sort_a.cmp(sort_b).then_with(|| a.label.cmp(&b.label))
+            });
             return items;
         }
 
@@ -859,7 +890,7 @@ impl AnalysisSession {
             "return", "break", "continue", "true", "false", "comptime",
         ];
         for kw in keywords {
-            add_item(kw, CompletionKind::Keyword, None);
+            add_item(kw, CompletionKind::Keyword, Some("keyword".to_string()));
         }
 
         // 2. Builtin Types
@@ -868,13 +899,13 @@ impl AnalysisSession {
             "Float64", "Bool", "String", "Never", "Option", "Result",
         ];
         for t in types {
-            add_item(t, CompletionKind::Type, None);
+            add_item(t, CompletionKind::Type, Some("type".to_string()));
         }
 
         // 3. Root namespaces
         let namespaces = ["fs", "os", "env", "cmd", "io"];
         for ns in namespaces {
-            add_item(ns, CompletionKind::Module, None);
+            add_item(ns, CompletionKind::Module, Some("module".to_string()));
         }
 
         // 4. Local bindings from SemanticIndex
@@ -908,6 +939,12 @@ impl AnalysisSession {
             add_item(&sym.name, kind, sym.signature.clone());
         }
 
+        // Deterministic sort for non-member completions
+        items.sort_by(|a, b| {
+            let sort_a = a.sort_text.as_deref().unwrap_or("");
+            let sort_b = b.sort_text.as_deref().unwrap_or("");
+            sort_a.cmp(sort_b).then_with(|| a.label.cmp(&b.label))
+        });
         items
     }
 

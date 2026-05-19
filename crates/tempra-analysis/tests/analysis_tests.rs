@@ -523,3 +523,220 @@ fn test_semantic_tokens() {
         .iter()
         .any(|t| t.kind == tempra_analysis::SemanticTokenKind::Property));
 }
+
+#[test]
+fn test_incremental_character_insert() {
+    let mut session = AnalysisSession::new();
+    let uri = DocumentUri::new("file:///incremental.tmpr");
+    let source = "fn foo() {}\n".to_string();
+    session.open_document(uri.clone(), source, 1);
+
+    // Insert a parameter 'x: Int' inside 'foo()'
+    // 'foo()' starts at line 0, char 3. '()' starts at char 6.
+    // Insert at line 0, character 7 (between '(' and ')')
+    let range = tempra_analysis::LspRange {
+        start: tempra_analysis::LspPosition {
+            line: 0,
+            character: 7,
+        },
+        end: tempra_analysis::LspPosition {
+            line: 0,
+            character: 7,
+        },
+    };
+    session
+        .update_document_incremental(&uri, vec![(Some(range), "x: Int".to_string())], 2)
+        .unwrap();
+
+    let snap = session.snapshot(&uri).unwrap();
+    assert_eq!(snap.content, "fn foo(x: Int) {}\n");
+    assert_eq!(snap.version, 2);
+}
+
+#[test]
+fn test_incremental_character_delete() {
+    let mut session = AnalysisSession::new();
+    let uri = DocumentUri::new("file:///incremental.tmpr");
+    let source = "fn foo(x: Int) {}\n".to_string();
+    session.open_document(uri.clone(), source, 1);
+
+    // Delete 'x: Int'
+    // 'x: Int' starts at line 0, character 7 and ends at character 13
+    let range = tempra_analysis::LspRange {
+        start: tempra_analysis::LspPosition {
+            line: 0,
+            character: 7,
+        },
+        end: tempra_analysis::LspPosition {
+            line: 0,
+            character: 13,
+        },
+    };
+    session
+        .update_document_incremental(&uri, vec![(Some(range), "".to_string())], 2)
+        .unwrap();
+
+    let snap = session.snapshot(&uri).unwrap();
+    assert_eq!(snap.content, "fn foo() {}\n");
+}
+
+#[test]
+fn test_incremental_multiline_edits() {
+    let mut session = AnalysisSession::new();
+    let uri = DocumentUri::new("file:///incremental.tmpr");
+    let source = "fn foo() {\n    let x = 1;\n    return x;\n}\n".to_string();
+    session.open_document(uri.clone(), source, 1);
+
+    // Replace the body: from line 1 character 0 to line 3 character 0 (exclusive/inclusive)
+    // Line 1: '    let x = 1;\n'
+    // Line 2: '    return x;\n'
+    let range = tempra_analysis::LspRange {
+        start: tempra_analysis::LspPosition {
+            line: 1,
+            character: 0,
+        },
+        end: tempra_analysis::LspPosition {
+            line: 3,
+            character: 0,
+        },
+    };
+    session
+        .update_document_incremental(&uri, vec![(Some(range), "    return 42;\n".to_string())], 2)
+        .unwrap();
+
+    let snap = session.snapshot(&uri).unwrap();
+    assert_eq!(snap.content, "fn foo() {\n    return 42;\n}\n");
+}
+
+#[test]
+fn test_incremental_unicode_edits() {
+    let mut session = AnalysisSession::new();
+    let uri = DocumentUri::new("file:///incremental.tmpr");
+    // "🐶" is 4 bytes (F0 9F 90 B6) but 2 UTF-16 code units.
+    // "è" is 2 bytes (C3 A8) but 1 UTF-16 code unit.
+    // "中" is 3 bytes (E4 B8 AD) but 1 UTF-16 code unit.
+    let source = "let x = \"🐶è中\"\n".to_string();
+    session.open_document(uri.clone(), source, 1);
+
+    // Let's replace "🐶" (start at line 0, character 9, end at line 0, character 11 in UTF-16) with "🐱" (2 UTF-16 code units)
+    let range = tempra_analysis::LspRange {
+        start: tempra_analysis::LspPosition {
+            line: 0,
+            character: 9,
+        },
+        end: tempra_analysis::LspPosition {
+            line: 0,
+            character: 11,
+        },
+    };
+    session
+        .update_document_incremental(&uri, vec![(Some(range), "🐱".to_string())], 2)
+        .unwrap();
+
+    let snap = session.snapshot(&uri).unwrap();
+    assert_eq!(snap.content, "let x = \"🐱è中\"\n");
+}
+
+#[test]
+fn test_incremental_lazy_diagnostics_completion_tokens() {
+    let mut session = AnalysisSession::new();
+    let uri = DocumentUri::new("file:///incremental.tmpr");
+    // Open a document with a syntax error
+    let source = "fn foo() {\n    let x =\n}\n".to_string();
+    session.open_document(uri.clone(), source, 1);
+
+    // Diagnostics should find the error (let x = )
+    let diags = session.diagnostics(&uri).unwrap();
+    assert!(!diags.is_empty(), "should have diagnostics error");
+
+    // Make an edit that fixes the syntax error
+    // Line 1: '    let x =\n'
+    // Replace '\n' or insert ' 10;\n'
+    let range = tempra_analysis::LspRange {
+        start: tempra_analysis::LspPosition {
+            line: 1,
+            character: 11,
+        },
+        end: tempra_analysis::LspPosition {
+            line: 1,
+            character: 11,
+        },
+    };
+    session
+        .update_document_incremental(&uri, vec![(Some(range), " 10;".to_string())], 2)
+        .unwrap();
+
+    // Verify it is not analyzed yet (still dirty)
+    // (We don't expose dirty_documents directly, but we can query diagnostics and verify it has cleared)
+    let diags_fixed = session.diagnostics(&uri).unwrap();
+    assert!(
+        diags_fixed.is_empty(),
+        "diagnostics should be empty after fix"
+    );
+
+    // Test completions work on lazy update too
+    let range2 = tempra_analysis::LspRange {
+        start: tempra_analysis::LspPosition {
+            line: 2,
+            character: 1,
+        },
+        end: tempra_analysis::LspPosition {
+            line: 2,
+            character: 1,
+        },
+    };
+    session
+        .update_document_incremental(&uri, vec![(Some(range2), "retur\n".to_string())], 3)
+        .unwrap();
+
+    // Query completions at line 2 character 5 (after "retur")
+    let completions = session.completions_at_position(&uri, 2, 5);
+    assert!(
+        completions.iter().any(|c| c.label == "return"),
+        "should suggest return"
+    );
+
+    // Verify semantic tokens lazy evaluation
+    let tokens = session.semantic_tokens(&uri);
+    assert!(!tokens.is_empty(), "should compute semantic tokens lazily");
+}
+
+#[test]
+fn test_incremental_errors_on_invalid_range() {
+    let mut session = AnalysisSession::new();
+    let uri = DocumentUri::new("file:///incremental.tmpr");
+    let source = "fn foo() {}\n".to_string();
+    session.open_document(uri.clone(), source, 1);
+
+    // Out of bounds line
+    let range = tempra_analysis::LspRange {
+        start: tempra_analysis::LspPosition {
+            line: 10,
+            character: 0,
+        },
+        end: tempra_analysis::LspPosition {
+            line: 10,
+            character: 1,
+        },
+    };
+    let res = session.update_document_incremental(&uri, vec![(Some(range), "foo".to_string())], 2);
+    assert!(res.is_err(), "should return error on invalid range");
+
+    // Out of bounds character
+    let range2 = tempra_analysis::LspRange {
+        start: tempra_analysis::LspPosition {
+            line: 0,
+            character: 50,
+        },
+        end: tempra_analysis::LspPosition {
+            line: 0,
+            character: 51,
+        },
+    };
+    let res2 =
+        session.update_document_incremental(&uri, vec![(Some(range2), "foo".to_string())], 3);
+    assert!(
+        res2.is_err(),
+        "should return error on invalid character range"
+    );
+}

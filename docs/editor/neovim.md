@@ -42,3 +42,4 @@ Open `examples/lsp_smoke.tmpr` in Neovim:
 - [ ] Open document symbols (e.g., using Telescope `lsp_document_symbols` or the native picker) to see the outline.
 - [ ] Trigger omnifunc (`<C-x><C-o>`), type `Point.` (triggering autocomplete on `.`), or use your completion plugin to test auto-completion with deterministic ordering.
 - [ ] Uncomment the `broken()` function at the bottom and verify that diagnostics appear (virtual text and signs).
+- [ ] Make incremental changes without saving the buffer and verify diagnostics / hover update immediately.

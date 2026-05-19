@@ -411,3 +411,76 @@ async fn test_semantic_tokens_full() {
         "expected keyword token"
     );
 }
+
+#[tokio::test]
+async fn test_integration_incremental_change() {
+    use tempra_lsp::server::Backend;
+    use tower_lsp::lsp_types::*;
+    use tower_lsp::LanguageServer;
+
+    let (service, _) = tower_lsp::LspService::new(Backend::new);
+    let backend = service.inner();
+
+    let uri = Url::parse("file:///test_inc.tmpr").unwrap();
+    let source = "fn foo() {}\n".to_string();
+
+    backend
+        .did_open(DidOpenTextDocumentParams {
+            text_document: TextDocumentItem {
+                uri: uri.clone(),
+                language_id: "tempra".to_string(),
+                version: 1,
+                text: source,
+            },
+        })
+        .await;
+
+    // Change "fn foo() {}\n" by inserting "x: Int" between '(' (char 7) and ')' (char 8)
+    let range = Range {
+        start: Position {
+            line: 0,
+            character: 7,
+        },
+        end: Position {
+            line: 0,
+            character: 7,
+        },
+    };
+    backend
+        .did_change(DidChangeTextDocumentParams {
+            text_document: VersionedTextDocumentIdentifier {
+                uri: uri.clone(),
+                version: 2,
+            },
+            content_changes: vec![TextDocumentContentChangeEvent {
+                range: Some(range),
+                range_length: None,
+                text: "x: Int".to_string(),
+            }],
+        })
+        .await;
+
+    // Now query hover at position of x (line 0, character 7)
+    let hover_params = HoverParams {
+        text_document_position_params: TextDocumentPositionParams {
+            text_document: TextDocumentIdentifier { uri: uri.clone() },
+            position: Position {
+                line: 0,
+                character: 7,
+            },
+        },
+        work_done_progress_params: WorkDoneProgressParams::default(),
+    };
+
+    let hover_result = backend.hover(hover_params).await.unwrap();
+    assert!(hover_result.is_some(), "expected hover on parameter 'x'");
+    let hover_contents = match hover_result.unwrap().contents {
+        HoverContents::Markup(m) => m.value,
+        _ => panic!("expected markup"),
+    };
+    assert!(
+        hover_contents.contains("x: Int"),
+        "hover should show param type, got: {}",
+        hover_contents
+    );
+}

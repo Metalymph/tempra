@@ -284,6 +284,12 @@ To improve user experience, completions are:
 
 All LSP positions from the editor pass through the `LspPosition` wrappers in `tempra-analysis`'s `LineIndex`. The adapter (`tempra-lsp`) **never** performs manual UTF-16/UTF-8 conversions. Span-to-range conversion for diagnostics, definition, and symbols uses the `session.span_to_lsp_range()` helper in `tempra-analysis`.
 
+### Incremental Sync & Reanalysis (Phase 18.3A)
+
+The LSP server uses incremental text synchronization and lazy reanalysis to maximize editor responsiveness:
+- **Synchronization**: Advertises `TextDocumentSyncKind::INCREMENTAL`. When a document is modified, the editor sends a sequence of range changes containing only the modified segments rather than the full source code.
+- **Lazy Recomputation**: Editor modifications invalidate cached diagnostic, completion, and definition states immediately, but recomputation is deferred until a query is executed. This eliminates redundant analysis cycles on typing.
+
 ### Running the server
 
 ```bash

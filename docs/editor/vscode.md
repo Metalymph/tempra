@@ -69,3 +69,4 @@ Open `examples/lsp_smoke.tmpr` in the editor:
 - [ ] Type `Point.` (triggering autocomplete on `.`) or `re...` to verify auto-completion appears, with deterministic ordering and detail formatting.
 - [ ] Verify that keywords (`fn`, `struct`, etc.), strings, numbers, types, parameter/local variables, and members/properties are semantically highlighted via semantic tokens.
 - [ ] Uncomment the `broken()` function at the bottom and verify that a red squiggly line appears for type errors.
+- [ ] Edit the file incrementally (e.g. typing parameter types or changing values) and verify that diagnostics, hover, and completions refresh instantly without saving the file (incremental synchronization).

@@ -4,7 +4,7 @@
 //! external UTF-16 code-unit coordinates (`LspPosition`) at the boundary to prevent
 //! coordinate drift while managing document caches and lightweight symbol indices.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use tempra_driver::pipeline::{diagnose_source_with_facts, extract_symbols_from_source};
 
 /// A normalized, unique Document URI representation.
@@ -373,6 +373,43 @@ impl DocumentSnapshot {
             .text_position_to_byte_offset(&self.content, pos)?;
         word_at_offset(&self.content, offset)
     }
+
+    pub fn apply_change(&mut self, range: Option<LspRange>, text: String) -> Result<(), String> {
+        if let Some(range) = range {
+            let start = self
+                .line_index
+                .lsp_position_to_byte_offset(&self.content, range.start)
+                .ok_or_else(|| {
+                    format!(
+                        "Invalid range start: line={}, character={}",
+                        range.start.line, range.start.character
+                    )
+                })?;
+            let end = self
+                .line_index
+                .lsp_position_to_byte_offset(&self.content, range.end)
+                .ok_or_else(|| {
+                    format!(
+                        "Invalid range end: line={}, character={}",
+                        range.end.line, range.end.character
+                    )
+                })?;
+
+            if start > end {
+                return Err(format!(
+                    "Invalid range: start offset {} is greater than end offset {}",
+                    start, end
+                ));
+            }
+
+            self.content.replace_range(start..end, &text);
+        } else {
+            self.content = text;
+        }
+
+        self.line_index = LineIndex::new(&self.content);
+        Ok(())
+    }
 }
 
 /// Spatial and exact/suffix lookup indices for Document symbols.
@@ -440,6 +477,7 @@ pub struct AnalysisResult {
 pub struct AnalysisSession {
     documents: HashMap<DocumentUri, DocumentSnapshot>,
     analysis_cache: HashMap<DocumentUri, AnalysisResult>,
+    dirty_documents: HashSet<DocumentUri>,
 }
 
 impl AnalysisSession {
@@ -448,6 +486,7 @@ impl AnalysisSession {
         Self {
             documents: HashMap::new(),
             analysis_cache: HashMap::new(),
+            dirty_documents: HashSet::new(),
         }
     }
 
@@ -460,7 +499,8 @@ impl AnalysisSession {
             version,
             line_index,
         };
-        self.run_and_cache_analysis(&uri, snapshot);
+        self.documents.insert(uri.clone(), snapshot);
+        self.dirty_documents.insert(uri);
     }
 
     /// Update an existing document snapshot and refresh diagnostics/symbols.
@@ -473,7 +513,37 @@ impl AnalysisSession {
             version,
             line_index,
         };
-        self.run_and_cache_analysis(&normalized, snapshot);
+        self.documents.insert(normalized.clone(), snapshot);
+        self.dirty_documents.insert(normalized);
+    }
+
+    /// Update an existing document snapshot incrementally.
+    pub fn update_document_incremental(
+        &mut self,
+        uri: &DocumentUri,
+        changes: Vec<(Option<LspRange>, String)>,
+        version: SourceVersion,
+    ) -> Result<(), String> {
+        let normalized = DocumentUri::new(uri.as_str());
+        if let Some(doc) = self.documents.get_mut(&normalized) {
+            for (range, text) in changes {
+                doc.apply_change(range, text)?;
+            }
+            doc.version = version;
+            self.dirty_documents.insert(normalized.clone());
+            Ok(())
+        } else {
+            // Fallback if not found: if there's a full sync change (range is None), we open it
+            if let Some((None, text)) = changes.into_iter().next() {
+                self.open_document(normalized, text, version);
+                Ok(())
+            } else {
+                Err(format!(
+                    "Document not found for incremental update: {}",
+                    uri.as_str()
+                ))
+            }
+        }
     }
 
     /// Evict document snapshot and analysis results from cache.
@@ -481,6 +551,17 @@ impl AnalysisSession {
         let normalized = DocumentUri::new(uri.as_str());
         self.documents.remove(&normalized);
         self.analysis_cache.remove(&normalized);
+        self.dirty_documents.remove(&normalized);
+    }
+
+    /// Ensure the document's analysis results are up-to-date.
+    pub fn ensure_analyzed(&mut self, uri: &DocumentUri) {
+        let normalized = DocumentUri::new(uri.as_str());
+        if self.dirty_documents.remove(&normalized) {
+            if let Some(snapshot) = self.documents.get(&normalized).cloned() {
+                self.run_and_cache_analysis(&normalized, snapshot);
+            }
+        }
     }
 
     /// Returns true if the session contains the document.
@@ -496,24 +577,33 @@ impl AnalysisSession {
     }
 
     /// Retrieve the cached diagnostics for a document.
-    pub fn diagnostics(&self, uri: &DocumentUri) -> Option<Vec<tempra_diagnostics::Diagnostic>> {
+    pub fn diagnostics(
+        &mut self,
+        uri: &DocumentUri,
+    ) -> Option<Vec<tempra_diagnostics::Diagnostic>> {
         let normalized = DocumentUri::new(uri.as_str());
+        self.ensure_analyzed(&normalized);
         self.analysis_cache
             .get(&normalized)
             .map(|res| res.diagnostics.clone())
     }
 
     /// Retrieve the cached symbols for a document.
-    pub fn document_symbols(&self, uri: &DocumentUri) -> Option<Vec<tempra_diagnostics::Symbol>> {
+    pub fn document_symbols(
+        &mut self,
+        uri: &DocumentUri,
+    ) -> Option<Vec<tempra_diagnostics::Symbol>> {
         let normalized = DocumentUri::new(uri.as_str());
+        self.ensure_analyzed(&normalized);
         self.analysis_cache
             .get(&normalized)
             .map(|res| res.symbols.clone())
     }
 
     /// Retrieve semantic tokens for a document.
-    pub fn semantic_tokens(&self, uri: &DocumentUri) -> Vec<SemanticToken> {
+    pub fn semantic_tokens(&mut self, uri: &DocumentUri) -> Vec<SemanticToken> {
         let normalized = DocumentUri::new(uri.as_str());
+        self.ensure_analyzed(&normalized);
         let snapshot = match self.documents.get(&normalized) {
             Some(s) => s,
             None => return vec![],
@@ -649,12 +739,13 @@ impl AnalysisSession {
 
     /// Retrieve symbol at the given internal coordinate.
     pub fn symbol_at_position(
-        &self,
+        &mut self,
         uri: &DocumentUri,
         line: u32,
         byte_character: u32,
     ) -> Option<tempra_diagnostics::Symbol> {
         let normalized = DocumentUri::new(uri.as_str());
+        self.ensure_analyzed(&normalized);
         let snapshot = self.documents.get(&normalized)?;
         let result = self.analysis_cache.get(&normalized)?;
 
@@ -686,12 +777,13 @@ impl AnalysisSession {
 
     /// Retrieve definition location at the given internal coordinate.
     pub fn definition_at_position(
-        &self,
+        &mut self,
         uri: &DocumentUri,
         line: u32,
         byte_character: u32,
     ) -> Option<tempra_span::Span> {
         let normalized = DocumentUri::new(uri.as_str());
+        self.ensure_analyzed(&normalized);
         let snapshot = self.documents.get(&normalized)?;
         let result = self.analysis_cache.get(&normalized)?;
 
@@ -749,12 +841,13 @@ impl AnalysisSession {
 
     /// Retrieve hover telemetry message at the given internal coordinate.
     pub fn hover_at_position(
-        &self,
+        &mut self,
         uri: &DocumentUri,
         line: u32,
         byte_character: u32,
     ) -> Option<String> {
         let normalized = DocumentUri::new(uri.as_str());
+        self.ensure_analyzed(&normalized);
         let snapshot = self.documents.get(&normalized)?;
         let result = self.analysis_cache.get(&normalized)?;
 
@@ -830,7 +923,7 @@ impl AnalysisSession {
 
     /// Retrieve symbol at the given external LSP coordinate.
     pub fn symbol_at_lsp_position(
-        &self,
+        &mut self,
         uri: &DocumentUri,
         pos: LspPosition,
     ) -> Option<tempra_diagnostics::Symbol> {
@@ -844,7 +937,7 @@ impl AnalysisSession {
 
     /// Retrieve definition location at the given external LSP coordinate.
     pub fn definition_at_lsp_position(
-        &self,
+        &mut self,
         uri: &DocumentUri,
         pos: LspPosition,
     ) -> Option<tempra_span::Span> {
@@ -857,7 +950,7 @@ impl AnalysisSession {
     }
 
     /// Retrieve hover telemetry message at the given external LSP coordinate.
-    pub fn hover_at_lsp_position(&self, uri: &DocumentUri, pos: LspPosition) -> Option<String> {
+    pub fn hover_at_lsp_position(&mut self, uri: &DocumentUri, pos: LspPosition) -> Option<String> {
         let normalized = DocumentUri::new(uri.as_str());
         let snapshot = self.documents.get(&normalized)?;
         let text_pos = snapshot
@@ -867,13 +960,13 @@ impl AnalysisSession {
     }
 
     /// Best-effort top-level hover provider.
-    pub fn hover(&self, uri: &DocumentUri, line: u32, character: u32) -> Option<String> {
+    pub fn hover(&mut self, uri: &DocumentUri, line: u32, character: u32) -> Option<String> {
         self.hover_at_position(uri, line, character)
     }
 
     /// Best-effort top-level goto definition resolver.
     pub fn goto_definition(
-        &self,
+        &mut self,
         uri: &DocumentUri,
         line: u32,
         character: u32,
@@ -898,12 +991,13 @@ impl AnalysisSession {
 
     /// Retrieve completions at the given internal coordinate.
     pub fn completions_at_position(
-        &self,
+        &mut self,
         uri: &DocumentUri,
         line: u32,
         byte_character: u32,
     ) -> Vec<CompletionItem> {
         let normalized = DocumentUri::new(uri.as_str());
+        self.ensure_analyzed(&normalized);
         let snapshot = match self.documents.get(&normalized) {
             Some(s) => s,
             None => return vec![],
@@ -1110,11 +1204,12 @@ impl AnalysisSession {
 
     /// Retrieve completions at the given external LSP coordinate.
     pub fn completions_at_lsp_position(
-        &self,
+        &mut self,
         uri: &DocumentUri,
         pos: LspPosition,
     ) -> Vec<CompletionItem> {
         let normalized = DocumentUri::new(uri.as_str());
+        self.ensure_analyzed(&normalized);
         let snapshot = match self.documents.get(&normalized) {
             Some(s) => s,
             None => return vec![],

@@ -25,3 +25,4 @@ Once integrated, open `examples/lsp_smoke.tmpr` in Zed:
 - [ ] Open the symbol outline to see the document symbols.
 - [ ] Type `Point.` (triggering autocomplete on `.`) or `re...` to verify auto-completion appears.
 - [ ] Uncomment the `broken()` function at the bottom and verify that diagnostics appear for type errors.
+- [ ] Make incremental changes in the buffer and verify diagnostics / hover update immediately.

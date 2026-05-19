@@ -70,6 +70,20 @@ fn to_analysis_pos(pos: Position) -> LspPosition {
     }
 }
 
+/// Convert a tower-lsp `Range` to a tempra-analysis `LspRange`.
+fn to_analysis_range(r: Range) -> tempra_analysis::LspRange {
+    tempra_analysis::LspRange {
+        start: LspPosition {
+            line: r.start.line,
+            character: r.start.character,
+        },
+        end: LspPosition {
+            line: r.end.line,
+            character: r.end.character,
+        },
+    }
+}
+
 /// Build a zero-length LSP range at position (0,0) — used as fallback when
 /// we have a diagnostic but the span cannot be mapped (e.g. empty source).
 fn fallback_range() -> Range {
@@ -151,7 +165,7 @@ impl Backend {
 
         // Read: collect diagnostics.
         let lsp_diags = {
-            let session = self.session.read().await;
+            let mut session = self.session.write().await;
             let tempra_diags = session.diagnostics(&doc_uri).unwrap_or_default();
             convert_diagnostics(&session, &doc_uri, tempra_diags)
         };
@@ -172,8 +186,7 @@ impl LanguageServer for Backend {
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
-                    // Full sync only for now (Phase 18.1E scope).
-                    TextDocumentSyncKind::FULL,
+                    TextDocumentSyncKind::INCREMENTAL,
                 )),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 definition_provider: Some(OneOf::Left(true)),
@@ -241,16 +254,34 @@ impl LanguageServer for Backend {
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
-        // Full sync: we always get exactly one content item containing the
-        // whole document.
-        if let Some(change) = params.content_changes.into_iter().next() {
-            self.refresh_diagnostics(
-                params.text_document.uri,
-                change.text,
-                params.text_document.version,
-            )
-            .await;
+        let url = params.text_document.uri;
+        let doc_uri = DocumentUri::new(url.as_str());
+        let version = params.text_document.version;
+
+        let changes = params
+            .content_changes
+            .into_iter()
+            .map(|change| (change.range.map(to_analysis_range), change.text))
+            .collect();
+
+        {
+            let mut session = self.session.write().await;
+            if let Err(e) = session.update_document_incremental(&doc_uri, changes, version as u64) {
+                eprintln!("Failed to apply incremental change: {}", e);
+                return;
+            }
         }
+
+        // Trigger diagnostic publish (lazy recompute and push)
+        let lsp_diags = {
+            let mut session = self.session.write().await;
+            let tempra_diags = session.diagnostics(&doc_uri).unwrap_or_default();
+            convert_diagnostics(&session, &doc_uri, tempra_diags)
+        };
+
+        self.client
+            .publish_diagnostics(url, lsp_diags, Some(version))
+            .await;
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
@@ -275,7 +306,7 @@ impl LanguageServer for Backend {
         let doc_uri = DocumentUri::new(td.text_document.uri.as_str());
         let pos = to_analysis_pos(td.position);
 
-        let session = self.session.read().await;
+        let mut session = self.session.write().await;
         let text = session
             .hover_at_lsp_position(&doc_uri, pos)
             .map(|contents| Hover {
@@ -302,7 +333,7 @@ impl LanguageServer for Backend {
         let doc_uri = DocumentUri::new(url.as_str());
         let pos = to_analysis_pos(td.position);
 
-        let session = self.session.read().await;
+        let mut session = self.session.write().await;
 
         let span = match session.definition_at_lsp_position(&doc_uri, pos) {
             Some(s) => s,
@@ -330,7 +361,7 @@ impl LanguageServer for Backend {
         let doc_uri = DocumentUri::new(url.as_str());
         let pos = to_analysis_pos(td.position);
 
-        let session = self.session.read().await;
+        let mut session = self.session.write().await;
 
         let completions = session.completions_at_lsp_position(&doc_uri, pos);
 
@@ -366,7 +397,7 @@ impl LanguageServer for Backend {
         let url = params.text_document.uri.clone();
         let doc_uri = DocumentUri::new(url.as_str());
 
-        let session = self.session.read().await;
+        let mut session = self.session.write().await;
 
         let symbols = match session.document_symbols(&doc_uri) {
             Some(syms) => syms,
@@ -406,7 +437,7 @@ impl LanguageServer for Backend {
         let url = params.text_document.uri;
         let doc_uri = DocumentUri::new(url.as_str());
 
-        let session = self.session.read().await;
+        let mut session = self.session.write().await;
 
         let tokens = session.semantic_tokens(&doc_uri);
 

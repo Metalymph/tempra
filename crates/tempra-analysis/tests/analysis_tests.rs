@@ -740,3 +740,69 @@ fn test_incremental_errors_on_invalid_range() {
         "should return error on invalid character range"
     );
 }
+
+#[test]
+fn test_references_and_highlights() {
+    let mut session = AnalysisSession::new();
+    let uri = DocumentUri::new("file:///references.tmpr");
+
+    let source = "fn test_func(x: Int64) -> Int64 {\n    let y = x + 1;\n    let x = y + 2;\n    let z = x + 3;\n    for i in [1, 2] {\n        let w = i + x;\n    }\n    return z;\n}\n".to_string();
+    session.open_document(uri.clone(), source, 1);
+
+    // Let's first test outer parameter x at line 0, character 13:
+    // include_declaration = true
+    let refs_outer_inc = session.references_at_position(&uri, 0, 13, true).unwrap();
+    // Should have 2 spans: the declaration (line 0, col 13) and the reference (line 1, col 12).
+    assert_eq!(refs_outer_inc.len(), 2);
+
+    // include_declaration = false
+    let refs_outer_exc = session.references_at_position(&uri, 0, 13, false).unwrap();
+    // Should have 1 span: reference only.
+    assert_eq!(refs_outer_exc.len(), 1);
+
+    // Let's get the inner shadowed x references (e.g. line 2, character 8):
+    let refs_inner = session.references_at_position(&uri, 2, 8, true).unwrap();
+    // Inner x has 3 spans: declaration (line 2, col 8), reference on line 3, col 12, and reference on line 5, col 20.
+    assert_eq!(refs_inner.len(), 3);
+
+    // Verify disjointness to prove shadowing correctness (outer references must not include inner shadowed references)
+    for span in &refs_outer_inc {
+        assert!(
+            !refs_inner.contains(span),
+            "outer reference list must be completely disjoint from shadowed inner reference list"
+        );
+    }
+
+    // Check highlights for outer x at line 0, character 13:
+    let highlights_outer = session.document_highlights(&uri, 0, 13).unwrap();
+    // Should contain 1 Write highlight (the declaration) and 1 Read highlight (the reference).
+    assert_eq!(highlights_outer.len(), 2);
+    assert_eq!(
+        highlights_outer[0].kind,
+        tempra_analysis::DocumentHighlightKind::Write
+    );
+    assert_eq!(
+        highlights_outer[1].kind,
+        tempra_analysis::DocumentHighlightKind::Read
+    );
+
+    // Check loop variable i (line 4, character 8):
+    let refs_loop = session.references_at_position(&uri, 4, 8, true).unwrap();
+    // Should contain declaration (line 4, col 8) and reference (line 5, col 16).
+    assert_eq!(refs_loop.len(), 2);
+
+    let highlights_loop = session.document_highlights(&uri, 4, 8).unwrap();
+    assert_eq!(highlights_loop.len(), 2);
+    assert_eq!(
+        highlights_loop[0].kind,
+        tempra_analysis::DocumentHighlightKind::Write
+    );
+    assert_eq!(
+        highlights_loop[1].kind,
+        tempra_analysis::DocumentHighlightKind::Read
+    );
+
+    // Query on an invalid offset or non-existent symbol (e.g. whitespace):
+    let refs_none = session.references_at_position(&uri, 0, 0, true);
+    assert!(refs_none.is_none());
+}

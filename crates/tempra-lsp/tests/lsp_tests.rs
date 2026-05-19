@@ -484,3 +484,72 @@ async fn test_integration_incremental_change() {
         hover_contents
     );
 }
+
+#[tokio::test]
+async fn test_integration_references_and_highlights() {
+    use tempra_lsp::server::Backend;
+    use tower_lsp::lsp_types::*;
+    use tower_lsp::LanguageServer;
+
+    let (service, _) = tower_lsp::LspService::new(Backend::new);
+    let backend = service.inner();
+
+    let uri = Url::parse("file:///test_refs.tmpr").unwrap();
+    let source = "fn main(x: Int64) {\n    let y = x + 1;\n}\n".to_string();
+
+    backend
+        .did_open(DidOpenTextDocumentParams {
+            text_document: TextDocumentItem {
+                uri: uri.clone(),
+                language_id: "tempra".to_string(),
+                version: 1,
+                text: source,
+            },
+        })
+        .await;
+
+    // References query on parameter 'x' (line 0, character 8)
+    let ref_params = ReferenceParams {
+        text_document_position: TextDocumentPositionParams {
+            text_document: TextDocumentIdentifier { uri: uri.clone() },
+            position: Position {
+                line: 0,
+                character: 8,
+            },
+        },
+        work_done_progress_params: WorkDoneProgressParams::default(),
+        partial_result_params: PartialResultParams::default(),
+        context: ReferenceContext {
+            include_declaration: true,
+        },
+    };
+
+    let refs_result = backend.references(ref_params).await.unwrap();
+    assert!(refs_result.is_some());
+    let locations = refs_result.unwrap();
+    assert_eq!(locations.len(), 2);
+    assert_eq!(locations[0].range.start.line, 0);
+    assert_eq!(locations[0].range.start.character, 8);
+    assert_eq!(locations[1].range.start.line, 1);
+    assert_eq!(locations[1].range.start.character, 12);
+
+    // Document highlights query on parameter 'x' (line 0, character 8)
+    let highlight_params = DocumentHighlightParams {
+        text_document_position_params: TextDocumentPositionParams {
+            text_document: TextDocumentIdentifier { uri: uri.clone() },
+            position: Position {
+                line: 0,
+                character: 8,
+            },
+        },
+        work_done_progress_params: WorkDoneProgressParams::default(),
+        partial_result_params: PartialResultParams::default(),
+    };
+
+    let highlights_result = backend.document_highlight(highlight_params).await.unwrap();
+    assert!(highlights_result.is_some());
+    let highlights = highlights_result.unwrap();
+    assert_eq!(highlights.len(), 2);
+    assert_eq!(highlights[0].kind, Some(DocumentHighlightKind::WRITE));
+    assert_eq!(highlights[1].kind, Some(DocumentHighlightKind::READ));
+}

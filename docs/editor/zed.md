@@ -24,5 +24,7 @@ Once integrated, open `examples/lsp_smoke.tmpr` in Zed:
 - [ ] Use `Go to Definition` on `p.x` or `add` to jump to their declarations.
 - [ ] Open the symbol outline to see the document symbols.
 - [ ] Type `Point.` (triggering autocomplete on `.`) or `re...` to verify auto-completion appears.
+- [ ] Find references (usually `alt-f8` or via context menu) on parameter `a` or variable `origin` and verify all usage and definition locations are found.
+- [ ] Place cursor on variable `origin` or parameter `a` and verify all occurrences are highlighted.
 - [ ] Uncomment the `broken()` function at the bottom and verify that diagnostics appear for type errors.
 - [ ] Make incremental changes in the buffer and verify diagnostics / hover update immediately.

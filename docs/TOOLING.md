@@ -237,15 +237,16 @@ Editor --JSON-RPC--> tempra-lsp --> tempra-analysis --> tempra-driver
 | Capability | Status |
 |---|---|
 | `textDocument/didOpen` | ✅ Full sync |
-| `textDocument/didChange` | ✅ Full sync |
+| `textDocument/didChange` | ✅ Incremental sync (Phase 18.3A) |
 | `textDocument/didClose` | ✅ Publishes empty diagnostics |
 | `textDocument/hover` | ✅ Markdown |
 | `textDocument/definition` | ✅ Goto Definition |
 | `textDocument/documentSymbol` | ✅ Flat symbol list |
 | `textDocument/completion` | ✅ Context-aware autocomplete & member completions (triggered by `.` and manual invocation). Features deterministic group sorting and detail formatting. |
 | `textDocument/semanticTokens/full` | ✅ Full document semantic highlighting |
-| Rename, References | 🚫 Not implemented |
-| Incremental text sync | 🚫 Not implemented |
+| `textDocument/references` | ✅ Find references (Phase 18.3B) |
+| `textDocument/documentHighlight` | ✅ Highlight occurrences (Phase 18.3B) |
+| Rename | 🚫 Not implemented |
 
 ### Semantic Tokens (Phase 18.2D)
 
@@ -289,6 +290,13 @@ All LSP positions from the editor pass through the `LspPosition` wrappers in `te
 The LSP server uses incremental text synchronization and lazy reanalysis to maximize editor responsiveness:
 - **Synchronization**: Advertises `TextDocumentSyncKind::INCREMENTAL`. When a document is modified, the editor sends a sequence of range changes containing only the modified segments rather than the full source code.
 - **Lazy Recomputation**: Editor modifications invalidate cached diagnostic, completion, and definition states immediately, but recomputation is deferred until a query is executed. This eliminates redundant analysis cycles on typing.
+
+### References & Document Highlights (Phase 18.3B)
+
+The LSP server tracks identifier declarations and usages within the document's semantic index:
+- **References**: Triggers `textDocument/references` to lookup all definition/usage locations. Supports the `include_declaration` option to optionally exclude the declaration span.
+- **Document Highlights**: Triggers `textDocument/documentHighlight` to highlight matching references under the cursor. Declaration spans are assigned `Write` highlights, while usages/references are assigned `Read` highlights.
+- **Shadowing Correctness**: Accurately scope-resolves identifiers. If an inner scope local variable shadows an outer parameter/variable, looking up references/highlights for the inner variable does not include outer references, and vice-versa.
 
 ### Running the server
 

@@ -84,6 +84,14 @@ fn to_analysis_range(r: Range) -> tempra_analysis::LspRange {
     }
 }
 
+fn convert_highlight_kind(k: tempra_analysis::DocumentHighlightKind) -> DocumentHighlightKind {
+    match k {
+        tempra_analysis::DocumentHighlightKind::Text => DocumentHighlightKind::TEXT,
+        tempra_analysis::DocumentHighlightKind::Read => DocumentHighlightKind::READ,
+        tempra_analysis::DocumentHighlightKind::Write => DocumentHighlightKind::WRITE,
+    }
+}
+
 /// Build a zero-length LSP range at position (0,0) — used as fallback when
 /// we have a diagnostic but the span cannot be mapped (e.g. empty source).
 fn fallback_range() -> Range {
@@ -191,6 +199,8 @@ impl LanguageServer for Backend {
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 definition_provider: Some(OneOf::Left(true)),
                 document_symbol_provider: Some(OneOf::Left(true)),
+                references_provider: Some(OneOf::Left(true)),
+                document_highlight_provider: Some(OneOf::Left(true)),
                 completion_provider: Some(CompletionOptions {
                     trigger_characters: Some(vec![".".to_string()]),
                     ..CompletionOptions::default()
@@ -490,6 +500,62 @@ impl LanguageServer for Backend {
             result_id: None,
             data,
         })))
+    }
+
+    async fn references(&self, params: ReferenceParams) -> LspResult<Option<Vec<Location>>> {
+        let td = params.text_document_position;
+        let url = td.text_document.uri.clone();
+        let doc_uri = DocumentUri::new(url.as_str());
+        let pos = to_analysis_pos(td.position);
+        let include_declaration = params.context.include_declaration;
+
+        let mut session = self.session.write().await;
+
+        let spans = match session.references_at_lsp_position(&doc_uri, pos, include_declaration) {
+            Some(s) => s,
+            None => return Ok(None),
+        };
+
+        let mut locations = Vec::new();
+        for span in spans {
+            if let Some(range) = session.span_to_lsp_range(&doc_uri, span) {
+                locations.push(Location {
+                    uri: url.clone(),
+                    range: analysis_range_to_lsp(range),
+                });
+            }
+        }
+
+        Ok(Some(locations))
+    }
+
+    async fn document_highlight(
+        &self,
+        params: DocumentHighlightParams,
+    ) -> LspResult<Option<Vec<DocumentHighlight>>> {
+        let td = params.text_document_position_params;
+        let url = td.text_document.uri.clone();
+        let doc_uri = DocumentUri::new(url.as_str());
+        let pos = to_analysis_pos(td.position);
+
+        let mut session = self.session.write().await;
+
+        let highlights = match session.document_highlights_lsp(&doc_uri, pos) {
+            Some(h) => h,
+            None => return Ok(None),
+        };
+
+        let mut lsp_highlights = Vec::new();
+        for h in highlights {
+            if let Some(range) = session.span_to_lsp_range(&doc_uri, h.span) {
+                lsp_highlights.push(DocumentHighlight {
+                    range: analysis_range_to_lsp(range),
+                    kind: Some(convert_highlight_kind(h.kind)),
+                });
+            }
+        }
+
+        Ok(Some(lsp_highlights))
     }
 }
 

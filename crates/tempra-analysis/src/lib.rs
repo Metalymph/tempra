@@ -146,6 +146,21 @@ pub struct LspRange {
     pub end: LspPosition,
 }
 
+/// Document highlight kind (text, read, write) mapping to LSP.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DocumentHighlightKind {
+    Text,
+    Read,
+    Write,
+}
+
+/// Document highlight span with a specific kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DocumentHighlight {
+    pub span: tempra_span::Span,
+    pub kind: DocumentHighlightKind,
+}
+
 /// Bidirectional index mapping coordinates to byte offsets.
 #[derive(Debug, Clone)]
 pub struct LineIndex {
@@ -972,6 +987,119 @@ impl AnalysisSession {
         character: u32,
     ) -> Option<tempra_span::Span> {
         self.definition_at_position(uri, line, character)
+    }
+
+    /// Find references to a symbol at the given internal coordinate.
+    pub fn references_at_position(
+        &mut self,
+        uri: &DocumentUri,
+        line: u32,
+        byte_character: u32,
+        include_declaration: bool,
+    ) -> Option<Vec<tempra_span::Span>> {
+        let normalized = DocumentUri::new(uri.as_str());
+        self.ensure_analyzed(&normalized);
+        let snapshot = self.documents.get(&normalized)?;
+        let result = self.analysis_cache.get(&normalized)?;
+
+        let pos = TextPosition {
+            line,
+            byte_character,
+        };
+        let offset = snapshot
+            .line_index
+            .text_position_to_byte_offset(&snapshot.content, pos)?;
+
+        let sym = result.semantic_index.find_by_offset(offset)?;
+        let mut spans = Vec::new();
+        if include_declaration {
+            spans.push(sym.definition_span);
+        }
+        spans.extend(sym.reference_spans.iter().copied());
+        spans.sort_by(|a, b| a.start.cmp(&b.start).then_with(|| a.end.cmp(&b.end)));
+        spans.dedup_by(|a, b| a.start == b.start && a.end == b.end);
+        Some(spans)
+    }
+
+    /// Find references to a symbol at the given external LSP position.
+    pub fn references_at_lsp_position(
+        &mut self,
+        uri: &DocumentUri,
+        pos: LspPosition,
+        include_declaration: bool,
+    ) -> Option<Vec<tempra_span::Span>> {
+        let normalized = DocumentUri::new(uri.as_str());
+        let snapshot = self.documents.get(&normalized)?;
+        let text_pos = snapshot
+            .line_index
+            .lsp_to_text_position(&snapshot.content, pos)?;
+        self.references_at_position(
+            &normalized,
+            text_pos.line,
+            text_pos.byte_character,
+            include_declaration,
+        )
+    }
+
+    /// Retrieve document highlights for a symbol at the given internal coordinate.
+    pub fn document_highlights(
+        &mut self,
+        uri: &DocumentUri,
+        line: u32,
+        byte_character: u32,
+    ) -> Option<Vec<DocumentHighlight>> {
+        let normalized = DocumentUri::new(uri.as_str());
+        self.ensure_analyzed(&normalized);
+        let snapshot = self.documents.get(&normalized)?;
+        let result = self.analysis_cache.get(&normalized)?;
+
+        let pos = TextPosition {
+            line,
+            byte_character,
+        };
+        let offset = snapshot
+            .line_index
+            .text_position_to_byte_offset(&snapshot.content, pos)?;
+
+        let sym = result.semantic_index.find_by_offset(offset)?;
+        let mut highlights = Vec::new();
+
+        highlights.push(DocumentHighlight {
+            span: sym.definition_span,
+            kind: DocumentHighlightKind::Write,
+        });
+
+        for &ref_span in &sym.reference_spans {
+            if ref_span != sym.definition_span {
+                highlights.push(DocumentHighlight {
+                    span: ref_span,
+                    kind: DocumentHighlightKind::Read,
+                });
+            }
+        }
+
+        highlights.sort_by(|a, b| {
+            a.span
+                .start
+                .cmp(&b.span.start)
+                .then_with(|| a.span.end.cmp(&b.span.end))
+        });
+        highlights.dedup_by(|a, b| a.span.start == b.span.start && a.span.end == b.span.end);
+        Some(highlights)
+    }
+
+    /// Retrieve document highlights for a symbol at the given external LSP position.
+    pub fn document_highlights_lsp(
+        &mut self,
+        uri: &DocumentUri,
+        pos: LspPosition,
+    ) -> Option<Vec<DocumentHighlight>> {
+        let normalized = DocumentUri::new(uri.as_str());
+        let snapshot = self.documents.get(&normalized)?;
+        let text_pos = snapshot
+            .line_index
+            .lsp_to_text_position(&snapshot.content, pos)?;
+        self.document_highlights(&normalized, text_pos.line, text_pos.byte_character)
     }
 
     /// Convert a `tempra_span::Span` to an `LspRange` using the document's line index.

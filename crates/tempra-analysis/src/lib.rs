@@ -312,6 +312,32 @@ impl LineIndex {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SemanticTokenKind {
+    Namespace,
+    Type,
+    Struct,
+    Enum,
+    Interface,
+    TypeParameter,
+    Parameter,
+    Variable,
+    Property,
+    EnumMember,
+    Function,
+    Method,
+    Keyword,
+    String,
+    Number,
+    Operator,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SemanticToken {
+    pub span: tempra_span::Span,
+    pub kind: SemanticTokenKind,
+}
+
 /// Monotonically increasing version counter for documents.
 pub type SourceVersion = u64;
 
@@ -483,6 +509,140 @@ impl AnalysisSession {
         self.analysis_cache
             .get(&normalized)
             .map(|res| res.symbols.clone())
+    }
+
+    /// Retrieve semantic tokens for a document.
+    pub fn semantic_tokens(&self, uri: &DocumentUri) -> Vec<SemanticToken> {
+        let normalized = DocumentUri::new(uri.as_str());
+        let snapshot = match self.documents.get(&normalized) {
+            Some(s) => s,
+            None => return vec![],
+        };
+        let result = match self.analysis_cache.get(&normalized) {
+            Some(r) => r,
+            None => return vec![],
+        };
+
+        let mut tokens = Vec::new();
+
+        // 1. Lexer tokens
+        let lex_tokens = tempra_lexer::tokenize(&snapshot.content);
+        for tok in lex_tokens {
+            let kind = match tok.kind {
+                // Keywords
+                tempra_lexer::TokenKind::Let
+                | tempra_lexer::TokenKind::Var
+                | tempra_lexer::TokenKind::Fn
+                | tempra_lexer::TokenKind::If
+                | tempra_lexer::TokenKind::Else
+                | tempra_lexer::TokenKind::Match
+                | tempra_lexer::TokenKind::For
+                | tempra_lexer::TokenKind::In
+                | tempra_lexer::TokenKind::Is
+                | tempra_lexer::TokenKind::As
+                | tempra_lexer::TokenKind::Struct
+                | tempra_lexer::TokenKind::Enum
+                | tempra_lexer::TokenKind::Extend
+                | tempra_lexer::TokenKind::Import
+                | tempra_lexer::TokenKind::Return
+                | tempra_lexer::TokenKind::Break
+                | tempra_lexer::TokenKind::Continue
+                | tempra_lexer::TokenKind::Inout
+                | tempra_lexer::TokenKind::True
+                | tempra_lexer::TokenKind::False
+                | tempra_lexer::TokenKind::Pub
+                | tempra_lexer::TokenKind::Type
+                | tempra_lexer::TokenKind::Ref
+                | tempra_lexer::TokenKind::Consume
+                | tempra_lexer::TokenKind::Comptime
+                | tempra_lexer::TokenKind::Interface => Some(SemanticTokenKind::Keyword),
+
+                // Literals
+                tempra_lexer::TokenKind::StringLiteral => Some(SemanticTokenKind::String),
+                tempra_lexer::TokenKind::IntegerLiteral | tempra_lexer::TokenKind::FloatLiteral => {
+                    Some(SemanticTokenKind::Number)
+                }
+
+                // Operators
+                tempra_lexer::TokenKind::Plus
+                | tempra_lexer::TokenKind::Minus
+                | tempra_lexer::TokenKind::Star
+                | tempra_lexer::TokenKind::Slash
+                | tempra_lexer::TokenKind::Equal
+                | tempra_lexer::TokenKind::EqualEqual
+                | tempra_lexer::TokenKind::Bang
+                | tempra_lexer::TokenKind::BangEqual
+                | tempra_lexer::TokenKind::Less
+                | tempra_lexer::TokenKind::LessEqual
+                | tempra_lexer::TokenKind::Greater
+                | tempra_lexer::TokenKind::GreaterEqual
+                | tempra_lexer::TokenKind::Pipe
+                | tempra_lexer::TokenKind::AndAnd
+                | tempra_lexer::TokenKind::OrOr
+                | tempra_lexer::TokenKind::QuestionMark
+                | tempra_lexer::TokenKind::Arrow
+                | tempra_lexer::TokenKind::FatArrow => Some(SemanticTokenKind::Operator),
+
+                _ => None,
+            };
+
+            if let Some(kind) = kind {
+                tokens.push(PrioritizedToken {
+                    span: tok.span,
+                    kind,
+                    priority: TokenPriority::Lexer,
+                });
+            }
+        }
+
+        // 2. Syntactic tokens from AST
+        if let Ok(file) = tempra_parser::parse_source(&snapshot.content) {
+            let mut collector = AstTokenCollector { tokens: Vec::new() };
+            collector.visit_file(&file);
+            tokens.extend(collector.tokens);
+        }
+
+        // 3. Semantic symbols from SemanticIndex
+        for sym in &result.semantic_index.symbols {
+            let kind = semantic_symbol_kind(sym);
+            // Definition span
+            tokens.push(PrioritizedToken {
+                span: sym.definition_span,
+                kind,
+                priority: TokenPriority::Semantic,
+            });
+            // Reference spans
+            for &ref_span in &sym.reference_spans {
+                tokens.push(PrioritizedToken {
+                    span: ref_span,
+                    kind,
+                    priority: TokenPriority::Semantic,
+                });
+            }
+        }
+
+        // 4. Sort and deduplicate
+        tokens.sort_by(|a, b| {
+            a.span
+                .start
+                .cmp(&b.span.start)
+                .then_with(|| b.span.end.cmp(&a.span.end))
+                .then_with(|| b.priority.cmp(&a.priority))
+        });
+
+        let mut final_tokens = Vec::new();
+        let mut last_end = 0;
+        for token in tokens {
+            if token.span.start >= last_end {
+                last_end = token.span.end;
+                final_tokens.push(SemanticToken {
+                    span: token.span,
+                    kind: token.kind,
+                });
+            }
+        }
+
+        final_tokens
     }
 
     // --- Internal-first UTF-8 Position Queries ---
@@ -1813,6 +1973,449 @@ impl SemanticResolver {
                 }
             }
             _ => {}
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Semantic Token Helpers
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum TokenPriority {
+    Lexer,
+    Ast,
+    Semantic,
+}
+
+struct PrioritizedToken {
+    span: tempra_span::Span,
+    kind: SemanticTokenKind,
+    priority: TokenPriority,
+}
+
+fn semantic_symbol_kind(sym: &SemanticSymbol) -> SemanticTokenKind {
+    match sym.kind {
+        tempra_diagnostics::SymbolKind::Struct => {
+            if let Some(sig) = &sym.signature {
+                if sig.starts_with("interface ") {
+                    SemanticTokenKind::Interface
+                } else {
+                    SemanticTokenKind::Struct
+                }
+            } else {
+                SemanticTokenKind::Struct
+            }
+        }
+        tempra_diagnostics::SymbolKind::Enum => SemanticTokenKind::Enum,
+        tempra_diagnostics::SymbolKind::Function => SemanticTokenKind::Function,
+        tempra_diagnostics::SymbolKind::Method => SemanticTokenKind::Method,
+        tempra_diagnostics::SymbolKind::Extension => SemanticTokenKind::Namespace,
+        tempra_diagnostics::SymbolKind::Variable => {
+            if let Some(sig) = &sym.signature {
+                if sig.contains('.') {
+                    if sig.contains(':') {
+                        SemanticTokenKind::Property
+                    } else {
+                        SemanticTokenKind::EnumMember
+                    }
+                } else {
+                    SemanticTokenKind::Variable
+                }
+            } else {
+                SemanticTokenKind::Variable
+            }
+        }
+        tempra_diagnostics::SymbolKind::Field => SemanticTokenKind::Property,
+    }
+}
+
+struct AstTokenCollector {
+    tokens: Vec<PrioritizedToken>,
+}
+
+impl AstTokenCollector {
+    fn add(&mut self, span: tempra_span::Span, kind: SemanticTokenKind) {
+        if span.start < span.end {
+            self.tokens.push(PrioritizedToken {
+                span,
+                kind,
+                priority: TokenPriority::Ast,
+            });
+        }
+    }
+
+    fn visit_file(&mut self, file: &tempra_ast::File) {
+        for item in &file.items {
+            self.visit_item(item);
+        }
+        for stmt in &file.top_level_statements {
+            self.visit_statement(stmt);
+        }
+    }
+
+    fn visit_item(&mut self, item: &tempra_ast::Item) {
+        match item {
+            tempra_ast::Item::Import(imp) => {
+                for seg in &imp.path.segments {
+                    self.add(seg.span, SemanticTokenKind::Namespace);
+                }
+            }
+            tempra_ast::Item::Function(func) => {
+                self.add(func.name.span, SemanticTokenKind::Function);
+                for gp in &func.generic_parameters {
+                    self.add(gp.name.span, SemanticTokenKind::TypeParameter);
+                    if let Some(constraint) = &gp.constraint {
+                        self.add(constraint.span, SemanticTokenKind::Type);
+                    }
+                }
+                for param in &func.parameters {
+                    self.add(param.name.span, SemanticTokenKind::Parameter);
+                    self.visit_type_expr(&param.ty);
+                }
+                if let Some(ret) = &func.return_type {
+                    self.visit_type_expr(ret);
+                }
+                self.visit_block(&func.body);
+            }
+            tempra_ast::Item::Struct(s) => {
+                self.add(s.name.span, SemanticTokenKind::Struct);
+                for gp in &s.generic_parameters {
+                    self.add(gp.name.span, SemanticTokenKind::TypeParameter);
+                    if let Some(constraint) = &gp.constraint {
+                        self.add(constraint.span, SemanticTokenKind::Type);
+                    }
+                }
+                for field in &s.fields {
+                    self.add(field.name.span, SemanticTokenKind::Property);
+                    self.visit_type_expr(&field.ty);
+                    if let Some(def) = &field.default_value {
+                        self.visit_expression(def);
+                    }
+                }
+            }
+            tempra_ast::Item::Enum(e) => {
+                self.add(e.name.span, SemanticTokenKind::Enum);
+                for gp in &e.generic_parameters {
+                    self.add(gp.name.span, SemanticTokenKind::TypeParameter);
+                    if let Some(constraint) = &gp.constraint {
+                        self.add(constraint.span, SemanticTokenKind::Type);
+                    }
+                }
+                for variant in &e.variants {
+                    self.add(variant.name.span, SemanticTokenKind::EnumMember);
+                    for payload in &variant.payload_types {
+                        self.visit_type_expr(payload);
+                    }
+                }
+            }
+            tempra_ast::Item::Interface(itf) => {
+                self.add(itf.name.span, SemanticTokenKind::Interface);
+                for method in &itf.methods {
+                    self.add(method.name.span, SemanticTokenKind::Method);
+                    for param in &method.parameters {
+                        self.add(param.name.span, SemanticTokenKind::Parameter);
+                        self.visit_type_expr(&param.ty);
+                    }
+                    if let Some(ret) = &method.return_type {
+                        self.visit_type_expr(ret);
+                    }
+                }
+                for at in &itf.associated_types {
+                    self.add(at.name.span, SemanticTokenKind::Type);
+                }
+            }
+            tempra_ast::Item::Extend(ext) => {
+                self.visit_type_expr(&ext.target);
+                for method in &ext.methods {
+                    self.add(method.name.span, SemanticTokenKind::Method);
+                    for gp in &method.generic_parameters {
+                        self.add(gp.name.span, SemanticTokenKind::TypeParameter);
+                        if let Some(constraint) = &gp.constraint {
+                            self.add(constraint.span, SemanticTokenKind::Type);
+                        }
+                    }
+                    for param in &method.parameters {
+                        self.add(param.name.span, SemanticTokenKind::Parameter);
+                        self.visit_type_expr(&param.ty);
+                    }
+                    if let Some(ret) = &method.return_type {
+                        self.visit_type_expr(ret);
+                    }
+                    self.visit_block(&method.body);
+                }
+            }
+        }
+    }
+
+    fn visit_type_expr(&mut self, ty: &tempra_ast::TypeExpr) {
+        match ty {
+            tempra_ast::TypeExpr::Named(named) => {
+                self.add(named.name.span, SemanticTokenKind::Type);
+            }
+            tempra_ast::TypeExpr::Array(arr) => {
+                self.visit_type_expr(&arr.element_type);
+            }
+            tempra_ast::TypeExpr::Tuple(tup) => {
+                for elem in &tup.elements {
+                    self.visit_type_expr(elem);
+                }
+            }
+            tempra_ast::TypeExpr::Apply(apply) => {
+                self.visit_type_expr(&apply.callee);
+                for arg in &apply.arguments {
+                    self.visit_type_expr(arg);
+                }
+            }
+            tempra_ast::TypeExpr::Optional(opt) => {
+                self.visit_type_expr(&opt.inner);
+            }
+            tempra_ast::TypeExpr::Result(res) => {
+                self.visit_type_expr(&res.ok);
+                if let Some(err) = &res.err {
+                    self.visit_type_expr(err);
+                }
+            }
+            tempra_ast::TypeExpr::Function(func) => {
+                for param in &func.parameters {
+                    self.visit_type_expr(param);
+                }
+                self.visit_type_expr(&func.return_type);
+            }
+            tempra_ast::TypeExpr::SelfType(span) => {
+                self.add(*span, SemanticTokenKind::Type);
+            }
+            tempra_ast::TypeExpr::Projection(proj) => {
+                self.visit_type_expr(&proj.base);
+                self.add(proj.member.span, SemanticTokenKind::Type);
+            }
+        }
+    }
+
+    fn visit_block(&mut self, block: &tempra_ast::Block) {
+        for stmt in &block.statements {
+            self.visit_statement(stmt);
+        }
+    }
+
+    fn visit_statement(&mut self, stmt: &tempra_ast::Statement) {
+        match stmt {
+            tempra_ast::Statement::Let(s) => {
+                self.add(s.name.span, SemanticTokenKind::Variable);
+                if let Some(ty) = &s.ty {
+                    self.visit_type_expr(ty);
+                }
+                self.visit_expression(&s.initializer);
+            }
+            tempra_ast::Statement::Var(s) => {
+                self.add(s.name.span, SemanticTokenKind::Variable);
+                if let Some(ty) = &s.ty {
+                    self.visit_type_expr(ty);
+                }
+                self.visit_expression(&s.initializer);
+            }
+            tempra_ast::Statement::Return(s) => {
+                if let Some(val) = &s.value {
+                    self.visit_expression(val);
+                }
+            }
+            tempra_ast::Statement::Break(_) => {}
+            tempra_ast::Statement::Continue(_) => {}
+            tempra_ast::Statement::For(s) => {
+                self.add(s.binding.span, SemanticTokenKind::Variable);
+                self.visit_expression(&s.iterable);
+                if let Some(filt) = &s.filter {
+                    self.visit_expression(filt);
+                }
+                self.visit_block(&s.body);
+            }
+            tempra_ast::Statement::Expression(s) => {
+                self.visit_expression(&s.expression);
+            }
+        }
+    }
+
+    fn visit_expression(&mut self, expr: &tempra_ast::Expression) {
+        match expr {
+            tempra_ast::Expression::Identifier(e) => {
+                self.add(e.name.span, SemanticTokenKind::Variable);
+            }
+            tempra_ast::Expression::Integer(_)
+            | tempra_ast::Expression::Float(_)
+            | tempra_ast::Expression::String(_)
+            | tempra_ast::Expression::Bool(_) => {}
+            tempra_ast::Expression::Block(e) => {
+                self.visit_block(&e.block);
+            }
+            tempra_ast::Expression::If(e) => {
+                self.visit_expression(&e.condition);
+                self.visit_block(&e.then_block);
+                if let Some(els) = &e.else_branch {
+                    self.visit_expression(els);
+                }
+            }
+            tempra_ast::Expression::Match(e) => {
+                self.visit_expression(&e.value);
+                for arm in &e.arms {
+                    self.visit_pattern(&arm.pattern);
+                    if let Some(guard) = &arm.guard {
+                        self.visit_expression(guard);
+                    }
+                    self.visit_expression(&arm.value);
+                }
+            }
+            tempra_ast::Expression::For(e) => {
+                self.add(e.binding.span, SemanticTokenKind::Variable);
+                self.visit_expression(&e.iterable);
+                if let Some(filt) = &e.filter {
+                    self.visit_expression(filt);
+                }
+                self.visit_block(&e.body);
+            }
+            tempra_ast::Expression::Unary(e) => {
+                self.visit_expression(&e.operand);
+            }
+            tempra_ast::Expression::Binary(e) => {
+                self.visit_expression(&e.left);
+                self.visit_expression(&e.right);
+            }
+            tempra_ast::Expression::Is(e) => {
+                self.visit_expression(&e.value);
+                self.visit_type_expr(&e.ty);
+            }
+            tempra_ast::Expression::IsPattern(e) => {
+                self.visit_expression(&e.value);
+                self.visit_pattern(&e.pattern);
+            }
+            tempra_ast::Expression::AsOptional(e) => {
+                self.visit_expression(&e.expression);
+                self.visit_type_expr(&e.ty);
+            }
+            tempra_ast::Expression::AsForced(e) => {
+                self.visit_expression(&e.expression);
+                self.visit_type_expr(&e.ty);
+            }
+            tempra_ast::Expression::Try(e) => {
+                self.visit_expression(&e.expression);
+            }
+            tempra_ast::Expression::Unwrap(e) => {
+                self.visit_expression(&e.expression);
+            }
+            tempra_ast::Expression::Call(e) => {
+                self.visit_expression(&e.callee);
+                if let Some(targs) = &e.type_args {
+                    for arg in targs {
+                        self.visit_type_expr(arg);
+                    }
+                }
+                for arg in &e.arguments {
+                    match arg {
+                        tempra_ast::CallArgument::Positional(p) => {
+                            self.visit_expression(&p.value);
+                        }
+                        tempra_ast::CallArgument::Named(n) => {
+                            self.add(n.name.span, SemanticTokenKind::Parameter);
+                            self.visit_expression(&n.value);
+                        }
+                    }
+                }
+            }
+            tempra_ast::Expression::Member(e) => {
+                self.visit_expression(&e.object);
+                self.add(e.member.span, SemanticTokenKind::Property);
+            }
+            tempra_ast::Expression::Index(e) => {
+                self.visit_expression(&e.object);
+                self.visit_expression(&e.index);
+            }
+            tempra_ast::Expression::Slice(e) => {
+                self.visit_expression(&e.object);
+                self.visit_expression(&e.start);
+                self.visit_expression(&e.end);
+            }
+            tempra_ast::Expression::Tuple(e) => {
+                for el in &e.elements {
+                    self.visit_expression(el);
+                }
+            }
+            tempra_ast::Expression::Array(e) => {
+                for el in &e.elements {
+                    self.visit_expression(el);
+                }
+            }
+            tempra_ast::Expression::StructLiteral(e) => {
+                self.visit_type_expr(&e.ty);
+                for field in &e.fields {
+                    self.add(field.name.span, SemanticTokenKind::Property);
+                    self.visit_expression(&field.value);
+                }
+                if let Some(upd) = &e.update_from {
+                    self.visit_expression(upd);
+                }
+            }
+            tempra_ast::Expression::Closure(e) => {
+                for cap in &e.captures {
+                    match cap {
+                        tempra_ast::Capture::Named(named) => {
+                            self.add(named.name.span, SemanticTokenKind::Variable);
+                        }
+                        tempra_ast::Capture::RecursiveSelf(span) => {
+                            self.add(*span, SemanticTokenKind::Variable);
+                        }
+                    }
+                }
+                for param in &e.parameters {
+                    self.add(param.name.span, SemanticTokenKind::Parameter);
+                    self.visit_type_expr(&param.ty);
+                }
+                if let Some(ret) = &e.return_type {
+                    self.visit_type_expr(ret);
+                }
+                self.visit_block(&e.body);
+            }
+            tempra_ast::Expression::Command(e) => {
+                for arg in &e.arguments {
+                    self.visit_expression(arg);
+                }
+            }
+            tempra_ast::Expression::Comptime(e) => {
+                self.visit_expression(&e.expression);
+            }
+        }
+    }
+
+    fn visit_pattern(&mut self, pat: &tempra_ast::Pattern) {
+        match pat {
+            tempra_ast::Pattern::Wildcard(_) => {}
+            tempra_ast::Pattern::Identifier(p) => {
+                self.add(p.name.span, SemanticTokenKind::Variable);
+            }
+            tempra_ast::Pattern::Literal(_) => {}
+            tempra_ast::Pattern::EnumCase(p) => {
+                self.add(p.name.span, SemanticTokenKind::EnumMember);
+                for arg in &p.arguments {
+                    self.visit_pattern(arg);
+                }
+            }
+            tempra_ast::Pattern::Struct(p) => {
+                self.add(p.name.span, SemanticTokenKind::Struct);
+                for (name, arg_pat) in &p.fields {
+                    self.add(name.span, SemanticTokenKind::Property);
+                    if let Some(ap) = arg_pat {
+                        self.visit_pattern(ap);
+                    }
+                }
+            }
+            tempra_ast::Pattern::Tuple(p) => {
+                for item in &p.items {
+                    self.visit_pattern(item);
+                }
+            }
+            tempra_ast::Pattern::Or(p) => {
+                for alt in &p.alternatives {
+                    self.visit_pattern(alt);
+                }
+            }
         }
     }
 }

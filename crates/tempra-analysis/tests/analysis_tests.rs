@@ -487,3 +487,39 @@ fn test_completion_member() {
     assert!(!completions.iter().any(|c| c.label == "p"));
     assert!(!completions.iter().any(|c| c.label == "fn"));
 }
+
+#[test]
+fn test_semantic_tokens() {
+    let mut session = AnalysisSession::new();
+    let uri = DocumentUri::new("file:///semantic_tokens.tmpr");
+
+    let source = r#"
+        struct Point {
+            x: Int64
+        }
+        fn main() {
+            let p = Point { x: 10 };
+        }
+    "#
+    .to_string();
+
+    session.open_document(uri.clone(), source, 1);
+    let tokens = session.semantic_tokens(&uri);
+
+    assert!(!tokens.is_empty(), "tokens should not be empty");
+
+    // We should find keywords like "struct", "let", "fn"
+    assert!(tokens
+        .iter()
+        .any(|t| t.kind == tempra_analysis::SemanticTokenKind::Keyword));
+
+    // We should find the struct definition "Point"
+    assert!(tokens
+        .iter()
+        .any(|t| t.kind == tempra_analysis::SemanticTokenKind::Struct));
+
+    // We should find the field definition "x"
+    assert!(tokens
+        .iter()
+        .any(|t| t.kind == tempra_analysis::SemanticTokenKind::Property));
+}

@@ -6,6 +6,7 @@
 //   - Diagnostics → the BROKEN section at the bottom shows intentional errors
 //   - Symbols     → open the document symbol outline to see Point, add, greeting
 //   - Completion  → type `re` in a function to see `return`, or type inside `main` to see locals
+//   - Highlighting → verify that keywords, types, functions, variables, parameters, and properties are highlighted via semantic tokens
 
 struct Point {
     x: Int64

@@ -182,6 +182,36 @@ impl LanguageServer for Backend {
                     trigger_characters: Some(vec![".".to_string()]),
                     ..CompletionOptions::default()
                 }),
+                semantic_tokens_provider: Some(
+                    SemanticTokensServerCapabilities::SemanticTokensOptions(
+                        SemanticTokensOptions {
+                            work_done_progress_options: WorkDoneProgressOptions::default(),
+                            legend: SemanticTokensLegend {
+                                token_types: vec![
+                                    SemanticTokenType::NAMESPACE,
+                                    SemanticTokenType::TYPE,
+                                    SemanticTokenType::STRUCT,
+                                    SemanticTokenType::ENUM,
+                                    SemanticTokenType::INTERFACE,
+                                    SemanticTokenType::TYPE_PARAMETER,
+                                    SemanticTokenType::PARAMETER,
+                                    SemanticTokenType::VARIABLE,
+                                    SemanticTokenType::PROPERTY,
+                                    SemanticTokenType::ENUM_MEMBER,
+                                    SemanticTokenType::FUNCTION,
+                                    SemanticTokenType::METHOD,
+                                    SemanticTokenType::KEYWORD,
+                                    SemanticTokenType::STRING,
+                                    SemanticTokenType::NUMBER,
+                                    SemanticTokenType::OPERATOR,
+                                ],
+                                token_modifiers: vec![],
+                            },
+                            range: Some(false),
+                            full: Some(SemanticTokensFullOptions::Bool(true)),
+                        },
+                    ),
+                ),
                 ..ServerCapabilities::default()
             },
             server_info: Some(ServerInfo {
@@ -367,5 +397,88 @@ impl LanguageServer for Backend {
             .collect();
 
         Ok(Some(DocumentSymbolResponse::Flat(lsp_symbols)))
+    }
+
+    async fn semantic_tokens_full(
+        &self,
+        params: SemanticTokensParams,
+    ) -> LspResult<Option<SemanticTokensResult>> {
+        let url = params.text_document.uri;
+        let doc_uri = DocumentUri::new(url.as_str());
+
+        let session = self.session.read().await;
+
+        let tokens = session.semantic_tokens(&doc_uri);
+
+        let mut lsp_tokens = Vec::new();
+        for token in tokens {
+            if let Some(range) = session.span_to_lsp_range(&doc_uri, token.span) {
+                let length = if range.end.line == range.start.line {
+                    range.end.character - range.start.character
+                } else {
+                    1
+                };
+
+                let type_idx = semantic_token_kind_to_index(token.kind);
+                lsp_tokens.push((range.start, length, type_idx));
+            }
+        }
+
+        // Sort by line, then character
+        lsp_tokens.sort_by(|a, b| {
+            a.0.line
+                .cmp(&b.0.line)
+                .then_with(|| a.0.character.cmp(&b.0.character))
+        });
+
+        let mut data = Vec::new();
+        let mut last_line = 0;
+        let mut last_char = 0;
+
+        for (pos, length, type_idx) in lsp_tokens {
+            let delta_line = pos.line - last_line;
+            let delta_start = if delta_line == 0 {
+                pos.character - last_char
+            } else {
+                pos.character
+            };
+
+            data.push(tower_lsp::lsp_types::SemanticToken {
+                delta_line,
+                delta_start,
+                length,
+                token_type: type_idx,
+                token_modifiers_bitset: 0,
+            });
+
+            last_line = pos.line;
+            last_char = pos.character;
+        }
+
+        Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
+            result_id: None,
+            data,
+        })))
+    }
+}
+
+fn semantic_token_kind_to_index(kind: tempra_analysis::SemanticTokenKind) -> u32 {
+    match kind {
+        tempra_analysis::SemanticTokenKind::Namespace => 0,
+        tempra_analysis::SemanticTokenKind::Type => 1,
+        tempra_analysis::SemanticTokenKind::Struct => 2,
+        tempra_analysis::SemanticTokenKind::Enum => 3,
+        tempra_analysis::SemanticTokenKind::Interface => 4,
+        tempra_analysis::SemanticTokenKind::TypeParameter => 5,
+        tempra_analysis::SemanticTokenKind::Parameter => 6,
+        tempra_analysis::SemanticTokenKind::Variable => 7,
+        tempra_analysis::SemanticTokenKind::Property => 8,
+        tempra_analysis::SemanticTokenKind::EnumMember => 9,
+        tempra_analysis::SemanticTokenKind::Function => 10,
+        tempra_analysis::SemanticTokenKind::Method => 11,
+        tempra_analysis::SemanticTokenKind::Keyword => 12,
+        tempra_analysis::SemanticTokenKind::String => 13,
+        tempra_analysis::SemanticTokenKind::Number => 14,
+        tempra_analysis::SemanticTokenKind::Operator => 15,
     }
 }

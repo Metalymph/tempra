@@ -352,3 +352,62 @@ async fn test_completion_conversion_fields() {
     assert_eq!(x_item.sort_text.as_deref().unwrap(), "03_field_x");
     assert_eq!(x_item.insert_text.as_deref().unwrap(), "x");
 }
+
+#[tokio::test]
+async fn test_semantic_tokens_full() {
+    use tower_lsp::lsp_types::*;
+    use tower_lsp::LanguageServer;
+
+    let (service, _) = tower_lsp::LspService::new(tempra_lsp::server::Backend::new);
+    let backend = service.inner();
+
+    let uri = Url::parse("file:///test.tmpr").unwrap();
+    let source = r#"
+        struct Point {
+            x: Int64
+        }
+        fn main() {
+            let p = Point { x: 10 };
+        }
+    "#
+    .to_string();
+
+    backend
+        .did_open(DidOpenTextDocumentParams {
+            text_document: TextDocumentItem {
+                uri: uri.clone(),
+                language_id: "tempra".to_string(),
+                version: 1,
+                text: source,
+            },
+        })
+        .await;
+
+    let params = SemanticTokensParams {
+        text_document: TextDocumentIdentifier { uri },
+        work_done_progress_params: WorkDoneProgressParams::default(),
+        partial_result_params: PartialResultParams::default(),
+    };
+
+    let result = backend
+        .semantic_tokens_full(params)
+        .await
+        .unwrap()
+        .expect("expected semantic tokens");
+
+    let tokens = match result {
+        SemanticTokensResult::Tokens(tokens) => tokens.data,
+        _ => panic!("expected SemanticTokensResult::Tokens"),
+    };
+
+    assert!(!tokens.is_empty());
+    // We should find struct Point (type 2) and struct keyword (type 12)
+    assert!(
+        tokens.iter().any(|t| t.token_type == 2),
+        "expected struct token"
+    );
+    assert!(
+        tokens.iter().any(|t| t.token_type == 12),
+        "expected keyword token"
+    );
+}

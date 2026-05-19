@@ -243,9 +243,18 @@ Editor --JSON-RPC--> tempra-lsp --> tempra-analysis --> tempra-driver
 | `textDocument/definition` | ✅ Goto Definition |
 | `textDocument/documentSymbol` | ✅ Flat symbol list |
 | `textDocument/completion` | ✅ Context-aware autocomplete & member completions (triggered by `.` and manual invocation). Features deterministic group sorting and detail formatting. |
+| `textDocument/semanticTokens/full` | ✅ Full document semantic highlighting |
 | Rename, References | 🚫 Not implemented |
-| Semantic tokens | 🚫 Not implemented |
 | Incremental text sync | 🚫 Not implemented |
+
+### Semantic Tokens (Phase 18.2D)
+
+The LSP server provides precise semantic token highlighting for Tempra source files:
+- **Scope**: Full-document requests (`textDocument/semanticTokens/full`). Range-based queries are not supported.
+- **Highlights**: Emits tokens for keywords, string literals, number literals, operators, type declarations/references, parameter declarations, local variables, properties (fields), and enum members (variants).
+- **Comments**: Not emitted in the MVP.
+- **Token Legend**: Advertises standard LSP types: `namespace`, `type`, `struct`, `enum`, `interface`, `typeParameter`, `parameter`, `variable`, `property`, `enumMember`, `function`, `method`, `keyword`, `string`, `number`, `operator`.
+- **Deduplication**: Handles token priority and resolves overlapping spans deterministically.
 
 ### Autocomplete & Member Completions (Phase 18.2C)
 

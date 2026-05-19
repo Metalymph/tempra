@@ -67,4 +67,5 @@ Open `examples/lsp_smoke.tmpr` in the editor:
 - [ ] Use `Go to Definition` (F12) on `p.x` or `add` to jump to their declarations.
 - [ ] Open the Outline or run `Go to Symbol in Editor` to see the document symbols.
 - [ ] Type `Point.` (triggering autocomplete on `.`) or `re...` to verify auto-completion appears, with deterministic ordering and detail formatting.
+- [ ] Verify that keywords (`fn`, `struct`, etc.), strings, numbers, types, parameter/local variables, and members/properties are semantically highlighted via semantic tokens.
 - [ ] Uncomment the `broken()` function at the bottom and verify that a red squiggly line appears for type errors.

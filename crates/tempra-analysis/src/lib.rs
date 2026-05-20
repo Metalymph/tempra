@@ -569,6 +569,27 @@ pub struct AnalysisResult {
     pub symbol_index: SymbolIndex,
     pub semantic_index: SemanticIndex,
     pub facts: Option<tempra_typeck::TypecheckFacts>,
+    pub imports: HashMap<String, String>,
+    pub module_name: Option<String>,
+}
+
+struct SessionDocumentLoader<'a> {
+    documents: &'a HashMap<DocumentUri, DocumentSnapshot>,
+}
+
+impl<'a> tempra_driver::module_graph::DocumentLoader for SessionDocumentLoader<'a> {
+    fn read_to_string(&self, path: &std::path::Path) -> std::io::Result<String> {
+        let uri = if let Ok(url) = url::Url::from_file_path(path) {
+            DocumentUri::new(url.as_str())
+        } else {
+            DocumentUri::new(&format!("file://{}", path.to_string_lossy()))
+        };
+        if let Some(snap) = self.documents.get(&uri) {
+            Ok(snap.content.clone())
+        } else {
+            std::fs::read_to_string(path)
+        }
+    }
 }
 
 /// AnalysisSession manages in-memory documents and keeps static analysis cached.
@@ -880,7 +901,7 @@ impl AnalysisSession {
         uri: &DocumentUri,
         line: u32,
         byte_character: u32,
-    ) -> Option<tempra_span::Span> {
+    ) -> Option<(DocumentUri, tempra_span::Span)> {
         let normalized = DocumentUri::new(uri.as_str());
         self.ensure_analyzed(&normalized);
         let snapshot = self.documents.get(&normalized)?;
@@ -899,43 +920,58 @@ impl AnalysisSession {
         if let Some(facts) = &result.facts {
             let offset_u32 = offset as u32;
 
+            // Check cross-file resolutions first!
+            for (&span, (target_module, def_span)) in &facts.cross_file_resolutions {
+                if span.start <= offset_u32 && offset_u32 <= span.end {
+                    let mut target_uri = None;
+                    for (cached_uri, cached_res) in &self.analysis_cache {
+                        if cached_res.module_name.as_ref() == Some(target_module) {
+                            target_uri = Some(cached_uri.clone());
+                            break;
+                        }
+                    }
+                    let final_uri = target_uri.unwrap_or_else(|| uri.clone());
+                    return Some((final_uri, *def_span));
+                }
+            }
+
             // Check member resolutions (fields)
             for (&span, &def_span) in &facts.member_resolutions {
                 if span.start <= offset_u32 && offset_u32 <= span.end {
-                    return Some(def_span);
+                    return Some((uri.clone(), def_span));
                 }
             }
 
             // Check variant resolutions
             for (&span, &def_span) in &facts.variant_resolutions {
                 if span.start <= offset_u32 && offset_u32 <= span.end {
-                    return Some(def_span);
+                    return Some((uri.clone(), def_span));
                 }
             }
 
             // Check method resolutions
             for (&span, &def_span) in &facts.method_resolutions {
                 if span.start <= offset_u32 && offset_u32 <= span.end {
-                    return Some(def_span);
+                    return Some((uri.clone(), def_span));
                 }
             }
 
             // Check resolved symbols
             for (&span, &def_span) in &facts.resolved_symbols {
                 if span.start <= offset_u32 && offset_u32 <= span.end {
-                    return Some(def_span);
+                    return Some((uri.clone(), def_span));
                 }
             }
         }
 
         // 2. Fallback to SemanticIndex next
         if let Some(sem_sym) = result.semantic_index.find_by_offset(offset) {
-            return Some(sem_sym.definition_span);
+            return Some((uri.clone(), sem_sym.definition_span));
         }
 
         // 3. Fallback to SymbolIndex (lexical outline lookups)
         self.symbol_at_position(uri, line, byte_character)
-            .map(|sym| sym.span)
+            .map(|sym| (uri.clone(), sym.span))
     }
 
     /// Retrieve hover telemetry message at the given internal coordinate.
@@ -1008,6 +1044,32 @@ impl AnalysisSession {
             }
         }
 
+        // Try cross-file lookup if we have a definition in another file
+        if let Some((def_uri, def_span)) = self.definition_at_position(uri, line, byte_character) {
+            if def_uri != normalized {
+                self.ensure_analyzed(&def_uri);
+                if let Some(target_res) = self.analysis_cache.get(&def_uri) {
+                    if let Some(target_sym) = target_res.semantic_index.find_by_offset(def_span.start as usize) {
+                        if let Some(sig) = &target_sym.signature {
+                            return Some(sig.clone());
+                        }
+                    } else {
+                        println!("SEMANTIC INDEX DID NOT FIND OFFSET {}", def_span.start);
+                        for sem in &target_res.semantic_index.symbols {
+                            println!(" - SEM {} def={:?}", sem.name, sem.definition_span);
+                        }
+                    }
+                    for sym in &target_res.symbols {
+                        if sym.span.start == def_span.start {
+                            if let Some(sig) = &sym.signature {
+                                return Some(sig.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // 4. Fallback to just the authoritative type if no lexical symbol was found
         if let Some(ty) = authoritative_ty {
             return Some(format!("{}", ty));
@@ -1039,7 +1101,7 @@ impl AnalysisSession {
         &mut self,
         uri: &DocumentUri,
         pos: LspPosition,
-    ) -> Option<tempra_span::Span> {
+    ) -> Option<(DocumentUri, tempra_span::Span)> {
         let normalized = DocumentUri::new(uri.as_str());
         let snapshot = self.documents.get(&normalized)?;
         let text_pos = snapshot
@@ -1069,7 +1131,7 @@ impl AnalysisSession {
         uri: &DocumentUri,
         line: u32,
         character: u32,
-    ) -> Option<tempra_span::Span> {
+    ) -> Option<(DocumentUri, tempra_span::Span)> {
         self.definition_at_position(uri, line, character)
     }
 
@@ -1359,10 +1421,7 @@ impl AnalysisSession {
             Some(s) => s,
             None => return vec![],
         };
-        let result = match self.analysis_cache.get(&normalized) {
-            Some(r) => r,
-            None => return vec![],
-        };
+
 
         let pos = TextPosition {
             line,
@@ -1434,6 +1493,41 @@ impl AnalysisSession {
             }
         };
 
+        let mut early_module_name = None;
+        if is_member_access {
+            let bytes = snapshot.content.as_bytes();
+            let mut ptr = dot_idx;
+            while ptr > 0 {
+                let ch = bytes[ptr - 1] as char;
+                if ch.is_alphanumeric() || ch == '_' {
+                    ptr -= 1;
+                } else {
+                    break;
+                }
+            }
+            if ptr < dot_idx {
+                early_module_name = Some(std::str::from_utf8(&bytes[ptr..dot_idx]).unwrap_or("").to_string());
+            }
+        }
+        
+        let mut target_uri = None;
+        if let Some(ns_name) = &early_module_name {
+            for (uri, _) in self.documents.iter() {
+                if uri.as_str().ends_with(&format!("/{}.tmpr", ns_name)) {
+                    target_uri = Some(uri.clone());
+                    break;
+                }
+            }
+        }
+        if let Some(ref uri) = target_uri {
+            self.ensure_analyzed(uri);
+        }
+
+        let result = match self.analysis_cache.get(&normalized) {
+            Some(r) => r,
+            None => return vec![],
+        };
+
         if is_member_access {
             let mut receiver_type = None;
             if let Some(facts) = &result.facts {
@@ -1451,8 +1545,30 @@ impl AnalysisSession {
                 }
             }
 
+            if let Some(ns_name) = early_module_name {
+                if let Some(uri) = target_uri {
+                    if let Some(target_res) = self.analysis_cache.get(&uri) {
+                        for sym in &target_res.symbols {
+                            // Only suggest public symbols
+                            if sym.signature.as_ref().map_or(false, |s| s.contains("pub")) {
+                                let kind = match sym.kind {
+                                    tempra_diagnostics::SymbolKind::Function => CompletionKind::Function,
+                                    tempra_diagnostics::SymbolKind::Struct => CompletionKind::Struct,
+                                    tempra_diagnostics::SymbolKind::Enum => CompletionKind::Enum,
+                                    _ => CompletionKind::Variable,
+                                };
+                                add_item(&sym.name, kind, sym.signature.clone());
+                            }
+                        }
+                    }
+                }
+            }
+
             if let Some(ty) = receiver_type {
-                if let Some(base_name) = type_to_base_name(&ty) {
+                if let Some(mut base_name) = type_to_base_name(&ty) {
+                    if let Some(last) = base_name.split('.').last() {
+                        base_name = last.to_string();
+                    }
                     let prefix = format!("{}.", base_name);
                     for sym in &result.symbols {
                         if sym.name.starts_with(&prefix) {
@@ -1582,30 +1698,163 @@ impl AnalysisSession {
     }
 
     fn run_and_cache_analysis(&mut self, uri: &DocumentUri, snapshot: DocumentSnapshot) {
-        let facts_res = diagnose_source_with_facts(&snapshot.content);
-        let diags = facts_res.diagnostics;
-        let facts = facts_res.facts;
-        let symbols = extract_symbols_from_source(&snapshot.content).unwrap_or_default();
-        let symbol_index = SymbolIndex::new(&symbols);
-
-        let semantic_index = if let Ok(file) = tempra_parser::parse_source(&snapshot.content) {
-            SemanticResolver::new().resolve(&file, &snapshot.content)
+        let file_path = if let Ok(url) = url::Url::parse(uri.as_str()) {
+            url.to_file_path().ok()
         } else {
-            SemanticIndex::default()
+            None
         };
 
-        let result = AnalysisResult {
-            version: snapshot.version,
-            diagnostics: diags,
-            symbols,
-            symbol_index,
-            semantic_index,
-            facts,
+        let mut diagnostics = Vec::new();
+        // Temporarily put the current snapshot into self.documents so loader can find it in-memory
+        self.documents.insert(uri.clone(), snapshot.clone());
+
+        let loader = SessionDocumentLoader {
+            documents: &self.documents,
         };
 
-        self.documents.insert(uri.clone(), snapshot);
-        self.analysis_cache.insert(uri.clone(), result);
+        let graph_result = if let Some(ref path) = file_path {
+            tempra_driver::module_graph::load_module_graph(path, &loader, &mut diagnostics)
+        } else {
+            Err(())
+        };
+
+        if let Ok(graph) = graph_result {
+            let mut files = Vec::new();
+            let mut source_texts = HashMap::new();
+            let mut paths_by_name = HashMap::new();
+            let mut imports_by_name = HashMap::new();
+            
+            for name in &graph.order {
+                if let Some(node) = graph.modules.get(name) {
+                    source_texts.insert(node.name.clone(), node.source.clone());
+                    paths_by_name.insert(node.name.clone(), node.path.clone());
+                    imports_by_name.insert(node.name.clone(), node.imports.clone());
+                }
+            }
+
+            for name in &graph.order {
+                if let Some(node) = graph.modules.get(name) {
+                    if let Ok(ast) = tempra_parser::parse_source(&node.source) {
+                        let hir = tempra_hir::lower_file(&node.source, &ast);
+                        files.push((node.name.clone(), node.imports.clone(), hir));
+                    }
+                }
+            }
+
+            let mut modules_to_check = Vec::new();
+            for (name, imports, hir) in &mut files {
+                modules_to_check.push(tempra_typeck::ModuleToCheck {
+                    name: name.clone(),
+                    imports: imports.clone(),
+                    file: hir,
+                });
+            }
+
+            let mut ctx = tempra_typeck::check_modules_always(&mut modules_to_check, &source_texts, false);
+
+            for err in ctx.errors {
+                let mut d = tempra_diagnostics::Diagnostic::error(err.span, err.message);
+                if let Some(ref m_name) = err.module_name {
+                    if let Some(path) = paths_by_name.get(m_name) {
+                        d = d.with_file_path(path.to_string_lossy().to_string());
+                    }
+                }
+                diagnostics.push(d);
+            }
+
+            // Distribute cached analysis results to all nodes in the graph
+            for name in &graph.order {
+                let path = paths_by_name.get(name).unwrap();
+                let source = source_texts.get(name).unwrap();
+                let imports = imports_by_name.get(name).unwrap().clone();
+
+                let node_uri = if let Ok(url) = url::Url::from_file_path(path) {
+                    DocumentUri::new(url.as_str())
+                } else {
+                    DocumentUri::new(&format!("file://{}", path.to_string_lossy()))
+                };
+
+                let node_version = if let Some(snap) = self.documents.get(&node_uri) {
+                    snap.version
+                } else {
+                    let line_index = LineIndex::new(source);
+                    self.documents.insert(node_uri.clone(), DocumentSnapshot {
+                        uri: node_uri.clone(),
+                        content: source.clone(),
+                        version: 0,
+                        line_index,
+                    });
+                    0
+                };
+
+                let symbols = extract_symbols_from_source(source).unwrap_or_default();
+                let symbol_index = SymbolIndex::new(&symbols);
+
+                let semantic_index = if let Ok(ast) = tempra_parser::parse_source(source) {
+                    SemanticResolver::new().resolve(&ast, source)
+                } else {
+                    SemanticIndex::default()
+                };
+
+                let facts = ctx.module_facts.remove(name);
+
+                let path_str = path.to_string_lossy().to_string();
+                let node_diags: Vec<_> = diagnostics
+                    .iter()
+                    .filter(|d| d.file_path.as_deref() == Some(&path_str))
+                    .cloned()
+                    .collect();
+
+                let result = AnalysisResult {
+                    version: node_version,
+                    diagnostics: node_diags,
+                    symbols,
+                    symbol_index,
+                    semantic_index,
+                    facts,
+                    imports,
+                    module_name: Some(name.clone()),
+                };
+
+                self.analysis_cache.insert(node_uri, result);
+            }
+        } else {
+            // Fallback to single-file analysis
+            let facts_res = diagnose_source_with_facts(&snapshot.content);
+            let mut diags = facts_res.diagnostics;
+            if let Some(ref path) = file_path {
+                let path_str = path.to_string_lossy().to_string();
+                diags = diags.into_iter().map(|d| d.with_file_path(&path_str)).collect();
+            }
+            for d in diagnostics {
+                diags.push(d);
+            }
+
+            let facts = facts_res.facts;
+            let symbols = extract_symbols_from_source(&snapshot.content).unwrap_or_default();
+            let symbol_index = SymbolIndex::new(&symbols);
+
+            let semantic_index = if let Ok(file) = tempra_parser::parse_source(&snapshot.content) {
+                SemanticResolver::new().resolve(&file, &snapshot.content)
+            } else {
+                SemanticIndex::default()
+            };
+
+            let result = AnalysisResult {
+                version: snapshot.version,
+                diagnostics: diags,
+                symbols,
+                symbol_index,
+                semantic_index,
+                facts,
+                imports: HashMap::new(),
+                module_name: None,
+            };
+
+            self.analysis_cache.insert(uri.clone(), result);
+        }
     }
+
 }
 
 /// Find word/identifier at absolute byte offset.

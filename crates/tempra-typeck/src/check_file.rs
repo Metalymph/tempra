@@ -79,6 +79,7 @@ pub fn check_modules_always(
     for m in modules.iter_mut() {
         ctx.current_module = m.name.clone();
         ctx.imports = m.imports.clone();
+        ctx.facts = crate::facts::TypecheckFacts::default();
         if let Some(source) = source_texts.get(&m.name) {
             ctx.source_text = Some(source.clone());
         } else {
@@ -87,12 +88,14 @@ pub fn check_modules_always(
         for item in &mut m.file.items {
             check_item(&mut ctx, item);
         }
+        ctx.module_facts.insert(m.name.clone(), ctx.facts.clone());
     }
 
     // Pass 3: check top-level statements
     for m in modules.iter_mut() {
         ctx.current_module = m.name.clone();
         ctx.imports = m.imports.clone();
+        ctx.facts = ctx.module_facts.remove(&m.name).unwrap_or_default();
         if let Some(source) = source_texts.get(&m.name) {
             ctx.source_text = Some(source.clone());
         } else {
@@ -108,6 +111,7 @@ pub fn check_modules_always(
             ctx.scopes.pop_scope();
             ctx.current_is_fallible = false;
         }
+        ctx.module_facts.insert(m.name.clone(), ctx.facts.clone());
     }
 
     ctx

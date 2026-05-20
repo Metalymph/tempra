@@ -17,4 +17,7 @@ pub struct TypecheckFacts {
     pub variant_resolutions: HashMap<Span, Span>,
     /// Mapping from method call name span to its implementation/definition span.
     pub method_resolutions: HashMap<Span, Span>,
+    /// Mapping from reference span to target module and definition span.
+    pub cross_file_resolutions: HashMap<Span, (String, Span)>,
 }
+

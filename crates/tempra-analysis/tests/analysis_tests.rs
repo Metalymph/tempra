@@ -87,7 +87,7 @@ fn test_hover_and_goto_definition() {
     assert_eq!(hover_point, "struct Point");
 
     // Goto definition at line 8, character 22 (referencing "Point")
-    let def_span = session.goto_definition(&uri, 8, 22).unwrap();
+    let (_def_uri, def_span) = session.goto_definition(&uri, 8, 22).unwrap();
     assert!(def_span.start > 0);
 
     // Hover on "add" at line 9, character 14
@@ -221,8 +221,8 @@ fn test_lsp_queries_after_unicode() {
     let hover_res = session.hover_at_lsp_position(&uri, pos).unwrap();
     assert_eq!(hover_res, "fn target() -> Int64");
 
-    let def_res = session.definition_at_lsp_position(&uri, pos).unwrap();
-    assert!(def_res.start > 0);
+    let (_def_uri, def_span) = session.definition_at_lsp_position(&uri, pos).unwrap();
+    assert!(def_span.start > 0);
 }
 
 #[test]
@@ -254,14 +254,14 @@ fn test_semantic_resolution_shadowing() {
     assert_eq!(hover_inner_x, "let x: Int"); // or let x, depends on parser
 
     // Definition of 'x' in "let y = x" should jump to inner x definition on line 4
-    let def_inner_x = session.goto_definition(&uri, 5, 24).unwrap();
+    let (_def_uri, def_inner_x) = session.goto_definition(&uri, 5, 24).unwrap();
 
     // Hover on 'x' in "let z = x" (line 7, character 20)
     let hover_outer_x = session.hover(&uri, 7, 20).unwrap();
     assert_eq!(hover_outer_x, "let x: Int");
 
     // Definition of 'x' in "let z = x" should jump to outer x definition on line 2
-    let def_outer_x = session.goto_definition(&uri, 7, 20).unwrap();
+    let (_def_uri, def_outer_x) = session.goto_definition(&uri, 7, 20).unwrap();
     assert_ne!(def_inner_x, def_outer_x);
 }
 
@@ -286,7 +286,7 @@ fn test_semantic_resolution_parameters() {
     assert!(hover_param.contains("name: String"));
 
     // Goto definition of "name" should jump to the parameter declaration on line 1, character 17
-    let def_param = session.goto_definition(&uri, 2, 22).unwrap();
+    let (_def_uri, def_param) = session.goto_definition(&uri, 2, 22).unwrap();
     assert!(def_param.start > 0);
 }
 
@@ -313,7 +313,7 @@ fn test_semantic_resolution_for_loops() {
     assert_eq!(hover_loop_var, "let item");
 
     // Goto definition of "item" should jump to the loop binding on line 3, character 16
-    let def_loop_var = session.goto_definition(&uri, 4, 26).unwrap();
+    let (_def_uri, def_loop_var) = session.goto_definition(&uri, 4, 26).unwrap();
     assert!(def_loop_var.start > 0);
 }
 
@@ -342,7 +342,7 @@ fn test_semantic_resolution_struct_fields() {
     assert!(hover_field.contains("Point.x"));
 
     // Goto definition of "x" field should jump to struct field declaration on line 2
-    let def_field = session.goto_definition(&uri, 7, 24).unwrap();
+    let (_def_uri, def_field) = session.goto_definition(&uri, 7, 24).unwrap();
     assert!(def_field.start > 0);
 }
 
@@ -909,4 +909,76 @@ fn test_rename_validation_and_overlap_rejection() {
     let res = ws_edit.validate_and_clean();
     assert!(res.is_err());
     assert!(res.unwrap_err().contains("Overlapping"));
+}
+
+#[test]
+fn test_cross_file_features() {
+    let mut session = AnalysisSession::new();
+    let uri_main = DocumentUri::new("file:///main.tmpr");
+    let uri_math = DocumentUri::new("file:///math.tmpr");
+
+    let source_math = r#"
+        pub struct Point { x: Int64, y: Int64 }
+        pub fn add(a: Int64, b: Int64) -> Int64 {
+            return a + b
+        }
+        fn private_helper() {}
+    "#
+    .to_string();
+
+    let source_main = r#"
+        import math
+        fn process(p: math.Point) {
+            math.add(1, 2);
+            math.
+        }
+    "#
+    .to_string();
+
+    session.open_document(uri_math.clone(), source_math, 1);
+    session.open_document(uri_main.clone(), source_main, 1);
+
+    let diags_math = session.diagnostics(&uri_math).unwrap();
+    println!("Math diags: {:?}", diags_math);
+    let diags_main = session.diagnostics(&uri_main).unwrap();
+    println!("Main diags: {:?}", diags_main);
+
+    // 1. Cross-file Goto-Definition
+    // "math.add" is on line 3, char 18 ('d' in add)
+    let def_add = session.goto_definition(&uri_main, 3, 18);
+    assert!(def_add.is_some(), "Goto-Definition on math.add failed");
+    let (def_uri, _) = def_add.unwrap();
+    assert_eq!(def_uri, uri_math);
+
+    // "math.Point" is on line 2, char 27 ('P' in Point)
+    let def_point = session.goto_definition(&uri_main, 2, 27);
+    assert!(def_point.is_some(), "Goto-Definition on math.Point failed");
+    let (def_uri_pt, _) = def_point.unwrap();
+    assert_eq!(def_uri_pt, uri_math);
+
+    // 2. Cross-file Hover
+    let hover_add = session.hover(&uri_main, 3, 18).unwrap();
+    println!("Hover add: {:?}", hover_add);
+    assert!(hover_add.contains("pub fn add") || hover_add.contains("fn add"));
+
+    let hover_point = session.hover(&uri_main, 2, 27);
+    assert!(hover_point.is_some(), "Hover on math.Point failed");
+    assert!(hover_point.unwrap().contains("pub struct Point"));
+
+    // 3. Cross-file Completions
+    // "math." is on line 4, char 17
+    let completions = session.completions_at_position(&uri_main, 4, 17);
+    assert!(completions.iter().any(|c| c.label == "Point"));
+    assert!(completions.iter().any(|c| c.label == "add"));
+    assert!(!completions.iter().any(|c| c.label == "private_helper"));
+
+    // 4. Module Graph Diagnostics
+    let uri_cycle1 = DocumentUri::new("file:///cycle1.tmpr");
+    let uri_cycle2 = DocumentUri::new("file:///cycle2.tmpr");
+    session.open_document(uri_cycle1.clone(), "import cycle2\n".to_string(), 1);
+    session.open_document(uri_cycle2.clone(), "import cycle1\n".to_string(), 1);
+
+    let diags = session.diagnostics(&uri_cycle1).unwrap();
+    assert!(!diags.is_empty(), "Expected cyclic import diagnostics");
+    assert!(diags[0].message.contains("cyclic import"));
 }

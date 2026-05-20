@@ -36,6 +36,7 @@ pub struct Diagnostic {
     pub span: Span,
     pub labels: Vec<Label>,
     pub notes: Vec<String>,
+    pub file_path: Option<String>,
 }
 
 impl Diagnostic {
@@ -51,6 +52,7 @@ impl Diagnostic {
                 message: None,
             }],
             notes: Vec::new(),
+            file_path: None,
         }
     }
 
@@ -66,18 +68,25 @@ impl Diagnostic {
                 message: None,
             }],
             notes: Vec::new(),
+            file_path: None,
         }
+    }
+
+    pub fn with_file_path(mut self, path: impl Into<String>) -> Self {
+        self.file_path = Some(path.into());
+        self
     }
 
     /// Convert the diagnostic to a public JSON representation without exposing Span internals.
     pub fn to_json_value(&self, file_path: Option<&str>) -> serde_json::Value {
+        let path_to_use = file_path.or(self.file_path.as_deref());
         let labels_json: Vec<serde_json::Value> = self
             .labels
             .iter()
             .map(|label| {
                 serde_json::json!({
                     "span": {
-                        "file": file_path,
+                        "file": path_to_use,
                         "start": label.span.start,
                         "end": label.span.end,
                     },

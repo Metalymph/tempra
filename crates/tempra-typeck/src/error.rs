@@ -5,6 +5,7 @@ use tempra_span::Span;
 pub struct TypeError {
     pub message: String,
     pub span: Span,
+    pub module_name: Option<String>,
 }
 
 impl TypeError {
@@ -12,6 +13,8 @@ impl TypeError {
         Self {
             message: message.into(),
             span,
+            module_name: None,
         }
     }
 }
+

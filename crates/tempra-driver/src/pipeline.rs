@@ -472,6 +472,11 @@ fn format_hir_type(ty: &tempra_hir::HirType) -> String {
 }
 
 fn format_function_signature(func: &tempra_hir::HirFunction) -> String {
+    let pub_prefix = if func.visibility == tempra_ast::Visibility::Public {
+        "pub "
+    } else {
+        ""
+    };
     let params: Vec<String> = func
         .parameters
         .iter()
@@ -487,7 +492,8 @@ fn format_function_signature(func: &tempra_hir::HirFunction) -> String {
     };
     let fallible_str = if func.is_fallible { "!" } else { "" };
     format!(
-        "fn {}{}({}){}",
+        "{}fn {}{}({}){}",
+        pub_prefix,
         func.name,
         fallible_str,
         params.join(", "),
@@ -582,7 +588,13 @@ pub fn diagnose_file(path: &Path) -> Vec<tempra_diagnostics::Diagnostic> {
 
     let ctx = check_modules_always(&mut modules_to_check, &source_texts, false);
     for err in ctx.errors {
-        diagnostics.push(tempra_diagnostics::Diagnostic::error(err.span, err.message));
+        let mut d = tempra_diagnostics::Diagnostic::error(err.span, err.message);
+        if let Some(ref m_name) = err.module_name {
+            if let Some(node) = graph.modules.get(m_name) {
+                d = d.with_file_path(node.path.to_string_lossy().to_string());
+            }
+        }
+        diagnostics.push(d);
     }
 
     diagnostics
@@ -608,11 +620,16 @@ pub fn extract_symbols_from_source(
                 });
             }
             tempra_hir::HirItem::Struct(s) => {
+                let pub_prefix = if s.visibility == tempra_ast::Visibility::Public {
+                    "pub "
+                } else {
+                    ""
+                };
                 symbols.push(tempra_diagnostics::Symbol {
                     name: s.name.clone(),
                     kind: tempra_diagnostics::SymbolKind::Struct,
                     span: s.span,
-                    signature: Some(format!("struct {}", s.name)),
+                    signature: Some(format!("{}struct {}", pub_prefix, s.name)),
                 });
                 for field in &s.fields {
                     let ty_str = format_hir_type(&field.ty);
@@ -625,11 +642,16 @@ pub fn extract_symbols_from_source(
                 }
             }
             tempra_hir::HirItem::Enum(e) => {
+                let pub_prefix = if e.visibility == tempra_ast::Visibility::Public {
+                    "pub "
+                } else {
+                    ""
+                };
                 symbols.push(tempra_diagnostics::Symbol {
                     name: e.name.clone(),
                     kind: tempra_diagnostics::SymbolKind::Enum,
                     span: e.span,
-                    signature: Some(format!("enum {}", e.name)),
+                    signature: Some(format!("{}enum {}", pub_prefix, e.name)),
                 });
             }
             tempra_hir::HirItem::Extend(ext) => {

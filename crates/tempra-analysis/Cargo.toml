@@ -13,6 +13,8 @@ tempra-lexer.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tempra-typeck.workspace = true
+tempra-hir.workspace = true
 anyhow.workspace = true
+url = "2.5"
 
 

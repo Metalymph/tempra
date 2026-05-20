@@ -349,18 +349,23 @@ impl LanguageServer for Backend {
 
         let mut session = self.session.write().await;
 
-        let span = match session.definition_at_lsp_position(&doc_uri, pos) {
-            Some(s) => s,
+        let (target_uri, span) = match session.definition_at_lsp_position(&doc_uri, pos) {
+            Some(res) => res,
             None => return Ok(None),
         };
 
-        let range = match session.span_to_lsp_range(&doc_uri, span) {
+        let range = match session.span_to_lsp_range(&target_uri, span) {
             Some(r) => analysis_range_to_lsp(r),
             None => fallback_range(),
         };
 
+        let target_url = match Url::parse(target_uri.as_str()) {
+            Ok(u) => u,
+            Err(_) => url,
+        };
+
         Ok(Some(GotoDefinitionResponse::Scalar(Location {
-            uri: url,
+            uri: target_url,
             range,
         })))
     }

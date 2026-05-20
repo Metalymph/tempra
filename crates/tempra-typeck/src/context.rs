@@ -122,6 +122,7 @@ pub struct TypeContext {
     pub imports: HashMap<String, String>,
     pub modules: HashSet<String>,
     pub is_single_file_fallback: bool,
+    pub module_facts: HashMap<String, crate::facts::TypecheckFacts>,
 }
 
 impl TypeContext {
@@ -154,7 +155,9 @@ impl TypeContext {
             imports: HashMap::new(),
             modules: HashSet::new(),
             is_single_file_fallback: false,
+            module_facts: HashMap::new(),
         };
+
         ctx.register_builtins();
         ctx
     }
@@ -259,8 +262,13 @@ impl TypeContext {
     }
 
     pub fn error(&mut self, message: impl Into<String>, span: Span) {
-        self.errors.push(TypeError::new(message, span));
+        let mut err = TypeError::new(message, span);
+        if !self.current_module.is_empty() {
+            err.module_name = Some(self.current_module.clone());
+        }
+        self.errors.push(err);
     }
+
 
     /// Resolves a simple type name into a semantic Type, checking builtins then user types.
     pub fn resolve_type_name(&self, name: &str) -> Type {
@@ -403,6 +411,11 @@ impl TypeContext {
                                 *span,
                             );
                         }
+                        if let Some(&def_span) = self.function_spans.get(&qualified) {
+                            let assoc_span = self.find_name_span(assoc, *span);
+                            self.facts.cross_file_resolutions.insert(assoc_span, (ns.clone(), def_span));
+                            self.facts.resolved_symbols.insert(assoc_span, def_span);
+                        }
                         return Type::Struct(qualified, vec![]);
                     }
                     if self.enums.contains_key(&qualified) {
@@ -416,6 +429,11 @@ impl TypeContext {
                                 *span,
                             );
                         }
+                        if let Some(&def_span) = self.function_spans.get(&qualified) {
+                            let assoc_span = self.find_name_span(assoc, *span);
+                            self.facts.cross_file_resolutions.insert(assoc_span, (ns.clone(), def_span));
+                            self.facts.resolved_symbols.insert(assoc_span, def_span);
+                        }
                         return Type::Enum(qualified, vec![]);
                     }
                     if self.interfaces.contains_key(&qualified) {
@@ -428,6 +446,11 @@ impl TypeContext {
                                 ),
                                 *span,
                             );
+                        }
+                        if let Some(&def_span) = self.function_spans.get(&qualified) {
+                            let assoc_span = self.find_name_span(assoc, *span);
+                            self.facts.cross_file_resolutions.insert(assoc_span, (ns.clone(), def_span));
+                            self.facts.resolved_symbols.insert(assoc_span, def_span);
                         }
                         return Type::Interface(qualified);
                     }

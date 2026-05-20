@@ -161,7 +161,7 @@ fn load_module_recursive(
                     path.display(),
                     e
                 ),
-            ));
+            ).with_file_path(path.to_string_lossy().to_string()));
             return Err(());
         }
     };
@@ -169,7 +169,8 @@ fn load_module_recursive(
     let ast = match parse_source(&source) {
         Ok(a) => a,
         Err(e) => {
-            diagnostics.push(Diagnostic::error(e.span, e.message));
+            diagnostics.push(Diagnostic::error(e.span, e.message)
+                .with_file_path(path.to_string_lossy().to_string()));
             return Err(());
         }
     };
@@ -192,7 +193,8 @@ fn load_module_recursive(
                 tempra_ast::ImportPathKind::Relative => match imp.path.last() {
                     Some(alias) => alias.clone(),
                     None => {
-                        diagnostics.push(Diagnostic::error(imp.span, "empty import path"));
+                        diagnostics.push(Diagnostic::error(imp.span, "empty import path")
+                            .with_file_path(path.to_string_lossy().to_string()));
                         load_errors = true;
                         continue;
                     }
@@ -212,10 +214,11 @@ fn load_module_recursive(
                 diagnostics.push(Diagnostic::error(
                     imp.span,
                     format!("cyclic import detected: {}", cycle_str),
-                ));
+                ).with_file_path(path.to_string_lossy().to_string()));
                 load_errors = true;
                 continue;
             }
+
 
             // Update the span in the visiting stack for the dependency
             if let Some(last) = visiting.last_mut() {

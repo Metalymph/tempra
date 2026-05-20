@@ -952,10 +952,12 @@ dependencies = [
  "tempra-ast",
  "tempra-diagnostics",
  "tempra-driver",
+ "tempra-hir",
  "tempra-lexer",
  "tempra-parser",
  "tempra-span",
  "tempra-typeck",
+ "url",
 ]
 
 [[package]]

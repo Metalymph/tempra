@@ -269,7 +269,6 @@ impl TypeContext {
         self.errors.push(err);
     }
 
-
     /// Resolves a simple type name into a semantic Type, checking builtins then user types.
     pub fn resolve_type_name(&self, name: &str) -> Type {
         let base = resolve_named_type(name);
@@ -413,7 +412,9 @@ impl TypeContext {
                         }
                         if let Some(&def_span) = self.function_spans.get(&qualified) {
                             let assoc_span = self.find_name_span(assoc, *span);
-                            self.facts.cross_file_resolutions.insert(assoc_span, (ns.clone(), def_span));
+                            self.facts
+                                .cross_file_resolutions
+                                .insert(assoc_span, (ns.clone(), def_span));
                             self.facts.resolved_symbols.insert(assoc_span, def_span);
                         }
                         return Type::Struct(qualified, vec![]);
@@ -431,7 +432,9 @@ impl TypeContext {
                         }
                         if let Some(&def_span) = self.function_spans.get(&qualified) {
                             let assoc_span = self.find_name_span(assoc, *span);
-                            self.facts.cross_file_resolutions.insert(assoc_span, (ns.clone(), def_span));
+                            self.facts
+                                .cross_file_resolutions
+                                .insert(assoc_span, (ns.clone(), def_span));
                             self.facts.resolved_symbols.insert(assoc_span, def_span);
                         }
                         return Type::Enum(qualified, vec![]);
@@ -449,7 +452,9 @@ impl TypeContext {
                         }
                         if let Some(&def_span) = self.function_spans.get(&qualified) {
                             let assoc_span = self.find_name_span(assoc, *span);
-                            self.facts.cross_file_resolutions.insert(assoc_span, (ns.clone(), def_span));
+                            self.facts
+                                .cross_file_resolutions
+                                .insert(assoc_span, (ns.clone(), def_span));
                             self.facts.resolved_symbols.insert(assoc_span, def_span);
                         }
                         return Type::Interface(qualified);

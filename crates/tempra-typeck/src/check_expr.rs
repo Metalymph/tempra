@@ -1948,7 +1948,9 @@ fn check_call(ctx: &mut TypeContext, expr: &mut HirExpression, expected: Option<
                             if let HirExpression::Member(ref m) = *c.callee {
                                 if let Some(&def_span) = ctx.function_spans.get(&qualified) {
                                     let member_span = ctx.find_name_span(&method, m.span);
-                                    ctx.facts.cross_file_resolutions.insert(member_span, (ns.clone(), def_span));
+                                    ctx.facts
+                                        .cross_file_resolutions
+                                        .insert(member_span, (ns.clone(), def_span));
                                     ctx.facts.resolved_symbols.insert(member_span, def_span);
                                 }
                             }
@@ -2478,7 +2480,9 @@ fn check_member(ctx: &mut TypeContext, m: &mut HirMember, _expected: Option<&Typ
             }
             if let Some(&def_span) = ctx.function_spans.get(&qualified) {
                 let member_span = ctx.find_name_span(&m.field, m.span);
-                ctx.facts.cross_file_resolutions.insert(member_span, (ns.clone(), def_span));
+                ctx.facts
+                    .cross_file_resolutions
+                    .insert(member_span, (ns.clone(), def_span));
                 ctx.facts.resolved_symbols.insert(member_span, def_span);
             }
             return Type::Unknown;
@@ -2496,7 +2500,9 @@ fn check_member(ctx: &mut TypeContext, m: &mut HirMember, _expected: Option<&Typ
             }
             if let Some(&def_span) = ctx.function_spans.get(&qualified) {
                 let member_span = ctx.find_name_span(&m.field, m.span);
-                ctx.facts.cross_file_resolutions.insert(member_span, (ns.clone(), def_span));
+                ctx.facts
+                    .cross_file_resolutions
+                    .insert(member_span, (ns.clone(), def_span));
                 ctx.facts.resolved_symbols.insert(member_span, def_span);
             }
             return Type::Meta(Box::new(Type::Struct(qualified, vec![])));
@@ -2514,7 +2520,9 @@ fn check_member(ctx: &mut TypeContext, m: &mut HirMember, _expected: Option<&Typ
             }
             if let Some(&def_span) = ctx.function_spans.get(&qualified) {
                 let member_span = ctx.find_name_span(&m.field, m.span);
-                ctx.facts.cross_file_resolutions.insert(member_span, (ns.clone(), def_span));
+                ctx.facts
+                    .cross_file_resolutions
+                    .insert(member_span, (ns.clone(), def_span));
                 ctx.facts.resolved_symbols.insert(member_span, def_span);
             }
             return Type::Meta(Box::new(Type::Enum(qualified, vec![])));
@@ -2532,7 +2540,9 @@ fn check_member(ctx: &mut TypeContext, m: &mut HirMember, _expected: Option<&Typ
             }
             if let Some(&def_span) = ctx.function_spans.get(&qualified) {
                 let member_span = ctx.find_name_span(&m.field, m.span);
-                ctx.facts.cross_file_resolutions.insert(member_span, (ns.clone(), def_span));
+                ctx.facts
+                    .cross_file_resolutions
+                    .insert(member_span, (ns.clone(), def_span));
                 ctx.facts.resolved_symbols.insert(member_span, def_span);
             }
             return Type::Meta(Box::new(Type::Interface(qualified)));

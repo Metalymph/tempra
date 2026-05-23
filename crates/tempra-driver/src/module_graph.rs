@@ -153,15 +153,18 @@ fn load_module_recursive(
         Ok(s) => s,
         Err(e) => {
             let span = visiting.last().map(|(_, s)| *s).unwrap_or(Span::new(0, 0));
-            diagnostics.push(Diagnostic::error(
-                span,
-                format!(
-                    "could not read module file '{}' (path: {}): {}",
-                    name,
-                    path.display(),
-                    e
-                ),
-            ).with_file_path(path.to_string_lossy().to_string()));
+            diagnostics.push(
+                Diagnostic::error(
+                    span,
+                    format!(
+                        "could not read module file '{}' (path: {}): {}",
+                        name,
+                        path.display(),
+                        e
+                    ),
+                )
+                .with_file_path(path.to_string_lossy().to_string()),
+            );
             return Err(());
         }
     };
@@ -169,8 +172,10 @@ fn load_module_recursive(
     let ast = match parse_source(&source) {
         Ok(a) => a,
         Err(e) => {
-            diagnostics.push(Diagnostic::error(e.span, e.message)
-                .with_file_path(path.to_string_lossy().to_string()));
+            diagnostics.push(
+                Diagnostic::error(e.span, e.message)
+                    .with_file_path(path.to_string_lossy().to_string()),
+            );
             return Err(());
         }
     };
@@ -193,8 +198,10 @@ fn load_module_recursive(
                 tempra_ast::ImportPathKind::Relative => match imp.path.last() {
                     Some(alias) => alias.clone(),
                     None => {
-                        diagnostics.push(Diagnostic::error(imp.span, "empty import path")
-                            .with_file_path(path.to_string_lossy().to_string()));
+                        diagnostics.push(
+                            Diagnostic::error(imp.span, "empty import path")
+                                .with_file_path(path.to_string_lossy().to_string()),
+                        );
                         load_errors = true;
                         continue;
                     }
@@ -211,14 +218,13 @@ fn load_module_recursive(
             if visiting_set.contains(&dep_name) {
                 let cycle_path: Vec<String> = visiting.iter().map(|(n, _)| n.clone()).collect();
                 let cycle_str = format!("{} -> {}", cycle_path.join(" -> "), dep_name);
-                diagnostics.push(Diagnostic::error(
-                    imp.span,
-                    format!("cyclic import detected: {}", cycle_str),
-                ).with_file_path(path.to_string_lossy().to_string()));
+                diagnostics.push(
+                    Diagnostic::error(imp.span, format!("cyclic import detected: {}", cycle_str))
+                        .with_file_path(path.to_string_lossy().to_string()),
+                );
                 load_errors = true;
                 continue;
             }
-
 
             // Update the span in the visiting stack for the dependency
             if let Some(last) = visiting.last_mut() {

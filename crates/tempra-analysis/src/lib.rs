@@ -1049,7 +1049,10 @@ impl AnalysisSession {
             if def_uri != normalized {
                 self.ensure_analyzed(&def_uri);
                 if let Some(target_res) = self.analysis_cache.get(&def_uri) {
-                    if let Some(target_sym) = target_res.semantic_index.find_by_offset(def_span.start as usize) {
+                    if let Some(target_sym) = target_res
+                        .semantic_index
+                        .find_by_offset(def_span.start as usize)
+                    {
                         if let Some(sig) = &target_sym.signature {
                             return Some(sig.clone());
                         }
@@ -1422,7 +1425,6 @@ impl AnalysisSession {
             None => return vec![],
         };
 
-
         let pos = TextPosition {
             line,
             byte_character,
@@ -1506,10 +1508,14 @@ impl AnalysisSession {
                 }
             }
             if ptr < dot_idx {
-                early_module_name = Some(std::str::from_utf8(&bytes[ptr..dot_idx]).unwrap_or("").to_string());
+                early_module_name = Some(
+                    std::str::from_utf8(&bytes[ptr..dot_idx])
+                        .unwrap_or("")
+                        .to_string(),
+                );
             }
         }
-        
+
         let mut target_uri = None;
         if let Some(ns_name) = &early_module_name {
             for (uri, _) in self.documents.iter() {
@@ -1552,8 +1558,12 @@ impl AnalysisSession {
                             // Only suggest public symbols
                             if sym.signature.as_ref().map_or(false, |s| s.contains("pub")) {
                                 let kind = match sym.kind {
-                                    tempra_diagnostics::SymbolKind::Function => CompletionKind::Function,
-                                    tempra_diagnostics::SymbolKind::Struct => CompletionKind::Struct,
+                                    tempra_diagnostics::SymbolKind::Function => {
+                                        CompletionKind::Function
+                                    }
+                                    tempra_diagnostics::SymbolKind::Struct => {
+                                        CompletionKind::Struct
+                                    }
                                     tempra_diagnostics::SymbolKind::Enum => CompletionKind::Enum,
                                     _ => CompletionKind::Variable,
                                 };
@@ -1723,7 +1733,7 @@ impl AnalysisSession {
             let mut source_texts = HashMap::new();
             let mut paths_by_name = HashMap::new();
             let mut imports_by_name = HashMap::new();
-            
+
             for name in &graph.order {
                 if let Some(node) = graph.modules.get(name) {
                     source_texts.insert(node.name.clone(), node.source.clone());
@@ -1750,7 +1760,8 @@ impl AnalysisSession {
                 });
             }
 
-            let mut ctx = tempra_typeck::check_modules_always(&mut modules_to_check, &source_texts, false);
+            let mut ctx =
+                tempra_typeck::check_modules_always(&mut modules_to_check, &source_texts, false);
 
             for err in ctx.errors {
                 let mut d = tempra_diagnostics::Diagnostic::error(err.span, err.message);
@@ -1778,12 +1789,15 @@ impl AnalysisSession {
                     snap.version
                 } else {
                     let line_index = LineIndex::new(source);
-                    self.documents.insert(node_uri.clone(), DocumentSnapshot {
-                        uri: node_uri.clone(),
-                        content: source.clone(),
-                        version: 0,
-                        line_index,
-                    });
+                    self.documents.insert(
+                        node_uri.clone(),
+                        DocumentSnapshot {
+                            uri: node_uri.clone(),
+                            content: source.clone(),
+                            version: 0,
+                            line_index,
+                        },
+                    );
                     0
                 };
 
@@ -1824,7 +1838,10 @@ impl AnalysisSession {
             let mut diags = facts_res.diagnostics;
             if let Some(ref path) = file_path {
                 let path_str = path.to_string_lossy().to_string();
-                diags = diags.into_iter().map(|d| d.with_file_path(&path_str)).collect();
+                diags = diags
+                    .into_iter()
+                    .map(|d| d.with_file_path(&path_str))
+                    .collect();
             }
             for d in diagnostics {
                 diags.push(d);
@@ -1854,7 +1871,6 @@ impl AnalysisSession {
             self.analysis_cache.insert(uri.clone(), result);
         }
     }
-
 }
 
 /// Find word/identifier at absolute byte offset.
@@ -1998,7 +2014,7 @@ impl SemanticResolver {
                 tempra_ast::Item::Function(func) => {
                     let name = get_token_text(func.name, source).to_string();
                     let start = func.span.start as usize;
-                    let end = func.body.span.start as usize;
+                    let end = func.body.as_ref().map_or(func.span.end, |b| b.span.start) as usize;
                     let sig = if start <= end && end <= source.len() {
                         source[start..end].trim().to_string()
                     } else {
@@ -2117,7 +2133,11 @@ impl SemanticResolver {
                     for method in &ext.methods {
                         let method_name = get_token_text(method.name, source).to_string();
                         let start = method.span.start as usize;
-                        let end = method.body.span.start as usize;
+                        let end = method
+                            .body
+                            .as_ref()
+                            .map_or(method.span.end, |b| b.span.start)
+                            as usize;
                         let method_sig = if start <= end && end <= source.len() {
                             source[start..end].trim().to_string()
                         } else {
@@ -2200,8 +2220,10 @@ impl SemanticResolver {
                     if let Some(ret) = &func.return_type {
                         self.walk_type_expr(ret, source);
                     }
-                    for stmt in &func.body.statements {
-                        self.walk_statement(stmt, source);
+                    if let Some(body) = &func.body {
+                        for stmt in &body.statements {
+                            self.walk_statement(stmt, source);
+                        }
                     }
                     self.scopes.pop();
                 }
@@ -2272,8 +2294,10 @@ impl SemanticResolver {
                         if let Some(ret) = &method.return_type {
                             self.walk_type_expr(ret, source);
                         }
-                        for stmt in &method.body.statements {
-                            self.walk_statement(stmt, source);
+                        if let Some(body) = &method.body {
+                            for stmt in &body.statements {
+                                self.walk_statement(stmt, source);
+                            }
                         }
                         self.scopes.pop();
                     }
@@ -2777,7 +2801,9 @@ impl AstTokenCollector {
                 if let Some(ret) = &func.return_type {
                     self.visit_type_expr(ret);
                 }
-                self.visit_block(&func.body);
+                if let Some(body) = &func.body {
+                    self.visit_block(body);
+                }
             }
             tempra_ast::Item::Struct(s) => {
                 self.add(s.name.span, SemanticTokenKind::Struct);
@@ -2843,7 +2869,9 @@ impl AstTokenCollector {
                     if let Some(ret) = &method.return_type {
                         self.visit_type_expr(ret);
                     }
-                    self.visit_block(&method.body);
+                    if let Some(body) = &method.body {
+                        self.visit_block(body);
+                    }
                 }
             }
         }

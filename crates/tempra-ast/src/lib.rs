@@ -127,7 +127,8 @@ pub struct FunctionItem {
     pub parameters: Vec<Parameter>,
     pub return_type: Option<TypeExpr>,
     pub is_fallible: bool,
-    pub body: Block,
+    pub is_extern: bool,
+    pub body: Option<Block>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

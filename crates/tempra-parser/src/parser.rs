@@ -62,7 +62,7 @@ impl<'src> Parser<'src> {
     }
 
     fn parse_item(&mut self) -> Result<Item, ParseError> {
-        let visibility = if self.eat(TokenKind::Pub) {
+        let mut visibility = if self.eat(TokenKind::Pub) {
             Visibility::Public
         } else {
             Visibility::Private
@@ -76,8 +76,19 @@ impl<'src> Parser<'src> {
                 });
             }
             Ok(Item::Import(self.parse_import()?))
+        } else if self.at(TokenKind::Extern) {
+            // consume 'extern'
+            self.advance();
+            // optional visibility after extern
+            if self.at(TokenKind::Pub) {
+                self.advance();
+                visibility = Visibility::Public;
+            }
+            self.expect(TokenKind::Fn)?;
+            Ok(Item::Function(self.parse_function(visibility, true)?))
         } else if self.at(TokenKind::Fn) {
-            Ok(Item::Function(self.parse_function(visibility)?))
+            self.expect(TokenKind::Fn)?;
+            Ok(Item::Function(self.parse_function(visibility, false)?))
         } else if self.at(TokenKind::Struct) {
             Ok(Item::Struct(self.parse_struct(visibility)?))
         } else if self.at(TokenKind::Enum) {
@@ -178,10 +189,14 @@ impl<'src> Parser<'src> {
         })
     }
 
-    fn parse_function(&mut self, visibility: Visibility) -> Result<FunctionItem, ParseError> {
-        let start_token = self.expect(TokenKind::Fn)?;
+    fn parse_function(
+        &mut self,
+        visibility: Visibility,
+        is_extern: bool,
+    ) -> Result<FunctionItem, ParseError> {
+        // 'fn' token has already been consumed by the caller
+        let start_token = self.tokens[self.position - 1];
         let name = self.expect_identifier()?;
-
         self.expect(TokenKind::LeftParen)?;
         let mut generic_parameters = Vec::new();
         let mut parameters = Vec::new();
@@ -265,8 +280,16 @@ impl<'src> Parser<'src> {
             return_type = Some(self.parse_type()?);
         }
 
-        let body = self.parse_block()?;
-        let span = Span::new(start_token.span.start, body.span.end);
+        // Parse body only for non-extern functions
+        let body_opt = if is_extern {
+            None
+        } else {
+            Some(self.parse_block()?)
+        };
+        let span = match &body_opt {
+            Some(body) => Span::new(start_token.span.start, body.span.end),
+            None => start_token.span,
+        };
 
         Ok(FunctionItem {
             span,
@@ -276,7 +299,8 @@ impl<'src> Parser<'src> {
             parameters,
             return_type,
             is_fallible,
-            body,
+            is_extern,
+            body: body_opt,
         })
     }
 
@@ -538,7 +562,8 @@ impl<'src> Parser<'src> {
             } else {
                 Visibility::Private
             };
-            methods.push(self.parse_function(v)?);
+            self.expect(TokenKind::Fn)?;
+            methods.push(self.parse_function(v, false)?);
         }
         let end_token = self.expect(TokenKind::RightBrace)?;
 
@@ -1657,7 +1682,7 @@ impl<'src> Parser<'src> {
             None
         }
     }
-}
+} // end impl Parser
 
 pub fn parse_source(source: &str) -> Result<File, ParseError> {
     let tokens = tokenize(source);

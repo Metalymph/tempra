@@ -40,6 +40,7 @@ pub enum TokenKind {
     Consume,
     Comptime,
     Interface,
+    Extern,
 
     // Delimiters
     LeftParen,    // (
@@ -115,6 +116,7 @@ pub fn keyword_kind(text: &str) -> Option<TokenKind> {
         "consume" => Some(TokenKind::Consume),
         "comptime" => Some(TokenKind::Comptime),
         "interface" => Some(TokenKind::Interface),
+        "extern" => Some(TokenKind::Extern),
         _ => None,
     }
 }
@@ -154,6 +156,7 @@ impl std::fmt::Display for TokenKind {
             TokenKind::Consume => "'consume'",
             TokenKind::Comptime => "'comptime'",
             TokenKind::Interface => "'interface'",
+            TokenKind::Extern => "'extern'",
             TokenKind::LeftParen => "'('",
             TokenKind::RightParen => "')'",
             TokenKind::LeftBrace => "'{'",

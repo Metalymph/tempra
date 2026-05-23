@@ -20,4 +20,3 @@ pub struct TypecheckFacts {
     /// Mapping from reference span to target module and definition span.
     pub cross_file_resolutions: HashMap<Span, (String, Span)>,
 }
-

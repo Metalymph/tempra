@@ -1,0 +1,2 @@
+pub extern fn print(value: String)
+pub extern fn println(value: String)

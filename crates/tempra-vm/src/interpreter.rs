@@ -25,10 +25,13 @@ pub struct Frame {
     pub stack: Vec<VmValue>,
 }
 
+pub type NativeResolver = fn(&str, &str) -> Option<fn(&[VmValue]) -> Result<VmValue, String>>;
+
 pub struct Interpreter<'a> {
     pub module: &'a BytecodeModule,
     pub call_stack: Vec<Frame>,
     pub(crate) profiling: Option<ProfilingState>,
+    pub native_resolver: Option<NativeResolver>,
 
     #[cfg(feature = "jit-cranelift")]
     pub(crate) jit_engine: Option<JitEngine>,
@@ -46,6 +49,7 @@ impl<'a> Interpreter<'a> {
             module,
             call_stack: Vec::with_capacity(32),
             profiling: None,
+            native_resolver: None,
             #[cfg(feature = "jit-cranelift")]
             jit_engine: None,
             #[cfg(feature = "jit-cranelift")]
@@ -73,6 +77,7 @@ impl<'a> Interpreter<'a> {
             module,
             call_stack: Vec::with_capacity(32),
             profiling,
+            native_resolver: None,
             #[cfg(feature = "jit-cranelift")]
             jit_engine,
             #[cfg(feature = "jit-cranelift")]
@@ -222,6 +227,16 @@ impl<'a> Interpreter<'a> {
         args: Vec<VmValue>,
         options: VmOptions,
     ) -> Result<(VmValue, VmProfile), VmError> {
+        Self::run_function_profiled_with_resolver(module, name, args, options, None)
+    }
+
+    pub fn run_function_profiled_with_resolver(
+        module: &'a BytecodeModule,
+        name: &str,
+        args: Vec<VmValue>,
+        options: VmOptions,
+        resolver: Option<NativeResolver>,
+    ) -> Result<(VmValue, VmProfile), VmError> {
         let id = module
             .functions
             .iter()
@@ -230,6 +245,7 @@ impl<'a> Interpreter<'a> {
             .ok_or_else(|| VmError::UnknownFunction(name.to_string()))?;
 
         let mut interpreter = Interpreter::with_options(module, options);
+        interpreter.native_resolver = resolver;
         let res = interpreter.run_function_id(id, args)?;
         let profile = interpreter.build_profile();
         Ok((res, profile))
@@ -900,6 +916,33 @@ impl<'a> Interpreter<'a> {
                         .get(target_id.0 as usize)
                         .ok_or_else(|| VmError::UnknownFunction(target_id.to_string()))?;
 
+                    if target_func.is_extern {
+                        let mut args = Vec::with_capacity(argc as usize);
+                        for _ in 0..argc {
+                            args.push(self.pop()?);
+                        }
+                        args.reverse();
+
+                        let resolver = self.native_resolver.ok_or_else(|| VmError::Native("native resolver not registered".into()))?;
+
+                        let name = target_func.name.as_str();
+                        let last_dot = name.rfind('.');
+                        let (mod_name, func_name) = if let Some(i) = last_dot {
+                            (&name[..i], &name[i + 1..])
+                        } else {
+                            ("", name)
+                        };
+
+                        let func_ptr = resolver(mod_name, func_name)
+                            .ok_or_else(|| VmError::Native(format!("unresolved native function: {}", target_func.name)))?;
+                        let res = func_ptr(&args).map_err(|e| VmError::Native(e))?;
+
+                        if target_func.ret != BytecodeType::Unit {
+                            self.push(res)?;
+                        }
+                        continue;
+                    }
+
                     let mut locals = vec![None; target_func.locals.len()];
                     // Pop arguments directly into locals in reverse order (right-to-left)
                     for i in (0..argc).rev() {
@@ -1372,11 +1415,22 @@ pub fn run_function_with_options(
     args: Vec<VmValue>,
     options: VmOptions,
 ) -> Result<VmValue, VmError> {
+    run_function_with_resolver(module, name, args, options, None)
+}
+
+pub fn run_function_with_resolver(
+    module: &BytecodeModule,
+    name: &str,
+    args: Vec<VmValue>,
+    options: VmOptions,
+    resolver: Option<NativeResolver>,
+) -> Result<VmValue, VmError> {
     let id = module
         .functions
         .iter()
         .position(|f| f.name == name)
         .ok_or_else(|| VmError::UnknownFunction(name.to_string()))?;
     let mut interp = Interpreter::with_options(module, options);
+    interp.native_resolver = resolver;
     interp.run_function_id(FunctionId(id as u32), args)
 }

@@ -16,7 +16,9 @@ pub fn lower_tir_module(module: &TirModule) -> Result<BytecodeModule, BytecodeLo
             .map(|(_, ty)| map_type(ty))
             .collect::<Result<Vec<_>, _>>()?;
         let ret = map_type(&tir_func.return_type)?;
-        bc_module.add_function(BytecodeFunction::new(tir_func.name.clone(), params, ret));
+        let mut bc_func = BytecodeFunction::new(tir_func.name.clone(), params, ret);
+        bc_func.is_extern = tir_func.is_extern;
+        bc_module.add_function(bc_func);
     }
 
     // Second pass: lower function bodies
@@ -40,10 +42,13 @@ fn lower_function(
         .collect::<Result<Vec<_>, _>>()?;
     let ret = map_type(&tir_func.return_type)?;
 
+    let mut bc_func = BytecodeFunction::new(tir_func.name.clone(), params, ret);
+    bc_func.is_extern = tir_func.is_extern;
+
     let mut lowerer = FunctionLowerer {
         tir_func,
         bc_module,
-        bc_func: BytecodeFunction::new(tir_func.name.clone(), params, ret),
+        bc_func,
         value_to_local: HashMap::new(),
         slot_to_local: HashMap::new(),
         slot_types: HashMap::new(),

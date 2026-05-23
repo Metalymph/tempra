@@ -96,13 +96,7 @@ impl<'src> Lowerer<'src> {
     }
 
     fn lower_function(&self, item: &ast::FunctionItem) -> HirFunction {
-        let hir_body = match &item.body {
-            Some(b) => self.lower_block(b),
-            None => HirBlock {
-                span: item.span,
-                statements: Vec::new(),
-            },
-        };
+        let hir_body = item.body.as_ref().map(|b| self.lower_block(b));
         HirFunction {
             span: item.span,
             visibility: item.visibility,
@@ -129,6 +123,7 @@ impl<'src> Lowerer<'src> {
             },
             return_type: item.return_type.as_ref().map(|t| self.lower_type(t)),
             is_fallible: item.is_fallible,
+            is_extern: item.is_extern,
             body: hir_body,
         }
     }

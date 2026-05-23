@@ -1049,6 +1049,7 @@ dependencies = [
  "tempra-lexer",
  "tempra-linker",
  "tempra-mir",
+ "tempra-native",
  "tempra-package",
  "tempra-parser",
  "tempra-repl",
@@ -1145,6 +1146,13 @@ version = "0.1.0"
 dependencies = [
  "tempra-hir",
  "tempra-span",
+]
+
+[[package]]
+name = "tempra-native"
+version = "0.1.0"
+dependencies = [
+ "tempra-vm",
 ]
 
 [[package]]

@@ -106,6 +106,7 @@ pub struct TirFunction {
     pub name: String,
     pub params: Vec<(TirValueId, TirType)>,
     pub return_type: TirType,
+    pub is_extern: bool,
     pub blocks: Vec<TirBlock>,
     pub next_value_id: usize,
     pub next_block_id: usize,

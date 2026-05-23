@@ -1,0 +1,2 @@
+pub extern fn join(a: String, b: String) -> String
+pub extern fn basename(path: String) -> String

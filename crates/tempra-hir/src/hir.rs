@@ -45,7 +45,8 @@ pub struct HirFunction {
     pub parameters: Vec<HirParameter>,
     pub return_type: Option<HirType>,
     pub is_fallible: bool,
-    pub body: HirBlock,
+    pub is_extern: bool,
+    pub body: Option<HirBlock>,
 }
 
 #[derive(Debug, Clone)]

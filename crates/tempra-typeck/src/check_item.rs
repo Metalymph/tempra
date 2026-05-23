@@ -115,26 +115,31 @@ fn check_function(ctx: &mut TypeContext, f: &mut HirFunction) {
         );
     }
 
-    let expected_ret = ctx.current_return_type.clone();
-    let body_ty = check_block(ctx, &mut f.body, expected_ret.as_ref());
+    // Skip body checking for extern functions
+    if !f.is_extern {
+        if let Some(ref mut body) = f.body {
+            let expected_ret = ctx.current_return_type.clone();
+            let body_ty = check_block(ctx, body, expected_ret.as_ref());
 
-    // Check final expression return type
-    if let Some(expected) = &ctx.current_return_type {
-        if body_ty != Type::Error && !types_compatible(expected, &body_ty) {
-            // Special case: implicit Ok(()) for fallible Unit functions
-            let is_implicit_ok_unit = f.is_fallible
-                && matches!(f.return_type, None | Some(HirType::Named(_, _))) // Simplified check for Unit success
-                && body_ty == Type::Unit
-                && *expected == Type::Result(Box::new(Type::Unit), Box::new(Type::BuiltinError));
+            // Check final expression return type
+            if let Some(expected) = &ctx.current_return_type {
+                if body_ty != Type::Error && !types_compatible(expected, &body_ty) {
+                    // Special case: implicit Ok(()) for fallible Unit functions
+                    let is_implicit_ok_unit = f.is_fallible
+                        && matches!(f.return_type, None | Some(HirType::Named(_, _)))
+                        && body_ty == Type::Unit
+                        && *expected == Type::Result(Box::new(Type::Unit), Box::new(Type::BuiltinError));
 
-            if !is_implicit_ok_unit {
-                ctx.error(
-                    format!(
-                        "function body return type mismatch: expected {}, found {}",
-                        expected, body_ty
-                    ),
-                    f.body.span,
-                );
+                    if !is_implicit_ok_unit {
+                        ctx.error(
+                            format!(
+                                "function body return type mismatch: expected {}, found {}",
+                                expected, body_ty
+                            ),
+                            body.span,
+                        );
+                    }
+                }
             }
         }
     }

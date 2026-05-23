@@ -51,6 +51,7 @@ impl ModuleBuilder {
                 name: name.to_string(),
                 params: params.into_iter().map(|t| (TirValueId(0), t)).collect(), // Dummy value IDs for params in decl
                 return_type,
+                is_extern: false,
                 blocks: Vec::new(),
                 next_value_id: 0,
                 next_block_id: 0,
@@ -74,6 +75,7 @@ impl FunctionBuilder {
                 name: name.to_string(),
                 params: Vec::new(),
                 return_type,
+                is_extern: false,
                 blocks: Vec::new(),
                 next_value_id: 0,
                 next_block_id: 0,

@@ -23,6 +23,7 @@ pub enum VmError {
     },
     PayloadOutOfBounds(u16),
     DivisionByZero,
+    Native(String),
     UnreachableExecuted,
     InvalidInstructionPointer(usize),
     MissingReturn,
@@ -58,8 +59,9 @@ impl fmt::Display for VmError {
                 write!(f, "Wrong variant: expected {}, found {}", expected, found)
             }
             VmError::PayloadOutOfBounds(i) => write!(f, "Payload out of bounds: {}", i),
-            VmError::DivisionByZero => write!(f, "Division by zero"),
-            VmError::UnreachableExecuted => write!(f, "Unreachable code executed"),
+            VmError::DivisionByZero => write!(f, "division by zero"),
+            VmError::Native(msg) => write!(f, "native error: {}", msg),
+            VmError::UnreachableExecuted => write!(f, "executed unreachable instruction"),
             VmError::InvalidInstructionPointer(ip) => {
                 write!(f, "Invalid instruction pointer: {}", ip)
             }

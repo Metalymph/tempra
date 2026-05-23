@@ -24,10 +24,11 @@ fn create_function(name: &str, ret_ty: HirType, stmts: Vec<HirStatement>) -> Hir
         generic_parameters: vec![],
         parameters: vec![],
         return_type: Some(ret_ty),
-        body: HirBlock {
+        body: Some(HirBlock {
             span: empty_span(),
             statements: stmts,
-        },
+        }),
+        is_extern: false,
         is_fallible: false,
     }
 }

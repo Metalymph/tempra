@@ -136,7 +136,11 @@ impl Interpreter {
         }
 
         let mut result_val = Value::Unit;
-        for stmt in &func.body.statements {
+        let body = match &func.body {
+            Some(b) => b,
+            None => return Ok((ControlFlow::Value(Value::Unit), env)),
+        };
+        for stmt in &body.statements {
             let flow = self.eval_statement(stmt, &mut env)?;
             match flow {
                 ControlFlow::Value(v) => result_val = v,

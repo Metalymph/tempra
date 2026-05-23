@@ -1801,7 +1801,26 @@ pub fn lower_function(
         TirType::Unit
     };
 
-    let builder = module_builder.new_function(&func.name, ret_ty);
+    let mut builder = module_builder.new_function(&func.name, ret_ty);
+    builder.func.is_extern = func.is_extern;
+
+    // Extern functions: emit params + empty entry block with Ret
+    if func.is_extern {
+        let entry_block = builder.new_block();
+        builder.set_current_block(entry_block);
+        for p in &func.parameters {
+            let ty = resolve_hir_type(&p.ty, type_ctx, self_ty.as_ref())?;
+            let tir_ty = map_type(&ty)?;
+            builder.add_param(tir_ty);
+        }
+        if builder.func.return_type == TirType::Unit {
+            builder.build_ret(None)?;
+        } else {
+            builder.build_unreachable()?;
+        }
+        return Ok(builder.build());
+    }
+
     let mut ctx = LowerContext::new(builder, type_ctx, module_builder, self_ty.clone());
 
     // Create entry block
@@ -1819,8 +1838,10 @@ pub fn lower_function(
         ctx.locals.insert(p.name.clone(), (slot, tir_ty, false));
     }
 
-    for stmt in &func.body.statements {
-        ctx.lower_statement(stmt)?;
+    if let Some(body) = &func.body {
+        for stmt in &body.statements {
+            ctx.lower_statement(stmt)?;
+        }
     }
 
     if !ctx.builder.is_terminated() {
@@ -1832,7 +1853,8 @@ pub fn lower_function(
             // We must still terminate it for the verifier, so we use unreachable.
             let current_block_id = ctx.builder.get_current_block().unwrap();
             if current_block_id.0 == 0 || ctx.builder.has_predecessors(current_block_id) {
-                return Err(TirLowerError::MissingReturn(func.body.span));
+                let body_span = func.body.as_ref().map_or(func.span, |b| b.span);
+                return Err(TirLowerError::MissingReturn(body_span));
             } else {
                 // Unreachable join block, terminate it
                 ctx.builder.build_unreachable()?;

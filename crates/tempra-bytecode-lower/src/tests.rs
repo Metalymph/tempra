@@ -16,6 +16,7 @@ fn test_lower_const_return_i64() {
         next_block_id: 0,
         next_slot_id: 0,
         debug_slots: Default::default(),
+        is_extern: false,
     };
 
     let b0 = TirBlockId(0);
@@ -54,6 +55,7 @@ fn test_lower_add_i64() {
         next_block_id: 0,
         next_slot_id: 0,
         debug_slots: Default::default(),
+        is_extern: false,
     };
 
     let b0 = TirBlockId(0);
@@ -88,6 +90,7 @@ fn test_lower_if_condbr() {
         next_block_id: 3,
         next_slot_id: 0,
         debug_slots: Default::default(),
+        is_extern: false,
     };
 
     // Block 0: CondBr %0, B1, B2
@@ -142,6 +145,7 @@ fn test_unsupported_make_error() {
         next_block_id: 1,
         next_slot_id: 0,
         debug_slots: Default::default(),
+        is_extern: false,
     };
 
     // Get is still unsupported in Phase 14.3 lowering (Make is now supported)
@@ -177,6 +181,7 @@ fn test_peephole_preserves_user_slots() {
         next_block_id: 1,
         next_slot_id: 1,
         debug_slots: Default::default(),
+        is_extern: false,
     };
 
     let s0 = TirSlotId(0);
@@ -224,6 +229,7 @@ fn test_peephole_fuses_superinstructions() {
         next_block_id: 1,
         next_slot_id: 0,
         debug_slots: Default::default(),
+        is_extern: false,
     };
 
     // v2 = v0 + v1

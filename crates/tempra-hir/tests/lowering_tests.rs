@@ -24,7 +24,10 @@ fn test_basic_lowering() {
                 panic!("Expected Integer, found {:?}", l.value);
             }
         } else {
-            panic!("Expected Let, found {:?}", f.body.as_ref().unwrap().statements[0]);
+            panic!(
+                "Expected Let, found {:?}",
+                f.body.as_ref().unwrap().statements[0]
+            );
         }
     } else {
         panic!("Expected Function, found {:?}", hir.items[0]);
@@ -37,7 +40,9 @@ fn test_binary_op_lowering() {
     let hir = assert_lowers(source);
 
     if let HirItem::Function(f) = &hir.items[0] {
-        if let HirStatement::Expr(HirExpression::Binary(b)) = &f.body.as_ref().unwrap().statements[0] {
+        if let HirStatement::Expr(HirExpression::Binary(b)) =
+            &f.body.as_ref().unwrap().statements[0]
+        {
             assert_eq!(b.op, HirBinaryOp::Add);
             if let HirExpression::Binary(rhs) = &*b.right {
                 assert_eq!(rhs.op, HirBinaryOp::Mul);
@@ -45,7 +50,10 @@ fn test_binary_op_lowering() {
                 panic!("Expected Binary RHS, found {:?}", b.right);
             }
         } else {
-            panic!("Expected Binary, found {:?}", f.body.as_ref().unwrap().statements[0]);
+            panic!(
+                "Expected Binary, found {:?}",
+                f.body.as_ref().unwrap().statements[0]
+            );
         }
     }
 }
@@ -56,7 +64,9 @@ fn test_struct_literal_lowering() {
     let hir = assert_lowers(source);
 
     if let HirItem::Function(f) = &hir.items[0] {
-        if let HirStatement::Expr(HirExpression::StructLiteral(sl)) = &f.body.as_ref().unwrap().statements[0] {
+        if let HirStatement::Expr(HirExpression::StructLiteral(sl)) =
+            &f.body.as_ref().unwrap().statements[0]
+        {
             if let HirType::Named(_, name) = &sl.ty {
                 assert_eq!(name, "User");
             } else {
@@ -65,7 +75,10 @@ fn test_struct_literal_lowering() {
             assert_eq!(sl.fields.len(), 1);
             assert_eq!(sl.fields[0].0, "name");
         } else {
-            panic!("Expected StructLiteral, found {:?}", f.body.as_ref().unwrap().statements[0]);
+            panic!(
+                "Expected StructLiteral, found {:?}",
+                f.body.as_ref().unwrap().statements[0]
+            );
         }
     }
 }

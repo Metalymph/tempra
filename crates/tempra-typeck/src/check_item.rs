@@ -128,7 +128,8 @@ fn check_function(ctx: &mut TypeContext, f: &mut HirFunction) {
                     let is_implicit_ok_unit = f.is_fallible
                         && matches!(f.return_type, None | Some(HirType::Named(_, _)))
                         && body_ty == Type::Unit
-                        && *expected == Type::Result(Box::new(Type::Unit), Box::new(Type::BuiltinError));
+                        && *expected
+                            == Type::Result(Box::new(Type::Unit), Box::new(Type::BuiltinError));
 
                     if !is_implicit_ok_unit {
                         ctx.error(

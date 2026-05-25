@@ -1,2 +1,2 @@
-pub mod std;
 pub mod registry;
+pub mod std;

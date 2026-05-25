@@ -923,7 +923,9 @@ impl<'a> Interpreter<'a> {
                         }
                         args.reverse();
 
-                        let resolver = self.native_resolver.ok_or_else(|| VmError::Native("native resolver not registered".into()))?;
+                        let resolver = self.native_resolver.ok_or_else(|| {
+                            VmError::Native("native resolver not registered".into())
+                        })?;
 
                         let name = target_func.name.as_str();
                         let last_dot = name.rfind('.');
@@ -933,8 +935,12 @@ impl<'a> Interpreter<'a> {
                             ("", name)
                         };
 
-                        let func_ptr = resolver(mod_name, func_name)
-                            .ok_or_else(|| VmError::Native(format!("unresolved native function: {}", target_func.name)))?;
+                        let func_ptr = resolver(mod_name, func_name).ok_or_else(|| {
+                            VmError::Native(format!(
+                                "unresolved native function: {}",
+                                target_func.name
+                            ))
+                        })?;
                         let res = func_ptr(&args).map_err(|e| VmError::Native(e))?;
 
                         if target_func.ret != BytecodeType::Unit {

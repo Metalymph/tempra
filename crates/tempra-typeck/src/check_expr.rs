@@ -337,7 +337,7 @@ fn resolve_name(
         return Ok(ResolvedName::Namespace(resolved));
     }
     if matches!(name, "fs" | "os" | "env" | "Regex") {
-        return Ok(ResolvedName::Namespace(name.to_string()));
+        return Ok(ResolvedName::Namespace(format!("@{}", name)));
     }
 
     if !ctx.current_module.is_empty() {
@@ -1938,10 +1938,10 @@ fn check_call(ctx: &mut TypeContext, expr: &mut HirExpression, expected: Option<
         ResolvedCallee::Namespace(ns, method) => {
             if let HirExpression::Call(ref mut c) = expr {
                 match ns.as_str() {
-                    "fs" => return check_fs_builtin(ctx, &method, &mut c.args, c.span),
-                    "env" => return check_env_builtin(ctx, &method, &mut c.args, c.span),
-                    "os" => return check_os_builtin(ctx, &method, &mut c.args, c.span),
-                    "Regex" => return check_regex_constructor(ctx, &method, &mut c.args, c.span),
+                    "@fs" => return check_fs_builtin(ctx, &method, &mut c.args, c.span),
+                    "@env" => return check_env_builtin(ctx, &method, &mut c.args, c.span),
+                    "@os" => return check_os_builtin(ctx, &method, &mut c.args, c.span),
+                    "@Regex" => return check_regex_constructor(ctx, &method, &mut c.args, c.span),
                     _ => {
                         let qualified = format!("{}.{}", ns, method);
                         if ctx.functions.contains_key(&qualified) {

@@ -58,8 +58,14 @@ pub fn run_source_vm_with_options(
         ));
     }
 
-    tempra_vm::run_function_with_resolver(&module, "main", vec![], options, Some(tempra_native::registry::resolve))
-        .map_err(|e| DriverError::VmError(format!("{:?}", e)))
+    tempra_vm::run_function_with_resolver(
+        &module,
+        "main",
+        vec![],
+        options,
+        Some(tempra_native::registry::resolve),
+    )
+    .map_err(|e| DriverError::VmError(format!("{:?}", e)))
 }
 
 pub fn run_source_vm_profiled(
@@ -89,8 +95,14 @@ pub fn run_source_vm_profiled(
         ));
     }
 
-    tempra_vm::Interpreter::run_function_profiled_with_resolver(&module, "main", vec![], options, Some(tempra_native::registry::resolve))
-        .map_err(|e| DriverError::VmError(format!("{:?}", e)))
+    tempra_vm::Interpreter::run_function_profiled_with_resolver(
+        &module,
+        "main",
+        vec![],
+        options,
+        Some(tempra_native::registry::resolve),
+    )
+    .map_err(|e| DriverError::VmError(format!("{:?}", e)))
 }
 
 fn compile_and_cache_module(

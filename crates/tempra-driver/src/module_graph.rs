@@ -49,8 +49,36 @@ pub fn resolve_import_path(
             }
             resolved
         }
-        ImportPathKind::Package | ImportPathKind::StandardLibrary => {
+        ImportPathKind::Package => {
             let mut resolved = root_dir.to_path_buf();
+            for (i, seg) in segments.iter().enumerate() {
+                if i == segments.len() - 1 {
+                    resolved.push(format!("{}.tmpr", seg));
+                } else {
+                    resolved.push(seg);
+                }
+            }
+            resolved
+        }
+        ImportPathKind::StandardLibrary => {
+            let mut base_dir = root_dir.to_path_buf();
+            let mut found_std = false;
+            let mut current = root_dir.to_path_buf();
+            loop {
+                if current.join("std").is_dir() {
+                    base_dir = current;
+                    found_std = true;
+                    break;
+                }
+                if !current.pop() {
+                    break;
+                }
+            }
+            if !found_std {
+                base_dir = std::env::current_dir().unwrap_or(root_dir.to_path_buf());
+            }
+
+            let mut resolved = base_dir;
             for (i, seg) in segments.iter().enumerate() {
                 if i == segments.len() - 1 {
                     resolved.push(format!("{}.tmpr", seg));
@@ -194,19 +222,16 @@ fn load_module_recursive(
     // First, resolve imports and detect cycles
     for item in &hir.items {
         if let HirItem::Import(imp) = item {
-            let local_alias = match imp.kind {
-                tempra_ast::ImportPathKind::Relative => match imp.path.last() {
-                    Some(alias) => alias.clone(),
-                    None => {
-                        diagnostics.push(
-                            Diagnostic::error(imp.span, "empty import path")
-                                .with_file_path(path.to_string_lossy().to_string()),
-                        );
-                        load_errors = true;
-                        continue;
-                    }
-                },
-                _ => imp.path.join("."),
+            let local_alias = match imp.path.last() {
+                Some(alias) => alias.clone(),
+                None => {
+                    diagnostics.push(
+                        Diagnostic::error(imp.span, "empty import path")
+                            .with_file_path(path.to_string_lossy().to_string()),
+                    );
+                    load_errors = true;
+                    continue;
+                }
             };
 
             let resolved_path = resolve_import_path(root_dir, &path, &imp.path, imp.kind);

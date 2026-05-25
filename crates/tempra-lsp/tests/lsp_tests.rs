@@ -620,3 +620,69 @@ async fn test_integration_rename() {
     assert_eq!(edits[1].range.start.character, 8);
     assert_eq!(edits[1].new_text, "new_name");
 }
+
+#[tokio::test]
+async fn test_integration_stdlib_imports() {
+    use tempra_lsp::server::Backend;
+    use tower_lsp::lsp_types::*;
+    use tower_lsp::LanguageServer;
+
+    let (service, _) = tower_lsp::LspService::new(Backend::new);
+    let backend = service.inner();
+
+    // 1. Open a mock fs.tmpr
+    let fs_uri = Url::parse("file:///fs.tmpr").unwrap();
+    let fs_source = "pub extern fn exists(path: String) -> Bool".to_string();
+    backend
+        .did_open(DidOpenTextDocumentParams {
+            text_document: TextDocumentItem {
+                uri: fs_uri.clone(),
+                language_id: "tempra".to_string(),
+                version: 1,
+                text: fs_source,
+            },
+        })
+        .await;
+
+    // 2. Open main.tmpr importing fs
+    let main_uri = Url::parse("file:///main.tmpr").unwrap();
+    let main_source = "import std.fs;\nfn main() {\n    fs.\n}".to_string();
+    backend
+        .did_open(DidOpenTextDocumentParams {
+            text_document: TextDocumentItem {
+                uri: main_uri.clone(),
+                language_id: "tempra".to_string(),
+                version: 1,
+                text: main_source,
+            },
+        })
+        .await;
+
+    // 3. Request completion at `fs.` (line 2, char 7)
+    let params = CompletionParams {
+        text_document_position: TextDocumentPositionParams {
+            text_document: TextDocumentIdentifier { uri: main_uri },
+            position: Position {
+                line: 2,
+                character: 7,
+            },
+        },
+        work_done_progress_params: WorkDoneProgressParams::default(),
+        partial_result_params: PartialResultParams::default(),
+        context: None,
+    };
+
+    let response = backend
+        .completion(params)
+        .await
+        .unwrap()
+        .expect("completions expected");
+    let items = match response {
+        CompletionResponse::Array(arr) => arr,
+        CompletionResponse::List(list) => list.items,
+    };
+
+    // Should contain "exists"
+    let exists_item = items.iter().find(|i| i.label == "exists");
+    assert!(exists_item.is_some(), "Completion for fs.exists not found");
+}

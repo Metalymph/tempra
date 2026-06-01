@@ -127,6 +127,7 @@ fn compile_and_cache_module(
                     &type_ctx,
                     &mut module_builder,
                     None,
+                    None,
                 ) {
                     Ok(tir_func) => {
                         module_builder.add_function(tir_func);
@@ -166,6 +167,7 @@ fn compile_and_cache_module(
                         &type_ctx,
                         &mut module_builder,
                         Some(target_ty.clone()),
+                        None,
                     ) {
                         Ok(tir_func) => {
                             module_builder.add_function(tir_func);
@@ -252,16 +254,125 @@ pub fn run_file(path: &Path) -> Result<(), DriverError> {
 }
 
 pub fn run_file_with_experimental_vm(path: &Path, args: &[String]) -> Result<(), DriverError> {
-    run_file_with_experimental_vm_jit(path, args, false)
+    run_file_with_experimental_vm_jit(path, args, false).map(|_| ())
 }
 
 pub fn run_file_with_experimental_vm_jit(
     path: &Path,
     args: &[String],
     jit_enabled: bool,
-) -> Result<(), DriverError> {
-    let source = fs::read_to_string(path)?;
-    run_source_with_experimental_vm_jit(&source, args, jit_enabled)
+) -> Result<tempra_vm::value::VmValue, DriverError> {
+    use crate::module_graph::{load_module_graph, DiskDocumentLoader};
+    use std::collections::HashMap;
+    use tempra_typeck::{check_modules_always, ModuleToCheck};
+
+    if !args.is_empty() {
+        return Err(DriverError::UnsupportedExperimentalVm(
+            "CLI arguments are not yet supported in experimental VM".into(),
+        ));
+    }
+
+    let mut diagnostics = Vec::new();
+    let mut graph = match load_module_graph(path, &DiskDocumentLoader, &mut diagnostics) {
+        Ok(g) => g,
+        Err(_) => {
+            let err_msgs: Vec<String> = diagnostics.iter().map(|d| format!("{:?}", d)).collect();
+            return Err(DriverError::TypeError(err_msgs.join("\n")));
+        }
+    };
+
+    let mut files = Vec::new();
+    for name in &graph.order {
+        if let Some(node) = graph.modules.get_mut(name) {
+            if let Some(hir) = node.hir.take() {
+                files.push((node.name.clone(), node.imports.clone(), hir));
+            }
+        }
+    }
+
+    let mut modules_to_check = Vec::new();
+    for (name, imports, hir) in &mut files {
+        modules_to_check.push(ModuleToCheck {
+            name: name.clone(),
+            imports: imports.clone(),
+            file: hir,
+        });
+    }
+
+    let source_texts = HashMap::new();
+    let type_ctx = check_modules_always(&mut modules_to_check, &source_texts, false);
+    if !type_ctx.errors.is_empty() {
+        let err_msgs: Vec<String> = type_ctx.errors.iter().map(|e| format!("{:?}", e)).collect();
+        return Err(DriverError::TypeError(err_msgs.join("\n")));
+    }
+
+    let mut module_builder = tempra_tir::builder::ModuleBuilder::new();
+    let mut errors = Vec::new();
+
+    for (name, _imports, hir) in &files {
+        for item in &hir.items {
+            if let tempra_hir::HirItem::Function(func) = item {
+                let prefix = if name.is_empty() {
+                    None
+                } else {
+                    Some(name.as_str())
+                };
+                match tempra_tir_lower::lower::lower_function(
+                    func,
+                    &type_ctx,
+                    &mut module_builder,
+                    None,
+                    prefix,
+                ) {
+                    Ok(tir_func) => {
+                        module_builder.add_function(tir_func);
+                    }
+                    Err(e) => {
+                        errors.push(format!("unsupported in fn '{}': {}", func.name, e));
+                    }
+                }
+            }
+        }
+    }
+
+    if !errors.is_empty() {
+        return Err(DriverError::UnsupportedExperimentalVm(errors.join("\n")));
+    }
+
+    let bc_module =
+        tempra_bytecode_lower::lower_tir_module(&module_builder.module).map_err(|e| {
+            DriverError::UnsupportedExperimentalVm(format!("bytecode lowering error: {:?}", e))
+        })?;
+
+    tempra_bytecode::verify::verify_module(&bc_module).map_err(|e| {
+        DriverError::UnsupportedExperimentalVm(format!("verification error: {:?}", e))
+    })?;
+
+    let main_name = bc_module
+        .functions
+        .iter()
+        .find(|f| f.name == "main" || f.name.ends_with(".main"))
+        .map(|f| f.name.clone());
+    let main_name = match main_name {
+        Some(name) => name,
+        None => {
+            return Err(DriverError::UnsupportedExperimentalVm(
+                "experimental VM currently requires main()".into(),
+            ));
+        }
+    };
+
+    let mut options = tempra_vm::profile::VmOptions::default();
+    options.jit_enabled = jit_enabled;
+
+    tempra_vm::run_function_with_resolver(
+        &bc_module,
+        &main_name,
+        vec![],
+        options,
+        Some(tempra_native::registry::resolve),
+    )
+    .map_err(|e| DriverError::VmError(format!("{:?}", e)))
 }
 
 pub fn run_source_with_experimental_vm_jit(
@@ -351,6 +462,7 @@ pub fn emit_tir_source(source: &str) -> Result<String, DriverError> {
                 &type_ctx,
                 &mut module_builder,
                 None,
+                None,
             ) {
                 Ok(tir_func) => {
                     module_builder.add_function(tir_func);
@@ -403,6 +515,7 @@ pub fn interpret_tir_source(
                 func,
                 &type_ctx,
                 &mut module_builder,
+                None,
                 None,
             ) {
                 Ok(tir_func) => {

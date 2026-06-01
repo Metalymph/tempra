@@ -551,6 +551,13 @@ impl<'a> Interpreter<'a> {
             // Increment IP before execution
             let (frame_func_id, current_ip) = {
                 let frame = self.call_stack.last_mut().unwrap();
+                let target_func = &self.module.functions[frame.function_id.0 as usize];
+                let instr = &target_func.code[frame.ip];
+
+                if target_func.name == "main" || target_func.name == "std.path.join" {
+                    println!("EXEC: {} @ {} - {:?}", target_func.name, frame.ip, instr);
+                }
+
                 let func_id = frame.function_id;
                 let ip = frame.ip;
                 frame.ip += 1;

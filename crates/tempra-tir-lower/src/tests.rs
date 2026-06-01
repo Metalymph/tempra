@@ -46,7 +46,7 @@ fn lower_const_return_i64() {
 
     let ctx = create_test_ctx();
     let mut builder = ModuleBuilder::new();
-    let tir_func = lower_function(&func, &ctx, &mut builder, None).unwrap();
+    let tir_func = lower_function(&func, &ctx, &mut builder, None, None).unwrap();
     builder.add_function(tir_func);
     let module = builder.module;
 
@@ -76,7 +76,7 @@ fn lower_add_return_i64() {
 
     let ctx = create_test_ctx();
     let mut builder = ModuleBuilder::new();
-    let tir_func = lower_function(&func, &ctx, &mut builder, None).unwrap();
+    let tir_func = lower_function(&func, &ctx, &mut builder, None, None).unwrap();
     builder.add_function(tir_func);
 
     assert!(verify_module(&builder.module).is_ok());
@@ -109,7 +109,7 @@ fn lower_param_return() {
 
     let ctx = create_test_ctx();
     let mut builder = ModuleBuilder::new();
-    let tir_func = lower_function(&func, &ctx, &mut builder, None).unwrap();
+    let tir_func = lower_function(&func, &ctx, &mut builder, None, None).unwrap();
     builder.add_function(tir_func);
 
     assert!(verify_module(&builder.module).is_ok());
@@ -144,7 +144,7 @@ fn var_assign_return_ok() {
 
     let ctx = create_test_ctx();
     let mut builder = ModuleBuilder::new();
-    let tir_func = lower_function(&func, &ctx, &mut builder, None).unwrap();
+    let tir_func = lower_function(&func, &ctx, &mut builder, None, None).unwrap();
     builder.add_function(tir_func);
 
     assert!(verify_module(&builder.module).is_ok());
@@ -174,7 +174,7 @@ fn let_assign_error() {
 
     let ctx = create_test_ctx();
     let mut builder = ModuleBuilder::new();
-    let res = lower_function(&func, &ctx, &mut builder, None);
+    let res = lower_function(&func, &ctx, &mut builder, None, None);
     assert!(res.is_err());
     assert!(res
         .unwrap_err()
@@ -219,7 +219,7 @@ fn call_known_function_ok() {
 
     let mut builder = ModuleBuilder::new();
     builder.add_declaration("other", vec![TirType::Int64], TirType::Int64);
-    let tir_func = lower_function(&func, &ctx, &mut builder, None).unwrap();
+    let tir_func = lower_function(&func, &ctx, &mut builder, None, None).unwrap();
     builder.add_function(tir_func);
 
     if let Err(e) = verify_module(&builder.module) {
@@ -260,7 +260,7 @@ fn if_both_branches_return_ok() {
 
     let ctx = create_test_ctx();
     let mut builder = ModuleBuilder::new();
-    let tir_func = lower_function(&func, &ctx, &mut builder, None).unwrap();
+    let tir_func = lower_function(&func, &ctx, &mut builder, None, None).unwrap();
     builder.add_function(tir_func);
 
     assert!(verify_module(&builder.module).is_ok());
@@ -297,7 +297,7 @@ fn if_missing_return_error() {
 
     let ctx = create_test_ctx();
     let mut builder = ModuleBuilder::new();
-    let res = lower_function(&func, &ctx, &mut builder, None);
+    let res = lower_function(&func, &ctx, &mut builder, None, None);
     assert!(res.is_err());
     assert!(res.unwrap_err().to_string().contains("missing return"));
 }

@@ -261,6 +261,8 @@ impl<'a> LowerContext<'a> {
                     Ok(info.ty.clone())
                 } else if let Some((_, tir_ty, _)) = self.locals.get(name) {
                     unmap_type(tir_ty)
+                } else if self.type_ctx.is_module(name) {
+                    Ok(Type::Namespace(name.clone()))
                 } else {
                     Err(TirLowerError::UnknownLocal(name.clone(), *span))
                 }
@@ -319,6 +321,12 @@ impl<'a> LowerContext<'a> {
             }
             HirExpression::Member(m) => {
                 let obj_ty = self.infer_expr_type(&m.object)?;
+                if let Type::Namespace(ns) = &obj_ty {
+                    let qualified = format!("{}.{}", ns, m.field);
+                    if self.type_ctx.is_module(&qualified) {
+                        return Ok(Type::Namespace(qualified));
+                    }
+                }
                 if m.field == "len" {
                     if matches!(obj_ty, Type::Array(_) | Type::Slice(_) | Type::String) {
                         return Ok(Type::Int64);
@@ -356,6 +364,12 @@ impl<'a> LowerContext<'a> {
                     }
 
                     let obj_ty = self.infer_expr_type(&m.object)?;
+                    if let Type::Namespace(ns) = &obj_ty {
+                        let qualified = format!("{}.{}", ns, m.field);
+                        if let Some(sig) = self.type_ctx.functions.get(&qualified) {
+                            return Ok(sig.return_type.clone());
+                        }
+                    }
                     if let Some(sig) = self
                         .type_ctx
                         .lookup_direct_method_signature(&obj_ty, &m.field)
@@ -1009,6 +1023,38 @@ impl<'a> LowerContext<'a> {
                                 let obj = self.lower_expression(&m.object)?;
                                 return self.builder.build_bytes(obj).map_err(|e| e.into());
                             }
+                        }
+                    }
+
+                    if let Type::Namespace(ns) = &obj_ty {
+                        let full_name = format!("{}.{}", ns, m.field);
+                        if let Some(sig) = self.type_ctx.functions.get(&full_name) {
+                            if sig.params.len() != c.args.len() {
+                                return Err(TirLowerError::UnsupportedExpr(
+                                    format!(
+                                        "wrong arity for call to {}: expected {}, found {}",
+                                        full_name,
+                                        sig.params.len(),
+                                        c.args.len()
+                                    ),
+                                    c.span,
+                                ));
+                            }
+
+                            let mut arg_values = Vec::new();
+                            for arg in &c.args {
+                                let arg_expr = match arg {
+                                    HirCallArgument::Positional(e) => e,
+                                    HirCallArgument::Named(n) => &n.value,
+                                };
+                                arg_values.push(self.lower_expression(arg_expr)?);
+                            }
+
+                            let func_id = self.module_builder.declare_function(&full_name);
+                            return self
+                                .builder
+                                .build_call(func_id, arg_values)
+                                .map_err(|e| e.into());
                         }
                     }
 
@@ -1793,6 +1839,7 @@ pub fn lower_function(
     type_ctx: &TypeContext,
     module_builder: &mut ModuleBuilder,
     self_ty: Option<Type>,
+    module_prefix: Option<&str>,
 ) -> Result<TirFunction, TirLowerError> {
     let ret_ty = if let Some(rt) = &func.return_type {
         let ty = resolve_hir_type(rt, type_ctx, self_ty.as_ref())?;
@@ -1801,7 +1848,17 @@ pub fn lower_function(
         TirType::Unit
     };
 
-    let mut builder = module_builder.new_function(&func.name, ret_ty);
+    let qual_name = if let Some(p) = module_prefix {
+        if p.is_empty() {
+            func.name.clone()
+        } else {
+            format!("{}.{}", p, func.name)
+        }
+    } else {
+        func.name.clone()
+    };
+
+    let mut builder = module_builder.new_function(&qual_name, ret_ty);
     builder.func.is_extern = func.is_extern;
 
     // Extern functions: emit params + empty entry block with Ret

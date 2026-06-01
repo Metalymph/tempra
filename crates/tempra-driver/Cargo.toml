@@ -34,3 +34,4 @@ jit-cranelift = ["tempra-vm/jit-cranelift"]
 
 [dev-dependencies]
 tempra-repl.workspace = true
+tempfile = "3.10"

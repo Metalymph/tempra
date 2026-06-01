@@ -75,7 +75,21 @@ pub fn resolve_import_path(
                 }
             }
             if !found_std {
-                base_dir = std::env::current_dir().unwrap_or(root_dir.to_path_buf());
+                if let Ok(cwd) = std::env::current_dir() {
+                    let mut current = cwd.clone();
+                    loop {
+                        if current.join("std").is_dir() {
+                            base_dir = current;
+                            break;
+                        }
+                        if !current.pop() {
+                            base_dir = cwd;
+                            break;
+                        }
+                    }
+                } else {
+                    base_dir = root_dir.to_path_buf();
+                }
             }
 
             let mut resolved = base_dir;
@@ -222,20 +236,22 @@ fn load_module_recursive(
     // First, resolve imports and detect cycles
     for item in &hir.items {
         if let HirItem::Import(imp) = item {
-            let local_alias = match imp.path.last() {
-                Some(alias) => alias.clone(),
-                None => {
-                    diagnostics.push(
-                        Diagnostic::error(imp.span, "empty import path")
-                            .with_file_path(path.to_string_lossy().to_string()),
-                    );
-                    load_errors = true;
-                    continue;
-                }
+            let local_alias = if imp.path.is_empty() {
+                diagnostics.push(
+                    Diagnostic::error(imp.span, "empty import path")
+                        .with_file_path(path.to_string_lossy().to_string()),
+                );
+                load_errors = true;
+                continue;
+            } else {
+                imp.path.join(".")
             };
 
             let resolved_path = resolve_import_path(root_dir, &path, &imp.path, imp.kind);
-            let dep_name = get_module_name(root_dir, &resolved_path);
+            let dep_name = match imp.kind {
+                ImportPathKind::Relative => get_module_name(root_dir, &resolved_path),
+                _ => imp.path.join("."),
+            };
 
             imports.insert(local_alias, dep_name.clone());
 

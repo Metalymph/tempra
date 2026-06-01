@@ -15,7 +15,7 @@ fn run_source(source: &str, entry: &str, args: Vec<VmValue>) -> VmValue {
     for item in &hir.items {
         match item {
             HirItem::Function(func) => {
-                let tir_func = lower_tir_function(func, &type_ctx, &mut tir_builder, None)
+                let tir_func = lower_tir_function(func, &type_ctx, &mut tir_builder, None, None)
                     .expect("TIR lower error");
                 tir_builder.add_function(tir_func);
             }
@@ -39,6 +39,7 @@ fn run_source(source: &str, entry: &str, args: Vec<VmValue>) -> VmValue {
                         &type_ctx,
                         &mut tir_builder,
                         Some(target_ty.clone()),
+                        None,
                     )
                     .expect("TIR lower error");
                     tir_builder.add_function(tir_func);

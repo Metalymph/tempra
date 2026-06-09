@@ -5,3 +5,6 @@ edition = "2021"
 
 [dependencies]
 tempra-vm = { path = "../tempra-vm" }
+
+[dev-dependencies]
+tempfile = "3"

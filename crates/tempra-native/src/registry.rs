@@ -6,6 +6,8 @@ pub type NativeFn = fn(&[VmValue]) -> Result<VmValue, String>;
 pub fn resolve(module: &str, function: &str) -> Option<NativeFn> {
     match (module, function) {
         ("std.fs", "exists") => Some(fs::exists),
+        ("std.fs", "read_text") => Some(fs::read_text),
+        ("std.fs", "write_text") => Some(fs::write_text),
         ("std.path", "join") => Some(path::join),
         ("std.path", "basename") => Some(path::basename),
         ("std.strings", "contains") => Some(strings::contains),

@@ -154,3 +154,112 @@ pub fn not_main() {
         panic!("Expected UnsupportedExperimentalVm error, got {:?}", res);
     }
 }
+
+#[test]
+fn test_stdlib_fs_read_text_ok() {
+    let dir = tempdir().unwrap();
+    let fixture_path = dir.path().join("hello.txt");
+    let main_path = dir.path().join("main.tmpr");
+
+    fs::write(&fixture_path, "hello from tempra").unwrap();
+
+    let main_src = format!(
+        r#"
+import std.fs;
+
+pub fn main() -> Int64 {{
+    let result = std.fs.read_text("{}");
+    match result {{
+        Ok(text) => return 0;
+        Err(_) => return 1;
+    }}
+}}
+"#,
+        fixture_path.to_string_lossy()
+    );
+
+    fs::write(&main_path, main_src).unwrap();
+
+    let res = run_tempra_vm_file(&main_path).unwrap();
+    assert_eq!(res, VmValue::Int64(0));
+}
+
+#[test]
+fn test_stdlib_fs_read_text_missing() {
+    let dir = tempdir().unwrap();
+    let main_path = dir.path().join("main.tmpr");
+
+    let main_src = r#"
+import std.fs;
+
+pub fn main() -> Int64 {
+    let result = std.fs.read_text("nonexistent_file_xyz.txt");
+    match result {
+        Ok(_) => return 1;
+        Err(_) => return 0;
+    }
+}
+"#;
+
+    fs::write(&main_path, main_src).unwrap();
+
+    let res = run_tempra_vm_file(&main_path).unwrap();
+    assert_eq!(res, VmValue::Int64(0));
+}
+
+#[test]
+fn test_stdlib_fs_write_text_ok() {
+    let dir = tempdir().unwrap();
+    let out_path = dir.path().join("out.txt");
+    let main_path = dir.path().join("main.tmpr");
+
+    let main_src = format!(
+        r#"
+import std.fs;
+
+pub fn main() -> Int64 {{
+    let result = std.fs.write_text("{}", "written by tempra");
+    match result {{
+        Ok(_) => return 0;
+        Err(_) => return 1;
+    }}
+}}
+"#,
+        out_path.to_string_lossy()
+    );
+
+    fs::write(&main_path, main_src).unwrap();
+
+    let res = run_tempra_vm_file(&main_path).unwrap();
+    assert_eq!(res, VmValue::Int64(0));
+    // Verify the file was actually written
+    assert_eq!(fs::read_to_string(&out_path).unwrap(), "written by tempra");
+}
+
+#[test]
+fn test_stdlib_fs_write_text_invalid_path() {
+    let dir = tempdir().unwrap();
+    let main_path = dir.path().join("main.tmpr");
+
+    // Use a path whose parent doesn't exist so write will fail
+    let bad_path = dir.path().join("nonexistent_dir").join("out.txt");
+    let main_src = format!(
+        r#"
+import std.fs;
+
+pub fn main() -> Int64 {{
+    let result = std.fs.write_text("{}", "data");
+    match result {{
+        Ok(_) => return 1;
+        Err(_) => return 0;
+    }}
+}}
+"#,
+        bad_path.to_string_lossy()
+    );
+
+    fs::write(&main_path, main_src).unwrap();
+
+    let res = run_tempra_vm_file(&main_path).unwrap();
+    assert_eq!(res, VmValue::Int64(0));
+}

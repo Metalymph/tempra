@@ -46,5 +46,26 @@ fn main() -> Int64 {
         std.io.println("File exists: false");
     }
 
+    let write_res = std.fs.write_text("examples/test_output.txt", "hello tempra");
+    match write_res {
+        Ok(_) => std.io.println("File write: success"),
+        Err(e) => {
+            std.io.print("File write failed: ");
+            std.io.println(e);
+        }
+    }
+
+    let read_res = std.fs.read_text("examples/test_output.txt");
+    match read_res {
+        Ok(text) => {
+            std.io.print("File read: ");
+            std.io.println(text);
+        }
+        Err(e) => {
+            std.io.print("File read failed: ");
+            std.io.println(e);
+        }
+    }
+
     return 0;
 }

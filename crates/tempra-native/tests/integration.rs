@@ -88,3 +88,87 @@ fn test_io_smoke() {
     let res2 = println_handler(&args).unwrap();
     assert_eq!(res2, VmValue::Unit);
 }
+
+#[test]
+fn test_fs_read_text_ok() {
+    let handler = resolve("std.fs", "read_text").expect("read_text handler not found");
+
+    // Use this test file itself — it definitely exists
+    let path = format!("{}/tests/integration.rs", env!("CARGO_MANIFEST_DIR"));
+    let args = vec![VmValue::String(path)];
+    let res = handler(&args).expect("handler should not return Err");
+
+    // Should be Ok(String)
+    assert!(
+        matches!(&res, VmValue::Enum(e, v, p) if e == "Result" && v == "Ok" && p.len() == 1),
+        "Expected Ok(String), got {:?}",
+        res
+    );
+    if let VmValue::Enum(_, _, payloads) = &res {
+        assert!(matches!(&payloads[0], VmValue::String(_)));
+    }
+}
+
+#[test]
+fn test_fs_read_text_missing() {
+    let handler = resolve("std.fs", "read_text").expect("read_text handler not found");
+
+    let args = vec![VmValue::String("does_not_exist_xyz.txt".into())];
+    let res = handler(&args).expect("handler should not panic");
+
+    // Should be Err(String)
+    assert!(
+        matches!(&res, VmValue::Enum(e, v, p) if e == "Result" && v == "Err" && p.len() == 1),
+        "Expected Err(String), got {:?}",
+        res
+    );
+    if let VmValue::Enum(_, _, payloads) = &res {
+        assert!(matches!(&payloads[0], VmValue::String(_)));
+    }
+}
+
+#[test]
+fn test_fs_write_text_ok() {
+    let handler = resolve("std.fs", "write_text").expect("write_text handler not found");
+
+    let dir = tempfile::tempdir().expect("tempdir failed");
+    let out_path = dir.path().join("out.txt");
+    let args = vec![
+        VmValue::String(out_path.to_string_lossy().to_string()),
+        VmValue::String("hello from native".into()),
+    ];
+    let res = handler(&args).expect("handler should not panic");
+
+    // Should be Ok(Unit)
+    assert!(
+        matches!(&res, VmValue::Enum(e, v, p) if e == "Result" && v == "Ok" && p.len() == 1),
+        "Expected Ok(Unit), got {:?}",
+        res
+    );
+    if let VmValue::Enum(_, _, payloads) = &res {
+        assert_eq!(payloads[0], VmValue::Unit);
+    }
+    assert_eq!(
+        std::fs::read_to_string(&out_path).unwrap(),
+        "hello from native"
+    );
+}
+
+#[test]
+fn test_fs_write_text_invalid_path() {
+    let handler = resolve("std.fs", "write_text").expect("write_text handler not found");
+
+    // Non-existent parent directory
+    let args = vec![
+        VmValue::String("/nonexistent_dir_xyz/out.txt".into()),
+        VmValue::String("data".into()),
+    ];
+    let res = handler(&args).expect("handler should not panic");
+
+    // Should be Err(String)
+    assert!(
+        matches!(&res, VmValue::Enum(e, v, p) if e == "Result" && v == "Err" && p.len() == 1),
+        "Expected Err(String), got {:?}",
+        res
+    );
+}

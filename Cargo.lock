@@ -1255,6 +1255,7 @@ dependencies = [
 name = "tempra-native"
 version = "0.1.0"
 dependencies = [
+ "tempfile",
  "tempra-vm",
 ]
 

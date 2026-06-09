@@ -173,7 +173,7 @@ Tempra is rapidly evolving. We currently have a functional core with:
 - **Rich Syntax**: Arrays, Slices, Structs, Enums, Expressions-as-statements.
 - **Strong Type System**: Static type validation for variables, functions, and standard methods.
 - **Unicode Model**: String handling based on Unicode scalar values (`len()`) and UTF-8 bytes (`size()`).
-- **Standard Library**: Core `os`, `fs`, `env`, and `builtins` (print, fmt, dbg, cmd).
+- **Standard Library**: Native bridge exposing `std.fs`, `std.path`, `std.strings`, `std.io`.
 - **Tooling**: A working CLI with `run` and `check` commands.
 
 ## Roadmap
@@ -181,7 +181,7 @@ Tempra is rapidly evolving. We currently have a functional core with:
 ### Current (Done)
 - [x] Lexer, Parser, AST, HIR, Type Checker.
 - [x] Fast, high-level Interpreter.
-- [x] Initial Stdlib: `os`, `fs`, `env`.
+- [x] Initial Stdlib MVP: `std.fs`, `std.path`, `std.strings`, `std.io`.
 - [x] Native Command Execution (`cmd`).
 - [x] Array Slicing `xs[start..end]`.
 - [x] Shared backing storage for array slices.

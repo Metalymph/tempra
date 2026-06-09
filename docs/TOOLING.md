@@ -311,6 +311,9 @@ The LSP server provides safe local variable and parameter renaming using a works
 - **Robust Verification**: Validates edits to prevent overlapping edits, filters duplicate spans, and reverse-sorts edits (descending start offset) for shift-free, safe application.
 - **Lexical Isolation**: Rejects keywords or invalid identifier formats (e.g. starting with digits) and restricts renaming strictly to semantic-index resolved local bindings.
 
+### 9.1 Standard Library Support
+The LSP views `std` modules as normal Tempra modules. Standard library completions, hover, and goto-definition work naturally through module-aware analysis whenever the `/std` namespace is resolved.
+
 ### Running the server
 
 ```bash

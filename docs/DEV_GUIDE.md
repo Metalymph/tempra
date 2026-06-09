@@ -95,3 +95,12 @@ Tempra employs a filesystem-driven, dot-separated module system.
 - **Visibility**: Items are private by default; `pub` visibility modifier is required for cross-module access.
 - **Type Checking Namespace Qualification**: During type checking, namespaces and types from other modules are resolved dynamically via the dot-separated prefix matching (`TypeContext::is_module`).
 - **Relative Imports**: Imports starting with a dot (e.g. `import .helper`) are resolved relative to the directory of the current source file.
+
+---
+
+## 6. Native Bridge Architecture
+
+The Tempra standard library relies on a native bridge to communicate with Rust implementations.
+- **Signatures**: Extern functions are declared in `.tmpr` files inside the `/std` directory (e.g., `pub extern fn exists(path: String) -> Bool`).
+- **Rust Implementation**: The `tempra-native` crate provides the actual logic for these standard library functions.
+- **VM Extern Dispatch**: During execution, the VM resolves `extern` calls by routing them to the native registry, which dispatches the call to the corresponding Rust function without leaving the VM cleanly.

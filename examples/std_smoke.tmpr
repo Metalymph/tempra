@@ -4,46 +4,46 @@ import std.strings;
 import std.io;
 
 fn main() -> Int64 {
-    io.println("--- Tempra Stdlib Smoke Test ---");
+    std.io.println("--- Tempra Stdlib Smoke Test ---");
 
     // Path
-    let p = path.join("foo", "bar.txt");
-    io.print("Path join: ");
-    io.println(p);
+    let p = std.path.join("foo", "bar.txt");
+    std.io.print("Path join: ");
+    std.io.println(p);
 
-    let b = path.basename(p);
-    io.print("Basename: ");
-    io.println(b);
+    let b = std.path.basename(p);
+    std.io.print("Basename: ");
+    std.io.println(b);
 
     // Strings
     let s = "Hello, Tempra!";
-    let has_tempra = strings.contains(s, "Tempra");
+    let has_tempra = std.strings.contains(s, "Tempra");
     if has_tempra {
-        io.println("String contains 'Tempra': true");
+        std.io.println("String contains 'Tempra': true");
     } else {
-        io.println("String contains 'Tempra': false");
+        std.io.println("String contains 'Tempra': false");
     }
 
-    let starts = strings.starts_with(s, "Hello");
+    let starts = std.strings.starts_with(s, "Hello");
     if starts {
-        io.println("String starts with 'Hello': true");
+        std.io.println("String starts with 'Hello': true");
     } else {
-        io.println("String starts with 'Hello': false");
+        std.io.println("String starts with 'Hello': false");
     }
 
-    let ends = strings.ends_with(s, "!");
+    let ends = std.strings.ends_with(s, "!");
     if ends {
-        io.println("String ends with '!': true");
+        std.io.println("String ends with '!': true");
     } else {
-        io.println("String ends with '!': false");
+        std.io.println("String ends with '!': false");
     }
 
     // FS
-    let exists = fs.exists("examples/std_smoke.tmpr");
+    let exists = std.fs.exists("examples/std_smoke.tmpr");
     if exists {
-        io.println("File exists: true");
+        std.io.println("File exists: true");
     } else {
-        io.println("File exists: false");
+        std.io.println("File exists: false");
     }
 
     return 0;

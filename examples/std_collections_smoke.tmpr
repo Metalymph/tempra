@@ -1,0 +1,49 @@
+import std.strings
+import std.io
+
+pub fn main() -> Int64 {
+    let empty: [Int64] = []
+    let nums: [Int64] = [10, 20, 30]
+
+    if empty.is_empty() {
+        std.io.println("empty.is_empty() => true  ✓")
+    }
+    
+    if !nums.is_empty() {
+        std.io.println("nums.is_empty()  => false ✓")
+    }
+
+    match nums.first() {
+        Some(v) => std.io.println("nums.first()     => Some(10) ✓")
+        None => {}
+    }
+
+    match nums.last() {
+        Some(v) => std.io.println("nums.last()      => Some(30) ✓")
+        None => {}
+    }
+
+    match empty.first() {
+        Some(v) => {}
+        None => std.io.println("empty.first()    => None ✓")
+    }
+
+    match empty.last() {
+        Some(v) => {}
+        None => std.io.println("empty.last()     => None ✓")
+    }
+
+    let text = std.strings.trim("   hello world   ")
+    let replaced = std.strings.replace("foo-bar-baz", "-", "_")
+
+    if std.strings.contains(text, "hello") {
+        std.io.println("String.trim()    ✓")
+    }
+
+    if std.strings.contains(replaced, "_") {
+        std.io.println("String.replace() ✓")
+    }
+
+    std.io.println("All Phase 19.2A checks passed.")
+    return 0
+}

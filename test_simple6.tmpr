@@ -1,0 +1,9 @@
+import std.io
+fn main() -> Int64 {
+    let nums = [10]
+    match nums.first() {
+        Some(v) => std.io.println("nums.first() => Some(10)")
+        None => {}
+    }
+    return 0
+}

@@ -13,6 +13,8 @@ pub fn resolve(module: &str, function: &str) -> Option<NativeFn> {
         ("std.strings", "contains") => Some(strings::contains),
         ("std.strings", "starts_with") => Some(strings::starts_with),
         ("std.strings", "ends_with") => Some(strings::ends_with),
+        ("std.strings", "trim") => Some(strings::trim),
+        ("std.strings", "replace") => Some(strings::replace),
         ("std.io", "print") => Some(io::print),
         ("std.io", "println") => Some(io::println),
         _ => None,

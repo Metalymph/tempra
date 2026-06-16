@@ -8,18 +8,31 @@ The Tempra standard library (`std`) provides a foundational set of cross-platfor
 ## Core Modules
 
 ### `std.fs`
-File system operations.
+File system operations. Fallible APIs return `Result<T, Error>`.
+
 - `std.fs.exists(path: String) -> Bool`
+- `std.fs.read_text(path: String) -> String!` — returns `Ok(String)` or `Err(String)`
+- `std.fs.write_text(path: String, text: String) -> Unit!` — returns `Ok(())` or `Err(String)`
 
 ```tempra
 import std.fs
-let has_config = std.fs.exists("config.json")
-```
 
-*Note*: Read/write operations (`read_text`, `write_text`) are currently deferred until native `Result` extern support is fully implemented.
+pub fn main() -> Int64 {
+    // Infallible existence check
+    let exists = std.fs.exists("config.json")
+
+    // Fallible read – returns Result<String, Error>
+    let result = std.fs.read_text("data.txt")
+    match result {
+        Ok(text) => 0
+        Err(_)   => 1
+    }
+}
+```
 
 ### `std.path`
 Path manipulation utilities.
+
 - `std.path.join(a: String, b: String) -> String`
 - `std.path.basename(path: String) -> String`
 
@@ -32,19 +45,24 @@ std.io.println(std.path.basename(full))
 
 ### `std.strings`
 String manipulation utilities.
+
 - `std.strings.contains(text: String, needle: String) -> Bool`
 - `std.strings.starts_with(text: String, prefix: String) -> Bool`
 - `std.strings.ends_with(text: String, suffix: String) -> Bool`
+- `std.strings.trim(text: String) -> String` *(Phase 19.2A)*
+- `std.strings.replace(text: String, from: String, to: String) -> String` *(Phase 19.2A)*
 
 ```tempra
 import std.strings
-let is_greeting = std.strings.starts_with("hello world", "hello")
+
+let greeting = std.strings.trim("  hello world  ")   // "hello world"
+let updated  = std.strings.replace("foo-bar", "-", "_")  // "foo_bar"
 let has_space = std.strings.contains("hello world", " ")
-let is_txt = std.strings.ends_with("file.txt", ".txt")
 ```
 
 ### `std.io`
 Basic input/output operations.
+
 - `std.io.print(value: String)`
 - `std.io.println(value: String)`
 
@@ -54,13 +72,40 @@ std.io.print("Status: ")
 std.io.println("Running")
 ```
 
+## Array / Slice Methods
+*(Phase 19.2A — available via method-call syntax on arrays and slices)*
+
+- `.len() -> Int64` — number of elements
+- `.is_empty() -> Bool` — true if len == 0
+- `.first() -> Option<T>` — `Some(first_element)` or `None` if empty
+- `.last() -> Option<T>` — `Some(last_element)` or `None` if empty
+
+```tempra
+let xs: [Int64] = [10, 20, 30]
+
+if xs.is_empty() {
+    // ...
+}
+
+match xs.first() {
+    Some(v) => v
+    None    => 0
+}
+
+match xs.last() {
+    Some(v) => v
+    None    => 0
+}
+```
+
 ## Native Error Convention
 
 The standard library adheres to strict error handling conventions to ensure stability across the Tempra-to-Rust native boundary:
 
 1. **No Panics**: Native Rust functions (`extern` implementations) must **never** panic. Any panic in a native function will crash the VM.
-2. **Runtime Failures**: If an operation fails in a way that should halt execution (or isn't catchable in current Tempra semantics) or targets an unknown native target, it returns `VmError::Native(String)`.
-3. **Future `Result` Design**: In the future, operations that can fail gracefully (like file I/O) will return a Tempra `Result<T, E>`. Native functions will construct the `Enum` representation of `Result` to pass the success or error state back to Tempra code. Until `Result` mapping across the FFI boundary is finalized, fallible APIs are deferred.
+2. **Result Enum**: Fallible native APIs return `VmValue::Enum("Result", "Ok"/"Err", payload)` which maps to Tempra `Result<T, Error>`. Pattern match on `Ok(...)` / `Err(...)` to handle failures.
+3. **Non-fallible APIs**: Boolean or value-returning APIs that cannot fail (e.g. `exists`, `contains`) return plain values directly.
+4. **`BuiltinError`**: The internal `Error` type in `Result<T, Error!>` signatures is lowered as `String` in TIR, carrying the error message.
 
 ## Legacy Code
 

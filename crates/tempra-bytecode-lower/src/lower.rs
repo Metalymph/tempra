@@ -283,11 +283,19 @@ impl<'a> FunctionLowerer<'a> {
                 for arg in args {
                     self.load_val(*arg)?;
                 }
-                self.emit(BytecodeInstr::Call(
-                    FunctionId(func_id.0 as u32),
-                    args.len() as u16,
-                ));
-                self.store_res(*res)?;
+
+                let bytecode_func_id = FunctionId(func_id.0 as u32);
+
+                self.emit(BytecodeInstr::Call(bytecode_func_id, args.len() as u16));
+
+                let target_ret = self.bc_module.functions[bytecode_func_id.0 as usize].ret;
+
+                if target_ret != BytecodeType::Unit {
+                    self.store_res(*res)?;
+                } else {
+                    self.emit(BytecodeInstr::ConstUnit);
+                    self.store_res(*res)?;
+                }
             }
             TirInstr::Slot(_, _) => {}
             TirInstr::Make(res, ty, variant, args) => {

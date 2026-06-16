@@ -1689,6 +1689,7 @@ fn check_array_method(
     name: &str,
     args: &mut [HirCallArgument],
     span: Span,
+    receiver_ty: &Type,
 ) -> Type {
     match name {
         "len" => {
@@ -1702,6 +1703,16 @@ fn check_array_method(
                 ctx.error("'is_empty' method expects 0 arguments", span);
             }
             Type::Bool
+        }
+        "first" | "last" => {
+            if !args.is_empty() {
+                ctx.error(format!("'{}' method expects 0 arguments", name), span);
+            }
+            let inner_ty = match receiver_ty {
+                Type::Array(inner) | Type::Slice(inner) => *inner.clone(),
+                _ => Type::Error,
+            };
+            Type::Option(Box::new(inner_ty))
         }
         _ => {
             ctx.error(format!("Array/Slice has no method '{}'", name), span);
@@ -2053,7 +2064,7 @@ fn check_call(ctx: &mut TypeContext, expr: &mut HirExpression, expected: Option<
                 match &receiver_ty {
                     Type::String => return check_string_method(ctx, &method, &mut c.args, c.span),
                     Type::Array(_) | Type::Slice(_) => {
-                        return check_array_method(ctx, &method, &mut c.args, c.span)
+                        return check_array_method(ctx, &method, &mut c.args, c.span, &receiver_ty)
                     }
                     Type::Regex => return check_regex_method(ctx, &method, &mut c.args, c.span),
                     Type::Command => {

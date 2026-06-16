@@ -1,0 +1,8 @@
+fn main() -> Int64 {
+    let arr = [10]
+    match arr.first() {
+        Some(v) => {}
+        None => {}
+    }
+    return 0
+}

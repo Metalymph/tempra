@@ -45,7 +45,7 @@ pub fn map_type(ty: &Type) -> Result<TirType, TirLowerError> {
         Type::Regex => Err(TirLowerError::UnsupportedType("Regex".to_string())),
         Type::SelfType => Err(TirLowerError::UnsupportedType("Self".to_string())),
         Type::Associated(_, _) => Err(TirLowerError::UnsupportedType("Associated".to_string())),
-        Type::BuiltinError => Err(TirLowerError::UnsupportedType("BuiltinError".to_string())),
+        Type::BuiltinError => Ok(TirType::String),
         Type::Namespace(_) => Err(TirLowerError::UnsupportedType("Namespace".to_string())),
         Type::Function(_, _) => Err(TirLowerError::UnsupportedType("Function".to_string())),
         Type::GenericParam { .. } => {
@@ -362,8 +362,16 @@ impl<'a> LowerContext<'a> {
                     if m.field == "bytes" {
                         return Ok(Type::Slice(Box::new(Type::UInt8)));
                     }
+                    if m.field == "is_empty" {
+                        return Ok(Type::Bool);
+                    }
 
                     let obj_ty = self.infer_expr_type(&m.object)?;
+                    if m.field == "first" || m.field == "last" {
+                        if let Type::Array(inner) | Type::Slice(inner) = &obj_ty {
+                            return Ok(Type::Option(inner.clone()));
+                        }
+                    }
                     if let Type::Namespace(ns) = &obj_ty {
                         let qualified = format!("{}.{}", ns, m.field);
                         if let Some(sig) = self.type_ctx.functions.get(&qualified) {
@@ -1022,6 +1030,133 @@ impl<'a> LowerContext<'a> {
                             if matches!(obj_ty, Type::String) {
                                 let obj = self.lower_expression(&m.object)?;
                                 return self.builder.build_bytes(obj).map_err(|e| e.into());
+                            }
+                        } else if m.field == "is_empty" {
+                            if matches!(obj_ty, Type::Array(_) | Type::Slice(_) | Type::String) {
+                                let obj = self.lower_expression(&m.object)?;
+                                let len_val = self.builder.build_len(obj)?;
+                                let zero_val = self.builder.build_const(TirConst::Int64(0))?;
+                                return self
+                                    .builder
+                                    .build_eq(len_val, zero_val)
+                                    .map_err(|e| e.into());
+                            }
+                        } else if m.field == "first" {
+                            if matches!(obj_ty, Type::Array(_) | Type::Slice(_)) {
+                                let inner_ty = match &obj_ty {
+                                    Type::Array(t) | Type::Slice(t) => map_type(t.as_ref())?,
+                                    _ => unreachable!(),
+                                };
+                                let opt_ty = TirType::Option(Box::new(inner_ty));
+
+                                let obj = self.lower_expression(&m.object)?;
+                                let len_val = self.builder.build_len(obj)?;
+                                let zero_val = self.builder.build_const(TirConst::Int64(0))?;
+                                let is_empty = self.builder.build_eq(len_val, zero_val)?;
+
+                                let tmp_slot = self
+                                    .builder
+                                    .build_slot(opt_ty.clone(), Some("$first_tmp"))?;
+                                let init_none = self.builder.build_make(
+                                    opt_ty.clone(),
+                                    Some("None".to_string()),
+                                    vec![],
+                                )?;
+                                self.builder.build_store(tmp_slot, init_none)?;
+
+                                let empty_block = self.builder.new_block();
+                                let non_empty_block = self.builder.new_block();
+                                let end_block = self.builder.new_block();
+
+                                self.builder.build_condbr(
+                                    is_empty,
+                                    empty_block,
+                                    non_empty_block,
+                                )?;
+
+                                // empty_block
+                                self.builder.set_current_block(empty_block);
+                                let none_val = self.builder.build_make(
+                                    opt_ty.clone(),
+                                    Some("None".to_string()),
+                                    vec![],
+                                )?;
+                                self.builder.build_store(tmp_slot, none_val)?;
+                                self.builder.build_br(end_block)?;
+
+                                // non_empty_block
+                                self.builder.set_current_block(non_empty_block);
+                                let first_val = self.builder.build_get_index(obj, zero_val)?;
+                                let some_val = self.builder.build_make(
+                                    opt_ty,
+                                    Some("Some".to_string()),
+                                    vec![first_val],
+                                )?;
+                                self.builder.build_store(tmp_slot, some_val)?;
+                                self.builder.build_br(end_block)?;
+
+                                // end_block
+                                self.builder.set_current_block(end_block);
+                                return self.builder.build_load(tmp_slot).map_err(|e| e.into());
+                            }
+                        } else if m.field == "last" {
+                            if matches!(obj_ty, Type::Array(_) | Type::Slice(_)) {
+                                let inner_ty = match &obj_ty {
+                                    Type::Array(t) | Type::Slice(t) => map_type(t.as_ref())?,
+                                    _ => unreachable!(),
+                                };
+                                let opt_ty = TirType::Option(Box::new(inner_ty));
+
+                                let obj = self.lower_expression(&m.object)?;
+                                let len_val = self.builder.build_len(obj)?;
+                                let zero_val = self.builder.build_const(TirConst::Int64(0))?;
+                                let is_empty = self.builder.build_eq(len_val, zero_val)?;
+
+                                let tmp_slot =
+                                    self.builder.build_slot(opt_ty.clone(), Some("$last_tmp"))?;
+                                let init_none = self.builder.build_make(
+                                    opt_ty.clone(),
+                                    Some("None".to_string()),
+                                    vec![],
+                                )?;
+                                self.builder.build_store(tmp_slot, init_none)?;
+
+                                let empty_block = self.builder.new_block();
+                                let non_empty_block = self.builder.new_block();
+                                let end_block = self.builder.new_block();
+
+                                self.builder.build_condbr(
+                                    is_empty,
+                                    empty_block,
+                                    non_empty_block,
+                                )?;
+
+                                // empty_block
+                                self.builder.set_current_block(empty_block);
+                                let none_val = self.builder.build_make(
+                                    opt_ty.clone(),
+                                    Some("None".to_string()),
+                                    vec![],
+                                )?;
+                                self.builder.build_store(tmp_slot, none_val)?;
+                                self.builder.build_br(end_block)?;
+
+                                // non_empty_block
+                                self.builder.set_current_block(non_empty_block);
+                                let one_val = self.builder.build_const(TirConst::Int64(1))?;
+                                let last_idx = self.builder.build_sub(len_val, one_val)?;
+                                let last_val = self.builder.build_get_index(obj, last_idx)?;
+                                let some_val = self.builder.build_make(
+                                    opt_ty,
+                                    Some("Some".to_string()),
+                                    vec![last_val],
+                                )?;
+                                self.builder.build_store(tmp_slot, some_val)?;
+                                self.builder.build_br(end_block)?;
+
+                                // end_block
+                                self.builder.set_current_block(end_block);
+                                return self.builder.build_load(tmp_slot).map_err(|e| e.into());
                             }
                         }
                     }

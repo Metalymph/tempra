@@ -186,3 +186,51 @@ fn test_slice_view_write() {
     "#;
     assert!(test_source(source).is_ok());
 }
+
+#[test]
+fn test_array_first_non_empty() {
+    let source = r#"
+        let xs = [10, 20, 30]
+        match xs.first() {
+            Some(v) => expect(v == 10)
+            None => crash("expected Some")
+        }
+    "#;
+    assert!(test_source(source).is_ok());
+}
+
+#[test]
+fn test_array_last_non_empty() {
+    let source = r#"
+        let xs = [10, 20, 30]
+        match xs.last() {
+            Some(v) => expect(v == 30)
+            None => crash("expected Some")
+        }
+    "#;
+    assert!(test_source(source).is_ok());
+}
+
+#[test]
+fn test_array_first_empty() {
+    let source = r#"
+        let xs: Array(Int) = []
+        match xs.first() {
+            Some(_) => crash("expected None")
+            None => {}
+        }
+    "#;
+    assert!(test_source(source).is_ok());
+}
+
+#[test]
+fn test_array_last_empty() {
+    let source = r#"
+        let xs: Array(Int) = []
+        match xs.last() {
+            Some(_) => crash("expected None")
+            None => {}
+        }
+    "#;
+    assert!(test_source(source).is_ok());
+}

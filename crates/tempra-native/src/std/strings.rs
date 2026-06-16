@@ -38,3 +38,29 @@ pub fn ends_with(args: &[VmValue]) -> Result<VmValue, String> {
     };
     Ok(VmValue::Bool(text.as_str().ends_with(suffix.as_str())))
 }
+
+pub fn trim(args: &[VmValue]) -> Result<VmValue, String> {
+    if args.len() != 1 {
+        return Err("trim expects 1 argument".to_string());
+    }
+    let VmValue::String(text) = &args[0] else {
+        return Err("expected String".into());
+    };
+    Ok(VmValue::String(text.trim().to_string()))
+}
+
+pub fn replace(args: &[VmValue]) -> Result<VmValue, String> {
+    if args.len() != 3 {
+        return Err("replace expects 3 arguments".to_string());
+    }
+    let VmValue::String(text) = &args[0] else {
+        return Err("expected String".into());
+    };
+    let VmValue::String(from) = &args[1] else {
+        return Err("expected String".into());
+    };
+    let VmValue::String(to) = &args[2] else {
+        return Err("expected String".into());
+    };
+    Ok(VmValue::String(text.replace(from.as_str(), to.as_str())))
+}

@@ -1,0 +1,42 @@
+import std.io
+
+pub fn main() -> Int64 {
+    let arr = [10, 20, 30]
+    
+    if arr.is_empty() {
+        std.io.println("arr is empty")
+    } else {
+        std.io.println("arr is not empty")
+    }
+
+    match arr.first() {
+        Some(v) => {
+            std.io.println("first is Some")
+        }
+        None => std.io.println("first is None")
+    }
+
+    match arr.last() {
+        Some(v) => {
+            std.io.println("last is Some")
+        }
+        None => std.io.println("last is None")
+    }
+
+    let empty_arr: [Int64] = []
+    if empty_arr.is_empty() {
+        std.io.println("empty_arr is empty")
+    }
+
+    match empty_arr.first() {
+        Some(v) => std.io.println("empty_arr first is Some")
+        None => std.io.println("empty_arr first is None")
+    }
+
+    match empty_arr.last() {
+        Some(v) => std.io.println("empty_arr last is Some")
+        None => std.io.println("empty_arr last is None")
+    }
+
+    return 0
+}

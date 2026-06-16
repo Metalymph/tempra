@@ -1,3 +1,5 @@
 pub extern fn contains(text: String, needle: String) -> Bool
 pub extern fn starts_with(text: String, prefix: String) -> Bool
 pub extern fn ends_with(text: String, suffix: String) -> Bool
+pub extern fn trim(text: String) -> String
+pub extern fn replace(text: String, from: String, to: String) -> String

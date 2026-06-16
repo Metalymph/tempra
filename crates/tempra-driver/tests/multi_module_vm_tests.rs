@@ -169,10 +169,10 @@ import std.fs;
 
 pub fn main() -> Int64 {{
     let result = std.fs.read_text("{}");
-    match result {{
-        Ok(text) => return 0;
-        Err(_) => return 1;
-    }}
+    return match result {{
+        Ok(text) => 0
+        Err(_) => 1
+    }};
 }}
 "#,
         fixture_path.to_string_lossy()
@@ -194,10 +194,10 @@ import std.fs;
 
 pub fn main() -> Int64 {
     let result = std.fs.read_text("nonexistent_file_xyz.txt");
-    match result {
-        Ok(_) => return 1;
-        Err(_) => return 0;
-    }
+    return match result {
+        Ok(_) => 1
+        Err(_) => 0
+    };
 }
 "#;
 
@@ -219,10 +219,10 @@ import std.fs;
 
 pub fn main() -> Int64 {{
     let result = std.fs.write_text("{}", "written by tempra");
-    match result {{
-        Ok(_) => return 0;
-        Err(_) => return 1;
-    }}
+    return match result {{
+        Ok(_) => 0
+        Err(_) => 1
+    }};
 }}
 "#,
         out_path.to_string_lossy()
@@ -249,10 +249,10 @@ import std.fs;
 
 pub fn main() -> Int64 {{
     let result = std.fs.write_text("{}", "data");
-    match result {{
-        Ok(_) => return 1;
-        Err(_) => return 0;
-    }}
+    return match result {{
+        Ok(_) => 1
+        Err(_) => 0
+    }};
 }}
 "#,
         bad_path.to_string_lossy()
@@ -262,4 +262,95 @@ pub fn main() -> Int64 {{
 
     let res = run_tempra_vm_file(&main_path).unwrap();
     assert_eq!(res, VmValue::Int64(0));
+}
+
+#[test]
+fn test_stdlib_strings_trim() {
+    let dir = tempdir().unwrap();
+    let main_path = dir.path().join("main.tmpr");
+
+    let main_src = r#"
+import std.strings;
+
+pub fn main() -> Int64 {
+    let trimmed = std.strings.trim("  hello  ");
+    if trimmed != "hello" {
+        return 1;
+    }
+    return 0;
+}
+"#;
+
+    fs::write(&main_path, main_src).unwrap();
+
+    let res = run_tempra_vm_file(&main_path).unwrap();
+    assert_eq!(res, VmValue::Int64(0));
+}
+
+#[test]
+fn test_stdlib_strings_replace() {
+    let dir = tempdir().unwrap();
+    let main_path = dir.path().join("main.tmpr");
+
+    let main_src = r#"
+import std.strings;
+
+pub fn main() -> Int64 {
+    let result = std.strings.replace("hello world", "world", "Tempra");
+    if result != "hello Tempra" {
+        return 1;
+    }
+    return 0;
+}
+"#;
+
+    fs::write(&main_path, main_src).unwrap();
+
+    let res = run_tempra_vm_file(&main_path).unwrap();
+    assert_eq!(res, VmValue::Int64(0));
+}
+
+#[test]
+fn test_stdlib_io_println_statement() {
+    let dir = tempfile::tempdir().unwrap();
+    let main_path = dir.path().join("main.tmpr");
+
+    let main_src = r#"
+import std.io;
+
+pub fn main() -> Int64 {
+    std.io.println("hello")
+    return 0
+}
+"#;
+
+    std::fs::write(&main_path, main_src).unwrap();
+
+    let res = run_tempra_vm_file(&main_path).unwrap();
+
+    assert_eq!(res, tempra_vm::value::VmValue::Int64(0));
+}
+
+#[test]
+fn test_stdlib_io_println_if_branch() {
+    let dir = tempfile::tempdir().unwrap();
+    let main_path = dir.path().join("main.tmpr");
+
+    let main_src = r#"
+import std.io;
+
+pub fn main() -> Int64 {
+    if true {
+        std.io.println("hello")
+    }
+
+    return 0
+}
+"#;
+
+    std::fs::write(&main_path, main_src).unwrap();
+
+    let res = run_tempra_vm_file(&main_path).unwrap();
+
+    assert_eq!(res, tempra_vm::value::VmValue::Int64(0));
 }

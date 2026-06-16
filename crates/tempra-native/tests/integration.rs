@@ -172,3 +172,58 @@ fn test_fs_write_text_invalid_path() {
         res
     );
 }
+
+#[test]
+fn test_strings_trim() {
+    let handler = resolve("std.strings", "trim").expect("trim handler not found");
+
+    let args = vec![VmValue::String("  hello world  ".into())];
+    let res = handler(&args).unwrap();
+    assert_eq!(res, VmValue::String("hello world".into()));
+
+    // Already trimmed
+    let args2 = vec![VmValue::String("no_spaces".into())];
+    let res2 = handler(&args2).unwrap();
+    assert_eq!(res2, VmValue::String("no_spaces".into()));
+
+    // Empty string
+    let args3 = vec![VmValue::String("".into())];
+    let res3 = handler(&args3).unwrap();
+    assert_eq!(res3, VmValue::String("".into()));
+
+    // Only whitespace
+    let args4 = vec![VmValue::String("   \t\n  ".into())];
+    let res4 = handler(&args4).unwrap();
+    assert_eq!(res4, VmValue::String("".into()));
+}
+
+#[test]
+fn test_strings_replace() {
+    let handler = resolve("std.strings", "replace").expect("replace handler not found");
+
+    let args = vec![
+        VmValue::String("hello world".into()),
+        VmValue::String("world".into()),
+        VmValue::String("Tempra".into()),
+    ];
+    let res = handler(&args).unwrap();
+    assert_eq!(res, VmValue::String("hello Tempra".into()));
+
+    // No match — returns unchanged
+    let args2 = vec![
+        VmValue::String("abc".into()),
+        VmValue::String("xyz".into()),
+        VmValue::String("123".into()),
+    ];
+    let res2 = handler(&args2).unwrap();
+    assert_eq!(res2, VmValue::String("abc".into()));
+
+    // Multiple occurrences
+    let args3 = vec![
+        VmValue::String("aaa".into()),
+        VmValue::String("a".into()),
+        VmValue::String("bb".into()),
+    ];
+    let res3 = handler(&args3).unwrap();
+    assert_eq!(res3, VmValue::String("bbbbbb".into()));
+}

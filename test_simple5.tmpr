@@ -1,0 +1,6 @@
+fn main() -> Int64 {
+    let empty_arr: [Int64] = []
+    if !empty_arr.is_empty() {
+    }
+    return 0
+}

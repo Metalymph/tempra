@@ -994,6 +994,32 @@ impl Interpreter {
                                     },
                                 )));
                             }
+                            if member.field == "first" {
+                                if !call.args.is_empty() {
+                                    return Err("Method 'first' expects 0 arguments".into());
+                                }
+                                let borrowed = arr.borrow();
+                                return if borrowed.is_empty() {
+                                    Ok(ControlFlow::Value(Value::Option(OptionValue::None)))
+                                } else {
+                                    Ok(ControlFlow::Value(Value::Option(OptionValue::Some(
+                                        Box::new(borrowed[0].clone()),
+                                    ))))
+                                };
+                            }
+                            if member.field == "last" {
+                                if !call.args.is_empty() {
+                                    return Err("Method 'last' expects 0 arguments".into());
+                                }
+                                let borrowed = arr.borrow();
+                                return if borrowed.is_empty() {
+                                    Ok(ControlFlow::Value(Value::Option(OptionValue::None)))
+                                } else {
+                                    Ok(ControlFlow::Value(Value::Option(OptionValue::Some(
+                                        Box::new(borrowed[borrowed.len() - 1].clone()),
+                                    ))))
+                                };
+                            }
                             return Err(format!("Unknown method '{}' on Array", member.field));
                         }
                         Value::Slice(slice) => {
@@ -1019,6 +1045,30 @@ impl Interpreter {
                                         index: std::rc::Rc::new(std::cell::RefCell::new(0)),
                                     },
                                 )));
+                            }
+                            if member.field == "first" {
+                                if !call.args.is_empty() {
+                                    return Err("Method 'first' expects 0 arguments".into());
+                                }
+                                return if slice.len() == 0 {
+                                    Ok(ControlFlow::Value(Value::Option(OptionValue::None)))
+                                } else {
+                                    Ok(ControlFlow::Value(Value::Option(OptionValue::Some(
+                                        Box::new(slice.get(0).unwrap()),
+                                    ))))
+                                };
+                            }
+                            if member.field == "last" {
+                                if !call.args.is_empty() {
+                                    return Err("Method 'last' expects 0 arguments".into());
+                                }
+                                return if slice.len() == 0 {
+                                    Ok(ControlFlow::Value(Value::Option(OptionValue::None)))
+                                } else {
+                                    Ok(ControlFlow::Value(Value::Option(OptionValue::Some(
+                                        Box::new(slice.get(slice.len() - 1).unwrap()),
+                                    ))))
+                                };
                             }
                             return Err(format!("Unknown method '{}' on Slice", member.field));
                         }

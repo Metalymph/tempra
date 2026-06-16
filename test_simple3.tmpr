@@ -1,0 +1,8 @@
+fn main() -> Int64 {
+    let empty_arr: [Int64] = []
+    match empty_arr.last() {
+        Some(v) => {}
+        None => {}
+    }
+    return 0
+}

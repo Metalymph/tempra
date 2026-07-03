@@ -1,13 +1,31 @@
 use std::fs;
 use tempra_bytecode::serialize::decode_artifact;
 use tempra_driver::cache::{compute_source_hash, get_cache_path};
-use tempra_driver::pipeline::run_source_with_experimental_vm;
+use tempra_driver::pipeline::{run_source_vm, run_source_with_experimental_vm};
+use tempra_vm::value::VmValue;
 
 #[test]
 fn test_run_experimental_vm_simple_main() {
     let source = "fn main() { var x = 10; }";
     let res = run_source_with_experimental_vm(source, &[]);
     assert!(res.is_ok());
+}
+
+#[test]
+fn test_run_experimental_vm_generic_reduce_callback() {
+    let source = r#"
+fn choose(type T, a: T, b: T) -> T { return a }
+fn main() -> Int64 {
+    let xs: Array(Int) = [1, 2, 3]
+    let reduced = xs.reduce(choose)
+    if reduced is Some(v) {
+        return v
+    }
+    return 0
+}
+"#;
+    let res = run_source_vm(source, &[]).expect("generic reduce callback should run");
+    assert_eq!(res, VmValue::Int64(1));
 }
 
 #[test]

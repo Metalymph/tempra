@@ -39,6 +39,30 @@ fn test_custom_iterator_success() {
 }
 
 #[test]
+fn test_string_iterator_is_byte_oriented() {
+    let source = r#"
+        fn take_byte(b: UInt8) {}
+
+        fn main() {
+            var it = "abc".iter();
+            let first: UInt8? = it.next();
+            let second: UInt8? = it.next();
+            let third: UInt8? = it.next();
+            let done: UInt8? = it.next();
+
+            for b in "hello" {
+                take_byte(b);
+            }
+        }
+    "#;
+    let res = test_source(source);
+    if let Err(e) = &res {
+        println!("FAIL: {}", e);
+    }
+    assert!(res.is_ok());
+}
+
+#[test]
 fn test_missing_inout_fails() {
     let source = r#"
         struct MyIter {

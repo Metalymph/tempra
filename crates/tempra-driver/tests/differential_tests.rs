@@ -365,7 +365,7 @@ fn test_unsupported_closure() {
 }
 
 #[test]
-fn test_unsupported_string_for_in() {
+fn test_diff_string_for_in() {
     let source = r#"
         fn main() -> Int64 {
             let s = "abc"
@@ -377,13 +377,7 @@ fn test_unsupported_string_for_in() {
         }
     "#;
     let vm_res = run_source_vm(source, &[]);
-    assert!(vm_res.is_err(), "VM should have failed for string for-in");
-    let err = format!("{:?}", vm_res.err().unwrap());
-    assert!(
-        err.contains("supports Array/Slice"),
-        "Unexpected error: {}",
-        err
-    );
+    assert_eq!(vm_res.unwrap(), VmValue::Int64(3));
 }
 
 #[test]

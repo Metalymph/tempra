@@ -471,6 +471,89 @@ fn test_experimental_vm_for_expr_map() {
 }
 
 #[test]
+fn test_experimental_vm_reduce_integer_sum() {
+    let source = r#"
+        fn add(a: Int, b: Int) -> Int { return a + b }
+        fn main() -> Int64 {
+            let xs: Array(Int) = [1, 2, 3]
+            let reduced = xs.reduce(add)
+            if reduced is Some(v) {
+                return v
+            }
+            return 0
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(6));
+}
+
+#[test]
+fn test_experimental_vm_reduce_single_element_skips_callback() {
+    let source = r#"
+        fn wrong(a: Int, b: Int) -> Int { return 999 }
+        fn main() -> Int64 {
+            let xs: Array(Int) = [42]
+            let reduced = xs.reduce(wrong)
+            if reduced is Some(v) {
+                return v
+            }
+            return 0
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(42));
+}
+
+#[test]
+fn test_experimental_vm_fold_integer_sum() {
+    let source = r#"
+        fn add(a: Int, b: Int) -> Int { return a + b }
+        fn main() -> Int64 {
+            let xs: Array(Int) = [1, 2, 3]
+            return xs.fold(10, add)
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(16));
+}
+
+#[test]
+fn test_experimental_vm_reductions_on_slices_and_empty() {
+    let source = r#"
+        fn add(a: Int, b: Int) -> Int { return a + b }
+        fn main() -> Int64 {
+            let xs: Array(Int) = [1, 2, 3, 4]
+            let sl: Slice(Int) = xs[1..4]
+            let reduced = sl.reduce(add)
+            let empty: Array(Int) = []
+            let empty_reduced = empty.reduce(add)
+            let empty_folded = empty.fold(100, add)
+
+            var total = empty_folded
+            if reduced is Some(v) {
+                total = total + v
+            } else {
+                total = 0
+            }
+            if empty_reduced is Some(v) {
+                return 0
+            }
+            return total
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(109));
+}
+
+#[test]
+fn test_experimental_vm_fold_boolean_reduction() {
+    let source = r#"
+        fn and_bool(a: Bool, b: Bool) -> Bool { return a && b }
+        fn main() -> Bool {
+            let xs: Array(Bool) = [true, true, false]
+            return xs.fold(true, and_bool)
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Bool(false));
+}
+
+#[test]
 fn test_experimental_vm_for_expr_slice() {
     let source = r#"
         fn main() -> Int64 {

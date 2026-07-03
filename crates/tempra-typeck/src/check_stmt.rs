@@ -151,9 +151,7 @@ pub fn check_statement(
             let iter_ty = check_expression(ctx, &mut f.iterable, None);
 
             // Determine the element type by routing through the Iterable protocol.
-            let elem_ty = if iter_ty == Type::String {
-                Type::String
-            } else if iter_ty == Type::Error {
+            let elem_ty = if iter_ty == Type::Error {
                 Type::Error
             } else if crate::check_expr::satisfies_interface(ctx, &iter_ty, "Iterable") {
                 // Resolve the Item associated type from Iterable

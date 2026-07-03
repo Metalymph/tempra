@@ -1,0 +1,60 @@
+import std.io
+
+fn main() -> Int64 {
+    let xs = [10, 20, 30]
+
+    // --- Manual iter/next ---
+    var it = xs.iter()
+
+    let o1 = it.next()
+    if o1 is Some(v) {
+        std.io.println("next1: got Some")
+    }
+
+    let o2 = it.next()
+    if o2 is Some(v) {
+        std.io.println("next2: got Some")
+    }
+
+    let o3 = it.next()
+    if o3 is Some(v) {
+        std.io.println("next3: got Some")
+    }
+
+    let o4 = it.next()
+    match o4 {
+        Some(v) => std.io.println("next4: got Some (unexpected)")
+        None => std.io.println("next4: got None (expected)")
+    }
+
+    // --- For loop over array ---
+    var sum = 0
+    for x in xs {
+        sum = sum + x
+    }
+    if sum == 60 {
+        std.io.println("for-array sum: 60 OK")
+    }
+
+    // --- For loop over slice ---
+    let sl = xs[0..2]
+    var sum2 = 0
+    for x in sl {
+        sum2 = sum2 + x
+    }
+    if sum2 == 30 {
+        std.io.println("for-slice sum: 30 OK")
+    }
+
+    // --- For expression ---
+    let doubled = for x in xs { x * 2 }
+    var sum3 = 0
+    for y in doubled {
+        sum3 = sum3 + y
+    }
+    if sum3 == 120 {
+        std.io.println("for-expr sum: 120 OK")
+    }
+
+    return 0
+}

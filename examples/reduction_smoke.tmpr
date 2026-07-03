@@ -1,0 +1,50 @@
+import std.io
+
+fn add(a: Int, b: Int) -> Int {
+    return a + b
+}
+
+fn wrong(a: Int, b: Int) -> Int {
+    return 999
+}
+
+pub fn main() -> Int64 {
+    let xs: Array(Int) = [1, 2, 3]
+    let sl: Slice(Int) = xs[0..3]
+
+    let reduced = xs.reduce(add)
+    if reduced is Some(v) {
+        if v != 6 { return 1 }
+    } else {
+        return 1
+    }
+
+    let slice_reduced = sl.reduce(add)
+    if slice_reduced is Some(v) {
+        if v != 6 { return 2 }
+    } else {
+        return 2
+    }
+
+    if xs.fold(0, add) != 6 { return 5 }
+    if sl.fold(0, add) != 6 { return 6 }
+
+    let empty: Array(Int) = []
+    let empty_reduced = empty.reduce(add)
+    if empty_reduced is Some(v) {
+        return 7
+    }
+
+    if empty.fold(100, add) != 100 { return 8 }
+
+    let single: Array(Int) = [42]
+    let single_reduced = single.reduce(wrong)
+    if single_reduced is Some(v) {
+        if v != 42 { return 9 }
+    } else {
+        return 9
+    }
+
+    std.io.println("reduction smoke passed")
+    return 0
+}

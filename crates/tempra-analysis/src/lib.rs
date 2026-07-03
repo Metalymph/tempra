@@ -73,6 +73,42 @@ fn type_to_base_name(ty: &tempra_typeck::Type) -> Option<String> {
     }
 }
 
+fn builtin_collection_method_signature(ty: &tempra_typeck::Type, method: &str) -> Option<String> {
+    let elem = match ty {
+        tempra_typeck::Type::Array(inner) | tempra_typeck::Type::Slice(inner) => inner.as_ref(),
+        _ => return None,
+    };
+
+    match method {
+        "count" => Some("count() -> Int".to_string()),
+        "any" => Some(format!("any(fn({}) -> Bool) -> Bool", elem)),
+        "all" => Some(format!("all(fn({}) -> Bool) -> Bool", elem)),
+        "find" => Some(format!("find(fn({}) -> Bool) -> Option({})", elem, elem)),
+        "map" => Some(format!("map(fn({}) -> U) -> Array(U)", elem)),
+        "filter" => Some(format!("filter(fn({}) -> Bool) -> Array({})", elem, elem)),
+        "for_each" => Some(format!("for_each(fn({}) -> Unit) -> Unit", elem)),
+        "reduce" => Some(format!(
+            "reduce(fn({}, {}) -> {}) -> Option({})",
+            elem, elem, elem, elem
+        )),
+        "fold" => Some(format!("fold(init: U, fn(U, {}) -> U) -> U", elem)),
+        _ => None,
+    }
+}
+
+fn add_builtin_collection_completions(
+    ty: &tempra_typeck::Type,
+    mut add_item: impl FnMut(&str, CompletionKind, Option<String>),
+) {
+    for method in [
+        "count", "any", "all", "find", "map", "filter", "for_each", "reduce", "fold",
+    ] {
+        if let Some(sig) = builtin_collection_method_signature(ty, method) {
+            add_item(method, CompletionKind::Method, Some(sig));
+        }
+    }
+}
+
 impl DocumentUri {
     /// Create a new normalized URI.
     pub fn new(uri: &str) -> Self {
@@ -1024,6 +1060,37 @@ impl AnalysisSession {
             }
         }
 
+        if let Some(method_name) = word_at_offset(&snapshot.content, offset) {
+            let bytes = snapshot.content.as_bytes();
+            let mut word_start = offset.min(bytes.len());
+            while word_start > 0 {
+                let ch = bytes[word_start - 1] as char;
+                if ch.is_alphanumeric() || ch == '_' {
+                    word_start -= 1;
+                } else {
+                    break;
+                }
+            }
+
+            if word_start > 0 && bytes[word_start - 1] == b'.' {
+                let dot_idx = word_start - 1;
+                if let Some(facts) = &result.facts {
+                    let mut matched_exprs: Vec<(&tempra_span::Span, &tempra_typeck::Type)> = facts
+                        .expr_types
+                        .iter()
+                        .filter(|(&span, _)| span.end <= dot_idx as u32)
+                        .collect();
+                    matched_exprs.sort_by_key(|&(span, _)| dot_idx as u32 - span.end);
+
+                    if let Some((_, ty)) = matched_exprs.first() {
+                        if let Some(sig) = builtin_collection_method_signature(ty, &method_name) {
+                            return Some(sig);
+                        }
+                    }
+                }
+            }
+        }
+
         // 3. Combine them beautifully!
         if let Some(sym) = sem_sym {
             if let Some(ref ty) = authoritative_ty {
@@ -1551,7 +1618,7 @@ impl AnalysisSession {
                 }
             }
 
-            if let Some(ns_name) = early_module_name {
+            if let Some(_ns_name) = early_module_name {
                 if let Some(uri) = target_uri {
                     if let Some(target_res) = self.analysis_cache.get(&uri) {
                         for sym in &target_res.symbols {
@@ -1575,6 +1642,10 @@ impl AnalysisSession {
             }
 
             if let Some(ty) = receiver_type {
+                add_builtin_collection_completions(&ty, |label, kind, detail| {
+                    add_item(label, kind, detail)
+                });
+
                 if let Some(mut base_name) = type_to_base_name(&ty) {
                     if let Some(last) = base_name.split('.').last() {
                         base_name = last.to_string();

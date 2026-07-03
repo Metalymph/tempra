@@ -2,6 +2,7 @@ use crate::error::TirLowerError;
 use std::collections::HashMap;
 use tempra_hir::Type;
 use tempra_hir::*;
+use tempra_span::Span;
 use tempra_tir::builder::{FunctionBuilder, ModuleBuilder};
 use tempra_tir::ir::*;
 use tempra_typeck::context::TypeContext;
@@ -54,8 +55,8 @@ pub fn map_type(ty: &Type) -> Result<TirType, TirLowerError> {
         Type::Meta(_) => Err(TirLowerError::UnsupportedType("Meta".to_string())),
         Type::Projection { .. } => Err(TirLowerError::UnsupportedType("Projection".to_string())),
         Type::Interface(_) => Err(TirLowerError::UnsupportedType("Interface".to_string())),
-        Type::ArrayIter(_) => Err(TirLowerError::UnsupportedType("ArrayIter".to_string())),
-        Type::SliceIter(_) => Err(TirLowerError::UnsupportedType("SliceIter".to_string())),
+        Type::ArrayIter(_) => Ok(TirType::Struct("$ArrayIter".to_string())),
+        Type::SliceIter(_) => Ok(TirType::Struct("$SliceIter".to_string())),
     }
 }
 
@@ -82,14 +83,72 @@ pub fn unmap_type(tir_ty: &TirType) -> Result<Type, TirLowerError> {
     }
 }
 
+fn sanitize_specialization_part(part: &str) -> String {
+    part.chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+        .collect()
+}
+
+pub fn specialized_function_name(base: &str, type_args: &[Type]) -> String {
+    if type_args.is_empty() {
+        return base.to_string();
+    }
+
+    let suffix = type_args
+        .iter()
+        .map(|ty| sanitize_specialization_part(&ty.to_string()))
+        .collect::<Vec<_>>()
+        .join("$");
+    format!("{}${}", base, suffix)
+}
+
+fn infer_generic_type_args(
+    pattern: &Type,
+    actual: &Type,
+    inferred: &mut HashMap<tempra_hir::types::GenericParamId, Type>,
+) {
+    match (pattern, actual) {
+        (Type::GenericParam { id, .. }, ty) => {
+            inferred.entry(*id).or_insert_with(|| ty.clone());
+        }
+        (Type::Array(p), Type::Array(a))
+        | (Type::Slice(p), Type::Slice(a))
+        | (Type::Option(p), Type::Option(a))
+        | (Type::ArrayIter(p), Type::ArrayIter(a))
+        | (Type::SliceIter(p), Type::SliceIter(a)) => infer_generic_type_args(p, a, inferred),
+        (Type::Result(p_ok, p_err), Type::Result(a_ok, a_err)) => {
+            infer_generic_type_args(p_ok, a_ok, inferred);
+            infer_generic_type_args(p_err, a_err, inferred);
+        }
+        (Type::Tuple(p), Type::Tuple(a)) if p.len() == a.len() => {
+            for (p_ty, a_ty) in p.iter().zip(a.iter()) {
+                infer_generic_type_args(p_ty, a_ty, inferred);
+            }
+        }
+        (Type::Struct(p_name, p_args), Type::Struct(a_name, a_args))
+        | (Type::Enum(p_name, p_args), Type::Enum(a_name, a_args))
+            if p_name == a_name && p_args.len() == a_args.len() =>
+        {
+            for (p_ty, a_ty) in p_args.iter().zip(a_args.iter()) {
+                infer_generic_type_args(p_ty, a_ty, inferred);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Resolve an HirType to a semantic Type. Minimal — only handles what Phase 14.4 needs.
 fn resolve_hir_type(
     hir_ty: &HirType,
     _type_ctx: &TypeContext,
     self_ty: Option<&Type>,
+    generic_subs: &HashMap<String, Type>,
 ) -> Result<Type, TirLowerError> {
     match hir_ty {
         HirType::Named(_, name) => {
+            if let Some(ty) = generic_subs.get(name) {
+                return Ok(ty.clone());
+            }
             let ty = tempra_typeck::types::resolve_named_type(name);
             if ty == Type::Unknown {
                 if let Some(info) = _type_ctx.structs.get(name) {
@@ -127,35 +186,35 @@ fn resolve_hir_type(
             }
         }
         HirType::Result(_, ok_hir, err_hir) => {
-            let ok_ty = resolve_hir_type(ok_hir, _type_ctx, self_ty)?;
-            let err_ty = resolve_hir_type(err_hir, _type_ctx, self_ty)?;
+            let ok_ty = resolve_hir_type(ok_hir, _type_ctx, self_ty, generic_subs)?;
+            let err_ty = resolve_hir_type(err_hir, _type_ctx, self_ty, generic_subs)?;
             Ok(Type::Result(Box::new(ok_ty), Box::new(err_ty)))
         }
         HirType::Optional(_, inner_hir) => {
-            let inner_ty = resolve_hir_type(inner_hir, _type_ctx, self_ty)?;
+            let inner_ty = resolve_hir_type(inner_hir, _type_ctx, self_ty, generic_subs)?;
             Ok(Type::Option(Box::new(inner_ty)))
         }
         HirType::Array(_, inner_hir) => {
-            let inner_ty = resolve_hir_type(inner_hir, _type_ctx, self_ty)?;
+            let inner_ty = resolve_hir_type(inner_hir, _type_ctx, self_ty, generic_subs)?;
             Ok(Type::Array(Box::new(inner_ty)))
         }
         HirType::Apply(_, callee, args) => {
             if let HirType::Named(_, name) = &**callee {
                 if name == "Slice" && args.len() == 1 {
-                    let inner_ty = resolve_hir_type(&args[0], _type_ctx, self_ty)?;
+                    let inner_ty = resolve_hir_type(&args[0], _type_ctx, self_ty, generic_subs)?;
                     return Ok(Type::Slice(Box::new(inner_ty)));
                 }
                 if name == "Array" && args.len() == 1 {
-                    let inner_ty = resolve_hir_type(&args[0], _type_ctx, self_ty)?;
+                    let inner_ty = resolve_hir_type(&args[0], _type_ctx, self_ty, generic_subs)?;
                     return Ok(Type::Array(Box::new(inner_ty)));
                 }
                 if name == "Option" && args.len() == 1 {
-                    let inner_ty = resolve_hir_type(&args[0], _type_ctx, self_ty)?;
+                    let inner_ty = resolve_hir_type(&args[0], _type_ctx, self_ty, generic_subs)?;
                     return Ok(Type::Option(Box::new(inner_ty)));
                 }
                 if name == "Result" && args.len() == 2 {
-                    let ok_ty = resolve_hir_type(&args[0], _type_ctx, self_ty)?;
-                    let err_ty = resolve_hir_type(&args[1], _type_ctx, self_ty)?;
+                    let ok_ty = resolve_hir_type(&args[0], _type_ctx, self_ty, generic_subs)?;
+                    let err_ty = resolve_hir_type(&args[1], _type_ctx, self_ty, generic_subs)?;
                     return Ok(Type::Result(Box::new(ok_ty), Box::new(err_ty)));
                 }
             }
@@ -185,8 +244,10 @@ pub struct LowerContext<'a> {
     pub type_ctx: &'a TypeContext,
     pub module_builder: &'a mut ModuleBuilder,
     pub self_ty: Option<Type>,
+    pub generic_subs: HashMap<String, Type>,
     /// (SlotId, Type, is_mutable)
     pub locals: HashMap<String, (TirSlotId, TirType, bool)>,
+    pub local_hir_types: HashMap<String, Type>,
 }
 
 impl<'a> LowerContext<'a> {
@@ -195,13 +256,16 @@ impl<'a> LowerContext<'a> {
         type_ctx: &'a TypeContext,
         module_builder: &'a mut ModuleBuilder,
         self_ty: Option<Type>,
+        generic_subs: HashMap<String, Type>,
     ) -> Self {
         Self {
             builder,
             type_ctx,
             module_builder,
             self_ty,
+            generic_subs,
             locals: HashMap::new(),
+            local_hir_types: HashMap::new(),
         }
     }
 
@@ -209,23 +273,25 @@ impl<'a> LowerContext<'a> {
         match stmt {
             HirStatement::Let(l) => {
                 let ty = if let Some(ht) = &l.ty {
-                    resolve_hir_type(ht, self.type_ctx, self.self_ty.as_ref())?
+                    resolve_hir_type(ht, self.type_ctx, self.self_ty.as_ref(), &self.generic_subs)?
                 } else {
                     self.infer_expr_type(&l.value)?
                 };
                 let tir_ty = map_type(&ty)?;
                 self.locals
                     .insert(l.name.clone(), (TirSlotId(0), tir_ty, false));
+                self.local_hir_types.insert(l.name.clone(), ty);
             }
             HirStatement::Var(v) => {
                 let ty = if let Some(ht) = &v.ty {
-                    resolve_hir_type(ht, self.type_ctx, self.self_ty.as_ref())?
+                    resolve_hir_type(ht, self.type_ctx, self.self_ty.as_ref(), &self.generic_subs)?
                 } else {
                     self.infer_expr_type(&v.value)?
                 };
                 let tir_ty = map_type(&ty)?;
                 self.locals
                     .insert(v.name.clone(), (TirSlotId(0), tir_ty, true));
+                self.local_hir_types.insert(v.name.clone(), ty);
             }
             _ => {}
         }
@@ -259,6 +325,8 @@ impl<'a> LowerContext<'a> {
                 }
                 if let Some(info) = self.type_ctx.scopes.lookup(name) {
                     Ok(info.ty.clone())
+                } else if let Some(hir_ty) = self.local_hir_types.get(name) {
+                    Ok(hir_ty.clone())
                 } else if let Some((_, tir_ty, _)) = self.locals.get(name) {
                     unmap_type(tir_ty)
                 } else if self.type_ctx.is_module(name) {
@@ -351,13 +419,21 @@ impl<'a> LowerContext<'a> {
                 ))
             }
             HirExpression::StructLiteral(s) => {
-                let ty = resolve_hir_type(&s.ty, self.type_ctx, self.self_ty.as_ref())?;
+                let ty = resolve_hir_type(
+                    &s.ty,
+                    self.type_ctx,
+                    self.self_ty.as_ref(),
+                    &self.generic_subs,
+                )?;
                 Ok(ty)
             }
             HirExpression::Call(c) => {
                 if let HirExpression::Member(m) = &*c.callee {
                     if m.field == "len" || m.field == "size" {
                         return Ok(Type::Int64);
+                    }
+                    if m.field == "count" {
+                        return Ok(Type::Int);
                     }
                     if m.field == "bytes" {
                         return Ok(Type::Slice(Box::new(Type::UInt8)));
@@ -372,6 +448,53 @@ impl<'a> LowerContext<'a> {
                             return Ok(Type::Option(inner.clone()));
                         }
                     }
+                    if m.field == "iter" {
+                        if let Type::Array(inner) = &obj_ty {
+                            return Ok(Type::ArrayIter(inner.clone()));
+                        } else if let Type::Slice(inner) = &obj_ty {
+                            return Ok(Type::SliceIter(inner.clone()));
+                        } else if let Type::String = &obj_ty {
+                            return Ok(Type::SliceIter(Box::new(Type::UInt8)));
+                        }
+                    }
+                    if m.field == "next" {
+                        if let Type::ArrayIter(inner) | Type::SliceIter(inner) = &obj_ty {
+                            return Ok(Type::Option(inner.clone()));
+                        }
+                    }
+                    if let Some(elem_ty) = self.collection_element_type(&obj_ty) {
+                        match m.field.as_str() {
+                            "map" => {
+                                let callback_name = self.resolve_collection_callback(
+                                    &m.field,
+                                    &c.args,
+                                    c.span,
+                                    0,
+                                    std::slice::from_ref(&elem_ty),
+                                )?;
+                                let sig = self.type_ctx.functions.get(&callback_name).ok_or_else(
+                                    || {
+                                        TirLowerError::UnknownFunction(
+                                            callback_name.clone(),
+                                            c.span,
+                                        )
+                                    },
+                                )?;
+                                return Ok(Type::Array(Box::new(sig.return_type.clone())));
+                            }
+                            "filter" => return Ok(Type::Array(Box::new(elem_ty))),
+                            "find" => return Ok(Type::Option(Box::new(elem_ty))),
+                            "any" | "all" => return Ok(Type::Bool),
+                            "for_each" => return Ok(Type::Unit),
+                            "reduce" => return Ok(Type::Option(Box::new(elem_ty))),
+                            "fold" => {
+                                if let Some(HirCallArgument::Positional(init)) = c.args.first() {
+                                    return self.infer_expr_type(init);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
                     if let Type::Namespace(ns) = &obj_ty {
                         let qualified = format!("{}.{}", ns, m.field);
                         if let Some(sig) = self.type_ctx.functions.get(&qualified) {
@@ -384,8 +507,11 @@ impl<'a> LowerContext<'a> {
                     {
                         return Ok(sig.return_type.clone());
                     }
-                }
-                if let HirExpression::Name(_, name) = &*c.callee {
+                    Err(TirLowerError::UnsupportedExpr(
+                        format!("Cannot infer call type for method: {}", m.field),
+                        c.span,
+                    ))
+                } else if let HirExpression::Name(_, name) = &*c.callee {
                     match name.as_str() {
                         "Some" => {
                             if let Some(arg) = c.args.first() {
@@ -412,7 +538,7 @@ impl<'a> LowerContext<'a> {
                     }
                 } else {
                     Err(TirLowerError::UnsupportedExpr(
-                        "Cannot infer call type for complex callee".into(),
+                        format!("Cannot infer call type for complex callee: {:?}", c.callee),
                         c.span,
                     ))
                 }
@@ -443,6 +569,7 @@ impl<'a> LowerContext<'a> {
                 self.locals = old_locals;
                 Ok(Type::Array(Box::new(body_ty)))
             }
+
             _ => Err(TirLowerError::UnsupportedExpr(
                 format!("{:?}", expr),
                 expr.span(),
@@ -459,7 +586,12 @@ impl<'a> LowerContext<'a> {
             HirStatement::Let(l) => {
                 // Use explicit type if available, otherwise infer
                 let val_ty = if let Some(hir_ty) = &l.ty {
-                    resolve_hir_type(hir_ty, self.type_ctx, self.self_ty.as_ref())?
+                    resolve_hir_type(
+                        hir_ty,
+                        self.type_ctx,
+                        self.self_ty.as_ref(),
+                        &self.generic_subs,
+                    )?
                 } else {
                     self.infer_expr_type(&l.value)?
                 };
@@ -467,6 +599,7 @@ impl<'a> LowerContext<'a> {
                 let slot = self.builder.build_slot(tir_ty.clone(), Some(&l.name))?;
                 self.locals
                     .insert(l.name.clone(), (slot, tir_ty.clone(), false));
+                self.local_hir_types.insert(l.name.clone(), val_ty);
 
                 let val = match &l.value {
                     HirExpression::Name(_, name) if name == "None" => {
@@ -483,7 +616,12 @@ impl<'a> LowerContext<'a> {
             }
             HirStatement::Var(v) => {
                 let val_ty = if let Some(hir_ty) = &v.ty {
-                    resolve_hir_type(hir_ty, self.type_ctx, self.self_ty.as_ref())?
+                    resolve_hir_type(
+                        hir_ty,
+                        self.type_ctx,
+                        self.self_ty.as_ref(),
+                        &self.generic_subs,
+                    )?
                 } else {
                     self.infer_expr_type(&v.value)?
                 };
@@ -491,6 +629,7 @@ impl<'a> LowerContext<'a> {
                 let slot = self.builder.build_slot(tir_ty.clone(), Some(&v.name))?;
                 self.locals
                     .insert(v.name.clone(), (slot, tir_ty.clone(), true));
+                self.local_hir_types.insert(v.name.clone(), val_ty);
 
                 let val = match &v.value {
                     HirExpression::Name(_, name) if name == "None" => {
@@ -524,19 +663,20 @@ impl<'a> LowerContext<'a> {
 
     fn lower_for(&mut self, f: &HirFor) -> Result<(), TirLowerError> {
         let iterable_ty = self.infer_expr_type(&f.iterable)?;
-        if !matches!(iterable_ty, Type::Array(_) | Type::Slice(_)) {
+        if !matches!(iterable_ty, Type::Array(_) | Type::Slice(_) | Type::String) {
             return Err(TirLowerError::UnsupportedExpr(
-                "for-in currently only supports Array/Slice in experimental VM".into(),
+                "for-in currently only supports Array/Slice/String in experimental VM".into(),
                 f.iterable.span(),
             ));
         }
 
         let element_ty = match &iterable_ty {
             Type::Array(inner) | Type::Slice(inner) => inner.as_ref().clone(),
+            Type::String => Type::UInt8,
             _ => {
                 return Err(TirLowerError::UnsupportedExpr(
                     format!(
-                        "for-in currently only supports Array/Slice in experimental VM, found {}",
+                        "for-in currently only supports Array/Slice/String in experimental VM, found {}",
                         iterable_ty
                     ),
                     f.iterable.span(),
@@ -544,54 +684,56 @@ impl<'a> LowerContext<'a> {
             }
         };
 
-        // 1. Lower iterable and store in a hidden slot
+        // 1. Lower iterable and create iterator struct { data, idx: 0 }
         let iter_val = self.lower_expression(&f.iterable)?;
-        let tir_iterable_ty = map_type(&iterable_ty)?;
-        let iter_obj_slot = self.builder.build_slot(
-            tir_iterable_ty,
-            Some(&format!("$iter_obj_{}", f.span.start)),
-        )?;
-        self.builder.build_store(iter_obj_slot, iter_val)?;
-
-        // 2. Initialize index slot
+        // For String, desugar to bytes() first
+        let data_val = if matches!(iterable_ty, Type::String) {
+            self.builder.build_bytes(iter_val)?
+        } else {
+            iter_val
+        };
         let zero = self.builder.build_const(TirConst::Int64(0))?;
-        let idx_slot = self
-            .builder
-            .build_slot(TirType::Int64, Some(&format!("$idx_{}", f.span.start)))?;
-        self.builder.build_store(idx_slot, zero)?;
+        let struct_name = if matches!(iterable_ty, Type::Array(_)) {
+            "$ArrayIter"
+        } else {
+            "$SliceIter"
+        };
+        let iter_struct = self.builder.build_make_struct(
+            struct_name.to_string(),
+            vec![("data".to_string(), data_val), ("idx".to_string(), zero)],
+        )?;
 
-        // 3. Initialize length slot
-        let loaded_iter = self.builder.build_load(iter_obj_slot)?;
-        let len_val = self.builder.build_len(loaded_iter)?;
-        let len_slot = self
+        let tir_iter_ty = TirType::Struct(struct_name.to_string());
+        let iter_slot = self
             .builder
-            .build_slot(TirType::Int64, Some(&format!("$len_{}", f.span.start)))?;
-        self.builder.build_store(len_slot, len_val)?;
+            .build_slot(tir_iter_ty, Some(&format!("$it_{}", f.span.start)))?;
+        self.builder.build_store(iter_slot, iter_struct)?;
 
-        // 4. Create blocks
+        // 2. Create blocks
         let cond_block = self.builder.new_block();
         let body_block = self.builder.new_block();
         let exit_block = self.builder.new_block();
 
-        // Branch to cond
         self.builder.build_br(cond_block)?;
 
-        // 5. Condition Block
+        // 3. Condition block — inline next() logic
         self.builder.set_current_block(cond_block);
-        let curr_idx = self.builder.build_load(idx_slot)?;
-        let curr_len = self.builder.build_load(len_slot)?;
-        let is_less = self.builder.build_lt(curr_idx, curr_len)?;
+        let loaded_it = self.builder.build_load(iter_slot)?;
+        let data_val = self
+            .builder
+            .build_get(loaded_it, tempra_tir::ir::TirKey::Field("data".to_string()))?;
+        let idx_val = self
+            .builder
+            .build_get(loaded_it, tempra_tir::ir::TirKey::Field("idx".to_string()))?;
+        let len_val = self.builder.build_len(data_val)?;
+        let is_less = self.builder.build_lt(idx_val, len_val)?;
         self.builder.build_condbr(is_less, body_block, exit_block)?;
 
-        // 6. Body Block
+        // 4. Body block
         self.builder.set_current_block(body_block);
 
-        // Load element
-        let iter_obj_for_get = self.builder.build_load(iter_obj_slot)?;
-        let idx_for_get = self.builder.build_load(idx_slot)?;
-        let element_val = self
-            .builder
-            .build_get_index(iter_obj_for_get, idx_for_get)?;
+        // Extract element at current idx
+        let element_val = self.builder.build_get_index(data_val, idx_val)?;
 
         // Scope for loop variable
         let old_locals = self.locals.clone();
@@ -612,16 +754,20 @@ impl<'a> LowerContext<'a> {
         // Restore locals scope
         self.locals = old_locals;
 
-        // Increment index
+        // Increment idx and store back updated iterator
         if !self.builder.is_terminated() {
-            let idx_to_inc = self.builder.build_load(idx_slot)?;
             let one = self.builder.build_const(TirConst::Int64(1))?;
-            let next_idx = self.builder.build_add(idx_to_inc, one)?;
-            self.builder.build_store(idx_slot, next_idx)?;
+            let next_idx = self.builder.build_add(idx_val, one)?;
+            let updated_it = self.builder.build_set(
+                loaded_it,
+                tempra_tir::ir::TirKey::Field("idx".to_string()),
+                next_idx,
+            )?;
+            self.builder.build_store(iter_slot, updated_it)?;
             self.builder.build_br(cond_block)?;
         }
 
-        // 7. Exit Block
+        // 5. Exit block
         self.builder.set_current_block(exit_block);
 
         Ok(())
@@ -653,19 +799,20 @@ impl<'a> LowerContext<'a> {
 
     fn lower_for_expr(&mut self, f: &HirForExpr) -> Result<TirValueId, TirLowerError> {
         let iterable_ty = self.infer_expr_type(&f.iterable)?;
-        if !matches!(iterable_ty, Type::Array(_) | Type::Slice(_)) {
+        if !matches!(iterable_ty, Type::Array(_) | Type::Slice(_) | Type::String) {
             return Err(TirLowerError::UnsupportedExpr(
-                "for-expr currently only supports Array/Slice in experimental VM".into(),
+                "for-expr currently only supports Array/Slice/String in experimental VM".into(),
                 f.iterable.span(),
             ));
         }
 
         let element_ty = match &iterable_ty {
             Type::Array(inner) | Type::Slice(inner) => inner.as_ref().clone(),
+            Type::String => Type::UInt8,
             _ => {
                 return Err(TirLowerError::UnsupportedExpr(
                     format!(
-                        "for-expr currently only supports Array/Slice in experimental VM, found {}",
+                        "for-expr currently only supports Array/Slice/String in experimental VM, found {}",
                         iterable_ty
                     ),
                     f.iterable.span(),
@@ -697,54 +844,56 @@ impl<'a> LowerContext<'a> {
             .build_slot(result_array_ty, Some(&format!("$for_res_{}", f.span.start)))?;
         self.builder.build_store(res_slot, empty_arr)?;
 
-        // 3. Lower iterable and store in a hidden slot
+        // 3. Lower iterable and create iterator struct { data, idx: 0 }
         let iter_val = self.lower_expression(&f.iterable)?;
-        let tir_iterable_ty = map_type(&iterable_ty)?;
-        let iter_obj_slot = self.builder.build_slot(
-            tir_iterable_ty,
-            Some(&format!("$iter_obj_{}", f.span.start)),
-        )?;
-        self.builder.build_store(iter_obj_slot, iter_val)?;
-
-        // 4. Initialize index slot
+        // For String, desugar to bytes() first
+        let data_val = if matches!(iterable_ty, Type::String) {
+            self.builder.build_bytes(iter_val)?
+        } else {
+            iter_val
+        };
         let zero = self.builder.build_const(TirConst::Int64(0))?;
-        let idx_slot = self
-            .builder
-            .build_slot(TirType::Int64, Some(&format!("$idx_{}", f.span.start)))?;
-        self.builder.build_store(idx_slot, zero)?;
+        let struct_name = if matches!(iterable_ty, Type::Array(_)) {
+            "$ArrayIter"
+        } else {
+            "$SliceIter"
+        };
+        let iter_struct = self.builder.build_make_struct(
+            struct_name.to_string(),
+            vec![("data".to_string(), data_val), ("idx".to_string(), zero)],
+        )?;
 
-        // 5. Initialize length slot
-        let loaded_iter = self.builder.build_load(iter_obj_slot)?;
-        let len_val = self.builder.build_len(loaded_iter)?;
-        let len_slot = self
+        let tir_iter_ty = TirType::Struct(struct_name.to_string());
+        let iter_slot = self
             .builder
-            .build_slot(TirType::Int64, Some(&format!("$len_{}", f.span.start)))?;
-        self.builder.build_store(len_slot, len_val)?;
+            .build_slot(tir_iter_ty, Some(&format!("$it_{}", f.span.start)))?;
+        self.builder.build_store(iter_slot, iter_struct)?;
 
-        // 6. Create blocks
+        // 4. Create blocks
         let cond_block = self.builder.new_block();
         let body_block = self.builder.new_block();
         let exit_block = self.builder.new_block();
 
-        // Branch to cond
         self.builder.build_br(cond_block)?;
 
-        // 7. Condition Block
+        // 5. Condition block — inline next() logic
         self.builder.set_current_block(cond_block);
-        let curr_idx = self.builder.build_load(idx_slot)?;
-        let curr_len = self.builder.build_load(len_slot)?;
-        let is_less = self.builder.build_lt(curr_idx, curr_len)?;
+        let loaded_it = self.builder.build_load(iter_slot)?;
+        let data_val = self
+            .builder
+            .build_get(loaded_it, tempra_tir::ir::TirKey::Field("data".to_string()))?;
+        let idx_val = self
+            .builder
+            .build_get(loaded_it, tempra_tir::ir::TirKey::Field("idx".to_string()))?;
+        let len_val = self.builder.build_len(data_val)?;
+        let is_less = self.builder.build_lt(idx_val, len_val)?;
         self.builder.build_condbr(is_less, body_block, exit_block)?;
 
-        // 8. Body Block
+        // 6. Body block
         self.builder.set_current_block(body_block);
 
-        // Load element
-        let iter_obj_for_get = self.builder.build_load(iter_obj_slot)?;
-        let idx_for_get = self.builder.build_load(idx_slot)?;
-        let element_val = self
-            .builder
-            .build_get_index(iter_obj_for_get, idx_for_get)?;
+        // Extract element at current idx
+        let element_val = self.builder.build_get_index(data_val, idx_val)?;
 
         // Scope for loop variable
         let old_locals = self.locals.clone();
@@ -786,20 +935,569 @@ impl<'a> LowerContext<'a> {
         // Restore locals scope
         self.locals = old_locals;
 
-        // Increment index
+        // Increment idx and store back updated iterator
         if !self.builder.is_terminated() {
-            let idx_to_inc = self.builder.build_load(idx_slot)?;
             let one = self.builder.build_const(TirConst::Int64(1))?;
-            let next_idx = self.builder.build_add(idx_to_inc, one)?;
-            self.builder.build_store(idx_slot, next_idx)?;
+            let next_idx = self.builder.build_add(idx_val, one)?;
+            let updated_it = self.builder.build_set(
+                loaded_it,
+                tempra_tir::ir::TirKey::Field("idx".to_string()),
+                next_idx,
+            )?;
+            self.builder.build_store(iter_slot, updated_it)?;
             self.builder.build_br(cond_block)?;
         }
 
-        // 9. Exit Block
+        // 7. Exit block
         self.builder.set_current_block(exit_block);
+
         self.builder
             .build_load(res_slot)
             .map_err(TirLowerError::from)
+    }
+
+    fn collection_element_type(&self, ty: &Type) -> Option<Type> {
+        match ty {
+            Type::Array(inner) | Type::Slice(inner) => Some(*inner.clone()),
+            _ => None,
+        }
+    }
+
+    fn lookup_direct_callback_signature(
+        &self,
+        name: &str,
+    ) -> Option<(String, tempra_typeck::context::FunctionSignature)> {
+        if !self.type_ctx.current_module.is_empty() {
+            let qualified = format!("{}.{}", self.type_ctx.current_module, name);
+            if let Some(sig) = self.type_ctx.functions.get(&qualified) {
+                return Some((qualified, sig.clone()));
+            }
+        }
+
+        self.type_ctx
+            .functions
+            .get(name)
+            .map(|sig| (name.to_string(), sig.clone()))
+    }
+
+    fn resolve_collection_callback(
+        &self,
+        method: &str,
+        args: &[HirCallArgument],
+        span: Span,
+        callback_arg_index: usize,
+        expected_params: &[Type],
+    ) -> Result<String, TirLowerError> {
+        if args.len() != callback_arg_index + 1 {
+            return Err(TirLowerError::UnsupportedExpr(
+                format!("'{}' expects {} arguments", method, callback_arg_index + 1),
+                span,
+            ));
+        }
+
+        let expr = match &args[callback_arg_index] {
+            HirCallArgument::Positional(expr) => expr,
+            HirCallArgument::Named(named) => {
+                return Err(TirLowerError::UnsupportedExpr(
+                    format!(
+                        "'{}' expects a positional direct function callback, found '{}'",
+                        method, named.name
+                    ),
+                    named.value.span(),
+                ))
+            }
+        };
+
+        let HirExpression::Name(name_span, name) = expr else {
+            return Err(TirLowerError::UnsupportedExpr(
+                format!("'{}' expects a direct top-level function reference", method),
+                expr.span(),
+            ));
+        };
+
+        let Some((qualified_name, sig)) = self.lookup_direct_callback_signature(name) else {
+            return Err(TirLowerError::UnsupportedExpr(
+                format!(
+                    "'{}' expects a direct top-level function reference, found '{}'",
+                    method, name
+                ),
+                *name_span,
+            ));
+        };
+
+        let runtime_params: Vec<_> = sig
+            .params
+            .iter()
+            .filter(|param| param.kind == tempra_ast::ParameterKind::Runtime)
+            .collect();
+
+        if runtime_params.len() != expected_params.len() {
+            return Err(TirLowerError::UnsupportedExpr(
+                format!(
+                    "'{}' callback '{}' must be a function with exactly {} runtime parameters",
+                    method,
+                    name,
+                    expected_params.len()
+                ),
+                *name_span,
+            ));
+        }
+
+        if !sig.generic_params.is_empty() {
+            let mut inferred = HashMap::new();
+            for (param, expected) in runtime_params.iter().zip(expected_params.iter()) {
+                infer_generic_type_args(&param.ty, expected, &mut inferred);
+            }
+
+            let mut type_args = Vec::new();
+            for generic in &sig.generic_params {
+                let Some(ty) = inferred.get(&generic.id) else {
+                    return Err(TirLowerError::UnsupportedExpr(
+                        format!(
+                            "'{}' callback '{}' generic parameter '{}' could not be inferred",
+                            method, name, generic.name
+                        ),
+                        *name_span,
+                    ));
+                };
+                type_args.push(ty.clone());
+            }
+
+            return Ok(specialized_function_name(&qualified_name, &type_args));
+        }
+
+        Ok(qualified_name)
+    }
+
+    fn build_collection_iterator(
+        &mut self,
+        object: &HirExpression,
+        obj_ty: &Type,
+        span: Span,
+    ) -> Result<TirSlotId, TirLowerError> {
+        let obj = self.lower_expression(object)?;
+        let zero = self.builder.build_const(TirConst::Int64(0))?;
+        let struct_name = match obj_ty {
+            Type::Array(_) => "$ArrayIter",
+            Type::Slice(_) => "$SliceIter",
+            _ => {
+                return Err(TirLowerError::UnsupportedExpr(
+                    format!("collection helper requires Array/Slice, found {}", obj_ty),
+                    span,
+                ))
+            }
+        };
+        let iter_struct = self.builder.build_make_struct(
+            struct_name.to_string(),
+            vec![("data".to_string(), obj), ("idx".to_string(), zero)],
+        )?;
+        let iter_slot = self.builder.build_slot(
+            TirType::Struct(struct_name.to_string()),
+            Some(&format!("$functional_it_{}", span.start)),
+        )?;
+        self.builder.build_store(iter_slot, iter_struct)?;
+        Ok(iter_slot)
+    }
+
+    fn build_collection_loop_cond(
+        &mut self,
+        iter_slot: TirSlotId,
+        body_block: TirBlockId,
+        exit_block: TirBlockId,
+    ) -> Result<(TirValueId, TirValueId, TirValueId), TirLowerError> {
+        let loaded_it = self.builder.build_load(iter_slot)?;
+        let data_val = self
+            .builder
+            .build_get(loaded_it, tempra_tir::ir::TirKey::Field("data".to_string()))?;
+        let idx_val = self
+            .builder
+            .build_get(loaded_it, tempra_tir::ir::TirKey::Field("idx".to_string()))?;
+        let len_val = self.builder.build_len(data_val)?;
+        let is_less = self.builder.build_lt(idx_val, len_val)?;
+        self.builder.build_condbr(is_less, body_block, exit_block)?;
+        Ok((loaded_it, data_val, idx_val))
+    }
+
+    fn build_collection_loop_continue(
+        &mut self,
+        loaded_it: TirValueId,
+        idx_val: TirValueId,
+        iter_slot: TirSlotId,
+        cond_block: TirBlockId,
+    ) -> Result<(), TirLowerError> {
+        let one = self.builder.build_const(TirConst::Int64(1))?;
+        let next_idx = self.builder.build_add(idx_val, one)?;
+        let updated_it = self.builder.build_set(
+            loaded_it,
+            tempra_tir::ir::TirKey::Field("idx".to_string()),
+            next_idx,
+        )?;
+        self.builder.build_store(iter_slot, updated_it)?;
+        self.builder.build_br(cond_block)?;
+        Ok(())
+    }
+
+    fn lower_collection_helper_call(
+        &mut self,
+        method: &str,
+        object: &HirExpression,
+        args: &[HirCallArgument],
+        span: Span,
+        obj_ty: &Type,
+    ) -> Result<Option<TirValueId>, TirLowerError> {
+        let Some(elem_ty) = self.collection_element_type(obj_ty) else {
+            return Ok(None);
+        };
+
+        match method {
+            "count" => {
+                if !args.is_empty() {
+                    return Err(TirLowerError::UnsupportedExpr(
+                        "'count' expects 0 arguments".into(),
+                        span,
+                    ));
+                }
+
+                let iter_slot = self.build_collection_iterator(object, obj_ty, span)?;
+                let zero = self.builder.build_const(TirConst::Int64(0))?;
+                let count_slot = self
+                    .builder
+                    .build_slot(TirType::Int64, Some(&format!("$count_{}", span.start)))?;
+                self.builder.build_store(count_slot, zero)?;
+
+                let cond_block = self.builder.new_block();
+                let body_block = self.builder.new_block();
+                let exit_block = self.builder.new_block();
+                self.builder.build_br(cond_block)?;
+
+                self.builder.set_current_block(cond_block);
+                let (loaded_it, _data_val, idx_val) =
+                    self.build_collection_loop_cond(iter_slot, body_block, exit_block)?;
+
+                self.builder.set_current_block(body_block);
+                let current = self.builder.build_load(count_slot)?;
+                let one = self.builder.build_const(TirConst::Int64(1))?;
+                let next = self.builder.build_add(current, one)?;
+                self.builder.build_store(count_slot, next)?;
+                self.build_collection_loop_continue(loaded_it, idx_val, iter_slot, cond_block)?;
+
+                self.builder.set_current_block(exit_block);
+                return self
+                    .builder
+                    .build_load(count_slot)
+                    .map(Some)
+                    .map_err(TirLowerError::from);
+            }
+            "fold" => {
+                if args.len() != 2 {
+                    return Err(TirLowerError::UnsupportedExpr(
+                        "'fold' expects 2 arguments".into(),
+                        span,
+                    ));
+                }
+
+                let init_expr = match &args[0] {
+                    HirCallArgument::Positional(expr) => expr,
+                    HirCallArgument::Named(named) => {
+                        return Err(TirLowerError::UnsupportedExpr(
+                            format!(
+                                "'fold' expects positional arguments, found '{}'",
+                                named.name
+                            ),
+                            named.value.span(),
+                        ))
+                    }
+                };
+                let init_ty = self.infer_expr_type(init_expr)?;
+                let callback_name = self.resolve_collection_callback(
+                    method,
+                    args,
+                    span,
+                    1,
+                    &[init_ty.clone(), elem_ty.clone()],
+                )?;
+                let callback_id = self.module_builder.declare_function(&callback_name);
+                let init_val = self.lower_expression(init_expr)?;
+                let acc_ty = map_type(&init_ty)?;
+                let acc_slot = self
+                    .builder
+                    .build_slot(acc_ty.clone(), Some(&format!("$fold_acc_{}", span.start)))?;
+                self.builder.build_store(acc_slot, init_val)?;
+
+                let iter_slot = self.build_collection_iterator(object, obj_ty, span)?;
+                let cond_block = self.builder.new_block();
+                let body_block = self.builder.new_block();
+                let exit_block = self.builder.new_block();
+                self.builder.build_br(cond_block)?;
+
+                self.builder.set_current_block(cond_block);
+                let (loaded_it, data_val, idx_val) =
+                    self.build_collection_loop_cond(iter_slot, body_block, exit_block)?;
+
+                self.builder.set_current_block(body_block);
+                let item_val = self.builder.build_get_index(data_val, idx_val)?;
+                let acc_val = self.builder.build_load(acc_slot)?;
+                let next_acc = self
+                    .builder
+                    .build_call(callback_id, vec![acc_val, item_val])?;
+                self.builder.build_store(acc_slot, next_acc)?;
+                self.build_collection_loop_continue(loaded_it, idx_val, iter_slot, cond_block)?;
+
+                self.builder.set_current_block(exit_block);
+                return self
+                    .builder
+                    .build_load(acc_slot)
+                    .map(Some)
+                    .map_err(TirLowerError::from);
+            }
+            "reduce" => {
+                let callback_name = self.resolve_collection_callback(
+                    method,
+                    args,
+                    span,
+                    0,
+                    &[elem_ty.clone(), elem_ty.clone()],
+                )?;
+                let callback_id = self.module_builder.declare_function(&callback_name);
+                let elem_tir_ty = map_type(&elem_ty)?;
+                let opt_ty = TirType::Option(Box::new(elem_tir_ty.clone()));
+                let none =
+                    self.builder
+                        .build_make(opt_ty.clone(), Some("None".to_string()), vec![])?;
+                let res_slot = self
+                    .builder
+                    .build_slot(opt_ty.clone(), Some(&format!("$reduce_res_{}", span.start)))?;
+                self.builder.build_store(res_slot, none)?;
+                let acc_slot = self.builder.build_slot(
+                    elem_tir_ty.clone(),
+                    Some(&format!("$reduce_acc_{}", span.start)),
+                )?;
+
+                let iter_slot = self.build_collection_iterator(object, obj_ty, span)?;
+                let first_cond_block = self.builder.new_block();
+                let first_body_block = self.builder.new_block();
+                let cond_block = self.builder.new_block();
+                let body_block = self.builder.new_block();
+                let done_block = self.builder.new_block();
+                let exit_block = self.builder.new_block();
+                self.builder.build_br(first_cond_block)?;
+
+                self.builder.set_current_block(first_cond_block);
+                let (loaded_it, data_val, idx_val) =
+                    self.build_collection_loop_cond(iter_slot, first_body_block, exit_block)?;
+
+                self.builder.set_current_block(first_body_block);
+                let first_val = self.builder.build_get_index(data_val, idx_val)?;
+                self.builder.build_store(acc_slot, first_val)?;
+                self.build_collection_loop_continue(loaded_it, idx_val, iter_slot, cond_block)?;
+
+                self.builder.set_current_block(cond_block);
+                let (loaded_it, data_val, idx_val) =
+                    self.build_collection_loop_cond(iter_slot, body_block, done_block)?;
+
+                self.builder.set_current_block(body_block);
+                let item_val = self.builder.build_get_index(data_val, idx_val)?;
+                let acc_val = self.builder.build_load(acc_slot)?;
+                let next_acc = self
+                    .builder
+                    .build_call(callback_id, vec![acc_val, item_val])?;
+                self.builder.build_store(acc_slot, next_acc)?;
+                self.build_collection_loop_continue(loaded_it, idx_val, iter_slot, cond_block)?;
+
+                self.builder.set_current_block(done_block);
+                let final_acc = self.builder.build_load(acc_slot)?;
+                let some =
+                    self.builder
+                        .build_make(opt_ty, Some("Some".to_string()), vec![final_acc])?;
+                self.builder.build_store(res_slot, some)?;
+                self.builder.build_br(exit_block)?;
+
+                self.builder.set_current_block(exit_block);
+                return self
+                    .builder
+                    .build_load(res_slot)
+                    .map(Some)
+                    .map_err(TirLowerError::from);
+            }
+            "map" | "filter" | "find" | "any" | "all" | "for_each" => {}
+            _ => return Ok(None),
+        }
+
+        let callback_name = self.resolve_collection_callback(
+            method,
+            args,
+            span,
+            0,
+            std::slice::from_ref(&elem_ty),
+        )?;
+        let callback_sig = self
+            .type_ctx
+            .functions
+            .get(&callback_name)
+            .ok_or_else(|| TirLowerError::UnknownFunction(callback_name.clone(), span))?
+            .clone();
+        let callback_id = self.module_builder.declare_function(&callback_name);
+        let elem_tir_ty = map_type(&elem_ty)?;
+
+        let iter_slot = self.build_collection_iterator(object, obj_ty, span)?;
+        let result_slot = match method {
+            "map" => {
+                let out_ty = map_type(&callback_sig.return_type)?;
+                let arr_ty = TirType::Array(Box::new(out_ty));
+                let empty = self.builder.build_make(arr_ty.clone(), None, vec![])?;
+                let slot = self
+                    .builder
+                    .build_slot(arr_ty, Some(&format!("$map_res_{}", span.start)))?;
+                self.builder.build_store(slot, empty)?;
+                Some(slot)
+            }
+            "filter" => {
+                let arr_ty = TirType::Array(Box::new(elem_tir_ty.clone()));
+                let empty = self.builder.build_make(arr_ty.clone(), None, vec![])?;
+                let slot = self
+                    .builder
+                    .build_slot(arr_ty, Some(&format!("$filter_res_{}", span.start)))?;
+                self.builder.build_store(slot, empty)?;
+                Some(slot)
+            }
+            "find" => {
+                let opt_ty = TirType::Option(Box::new(elem_tir_ty.clone()));
+                let none =
+                    self.builder
+                        .build_make(opt_ty.clone(), Some("None".to_string()), vec![])?;
+                let slot = self
+                    .builder
+                    .build_slot(opt_ty, Some(&format!("$find_res_{}", span.start)))?;
+                self.builder.build_store(slot, none)?;
+                Some(slot)
+            }
+            "any" => {
+                let init = self.builder.build_const(TirConst::Bool(false))?;
+                let slot = self
+                    .builder
+                    .build_slot(TirType::Bool, Some(&format!("$any_res_{}", span.start)))?;
+                self.builder.build_store(slot, init)?;
+                Some(slot)
+            }
+            "all" => {
+                let init = self.builder.build_const(TirConst::Bool(true))?;
+                let slot = self
+                    .builder
+                    .build_slot(TirType::Bool, Some(&format!("$all_res_{}", span.start)))?;
+                self.builder.build_store(slot, init)?;
+                Some(slot)
+            }
+            "for_each" => None,
+            _ => unreachable!(),
+        };
+
+        let cond_block = self.builder.new_block();
+        let body_block = self.builder.new_block();
+        let exit_block = self.builder.new_block();
+        self.builder.build_br(cond_block)?;
+
+        self.builder.set_current_block(cond_block);
+        let (loaded_it, data_val, idx_val) =
+            self.build_collection_loop_cond(iter_slot, body_block, exit_block)?;
+
+        self.builder.set_current_block(body_block);
+        let item_val = self.builder.build_get_index(data_val, idx_val)?;
+        let callback_val = self.builder.build_call(callback_id, vec![item_val])?;
+
+        match method {
+            "map" => {
+                let slot = result_slot.unwrap();
+                let cur = self.builder.build_load(slot)?;
+                let next = self.builder.build_array_push(cur, callback_val)?;
+                self.builder.build_store(slot, next)?;
+                self.build_collection_loop_continue(loaded_it, idx_val, iter_slot, cond_block)?;
+            }
+            "filter" => {
+                let push_block = self.builder.new_block();
+                let skip_block = self.builder.new_block();
+                let cont_block = self.builder.new_block();
+                self.builder
+                    .build_condbr(callback_val, push_block, skip_block)?;
+
+                self.builder.set_current_block(push_block);
+                let slot = result_slot.unwrap();
+                let cur = self.builder.build_load(slot)?;
+                let next = self.builder.build_array_push(cur, item_val)?;
+                self.builder.build_store(slot, next)?;
+                self.builder.build_br(cont_block)?;
+
+                self.builder.set_current_block(skip_block);
+                self.builder.build_br(cont_block)?;
+
+                self.builder.set_current_block(cont_block);
+                self.build_collection_loop_continue(loaded_it, idx_val, iter_slot, cond_block)?;
+            }
+            "find" => {
+                let found_block = self.builder.new_block();
+                let next_block = self.builder.new_block();
+                self.builder
+                    .build_condbr(callback_val, found_block, next_block)?;
+
+                self.builder.set_current_block(found_block);
+                let slot = result_slot.unwrap();
+                let opt_ty = TirType::Option(Box::new(elem_tir_ty));
+                let some =
+                    self.builder
+                        .build_make(opt_ty, Some("Some".to_string()), vec![item_val])?;
+                self.builder.build_store(slot, some)?;
+                self.builder.build_br(exit_block)?;
+
+                self.builder.set_current_block(next_block);
+                self.build_collection_loop_continue(loaded_it, idx_val, iter_slot, cond_block)?;
+            }
+            "any" => {
+                let true_block = self.builder.new_block();
+                let false_block = self.builder.new_block();
+                self.builder
+                    .build_condbr(callback_val, true_block, false_block)?;
+
+                self.builder.set_current_block(true_block);
+                let slot = result_slot.unwrap();
+                let true_val = self.builder.build_const(TirConst::Bool(true))?;
+                self.builder.build_store(slot, true_val)?;
+                self.builder.build_br(exit_block)?;
+
+                self.builder.set_current_block(false_block);
+                self.build_collection_loop_continue(loaded_it, idx_val, iter_slot, cond_block)?;
+            }
+            "all" => {
+                let true_block = self.builder.new_block();
+                let false_block = self.builder.new_block();
+                self.builder
+                    .build_condbr(callback_val, true_block, false_block)?;
+
+                self.builder.set_current_block(true_block);
+                self.build_collection_loop_continue(loaded_it, idx_val, iter_slot, cond_block)?;
+
+                self.builder.set_current_block(false_block);
+                let slot = result_slot.unwrap();
+                let false_val = self.builder.build_const(TirConst::Bool(false))?;
+                self.builder.build_store(slot, false_val)?;
+                self.builder.build_br(exit_block)?;
+            }
+            "for_each" => {
+                self.build_collection_loop_continue(loaded_it, idx_val, iter_slot, cond_block)?;
+            }
+            _ => unreachable!(),
+        }
+
+        self.builder.set_current_block(exit_block);
+        if let Some(slot) = result_slot {
+            self.builder
+                .build_load(slot)
+                .map(Some)
+                .map_err(TirLowerError::from)
+        } else {
+            self.builder
+                .build_const(TirConst::Unit)
+                .map(Some)
+                .map_err(TirLowerError::from)
+        }
     }
 
     pub fn lower_expression(&mut self, expr: &HirExpression) -> Result<TirValueId, TirLowerError> {
@@ -1158,7 +1856,122 @@ impl<'a> LowerContext<'a> {
                                 self.builder.set_current_block(end_block);
                                 return self.builder.build_load(tmp_slot).map_err(|e| e.into());
                             }
+                        } else if m.field == "iter" {
+                            if matches!(obj_ty, Type::Array(_) | Type::Slice(_)) {
+                                let obj = self.lower_expression(&m.object)?;
+                                let zero_val = self.builder.build_const(TirConst::Int64(0))?;
+                                let struct_name = if matches!(obj_ty, Type::Array(_)) {
+                                    "$ArrayIter"
+                                } else {
+                                    "$SliceIter"
+                                };
+                                return self
+                                    .builder
+                                    .build_make_struct(
+                                        struct_name.to_string(),
+                                        vec![
+                                            ("data".to_string(), obj),
+                                            ("idx".to_string(), zero_val),
+                                        ],
+                                    )
+                                    .map_err(|e| e.into());
+                            } else if matches!(obj_ty, Type::String) {
+                                // String.iter() => string.bytes().iter()
+                                // Lower the string, call bytes() on it, then wrap in $SliceIter
+                                let obj = self.lower_expression(&m.object)?;
+                                let bytes_val = self.builder.build_bytes(obj)?;
+                                let zero_val = self.builder.build_const(TirConst::Int64(0))?;
+                                return self
+                                    .builder
+                                    .build_make_struct(
+                                        "$SliceIter".to_string(),
+                                        vec![
+                                            ("data".to_string(), bytes_val),
+                                            ("idx".to_string(), zero_val),
+                                        ],
+                                    )
+                                    .map_err(|e| e.into());
+                            }
+                        } else if m.field == "next" {
+                            if let Type::ArrayIter(inner_ty) | Type::SliceIter(inner_ty) = &obj_ty {
+                                let opt_ty =
+                                    TirType::Option(Box::new(map_type(inner_ty.as_ref())?));
+
+                                // Load the iterator from the receiver
+                                let obj = self.lower_expression(&m.object)?;
+
+                                // Extract fields
+                                let data_val = self.builder.build_get(
+                                    obj,
+                                    tempra_tir::ir::TirKey::Field("data".to_string()),
+                                )?;
+                                let idx_val = self.builder.build_get(
+                                    obj,
+                                    tempra_tir::ir::TirKey::Field("idx".to_string()),
+                                )?;
+                                let len_val = self.builder.build_len(data_val)?;
+
+                                let is_less = self.builder.build_lt(idx_val, len_val)?;
+
+                                let tmp_slot =
+                                    self.builder.build_slot(opt_ty.clone(), Some("$next_tmp"))?;
+
+                                let empty_block = self.builder.new_block();
+                                let non_empty_block = self.builder.new_block();
+                                let end_block = self.builder.new_block();
+
+                                self.builder
+                                    .build_condbr(is_less, non_empty_block, empty_block)?;
+
+                                // empty_block
+                                self.builder.set_current_block(empty_block);
+                                let none_val = self.builder.build_make(
+                                    opt_ty.clone(),
+                                    Some("None".to_string()),
+                                    vec![],
+                                )?;
+                                self.builder.build_store(tmp_slot, none_val)?;
+                                self.builder.build_br(end_block)?;
+
+                                // non_empty_block
+                                self.builder.set_current_block(non_empty_block);
+                                let item_val = self.builder.build_get_index(data_val, idx_val)?;
+                                let some_val = self.builder.build_make(
+                                    opt_ty.clone(),
+                                    Some("Some".to_string()),
+                                    vec![item_val],
+                                )?;
+                                self.builder.build_store(tmp_slot, some_val)?;
+
+                                // Increment and update
+                                let one_val = self.builder.build_const(TirConst::Int64(1))?;
+                                let next_idx = self.builder.build_add(idx_val, one_val)?;
+                                let new_obj = self.builder.build_set(
+                                    obj,
+                                    tempra_tir::ir::TirKey::Field("idx".to_string()),
+                                    next_idx,
+                                )?;
+
+                                // Store back to local if it's a variable
+                                if let HirExpression::Name(_, ref name) = *m.object {
+                                    if let Some((slot, _, _)) = self.locals.get(name) {
+                                        self.builder.build_store(*slot, new_obj)?;
+                                    }
+                                }
+
+                                self.builder.build_br(end_block)?;
+
+                                // end_block
+                                self.builder.set_current_block(end_block);
+                                return self.builder.build_load(tmp_slot).map_err(|e| e.into());
+                            }
                         }
+                    }
+
+                    if let Some(value) = self.lower_collection_helper_call(
+                        &m.field, &m.object, &c.args, c.span, &obj_ty,
+                    )? {
+                        return Ok(value);
                     }
 
                     if let Type::Namespace(ns) = &obj_ty {
@@ -1976,14 +2789,71 @@ pub fn lower_function(
     self_ty: Option<Type>,
     module_prefix: Option<&str>,
 ) -> Result<TirFunction, TirLowerError> {
+    lower_function_inner(
+        func,
+        type_ctx,
+        module_builder,
+        self_ty,
+        module_prefix,
+        None,
+        HashMap::new(),
+    )
+}
+
+pub fn lower_function_specialization(
+    func: &HirFunction,
+    type_ctx: &TypeContext,
+    module_builder: &mut ModuleBuilder,
+    self_ty: Option<Type>,
+    module_prefix: Option<&str>,
+    type_args: &[Type],
+) -> Result<TirFunction, TirLowerError> {
+    let mut generic_subs = HashMap::new();
+    for (generic, ty) in func.generic_parameters.iter().zip(type_args.iter()) {
+        generic_subs.insert(generic.name.clone(), ty.clone());
+    }
+
+    let base_name = if let Some(p) = module_prefix {
+        if p.is_empty() {
+            func.name.clone()
+        } else {
+            format!("{}.{}", p, func.name)
+        }
+    } else {
+        func.name.clone()
+    };
+    let specialized_name = specialized_function_name(&base_name, type_args);
+
+    lower_function_inner(
+        func,
+        type_ctx,
+        module_builder,
+        self_ty,
+        module_prefix,
+        Some(specialized_name),
+        generic_subs,
+    )
+}
+
+fn lower_function_inner(
+    func: &HirFunction,
+    type_ctx: &TypeContext,
+    module_builder: &mut ModuleBuilder,
+    self_ty: Option<Type>,
+    module_prefix: Option<&str>,
+    override_name: Option<String>,
+    generic_subs: HashMap<String, Type>,
+) -> Result<TirFunction, TirLowerError> {
     let ret_ty = if let Some(rt) = &func.return_type {
-        let ty = resolve_hir_type(rt, type_ctx, self_ty.as_ref())?;
+        let ty = resolve_hir_type(rt, type_ctx, self_ty.as_ref(), &generic_subs)?;
         map_type(&ty)?
     } else {
         TirType::Unit
     };
 
-    let qual_name = if let Some(p) = module_prefix {
+    let qual_name = if let Some(name) = override_name {
+        name
+    } else if let Some(p) = module_prefix {
         if p.is_empty() {
             func.name.clone()
         } else {
@@ -2001,7 +2871,10 @@ pub fn lower_function(
         let entry_block = builder.new_block();
         builder.set_current_block(entry_block);
         for p in &func.parameters {
-            let ty = resolve_hir_type(&p.ty, type_ctx, self_ty.as_ref())?;
+            if p.kind == tempra_ast::ParameterKind::Type {
+                continue;
+            }
+            let ty = resolve_hir_type(&p.ty, type_ctx, self_ty.as_ref(), &generic_subs)?;
             let tir_ty = map_type(&ty)?;
             builder.add_param(tir_ty);
         }
@@ -2013,14 +2886,23 @@ pub fn lower_function(
         return Ok(builder.build());
     }
 
-    let mut ctx = LowerContext::new(builder, type_ctx, module_builder, self_ty.clone());
+    let mut ctx = LowerContext::new(
+        builder,
+        type_ctx,
+        module_builder,
+        self_ty.clone(),
+        generic_subs.clone(),
+    );
 
     // Create entry block
     let entry_block = ctx.builder.new_block();
     ctx.builder.set_current_block(entry_block);
 
     for p in &func.parameters {
-        let ty = resolve_hir_type(&p.ty, type_ctx, self_ty.as_ref())?;
+        if p.kind == tempra_ast::ParameterKind::Type {
+            continue;
+        }
+        let ty = resolve_hir_type(&p.ty, type_ctx, self_ty.as_ref(), &generic_subs)?;
         let tir_ty = map_type(&ty)?;
         let val_id = ctx.builder.add_param(tir_ty.clone());
 

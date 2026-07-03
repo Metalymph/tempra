@@ -76,9 +76,32 @@ std.io.println("Running")
 *(Phase 19.2A — available via method-call syntax on arrays and slices)*
 
 - `.len() -> Int64` — number of elements
+- `.count() -> Int` — number of elements, lowered through `iter()` / `next()`
 - `.is_empty() -> Bool` — true if len == 0
 - `.first() -> Option<T>` — `Some(first_element)` or `None` if empty
 - `.last() -> Option<T>` — `Some(last_element)` or `None` if empty
+- `.map(fn(T) -> U) -> Array<U>` — eager transform into a new array
+- `.filter(fn(T) -> Bool) -> Array<T>` — eager filter into a new array
+- `.find(fn(T) -> Bool) -> Option<T>` — first matching element
+- `.any(fn(T) -> Bool) -> Bool` — true if any element matches
+- `.all(fn(T) -> Bool) -> Bool` — true if all elements match
+- `.for_each(fn(T) -> Unit) -> Unit` — eager side-effect loop
+- `.reduce(fn(T, T) -> T) -> Option<T>` — eager left reduction; `None` for empty collections
+- `.fold(init: U, fn(U, T) -> U) -> U` — eager left fold starting from `init`
+
+Functional helpers currently accept direct top-level function references only. Inline closures,
+stored callbacks, function values, lazy iterators, and generators are intentionally out of scope.
+
+Reduction semantics:
+
+```tempra
+[].reduce(add)        // None
+[5].reduce(add)       // Some(5)
+[1, 2, 3].reduce(add) // Some(6)
+
+[].fold(100, add)        // 100
+[1, 2, 3].fold(0, add)   // 6
+```
 
 ```tempra
 let xs: [Int64] = [10, 20, 30]

@@ -489,6 +489,49 @@ fn test_completion_member() {
 }
 
 #[test]
+fn test_completion_and_hover_builtin_collection_methods() {
+    let mut session = AnalysisSession::new();
+    let uri = DocumentUri::new("file:///collection_completion.tmpr");
+
+    let source = r#"
+        fn double(x: Int) -> Int { x * 2 }
+        fn main() {
+            let xs: Array(Int) = [1, 2, 3]
+            xs.map(double)
+            xs.
+        }
+    "#
+    .to_string();
+    session.open_document(uri.clone(), source, 1);
+
+    let completions = session.completions_at_position(&uri, 5, 15);
+    for expected in [
+        "count", "any", "all", "find", "map", "filter", "for_each", "reduce", "fold",
+    ] {
+        assert!(
+            completions.iter().any(|c| c.label == expected),
+            "missing completion for {}",
+            expected
+        );
+    }
+
+    let map = completions.iter().find(|c| c.label == "map").unwrap();
+    assert_eq!(map.kind, tempra_analysis::CompletionKind::Method);
+    assert_eq!(
+        map.detail.as_deref().unwrap(),
+        "map(fn(Int) -> U) -> Array(U)"
+    );
+    let reduce = completions.iter().find(|c| c.label == "reduce").unwrap();
+    assert_eq!(
+        reduce.detail.as_deref().unwrap(),
+        "reduce(fn(Int, Int) -> Int) -> Option(Int)"
+    );
+
+    let hover = session.hover(&uri, 4, 16).unwrap();
+    assert_eq!(hover, "map(fn(Int) -> U) -> Array(U)");
+}
+
+#[test]
 fn test_semantic_tokens() {
     let mut session = AnalysisSession::new();
     let uri = DocumentUri::new("file:///semantic_tokens.tmpr");

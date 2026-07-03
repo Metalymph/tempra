@@ -1,0 +1,64 @@
+import std.io
+
+fn main() -> Int64 {
+    let s = "hello"
+
+    // --- Manual iter/next ---
+    var it = s.iter()
+    var manual_count = 0
+
+    let o1 = it.next()
+    if o1 is Some(v) {
+        manual_count = manual_count + 1
+    }
+
+    let o2 = it.next()
+    if o2 is Some(v) {
+        manual_count = manual_count + 1
+    }
+
+    let o3 = it.next()
+    if o3 is Some(v) {
+        manual_count = manual_count + 1
+    }
+    
+    let o4 = it.next()
+    if o4 is Some(v) {
+        manual_count = manual_count + 1
+    }
+
+    let o5 = it.next()
+    if o5 is Some(v) {
+        manual_count = manual_count + 1
+    }
+
+    let o6 = it.next()
+    match o6 {
+        Some(v) => std.io.println("next6: got Some (unexpected)")
+        None => std.io.println("next6: got None (expected)")
+    }
+    if manual_count == 5 {
+        std.io.println("manual iter count OK")
+    }
+
+    // --- For loop over string ---
+    var string_count = 0
+    for b in "hello" {
+        string_count = string_count + 1
+    }
+    if string_count == 5 {
+        std.io.println("for-string count OK")
+    }
+
+    // --- Compare with bytes() ---
+    let b_slice = "hello".bytes()
+    var bytes_count = 0
+    for b in b_slice {
+        bytes_count = bytes_count + 1
+    }
+    if bytes_count == string_count {
+        std.io.println("bytes parity OK")
+    }
+
+    return 0
+}

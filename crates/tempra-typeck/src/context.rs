@@ -740,6 +740,12 @@ impl TypeContext {
                     mappings.insert("Iter".to_string(), Type::SliceIter(inner.clone()));
                     return Some(mappings);
                 }
+                Type::String => {
+                    let mut mappings = HashMap::new();
+                    mappings.insert("Item".to_string(), Type::UInt8);
+                    mappings.insert("Iter".to_string(), Type::SliceIter(Box::new(Type::UInt8)));
+                    return Some(mappings);
+                }
                 _ => {}
             }
         }

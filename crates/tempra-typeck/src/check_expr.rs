@@ -1608,6 +1608,13 @@ fn check_string_method(
             }
             Type::Slice(Box::new(Type::UInt8))
         }
+        "iter" => {
+            if !args.is_empty() {
+                ctx.error("'iter' method expects 0 arguments", span);
+            }
+            // String.iter() returns SliceIter<UInt8> — byte-oriented iteration
+            Type::SliceIter(Box::new(Type::UInt8))
+        }
         "trim" | "trim_start" | "trim_end" | "to_lower" | "to_upper" => {
             if !args.is_empty() {
                 ctx.error(format!("'{}' method expects 0 arguments", name), span);
@@ -1698,6 +1705,12 @@ fn check_array_method(
             }
             Type::Int
         }
+        "count" => {
+            if !args.is_empty() {
+                ctx.error("'count' method expects 0 arguments", span);
+            }
+            Type::Int
+        }
         "is_empty" => {
             if !args.is_empty() {
                 ctx.error("'is_empty' method expects 0 arguments", span);
@@ -1714,11 +1727,316 @@ fn check_array_method(
             };
             Type::Option(Box::new(inner_ty))
         }
+        "map" => {
+            let Some(elem_ty) = collection_element_type(receiver_ty) else {
+                return Type::Error;
+            };
+            let callback_ret =
+                check_collection_callback(ctx, name, args, span, 0, &[elem_ty], None);
+            Type::Array(Box::new(callback_ret))
+        }
+        "filter" => {
+            let Some(elem_ty) = collection_element_type(receiver_ty) else {
+                return Type::Error;
+            };
+            check_collection_callback(
+                ctx,
+                name,
+                args,
+                span,
+                0,
+                &[elem_ty.clone()],
+                Some(&Type::Bool),
+            );
+            Type::Array(Box::new(elem_ty))
+        }
+        "find" => {
+            let Some(elem_ty) = collection_element_type(receiver_ty) else {
+                return Type::Error;
+            };
+            check_collection_callback(
+                ctx,
+                name,
+                args,
+                span,
+                0,
+                &[elem_ty.clone()],
+                Some(&Type::Bool),
+            );
+            Type::Option(Box::new(elem_ty))
+        }
+        "any" | "all" => {
+            let Some(elem_ty) = collection_element_type(receiver_ty) else {
+                return Type::Error;
+            };
+            check_collection_callback(ctx, name, args, span, 0, &[elem_ty], Some(&Type::Bool));
+            Type::Bool
+        }
+        "for_each" => {
+            let Some(elem_ty) = collection_element_type(receiver_ty) else {
+                return Type::Error;
+            };
+            check_collection_callback(ctx, name, args, span, 0, &[elem_ty], Some(&Type::Unit));
+            Type::Unit
+        }
+        "reduce" => {
+            let Some(elem_ty) = collection_element_type(receiver_ty) else {
+                return Type::Error;
+            };
+            check_collection_callback(
+                ctx,
+                name,
+                args,
+                span,
+                0,
+                &[elem_ty.clone(), elem_ty.clone()],
+                Some(&elem_ty),
+            );
+            Type::Option(Box::new(elem_ty))
+        }
+        "fold" => {
+            let Some(elem_ty) = collection_element_type(receiver_ty) else {
+                return Type::Error;
+            };
+            if args.len() != 2 {
+                ctx.error("'fold' method expects 2 arguments", span);
+                return Type::Error;
+            }
+            let init_ty = match &mut args[0] {
+                HirCallArgument::Positional(expr) => check_expression(ctx, expr, None),
+                HirCallArgument::Named(named) => {
+                    ctx.error(
+                        format!(
+                            "'fold' method expects positional arguments, found named argument '{}'",
+                            named.name
+                        ),
+                        named.value.span(),
+                    );
+                    Type::Error
+                }
+            };
+            check_collection_callback(
+                ctx,
+                name,
+                args,
+                span,
+                1,
+                &[init_ty.clone(), elem_ty],
+                Some(&init_ty),
+            );
+            init_ty
+        }
         _ => {
             ctx.error(format!("Array/Slice has no method '{}'", name), span);
             Type::Error
         }
     }
+}
+
+fn collection_element_type(receiver_ty: &Type) -> Option<Type> {
+    match receiver_ty {
+        Type::Array(inner) | Type::Slice(inner) => Some(*inner.clone()),
+        _ => None,
+    }
+}
+
+fn check_collection_callback(
+    ctx: &mut TypeContext,
+    method: &str,
+    args: &mut [HirCallArgument],
+    span: Span,
+    callback_arg_index: usize,
+    expected_params: &[Type],
+    expected_ret: Option<&Type>,
+) -> Type {
+    if args.len() != callback_arg_index + 1 {
+        ctx.error(
+            format!(
+                "'{}' method expects {} arguments",
+                method,
+                callback_arg_index + 1
+            ),
+            span,
+        );
+        return expected_ret.cloned().unwrap_or(Type::Error);
+    }
+
+    if callback_arg_index >= args.len() {
+        ctx.error(
+            format!("'{}' method expects a function argument", method),
+            span,
+        );
+        return expected_ret.cloned().unwrap_or(Type::Error);
+    }
+
+    let callback_expr = match &mut args[callback_arg_index] {
+        HirCallArgument::Positional(expr) => expr,
+        HirCallArgument::Named(named) => {
+            ctx.error(
+                format!(
+                    "'{}' method expects a positional function argument, found named argument '{}'",
+                    method, named.name
+                ),
+                named.value.span(),
+            );
+            return expected_ret.cloned().unwrap_or(Type::Error);
+        }
+    };
+
+    let (name_span, callback_name) = match callback_expr {
+        HirExpression::Name(span, name) => (*span, name.clone()),
+        _ => {
+            ctx.error(
+                format!(
+                    "'{}' method expects a direct top-level function reference",
+                    method
+                ),
+                callback_expr.span(),
+            );
+            return expected_ret.cloned().unwrap_or(Type::Error);
+        }
+    };
+
+    let Some((qualified_name, sig)) = lookup_direct_callback_signature(ctx, &callback_name) else {
+        ctx.error(
+            format!(
+                "'{}' method expects a direct top-level function reference, found '{}'",
+                method, callback_name
+            ),
+            name_span,
+        );
+        return expected_ret.cloned().unwrap_or(Type::Error);
+    };
+
+    if let Some(def_span) = ctx.function_spans.get(&qualified_name) {
+        ctx.facts.resolved_symbols.insert(name_span, *def_span);
+    }
+
+    let runtime_params: Vec<_> = sig
+        .params
+        .iter()
+        .filter(|param| param.kind == tempra_ast::ParameterKind::Runtime)
+        .collect();
+
+    if runtime_params.len() != expected_params.len() {
+        ctx.error(
+            format!(
+                "'{}' callback '{}' must take exactly {} arguments",
+                method,
+                callback_name,
+                expected_params.len()
+            ),
+            name_span,
+        );
+        return expected_ret.cloned().unwrap_or(Type::Error);
+    }
+
+    let mut inferred = std::collections::HashMap::new();
+    for (param, expected) in runtime_params.iter().zip(expected_params.iter()) {
+        if let Err(_) = match_generic_types(&param.ty, expected, &mut inferred) {
+            ctx.error(
+                format!(
+                    "'{}' callback '{}' parameter type mismatch: expected {}, found {}",
+                    method, callback_name, expected, param.ty
+                ),
+                name_span,
+            );
+        }
+    }
+    if let Some(expected) = expected_ret {
+        let _ = match_generic_types(&sig.return_type, expected, &mut inferred);
+    }
+
+    for generic in &sig.generic_params {
+        if !inferred.contains_key(&generic.id) {
+            ctx.error(
+                format!(
+                    "cannot infer type for generic callback parameter '{}' in '{}'",
+                    generic.name, callback_name
+                ),
+                name_span,
+            );
+            return expected_ret.cloned().unwrap_or(Type::Error);
+        }
+    }
+
+    let resolved_params: Vec<Type> = sig
+        .params
+        .iter()
+        .filter(|param| param.kind == tempra_ast::ParameterKind::Runtime)
+        .map(|param| substitute_generics(ctx, &param.ty, &inferred))
+        .collect();
+    let resolved_ret = substitute_generics(ctx, &sig.return_type, &inferred);
+
+    for (param, (resolved_param, expected)) in runtime_params
+        .iter()
+        .zip(resolved_params.iter().zip(expected_params.iter()))
+    {
+        if param.is_inout {
+            ctx.error(
+                format!(
+                    "'{}' callback '{}' must take plain runtime arguments",
+                    method, callback_name
+                ),
+                name_span,
+            );
+        }
+
+        if !types_compatible(expected, resolved_param) {
+            ctx.error(
+                format!(
+                    "'{}' callback '{}' parameter type mismatch: expected {}, found {}",
+                    method, callback_name, expected, resolved_param
+                ),
+                name_span,
+            );
+        }
+    }
+
+    if let Some(expected) = expected_ret {
+        if !types_compatible(expected, &resolved_ret) {
+            ctx.error(
+                format!(
+                    "'{}' callback '{}' return type mismatch: expected {}, found {}",
+                    method, callback_name, expected, resolved_ret
+                ),
+                name_span,
+            );
+        }
+    }
+
+    if !sig.generic_params.is_empty() {
+        let mut type_args = Vec::new();
+        for generic in &sig.generic_params {
+            if let Some(ty) = inferred.get(&generic.id) {
+                type_args.push(ty.clone());
+            }
+        }
+        ctx.specialization_log
+            .insert(crate::context::SpecializationKey {
+                function_name: qualified_name,
+                type_args,
+                comptime_args: Vec::new(),
+            });
+    }
+
+    resolved_ret
+}
+
+fn lookup_direct_callback_signature(
+    ctx: &TypeContext,
+    name: &str,
+) -> Option<(String, crate::context::FunctionSignature)> {
+    if !ctx.current_module.is_empty() {
+        let qualified = format!("{}.{}", ctx.current_module, name);
+        if let Some(sig) = ctx.functions.get(&qualified) {
+            return Some((qualified, sig.clone()));
+        }
+    }
+
+    ctx.functions
+        .get(name)
+        .map(|sig| (name.to_string(), sig.clone()))
 }
 
 fn check_command_method(
@@ -3268,12 +3586,9 @@ fn check_for_expr(ctx: &mut TypeContext, f: &mut HirForExpr) -> Type {
     let iter_ty = check_expression(ctx, &mut f.iterable, None);
 
     // Determine the element type by routing through the Iterable protocol.
-    // String is kept as a built-in special case (iterates chars as String).
-    // Arrays and Slices satisfy Iterable via compiler-known shortcuts.
+    // Arrays, slices, and strings satisfy Iterable via compiler-known shortcuts.
     // Custom structs/enums can satisfy Iterable structurally.
-    let elem_ty = if iter_ty == Type::String {
-        Type::String
-    } else if iter_ty == Type::Error {
+    let elem_ty = if iter_ty == Type::Error {
         Type::Error
     } else if satisfies_interface(ctx, &iter_ty, "Iterable") {
         // Resolve the Item associated type from Iterable
@@ -4078,7 +4393,7 @@ pub(crate) fn satisfies_interface(ctx: &mut TypeContext, ty: &Type, interface_na
         }
     }
     if interface_name == "Iterable" {
-        if matches!(ty, Type::Array(_) | Type::Slice(_)) {
+        if matches!(ty, Type::Array(_) | Type::Slice(_) | Type::String) {
             return true;
         }
     }
@@ -4237,7 +4552,7 @@ pub fn satisfies_interface_no_errors(ctx: &TypeContext, ty: &Type, interface_nam
         }
     }
     if interface_name == "Iterable" {
-        if matches!(ty, Type::Array(_) | Type::Slice(_)) {
+        if matches!(ty, Type::Array(_) | Type::Slice(_) | Type::String) {
             return true;
         }
     }

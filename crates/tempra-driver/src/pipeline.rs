@@ -9,6 +9,14 @@ use tempra_parser::parse_source;
 use tempra_typeck::check_file as typeck_check_file;
 use tempra_vm::value::VmValue;
 
+fn is_generic_template(func: &tempra_hir::HirFunction) -> bool {
+    !func.generic_parameters.is_empty()
+        || func
+            .parameters
+            .iter()
+            .any(|p| p.kind == tempra_ast::ParameterKind::Type)
+}
+
 pub fn run_source(source: &str) -> Result<(), DriverError> {
     run_source_with_args(source, &[])
 }
@@ -122,6 +130,9 @@ fn compile_and_cache_module(
     for item in &hir.items {
         match item {
             tempra_hir::HirItem::Function(func) => {
+                if is_generic_template(func) {
+                    continue;
+                }
                 match tempra_tir_lower::lower::lower_function(
                     func,
                     &type_ctx,
@@ -184,6 +195,13 @@ fn compile_and_cache_module(
             _ => {}
         }
     }
+    lower_requested_function_specializations(
+        &hir.items,
+        &type_ctx,
+        &mut module_builder,
+        &mut errors,
+        None,
+    );
     if !errors.is_empty() {
         return Err(DriverError::UnsupportedExperimentalVm(errors.join("\n")));
     }
@@ -211,6 +229,46 @@ fn compile_and_cache_module(
     }
 
     Ok(bc_module)
+}
+
+fn lower_requested_function_specializations(
+    items: &[tempra_hir::HirItem],
+    type_ctx: &tempra_typeck::context::TypeContext,
+    module_builder: &mut tempra_tir::builder::ModuleBuilder,
+    errors: &mut Vec<String>,
+    module_prefix: Option<&str>,
+) {
+    for key in &type_ctx.specialization_log {
+        let requested_name = key
+            .function_name
+            .rsplit('.')
+            .next()
+            .unwrap_or(&key.function_name);
+        let Some(func) = items.iter().find_map(|item| match item {
+            tempra_hir::HirItem::Function(func) if func.name == requested_name => Some(func),
+            _ => None,
+        }) else {
+            continue;
+        };
+        if !is_generic_template(func) {
+            continue;
+        }
+
+        match tempra_tir_lower::lower::lower_function_specialization(
+            func,
+            type_ctx,
+            module_builder,
+            None,
+            module_prefix,
+            &key.type_args,
+        ) {
+            Ok(tir_func) => module_builder.add_function(tir_func),
+            Err(e) => errors.push(format!(
+                "unsupported in specialization '{}': {}",
+                key.function_name, e
+            )),
+        }
+    }
 }
 
 /// Internal helper for benchmarking and testing the experimental VM pipeline.
@@ -312,6 +370,9 @@ pub fn run_file_with_experimental_vm_jit(
     for (name, _imports, hir) in &files {
         for item in &hir.items {
             if let tempra_hir::HirItem::Function(func) = item {
+                if is_generic_template(func) {
+                    continue;
+                }
                 let prefix = if name.is_empty() {
                     None
                 } else {
@@ -333,6 +394,18 @@ pub fn run_file_with_experimental_vm_jit(
                 }
             }
         }
+        let prefix = if name.is_empty() {
+            None
+        } else {
+            Some(name.as_str())
+        };
+        lower_requested_function_specializations(
+            &hir.items,
+            &type_ctx,
+            &mut module_builder,
+            &mut errors,
+            prefix,
+        );
     }
 
     if !errors.is_empty() {
@@ -1029,11 +1102,11 @@ mod tests {
     fn test_tir_interp_source_unsupported_for_error() {
         let source = "
         fn main() {
-            for i in \"string_iteration_unsupported\" {}
+            for i in 123 {}
         }
         ";
         let result = interpret_tir_source(source, "main", vec![]);
-        assert!(matches!(result, Err(DriverError::TirLowerError(_))));
+        assert!(matches!(result, Err(DriverError::TypeError(_))));
     }
 
     #[test]

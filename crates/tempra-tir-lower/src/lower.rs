@@ -507,6 +507,25 @@ impl<'a> LowerContext<'a> {
                             "find" => return Ok(Type::Option(Box::new(elem_ty))),
                             "any" | "all" => return Ok(Type::Bool),
                             "for_each" => return Ok(Type::Unit),
+                            "enumerate" => {
+                                return Ok(Type::Array(Box::new(Type::Tuple(vec![
+                                    Type::Int64,
+                                    elem_ty,
+                                ]))));
+                            }
+                            "zip" => {
+                                if let Some(HirCallArgument::Positional(other)) = c.args.first() {
+                                    let other_ty = self.infer_expr_type(other)?;
+                                    if let Some(other_elem_ty) =
+                                        self.collection_element_type(&other_ty)
+                                    {
+                                        return Ok(Type::Array(Box::new(Type::Tuple(vec![
+                                            elem_ty,
+                                            other_elem_ty,
+                                        ]))));
+                                    }
+                                }
+                            }
                             "reduce" => return Ok(Type::Option(Box::new(elem_ty))),
                             "fold" => {
                                 if let Some(HirCallArgument::Positional(init)) = c.args.first() {
@@ -1240,6 +1259,172 @@ impl<'a> LowerContext<'a> {
                 return self
                     .builder
                     .build_load(count_slot)
+                    .map(Some)
+                    .map_err(TirLowerError::from);
+            }
+            "enumerate" => {
+                if !args.is_empty() {
+                    return Err(TirLowerError::UnsupportedExpr(
+                        "'enumerate' expects 0 arguments".into(),
+                        span,
+                    ));
+                }
+
+                let elem_tir_ty = map_type(&elem_ty)?;
+                let tuple_ty = TirType::Tuple(vec![TirType::Int64, elem_tir_ty]);
+                let arr_ty = TirType::Array(Box::new(tuple_ty.clone()));
+                let empty = self.builder.build_make(arr_ty.clone(), None, vec![])?;
+                let result_slot = self
+                    .builder
+                    .build_slot(arr_ty, Some(&format!("$enumerate_res_{}", span.start)))?;
+                self.builder.build_store(result_slot, empty)?;
+
+                let zero = self.builder.build_const(TirConst::Int64(0))?;
+                let index_slot = self.builder.build_slot(
+                    TirType::Int64,
+                    Some(&format!("$enumerate_idx_{}", span.start)),
+                )?;
+                self.builder.build_store(index_slot, zero)?;
+
+                let iter_slot = self.build_collection_iterator(object, obj_ty, span)?;
+                let cond_block = self.builder.new_block();
+                let body_block = self.builder.new_block();
+                let exit_block = self.builder.new_block();
+                self.builder.build_br(cond_block)?;
+
+                self.builder.set_current_block(cond_block);
+                let (loaded_it, data_val, idx_val) =
+                    self.build_collection_loop_cond(iter_slot, body_block, exit_block)?;
+
+                self.builder.set_current_block(body_block);
+                let item_val = self.builder.build_get_index(data_val, idx_val)?;
+                let index_val = self.builder.build_load(index_slot)?;
+                let tuple_val =
+                    self.builder
+                        .build_make(tuple_ty, None, vec![index_val, item_val])?;
+                let current = self.builder.build_load(result_slot)?;
+                let next = self.builder.build_array_push(current, tuple_val)?;
+                self.builder.build_store(result_slot, next)?;
+
+                let one = self.builder.build_const(TirConst::Int64(1))?;
+                let next_index = self.builder.build_add(index_val, one)?;
+                self.builder.build_store(index_slot, next_index)?;
+                self.build_collection_loop_continue(loaded_it, idx_val, iter_slot, cond_block)?;
+
+                self.builder.set_current_block(exit_block);
+                return self
+                    .builder
+                    .build_load(result_slot)
+                    .map(Some)
+                    .map_err(TirLowerError::from);
+            }
+            "zip" => {
+                if args.len() != 1 {
+                    return Err(TirLowerError::UnsupportedExpr(
+                        "'zip' expects 1 argument".into(),
+                        span,
+                    ));
+                }
+
+                let other_expr = match &args[0] {
+                    HirCallArgument::Positional(expr) => expr,
+                    HirCallArgument::Named(named) => {
+                        return Err(TirLowerError::UnsupportedExpr(
+                            format!(
+                                "'zip' expects a positional collection argument, found '{}'",
+                                named.name
+                            ),
+                            named.value.span(),
+                        ))
+                    }
+                };
+                let other_ty = self.infer_expr_type(other_expr)?;
+                let Some(other_elem_ty) = self.collection_element_type(&other_ty) else {
+                    return Err(TirLowerError::UnsupportedExpr(
+                        format!("'zip' argument must be Array or Slice, found {}", other_ty),
+                        other_expr.span(),
+                    ));
+                };
+
+                let left_elem_tir_ty = map_type(&elem_ty)?;
+                let right_elem_tir_ty = map_type(&other_elem_ty)?;
+                let tuple_ty = TirType::Tuple(vec![left_elem_tir_ty, right_elem_tir_ty]);
+                let arr_ty = TirType::Array(Box::new(tuple_ty.clone()));
+                let empty = self.builder.build_make(arr_ty.clone(), None, vec![])?;
+                let result_slot = self
+                    .builder
+                    .build_slot(arr_ty, Some(&format!("$zip_res_{}", span.start)))?;
+                self.builder.build_store(result_slot, empty)?;
+
+                let left_iter_slot = self.build_collection_iterator(object, obj_ty, span)?;
+                let right_iter_slot =
+                    self.build_collection_iterator(other_expr, &other_ty, span)?;
+                let cond_block = self.builder.new_block();
+                let body_block = self.builder.new_block();
+                let exit_block = self.builder.new_block();
+                self.builder.build_br(cond_block)?;
+
+                self.builder.set_current_block(cond_block);
+                let loaded_left = self.builder.build_load(left_iter_slot)?;
+                let left_data = self.builder.build_get(
+                    loaded_left,
+                    tempra_tir::ir::TirKey::Field("data".to_string()),
+                )?;
+                let left_idx = self.builder.build_get(
+                    loaded_left,
+                    tempra_tir::ir::TirKey::Field("idx".to_string()),
+                )?;
+                let left_len = self.builder.build_len(left_data)?;
+                let left_has = self.builder.build_lt(left_idx, left_len)?;
+
+                let loaded_right = self.builder.build_load(right_iter_slot)?;
+                let right_data = self.builder.build_get(
+                    loaded_right,
+                    tempra_tir::ir::TirKey::Field("data".to_string()),
+                )?;
+                let right_idx = self.builder.build_get(
+                    loaded_right,
+                    tempra_tir::ir::TirKey::Field("idx".to_string()),
+                )?;
+                let right_len = self.builder.build_len(right_data)?;
+                let right_has = self.builder.build_lt(right_idx, right_len)?;
+                let both_have = self.builder.build_and(left_has, right_has)?;
+                self.builder
+                    .build_condbr(both_have, body_block, exit_block)?;
+
+                self.builder.set_current_block(body_block);
+                let left_item = self.builder.build_get_index(left_data, left_idx)?;
+                let right_item = self.builder.build_get_index(right_data, right_idx)?;
+                let tuple_val =
+                    self.builder
+                        .build_make(tuple_ty, None, vec![left_item, right_item])?;
+                let current = self.builder.build_load(result_slot)?;
+                let next = self.builder.build_array_push(current, tuple_val)?;
+                self.builder.build_store(result_slot, next)?;
+
+                let one_left = self.builder.build_const(TirConst::Int64(1))?;
+                let next_left_idx = self.builder.build_add(left_idx, one_left)?;
+                let updated_left = self.builder.build_set(
+                    loaded_left,
+                    tempra_tir::ir::TirKey::Field("idx".to_string()),
+                    next_left_idx,
+                )?;
+                self.builder.build_store(left_iter_slot, updated_left)?;
+
+                let one_right = self.builder.build_const(TirConst::Int64(1))?;
+                let next_right_idx = self.builder.build_add(right_idx, one_right)?;
+                let updated_right = self.builder.build_set(
+                    loaded_right,
+                    tempra_tir::ir::TirKey::Field("idx".to_string()),
+                    next_right_idx,
+                )?;
+                self.builder.build_store(right_iter_slot, updated_right)?;
+                self.builder.build_br(cond_block)?;
+
+                self.builder.set_current_block(exit_block);
+                return self
+                    .builder
+                    .build_load(result_slot)
                     .map(Some)
                     .map_err(TirLowerError::from);
             }

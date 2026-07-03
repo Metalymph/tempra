@@ -1779,6 +1779,48 @@ fn check_array_method(
             check_collection_callback(ctx, name, args, span, 0, &[elem_ty], Some(&Type::Unit));
             Type::Unit
         }
+        "enumerate" => {
+            let Some(elem_ty) = collection_element_type(receiver_ty) else {
+                return Type::Error;
+            };
+            if !args.is_empty() {
+                ctx.error("'enumerate' method expects 0 arguments", span);
+            }
+            Type::Array(Box::new(Type::Tuple(vec![Type::Int64, elem_ty])))
+        }
+        "zip" => {
+            let Some(elem_ty) = collection_element_type(receiver_ty) else {
+                return Type::Error;
+            };
+            if args.len() != 1 {
+                ctx.error("'zip' method expects 1 argument", span);
+                return Type::Error;
+            }
+            let (other_ty, other_span) = match &mut args[0] {
+                HirCallArgument::Positional(expr) => {
+                    let span = expr.span();
+                    (check_expression(ctx, expr, None), span)
+                }
+                HirCallArgument::Named(named) => {
+                    ctx.error(
+                        format!(
+                            "'zip' method expects a positional collection argument, found named argument '{}'",
+                            named.name
+                        ),
+                        named.value.span(),
+                    );
+                    (Type::Error, named.value.span())
+                }
+            };
+            let Some(other_elem_ty) = collection_element_type(&other_ty) else {
+                ctx.error(
+                    format!("'zip' argument must be Array or Slice, found {}", other_ty),
+                    other_span,
+                );
+                return Type::Error;
+            };
+            Type::Array(Box::new(Type::Tuple(vec![elem_ty, other_elem_ty])))
+        }
         "reduce" => {
             let Some(elem_ty) = collection_element_type(receiver_ty) else {
                 return Type::Error;

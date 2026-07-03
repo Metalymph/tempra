@@ -614,6 +614,134 @@ fn test_experimental_vm_nested_tuple_destructuring_match() {
 }
 
 #[test]
+fn test_experimental_vm_enumerate_array() {
+    let source = r#"
+        fn main() -> Int64 {
+            let xs: Array(Int64) = [10, 20, 30]
+            let pairs = xs.enumerate()
+            let zero: Int64 = 0
+            let first = match pairs[0] {
+                (i, v) => i + v,
+                _ => zero,
+            }
+            let third = match pairs[2] {
+                (i, v) => i + v,
+                _ => zero,
+            }
+            return first + third + pairs.len()
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(45));
+}
+
+#[test]
+fn test_experimental_vm_enumerate_slice() {
+    let source = r#"
+        fn main() -> Int64 {
+            let xs: Array(Int64) = [5, 6, 7, 8]
+            let sl: Slice(Int64) = xs[1..3]
+            let pairs = sl.enumerate()
+            let zero: Int64 = 0
+            let first = match pairs[0] {
+                (i, v) => i + v,
+                _ => zero,
+            }
+            let second = match pairs[1] {
+                (i, v) => i + v,
+                _ => zero,
+            }
+            return first + second + pairs.len()
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(16));
+}
+
+#[test]
+fn test_experimental_vm_zip_array_array() {
+    let source = r#"
+        fn main() -> Int64 {
+            let xs: Array(Int64) = [1, 2]
+            let ys: Array(Int64) = [10, 20]
+            let pairs = xs.zip(ys)
+            let zero: Int64 = 0
+            let second = match pairs[1] {
+                (a, b) => a + b,
+                _ => zero,
+            }
+            return second + pairs.len()
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(24));
+}
+
+#[test]
+fn test_experimental_vm_zip_array_slice_and_slice_array() {
+    let source = r#"
+        fn main() -> Int64 {
+            let xs: Array(Int64) = [1, 2, 3]
+            let ys: Array(Int64) = [10, 20, 30]
+            let xsl: Slice(Int64) = xs[0..2]
+            let ysl: Slice(Int64) = ys[1..3]
+
+            let array_slice = xs.zip(ysl)
+            let slice_array = xsl.zip(ys)
+            let zero: Int64 = 0
+            let a = match array_slice[1] {
+                (left, right) => left + right,
+                _ => zero,
+            }
+            let b = match slice_array[1] {
+                (left, right) => left + right,
+                _ => zero,
+            }
+            return a + b + array_slice.len() + slice_array.len()
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(58));
+}
+
+#[test]
+fn test_experimental_vm_zip_slice_slice() {
+    let source = r#"
+        fn main() -> Int64 {
+            let xs: Array(Int64) = [1, 2, 3]
+            let ys: Array(Int64) = [10, 20, 30]
+            let xsl: Slice(Int64) = xs[1..3]
+            let ysl: Slice(Int64) = ys[0..2]
+            let pairs = xsl.zip(ysl)
+            let zero: Int64 = 0
+            let first = match pairs[0] {
+                (left, right) => left + right,
+                _ => zero,
+            }
+            return first + pairs.len()
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(14));
+}
+
+#[test]
+fn test_experimental_vm_zip_stops_at_shortest_and_empty() {
+    let source = r#"
+        fn main() -> Int64 {
+            let left_short: Array(Int) = [1]
+            let right_long: Array(Int) = [10, 20, 30]
+            let a = left_short.zip(right_long)
+
+            let left_long: Array(Int) = [1, 2, 3]
+            let right_short: Array(Int) = [10]
+            let b = left_long.zip(right_short)
+
+            let empty: Array(Int) = []
+            let c = empty.zip(left_long)
+
+            return a.len() + b.len() + c.len()
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(2));
+}
+
+#[test]
 fn test_experimental_vm_for_expr_slice() {
     let source = r#"
         fn main() -> Int64 {

@@ -506,7 +506,17 @@ fn test_completion_and_hover_builtin_collection_methods() {
 
     let completions = session.completions_at_position(&uri, 5, 15);
     for expected in [
-        "count", "any", "all", "find", "map", "filter", "for_each", "reduce", "fold",
+        "count",
+        "any",
+        "all",
+        "find",
+        "map",
+        "filter",
+        "for_each",
+        "reduce",
+        "fold",
+        "enumerate",
+        "zip",
     ] {
         assert!(
             completions.iter().any(|c| c.label == expected),
@@ -525,6 +535,16 @@ fn test_completion_and_hover_builtin_collection_methods() {
     assert_eq!(
         reduce.detail.as_deref().unwrap(),
         "reduce(fn(Int, Int) -> Int) -> Option(Int)"
+    );
+    let enumerate = completions.iter().find(|c| c.label == "enumerate").unwrap();
+    assert_eq!(
+        enumerate.detail.as_deref().unwrap(),
+        "enumerate() -> Array((Int64, Int))"
+    );
+    let zip = completions.iter().find(|c| c.label == "zip").unwrap();
+    assert_eq!(
+        zip.detail.as_deref().unwrap(),
+        "zip(other: Array(U) | Slice(U)) -> Array((Int, U))"
     );
 
     let hover = session.hover(&uri, 4, 16).unwrap();

@@ -265,6 +265,58 @@ fn test_functional_collection_helpers_typecheck() {
 }
 
 #[test]
+fn test_tuple_collection_helpers_typecheck_success() {
+    let source = r#"
+        let xs: Array(Int) = [1, 2, 3]
+        let ys: Array(String) = ["a", "b", "c"]
+        let sl: Slice(Int) = xs[0..3]
+        let ysl: Slice(String) = ys[0..3]
+
+        let enumerated: Array((Int64, Int)) = xs.enumerate()
+        let slice_enumerated: Array((Int64, Int)) = sl.enumerate()
+
+        let zip_array_array: Array((Int, String)) = xs.zip(ys)
+        let zip_array_slice: Array((Int, String)) = xs.zip(ysl)
+        let zip_slice_array: Array((Int, String)) = sl.zip(ys)
+        let zip_slice_slice: Array((Int, String)) = sl.zip(ysl)
+    "#;
+    assert!(check_source(source).is_ok());
+}
+
+#[test]
+fn test_enumerate_rejects_wrong_arity() {
+    let source = r#"
+        let xs: Array(Int) = [1, 2, 3]
+        let value = xs.enumerate(1)
+    "#;
+    let res = test_source(source);
+    assert!(res.is_err());
+    assert!(format!("{:?}", res.err().unwrap()).contains("'enumerate' method expects 0 arguments"));
+}
+
+#[test]
+fn test_zip_rejects_wrong_arity() {
+    let source = r#"
+        let xs: Array(Int) = [1, 2, 3]
+        let value = xs.zip()
+    "#;
+    let res = test_source(source);
+    assert!(res.is_err());
+    assert!(format!("{:?}", res.err().unwrap()).contains("'zip' method expects 1 argument"));
+}
+
+#[test]
+fn test_zip_rejects_non_collection_argument() {
+    let source = r#"
+        let xs: Array(Int) = [1, 2, 3]
+        let value = xs.zip(123)
+    "#;
+    let res = test_source(source);
+    assert!(res.is_err());
+    assert!(format!("{:?}", res.err().unwrap()).contains("'zip' argument must be Array or Slice"));
+}
+
+#[test]
 fn test_functional_collection_helpers_reject_inline_closure() {
     let source = r#"
         let xs: Array(Int) = [1, 2, 3]

@@ -88,9 +88,14 @@ std.io.println("Running")
 - `.for_each(fn(T) -> Unit) -> Unit` — eager side-effect loop
 - `.reduce(fn(T, T) -> T) -> Option<T>` — eager left reduction; `None` for empty collections
 - `.fold(init: U, fn(U, T) -> U) -> U` — eager left fold starting from `init`
+- `.enumerate() -> Array((Int64, T))` — eager index/value tuples, starting from index `0`
+- `.zip(other: Array(U) | Slice(U)) -> Array((T, U))` — eager pairwise tuples, stopping at the shortest input
 
 Functional helpers currently accept direct top-level function references only. Inline closures,
 stored callbacks, function values, lazy iterators, and generators are intentionally out of scope.
+
+Tuple-returning collection helpers are eager: they consume the source collection immediately and
+return a new `Array`. `zip` consumes elements pairwise and stops as soon as either input is empty.
 
 Reduction semantics:
 

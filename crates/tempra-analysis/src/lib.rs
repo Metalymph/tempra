@@ -87,6 +87,11 @@ fn builtin_collection_method_signature(ty: &tempra_typeck::Type, method: &str) -
         "map" => Some(format!("map(fn({}) -> U) -> Array(U)", elem)),
         "filter" => Some(format!("filter(fn({}) -> Bool) -> Array({})", elem, elem)),
         "for_each" => Some(format!("for_each(fn({}) -> Unit) -> Unit", elem)),
+        "enumerate" => Some(format!("enumerate() -> Array((Int64, {}))", elem)),
+        "zip" => Some(format!(
+            "zip(other: Array(U) | Slice(U)) -> Array(({}, U))",
+            elem
+        )),
         "reduce" => Some(format!(
             "reduce(fn({}, {}) -> {}) -> Option({})",
             elem, elem, elem, elem
@@ -101,7 +106,17 @@ fn add_builtin_collection_completions(
     mut add_item: impl FnMut(&str, CompletionKind, Option<String>),
 ) {
     for method in [
-        "count", "any", "all", "find", "map", "filter", "for_each", "reduce", "fold",
+        "count",
+        "any",
+        "all",
+        "find",
+        "map",
+        "filter",
+        "for_each",
+        "enumerate",
+        "zip",
+        "reduce",
+        "fold",
     ] {
         if let Some(sig) = builtin_collection_method_signature(ty, method) {
             add_item(method, CompletionKind::Method, Some(sig));

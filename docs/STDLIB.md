@@ -90,12 +90,20 @@ std.io.println("Running")
 - `.fold(init: U, fn(U, T) -> U) -> U` — eager left fold starting from `init`
 - `.enumerate() -> Array((Int64, T))` — eager index/value tuples, starting from index `0`
 - `.zip(other: Array(U) | Slice(U)) -> Array((T, U))` — eager pairwise tuples, stopping at the shortest input
+- `.take(count: Int64) -> Array(T)` — eager prefix copy; counts less than or equal to `0` return an empty array
+- `.skip(count: Int64) -> Array(T)` — eager suffix copy after dropping up to `count` elements
+- `.chain(other: Array(T) | Slice(T)) -> Array(T)` — eager concatenation into a new array, preserving left-to-right order
 
 Functional helpers currently accept direct top-level function references only. Inline closures,
 stored callbacks, function values, lazy iterators, and generators are intentionally out of scope.
 
 Tuple-returning collection helpers are eager: they consume the source collection immediately and
 return a new `Array`. `zip` consumes elements pairwise and stops as soon as either input is empty.
+
+Linear collection helpers are also eager and always allocate a new `Array`. `take` with a count
+larger than the collection length returns the full collection. `skip` with a count larger than the
+collection length returns an empty array. `chain` appends all right-hand elements after all
+left-hand elements.
 
 Reduction semantics:
 

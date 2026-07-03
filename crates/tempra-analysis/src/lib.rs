@@ -92,6 +92,12 @@ fn builtin_collection_method_signature(ty: &tempra_typeck::Type, method: &str) -
             "zip(other: Array(U) | Slice(U)) -> Array(({}, U))",
             elem
         )),
+        "take" => Some(format!("take(count: Int64) -> Array({})", elem)),
+        "skip" => Some(format!("skip(count: Int64) -> Array({})", elem)),
+        "chain" => Some(format!(
+            "chain(other: Array({0}) | Slice({0})) -> Array({0})",
+            elem
+        )),
         "reduce" => Some(format!(
             "reduce(fn({}, {}) -> {}) -> Option({})",
             elem, elem, elem, elem
@@ -115,6 +121,9 @@ fn add_builtin_collection_completions(
         "for_each",
         "enumerate",
         "zip",
+        "take",
+        "skip",
+        "chain",
         "reduce",
         "fold",
     ] {

@@ -742,6 +742,126 @@ fn test_experimental_vm_zip_stops_at_shortest_and_empty() {
 }
 
 #[test]
+fn test_experimental_vm_take_boundaries() {
+    let source = r#"
+        fn main() -> Int64 {
+            let xs: Array(Int64) = [1, 2, 3]
+            let take_zero = xs.take(0)
+            let take_partial = xs.take(2)
+            let take_exact = xs.take(3)
+            let take_greater = xs.take(10)
+            let take_negative = xs.take(-1)
+            let empty: Array(Int64) = []
+            let take_empty = empty.take(3)
+
+            return take_zero.len()
+                + take_partial.len()
+                + take_partial[0]
+                + take_partial[1]
+                + take_exact.len()
+                + take_greater.len()
+                + take_greater[2]
+                + take_negative.len()
+                + take_empty.len()
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(14));
+}
+
+#[test]
+fn test_experimental_vm_skip_boundaries() {
+    let source = r#"
+        fn main() -> Int64 {
+            let xs: Array(Int64) = [1, 2, 3]
+            let skip_zero = xs.skip(0)
+            let skip_partial = xs.skip(2)
+            let skip_exact = xs.skip(3)
+            let skip_greater = xs.skip(10)
+            let skip_negative = xs.skip(-1)
+            let empty: Array(Int64) = []
+            let skip_empty = empty.skip(3)
+
+            return skip_zero.len()
+                + skip_zero[0]
+                + skip_partial.len()
+                + skip_partial[0]
+                + skip_exact.len()
+                + skip_greater.len()
+                + skip_negative.len()
+                + skip_negative[2]
+                + skip_empty.len()
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(14));
+}
+
+#[test]
+fn test_experimental_vm_chain_combinations_and_order() {
+    let source = r#"
+        fn main() -> Int64 {
+            let xs: Array(Int64) = [1, 2]
+            let ys: Array(Int64) = [3, 4]
+            let xsl: Slice(Int64) = xs[0..2]
+            let ysl: Slice(Int64) = ys[0..2]
+
+            let array_array = xs.chain(ys)
+            let array_slice = xs.chain(ysl)
+            let slice_array = xsl.chain(ys)
+            let slice_slice = xsl.chain(ysl)
+
+            return array_array.len()
+                + array_array[0]
+                + array_array[3]
+                + array_slice[2]
+                + slice_array[3]
+                + slice_slice[1]
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(18));
+}
+
+#[test]
+fn test_experimental_vm_chain_empty_combinations() {
+    let source = r#"
+        fn main() -> Int64 {
+            let empty: Array(Int64) = []
+            let xs: Array(Int64) = [7, 8]
+
+            let empty_non_empty = empty.chain(xs)
+            let non_empty_empty = xs.chain(empty)
+            let empty_empty = empty.chain(empty)
+
+            return empty_non_empty.len()
+                + empty_non_empty[0]
+                + empty_non_empty[1]
+                + non_empty_empty.len()
+                + non_empty_empty[0]
+                + non_empty_empty[1]
+                + empty_empty.len()
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(34));
+}
+
+#[test]
+fn test_experimental_vm_chained_linear_helpers() {
+    let source = r#"
+        fn main() -> Int64 {
+            let xs: Array(Int64) = [1, 2, 3, 4, 5, 6, 7, 8]
+            let other: Array(Int64) = [100, 200]
+            let result = xs.skip(2).take(5).chain(other)
+
+            return result.len()
+                + result[0]
+                + result[4]
+                + result[5]
+                + result[6]
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(317));
+}
+
+#[test]
 fn test_experimental_vm_for_expr_slice() {
     let source = r#"
         fn main() -> Int64 {

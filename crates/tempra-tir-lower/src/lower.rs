@@ -526,6 +526,19 @@ impl<'a> LowerContext<'a> {
                                     }
                                 }
                             }
+                            "take" | "skip" => return Ok(Type::Array(Box::new(elem_ty))),
+                            "chain" => {
+                                if let Some(HirCallArgument::Positional(other)) = c.args.first() {
+                                    let other_ty = self.infer_expr_type(other)?;
+                                    if let Some(other_elem_ty) =
+                                        self.collection_element_type(&other_ty)
+                                    {
+                                        if elem_ty == other_elem_ty {
+                                            return Ok(Type::Array(Box::new(elem_ty)));
+                                        }
+                                    }
+                                }
+                            }
                             "reduce" => return Ok(Type::Option(Box::new(elem_ty))),
                             "fold" => {
                                 if let Some(HirCallArgument::Positional(init)) = c.args.first() {
@@ -1420,6 +1433,283 @@ impl<'a> LowerContext<'a> {
                 )?;
                 self.builder.build_store(right_iter_slot, updated_right)?;
                 self.builder.build_br(cond_block)?;
+
+                self.builder.set_current_block(exit_block);
+                return self
+                    .builder
+                    .build_load(result_slot)
+                    .map(Some)
+                    .map_err(TirLowerError::from);
+            }
+            "take" => {
+                if args.len() != 1 {
+                    return Err(TirLowerError::UnsupportedExpr(
+                        "'take' expects 1 argument".into(),
+                        span,
+                    ));
+                }
+
+                let count_expr = match &args[0] {
+                    HirCallArgument::Positional(expr) => expr,
+                    HirCallArgument::Named(named) => {
+                        return Err(TirLowerError::UnsupportedExpr(
+                            format!(
+                                "'take' expects a positional Int64 argument, found '{}'",
+                                named.name
+                            ),
+                            named.value.span(),
+                        ))
+                    }
+                };
+
+                let elem_tir_ty = map_type(&elem_ty)?;
+                let arr_ty = TirType::Array(Box::new(elem_tir_ty));
+                let empty = self.builder.build_make(arr_ty.clone(), None, vec![])?;
+                let result_slot = self
+                    .builder
+                    .build_slot(arr_ty, Some(&format!("$take_res_{}", span.start)))?;
+                self.builder.build_store(result_slot, empty)?;
+
+                let remaining = self.lower_expression(count_expr)?;
+                let remaining_slot = self.builder.build_slot(
+                    TirType::Int64,
+                    Some(&format!("$take_remaining_{}", span.start)),
+                )?;
+                self.builder.build_store(remaining_slot, remaining)?;
+
+                let iter_slot = self.build_collection_iterator(object, obj_ty, span)?;
+                let cond_block = self.builder.new_block();
+                let body_block = self.builder.new_block();
+                let exit_block = self.builder.new_block();
+                self.builder.build_br(cond_block)?;
+
+                self.builder.set_current_block(cond_block);
+                let loaded_it = self.builder.build_load(iter_slot)?;
+                let data_val = self
+                    .builder
+                    .build_get(loaded_it, tempra_tir::ir::TirKey::Field("data".to_string()))?;
+                let idx_val = self
+                    .builder
+                    .build_get(loaded_it, tempra_tir::ir::TirKey::Field("idx".to_string()))?;
+                let len_val = self.builder.build_len(data_val)?;
+                let has_item = self.builder.build_lt(idx_val, len_val)?;
+                let remaining_val = self.builder.build_load(remaining_slot)?;
+                let zero = self.builder.build_const(TirConst::Int64(0))?;
+                let has_remaining = self.builder.build_gt(remaining_val, zero)?;
+                let should_continue = self.builder.build_and(has_item, has_remaining)?;
+                self.builder
+                    .build_condbr(should_continue, body_block, exit_block)?;
+
+                self.builder.set_current_block(body_block);
+                let item_val = self.builder.build_get_index(data_val, idx_val)?;
+                let current = self.builder.build_load(result_slot)?;
+                let next = self.builder.build_array_push(current, item_val)?;
+                self.builder.build_store(result_slot, next)?;
+
+                let one = self.builder.build_const(TirConst::Int64(1))?;
+                let next_remaining = self.builder.build_sub(remaining_val, one)?;
+                self.builder.build_store(remaining_slot, next_remaining)?;
+                self.build_collection_loop_continue(loaded_it, idx_val, iter_slot, cond_block)?;
+
+                self.builder.set_current_block(exit_block);
+                return self
+                    .builder
+                    .build_load(result_slot)
+                    .map(Some)
+                    .map_err(TirLowerError::from);
+            }
+            "skip" => {
+                if args.len() != 1 {
+                    return Err(TirLowerError::UnsupportedExpr(
+                        "'skip' expects 1 argument".into(),
+                        span,
+                    ));
+                }
+
+                let count_expr = match &args[0] {
+                    HirCallArgument::Positional(expr) => expr,
+                    HirCallArgument::Named(named) => {
+                        return Err(TirLowerError::UnsupportedExpr(
+                            format!(
+                                "'skip' expects a positional Int64 argument, found '{}'",
+                                named.name
+                            ),
+                            named.value.span(),
+                        ))
+                    }
+                };
+
+                let elem_tir_ty = map_type(&elem_ty)?;
+                let arr_ty = TirType::Array(Box::new(elem_tir_ty));
+                let empty = self.builder.build_make(arr_ty.clone(), None, vec![])?;
+                let result_slot = self
+                    .builder
+                    .build_slot(arr_ty, Some(&format!("$skip_res_{}", span.start)))?;
+                self.builder.build_store(result_slot, empty)?;
+
+                let remaining = self.lower_expression(count_expr)?;
+                let remaining_slot = self.builder.build_slot(
+                    TirType::Int64,
+                    Some(&format!("$skip_remaining_{}", span.start)),
+                )?;
+                self.builder.build_store(remaining_slot, remaining)?;
+
+                let iter_slot = self.build_collection_iterator(object, obj_ty, span)?;
+                let skip_cond_block = self.builder.new_block();
+                let skip_body_block = self.builder.new_block();
+                let collect_cond_block = self.builder.new_block();
+                let collect_body_block = self.builder.new_block();
+                let exit_block = self.builder.new_block();
+                self.builder.build_br(skip_cond_block)?;
+
+                self.builder.set_current_block(skip_cond_block);
+                let loaded_skip_it = self.builder.build_load(iter_slot)?;
+                let skip_data_val = self.builder.build_get(
+                    loaded_skip_it,
+                    tempra_tir::ir::TirKey::Field("data".to_string()),
+                )?;
+                let skip_idx_val = self.builder.build_get(
+                    loaded_skip_it,
+                    tempra_tir::ir::TirKey::Field("idx".to_string()),
+                )?;
+                let skip_len_val = self.builder.build_len(skip_data_val)?;
+                let has_item = self.builder.build_lt(skip_idx_val, skip_len_val)?;
+                let remaining_val = self.builder.build_load(remaining_slot)?;
+                let zero = self.builder.build_const(TirConst::Int64(0))?;
+                let has_remaining = self.builder.build_gt(remaining_val, zero)?;
+                let should_skip = self.builder.build_and(has_item, has_remaining)?;
+                self.builder
+                    .build_condbr(should_skip, skip_body_block, collect_cond_block)?;
+
+                self.builder.set_current_block(skip_body_block);
+                let one = self.builder.build_const(TirConst::Int64(1))?;
+                let next_remaining = self.builder.build_sub(remaining_val, one)?;
+                self.builder.build_store(remaining_slot, next_remaining)?;
+                self.build_collection_loop_continue(
+                    loaded_skip_it,
+                    skip_idx_val,
+                    iter_slot,
+                    skip_cond_block,
+                )?;
+
+                self.builder.set_current_block(collect_cond_block);
+                let (loaded_collect_it, collect_data_val, collect_idx_val) =
+                    self.build_collection_loop_cond(iter_slot, collect_body_block, exit_block)?;
+
+                self.builder.set_current_block(collect_body_block);
+                let item_val = self
+                    .builder
+                    .build_get_index(collect_data_val, collect_idx_val)?;
+                let current = self.builder.build_load(result_slot)?;
+                let next = self.builder.build_array_push(current, item_val)?;
+                self.builder.build_store(result_slot, next)?;
+                self.build_collection_loop_continue(
+                    loaded_collect_it,
+                    collect_idx_val,
+                    iter_slot,
+                    collect_cond_block,
+                )?;
+
+                self.builder.set_current_block(exit_block);
+                return self
+                    .builder
+                    .build_load(result_slot)
+                    .map(Some)
+                    .map_err(TirLowerError::from);
+            }
+            "chain" => {
+                if args.len() != 1 {
+                    return Err(TirLowerError::UnsupportedExpr(
+                        "'chain' expects 1 argument".into(),
+                        span,
+                    ));
+                }
+
+                let other_expr = match &args[0] {
+                    HirCallArgument::Positional(expr) => expr,
+                    HirCallArgument::Named(named) => {
+                        return Err(TirLowerError::UnsupportedExpr(
+                            format!(
+                                "'chain' expects a positional collection argument, found '{}'",
+                                named.name
+                            ),
+                            named.value.span(),
+                        ))
+                    }
+                };
+                let other_ty = self.infer_expr_type(other_expr)?;
+                let Some(other_elem_ty) = self.collection_element_type(&other_ty) else {
+                    return Err(TirLowerError::UnsupportedExpr(
+                        format!(
+                            "'chain' argument must be Array or Slice, found {}",
+                            other_ty
+                        ),
+                        other_expr.span(),
+                    ));
+                };
+                if elem_ty != other_elem_ty {
+                    return Err(TirLowerError::UnsupportedExpr(
+                        format!(
+                            "'chain' element type mismatch: expected {}, found {}",
+                            elem_ty, other_elem_ty
+                        ),
+                        other_expr.span(),
+                    ));
+                }
+
+                let elem_tir_ty = map_type(&elem_ty)?;
+                let arr_ty = TirType::Array(Box::new(elem_tir_ty));
+                let empty = self.builder.build_make(arr_ty.clone(), None, vec![])?;
+                let result_slot = self
+                    .builder
+                    .build_slot(arr_ty, Some(&format!("$chain_res_{}", span.start)))?;
+                self.builder.build_store(result_slot, empty)?;
+
+                let left_iter_slot = self.build_collection_iterator(object, obj_ty, span)?;
+                let right_iter_slot =
+                    self.build_collection_iterator(other_expr, &other_ty, span)?;
+
+                let left_cond_block = self.builder.new_block();
+                let left_body_block = self.builder.new_block();
+                let right_cond_block = self.builder.new_block();
+                let right_body_block = self.builder.new_block();
+                let exit_block = self.builder.new_block();
+                self.builder.build_br(left_cond_block)?;
+
+                self.builder.set_current_block(left_cond_block);
+                let (loaded_left, left_data, left_idx) = self.build_collection_loop_cond(
+                    left_iter_slot,
+                    left_body_block,
+                    right_cond_block,
+                )?;
+
+                self.builder.set_current_block(left_body_block);
+                let left_item = self.builder.build_get_index(left_data, left_idx)?;
+                let current = self.builder.build_load(result_slot)?;
+                let next = self.builder.build_array_push(current, left_item)?;
+                self.builder.build_store(result_slot, next)?;
+                self.build_collection_loop_continue(
+                    loaded_left,
+                    left_idx,
+                    left_iter_slot,
+                    left_cond_block,
+                )?;
+
+                self.builder.set_current_block(right_cond_block);
+                let (loaded_right, right_data, right_idx) =
+                    self.build_collection_loop_cond(right_iter_slot, right_body_block, exit_block)?;
+
+                self.builder.set_current_block(right_body_block);
+                let right_item = self.builder.build_get_index(right_data, right_idx)?;
+                let current = self.builder.build_load(result_slot)?;
+                let next = self.builder.build_array_push(current, right_item)?;
+                self.builder.build_store(result_slot, next)?;
+                self.build_collection_loop_continue(
+                    loaded_right,
+                    right_idx,
+                    right_iter_slot,
+                    right_cond_block,
+                )?;
 
                 self.builder.set_current_block(exit_block);
                 return self

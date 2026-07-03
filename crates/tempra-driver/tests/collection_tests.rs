@@ -317,6 +317,84 @@ fn test_zip_rejects_non_collection_argument() {
 }
 
 #[test]
+fn test_linear_collection_helpers_typecheck_success() {
+    let source = r#"
+        let xs: Array(Int) = [1, 2, 3]
+        let ys: Array(Int) = [4, 5]
+        let sl: Slice(Int) = xs[0..2]
+        let count: Int64 = 2
+
+        let taken: Array(Int) = xs.take(count)
+        let skipped: Array(Int) = xs.skip(count)
+        let literal_taken: Array(Int) = sl.take(1)
+        let literal_skipped: Array(Int) = sl.skip(1)
+
+        let chain_array_array: Array(Int) = xs.chain(ys)
+        let chain_array_slice: Array(Int) = xs.chain(sl)
+        let chain_slice_array: Array(Int) = sl.chain(xs)
+        let chain_slice_slice: Array(Int) = sl.chain(xs[1..3])
+    "#;
+    assert!(check_source(source).is_ok());
+}
+
+#[test]
+fn test_take_rejects_wrong_arity() {
+    let source = r#"
+        let xs: Array(Int) = [1, 2, 3]
+        let value = xs.take()
+    "#;
+    let res = test_source(source);
+    assert!(res.is_err());
+    assert!(format!("{:?}", res.err().unwrap()).contains("'take' method expects 1 argument"));
+}
+
+#[test]
+fn test_skip_rejects_non_int64_count() {
+    let source = r#"
+        let xs: Array(Int) = [1, 2, 3]
+        let count: Int = 1
+        let value = xs.skip(count)
+    "#;
+    let res = test_source(source);
+    assert!(res.is_err());
+    assert!(format!("{:?}", res.err().unwrap()).contains("'skip' method expects Int64 argument"));
+}
+
+#[test]
+fn test_take_rejects_non_integer_count() {
+    let source = r#"
+        let xs: Array(Int) = [1, 2, 3]
+        let value = xs.take("bad")
+    "#;
+    let res = test_source(source);
+    assert!(res.is_err());
+    assert!(format!("{:?}", res.err().unwrap()).contains("'take' method expects Int64 argument"));
+}
+
+#[test]
+fn test_chain_rejects_incompatible_element_type() {
+    let source = r#"
+        let xs: Array(Int) = [1, 2, 3]
+        let ys: Array(String) = ["a", "b"]
+        let value = xs.chain(ys)
+    "#;
+    let res = test_source(source);
+    assert!(res.is_err());
+    assert!(format!("{:?}", res.err().unwrap()).contains("'chain' element type mismatch"));
+}
+
+#[test]
+fn test_chain_rejects_non_collection_argument() {
+    let source = r#"
+        let xs: Array(Int) = [1, 2, 3]
+        let value = xs.chain(123)
+    "#;
+    let res = test_source(source);
+    assert!(res.is_err());
+    assert!(format!("{:?}", res.err().unwrap()).contains("'chain' argument must be Array or Slice"));
+}
+
+#[test]
 fn test_functional_collection_helpers_reject_inline_closure() {
     let source = r#"
         let xs: Array(Int) = [1, 2, 3]

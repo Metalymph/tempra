@@ -517,6 +517,9 @@ fn test_completion_and_hover_builtin_collection_methods() {
         "fold",
         "enumerate",
         "zip",
+        "take",
+        "skip",
+        "chain",
     ] {
         assert!(
             completions.iter().any(|c| c.label == expected),
@@ -545,6 +548,21 @@ fn test_completion_and_hover_builtin_collection_methods() {
     assert_eq!(
         zip.detail.as_deref().unwrap(),
         "zip(other: Array(U) | Slice(U)) -> Array((Int, U))"
+    );
+    let take = completions.iter().find(|c| c.label == "take").unwrap();
+    assert_eq!(
+        take.detail.as_deref().unwrap(),
+        "take(count: Int64) -> Array(Int)"
+    );
+    let skip = completions.iter().find(|c| c.label == "skip").unwrap();
+    assert_eq!(
+        skip.detail.as_deref().unwrap(),
+        "skip(count: Int64) -> Array(Int)"
+    );
+    let chain = completions.iter().find(|c| c.label == "chain").unwrap();
+    assert_eq!(
+        chain.detail.as_deref().unwrap(),
+        "chain(other: Array(Int) | Slice(Int)) -> Array(Int)"
     );
 
     let hover = session.hover(&uri, 4, 16).unwrap();

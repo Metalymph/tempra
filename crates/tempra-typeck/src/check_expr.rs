@@ -1821,6 +1821,59 @@ fn check_array_method(
             };
             Type::Array(Box::new(Type::Tuple(vec![elem_ty, other_elem_ty])))
         }
+        "take" | "skip" => {
+            let Some(elem_ty) = collection_element_type(receiver_ty) else {
+                return Type::Error;
+            };
+            check_int64_count_argument(ctx, name, args, span);
+            Type::Array(Box::new(elem_ty))
+        }
+        "chain" => {
+            let Some(elem_ty) = collection_element_type(receiver_ty) else {
+                return Type::Error;
+            };
+            if args.len() != 1 {
+                ctx.error(format!("'{}' method expects 1 argument", name), span);
+                return Type::Error;
+            }
+            let (other_ty, other_span) = match &mut args[0] {
+                HirCallArgument::Positional(expr) => {
+                    let span = expr.span();
+                    (check_expression(ctx, expr, None), span)
+                }
+                HirCallArgument::Named(named) => {
+                    ctx.error(
+                        format!(
+                            "'{}' method expects a positional collection argument, found named argument '{}'",
+                            name, named.name
+                        ),
+                        named.value.span(),
+                    );
+                    (Type::Error, named.value.span())
+                }
+            };
+            let Some(other_elem_ty) = collection_element_type(&other_ty) else {
+                ctx.error(
+                    format!(
+                        "'{}' argument must be Array or Slice, found {}",
+                        name, other_ty
+                    ),
+                    other_span,
+                );
+                return Type::Error;
+            };
+            if elem_ty != other_elem_ty && other_elem_ty != Type::Error {
+                ctx.error(
+                    format!(
+                        "'{}' element type mismatch: expected {}, found {}",
+                        name, elem_ty, other_elem_ty
+                    ),
+                    other_span,
+                );
+                return Type::Error;
+            }
+            Type::Array(Box::new(elem_ty))
+        }
         "reduce" => {
             let Some(elem_ty) = collection_element_type(receiver_ty) else {
                 return Type::Error;
@@ -1872,6 +1925,54 @@ fn check_array_method(
             ctx.error(format!("Array/Slice has no method '{}'", name), span);
             Type::Error
         }
+    }
+}
+
+fn check_int64_count_argument(
+    ctx: &mut TypeContext,
+    method: &str,
+    args: &mut [HirCallArgument],
+    span: Span,
+) {
+    if args.len() != 1 {
+        ctx.error(format!("'{}' method expects 1 argument", method), span);
+        return;
+    }
+
+    match &mut args[0] {
+        HirCallArgument::Positional(expr) => {
+            let is_integer_literal = is_int64_count_literal(expr);
+            let arg_span = expr.span();
+            let arg_ty = check_expression(ctx, expr, Some(&Type::Int64));
+            if arg_ty != Type::Int64 && !is_integer_literal && arg_ty != Type::Error {
+                ctx.error(
+                    format!(
+                        "'{}' method expects Int64 argument, found {}",
+                        method, arg_ty
+                    ),
+                    arg_span,
+                );
+            }
+        }
+        HirCallArgument::Named(named) => {
+            ctx.error(
+                format!(
+                    "'{}' method expects a positional Int64 argument, found named argument '{}'",
+                    method, named.name
+                ),
+                named.value.span(),
+            );
+        }
+    }
+}
+
+fn is_int64_count_literal(expr: &HirExpression) -> bool {
+    match expr {
+        HirExpression::Integer(_, _) => true,
+        HirExpression::Unary(unary) if unary.op == HirUnaryOp::Negate => {
+            matches!(unary.expr.as_ref(), HirExpression::Integer(_, _))
+        }
+        _ => false,
     }
 }
 

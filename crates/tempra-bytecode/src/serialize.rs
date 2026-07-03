@@ -60,7 +60,7 @@ impl From<crate::verify::BytecodeVerifyError> for BytecodeSerializeError {
 }
 
 const MAGIC: &[u8; 4] = b"TMBC";
-const FORMAT_VERSION: u32 = 1;
+const FORMAT_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct BytecodeCacheHeader {
@@ -295,33 +295,37 @@ fn write_instr(w: &mut impl Write, instr: &BytecodeInstr) -> io::Result<()> {
             w.write_all(&[40])?;
             w.write_all(&count.to_le_bytes())
         }
-        BytecodeInstr::GetIndex => w.write_all(&[41]),
-        BytecodeInstr::Slice => w.write_all(&[42]),
-        BytecodeInstr::Len => w.write_all(&[43]),
-        BytecodeInstr::Size => w.write_all(&[44]),
-        BytecodeInstr::Bytes => w.write_all(&[45]),
+        BytecodeInstr::MakeTuple(count) => {
+            w.write_all(&[41])?;
+            w.write_all(&count.to_le_bytes())
+        }
+        BytecodeInstr::GetIndex => w.write_all(&[42]),
+        BytecodeInstr::Slice => w.write_all(&[43]),
+        BytecodeInstr::Len => w.write_all(&[44]),
+        BytecodeInstr::Size => w.write_all(&[45]),
+        BytecodeInstr::Bytes => w.write_all(&[46]),
         BytecodeInstr::MakeStruct(name, fields, count) => {
-            w.write_all(&[46])?;
+            w.write_all(&[47])?;
             write_u32(w, name.0)?;
             write_u32(w, fields.0)?;
             w.write_all(&count.to_le_bytes())
         }
         BytecodeInstr::GetField(name) => {
-            w.write_all(&[47])?;
-            write_u32(w, name.0)
-        }
-        BytecodeInstr::SetField(name) => {
             w.write_all(&[48])?;
             write_u32(w, name.0)
         }
-        BytecodeInstr::ArrayPush => w.write_all(&[49]),
+        BytecodeInstr::SetField(name) => {
+            w.write_all(&[49])?;
+            write_u32(w, name.0)
+        }
+        BytecodeInstr::ArrayPush => w.write_all(&[50]),
         BytecodeInstr::AddI64LL(a, b) => {
-            w.write_all(&[50])?;
+            w.write_all(&[51])?;
             write_u32(w, a.0)?;
             write_u32(w, b.0)
         }
         BytecodeInstr::AddI64LC(a, id) => {
-            w.write_all(&[51])?;
+            w.write_all(&[52])?;
             write_u32(w, a.0)?;
             write_u32(w, id.0)
         }
@@ -557,12 +561,18 @@ fn read_instr(r: &mut impl Read) -> Result<BytecodeInstr, BytecodeSerializeError
             let count = u16::from_le_bytes(count_bytes);
             Ok(BytecodeInstr::MakeArray(count))
         }
-        41 => Ok(BytecodeInstr::GetIndex),
-        42 => Ok(BytecodeInstr::Slice),
-        43 => Ok(BytecodeInstr::Len),
-        44 => Ok(BytecodeInstr::Size),
-        45 => Ok(BytecodeInstr::Bytes),
-        46 => {
+        41 => {
+            let mut count_bytes = [0u8; 2];
+            r.read_exact(&mut count_bytes)?;
+            let count = u16::from_le_bytes(count_bytes);
+            Ok(BytecodeInstr::MakeTuple(count))
+        }
+        42 => Ok(BytecodeInstr::GetIndex),
+        43 => Ok(BytecodeInstr::Slice),
+        44 => Ok(BytecodeInstr::Len),
+        45 => Ok(BytecodeInstr::Size),
+        46 => Ok(BytecodeInstr::Bytes),
+        47 => {
             let name = ConstId(read_u32(r)?);
             let fields = ConstId(read_u32(r)?);
             let mut count_bytes = [0u8; 2];
@@ -570,15 +580,15 @@ fn read_instr(r: &mut impl Read) -> Result<BytecodeInstr, BytecodeSerializeError
             let count = u16::from_le_bytes(count_bytes);
             Ok(BytecodeInstr::MakeStruct(name, fields, count))
         }
-        47 => Ok(BytecodeInstr::GetField(ConstId(read_u32(r)?))),
-        48 => Ok(BytecodeInstr::SetField(ConstId(read_u32(r)?))),
-        49 => Ok(BytecodeInstr::ArrayPush),
-        50 => {
+        48 => Ok(BytecodeInstr::GetField(ConstId(read_u32(r)?))),
+        49 => Ok(BytecodeInstr::SetField(ConstId(read_u32(r)?))),
+        50 => Ok(BytecodeInstr::ArrayPush),
+        51 => {
             let a = LocalId(read_u32(r)?);
             let b = LocalId(read_u32(r)?);
             Ok(BytecodeInstr::AddI64LL(a, b))
         }
-        51 => {
+        52 => {
             let a = LocalId(read_u32(r)?);
             let id = ConstId(read_u32(r)?);
             Ok(BytecodeInstr::AddI64LC(a, id))

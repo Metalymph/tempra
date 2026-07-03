@@ -12,6 +12,7 @@ enum NormalizedValue {
     Float(f64),
     String(String),
     Array(Vec<NormalizedValue>),
+    Tuple(Vec<NormalizedValue>),
     Struct(String, Vec<(String, NormalizedValue)>),
     Enum(String, String, Vec<NormalizedValue>),
     Unsupported(String),
@@ -36,6 +37,10 @@ fn normalize_hir(val: Value) -> NormalizedValue {
         Value::Slice(s) => {
             let inner = s.to_vec().into_iter().map(normalize_hir).collect();
             NormalizedValue::Array(inner)
+        }
+        Value::Tuple(elements) => {
+            let inner = elements.into_iter().map(normalize_hir).collect();
+            NormalizedValue::Tuple(inner)
         }
         Value::Struct(s) => {
             let mut fields: Vec<_> = s
@@ -87,6 +92,10 @@ fn normalize_vm(val: VmValue) -> NormalizedValue {
                 .map(|v| normalize_vm(v.clone()))
                 .collect();
             NormalizedValue::Array(inner)
+        }
+        VmValue::Tuple(elements) => {
+            let inner = elements.into_iter().map(normalize_vm).collect();
+            NormalizedValue::Tuple(inner)
         }
         VmValue::Struct { name, fields } => {
             let mut normalized_fields: Vec<_> = fields

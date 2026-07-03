@@ -366,8 +366,8 @@ fn superinstruction_counter_visible() {
     let args = vec![VmValue::Int64(10), VmValue::Int64(20)];
     let (_, profile) = run_function_profiled(&module, "test", args, options).unwrap();
 
-    // AddI64LL id is 50
-    assert_eq!(profile.global_opcode_counts[50], 1);
+    let add_i64_ll_id = BytecodeInstr::AddI64LL(LocalId(0), LocalId(1)).opcode_id();
+    assert_eq!(profile.global_opcode_counts[add_i64_ll_id], 1);
 }
 
 #[test]
@@ -473,6 +473,7 @@ fn opcode_ids_are_unique_and_within_bounds() {
         BytecodeInstr::Tag,
         BytecodeInstr::Unwrap(tempra_bytecode::constant::ConstId(0), 0),
         BytecodeInstr::MakeArray(0),
+        BytecodeInstr::MakeTuple(0),
         BytecodeInstr::GetIndex,
         BytecodeInstr::Slice,
         BytecodeInstr::Len,

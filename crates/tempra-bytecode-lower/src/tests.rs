@@ -148,7 +148,7 @@ fn test_unsupported_make_error() {
         is_extern: false,
     };
 
-    // Get is still unsupported in Phase 14.3 lowering (Make is now supported)
+    // Non-field Set remains unsupported; tuple/index reads lower through GetIndex.
     func.blocks.push(TirBlock {
         id: TirBlockId(0),
         instrs: vec![
@@ -158,7 +158,12 @@ fn test_unsupported_make_error() {
                 Some("Bar".into()),
                 vec![],
             ),
-            TirInstr::Get(TirValueId(1), TirValueId(0), TirKey::Index(0)),
+            TirInstr::Set(
+                TirValueId(1),
+                TirValueId(0),
+                TirKey::Index(0),
+                TirValueId(0),
+            ),
         ],
         terminator: Some(TirTerminator::Ret(None)),
     });
@@ -166,6 +171,44 @@ fn test_unsupported_make_error() {
 
     let result = lower_tir_module(&module);
     assert!(result.is_err());
+}
+
+#[test]
+fn test_lower_make_tuple() {
+    let mut module = TirModule::default();
+    let mut func = TirFunction {
+        id: TirFunctionId(0),
+        name: "tuple".into(),
+        params: vec![],
+        return_type: TirType::Tuple(vec![TirType::Int64, TirType::Int64]),
+        blocks: vec![],
+        next_value_id: 3,
+        next_block_id: 1,
+        next_slot_id: 0,
+        debug_slots: Default::default(),
+        is_extern: false,
+    };
+
+    func.blocks.push(TirBlock {
+        id: TirBlockId(0),
+        instrs: vec![
+            TirInstr::Const(TirValueId(0), TirConst::Int64(1)),
+            TirInstr::Const(TirValueId(1), TirConst::Int64(2)),
+            TirInstr::Make(
+                TirValueId(2),
+                TirType::Tuple(vec![TirType::Int64, TirType::Int64]),
+                None,
+                vec![TirValueId(0), TirValueId(1)],
+            ),
+        ],
+        terminator: Some(TirTerminator::Ret(Some(TirValueId(2)))),
+    });
+    module.functions.push(func);
+
+    let bc_module = lower_tir_module(&module).unwrap();
+    verify_module(&bc_module).unwrap();
+    let disasm = disassemble_module(&bc_module);
+    assert!(disasm.contains("MakeTuple 2"));
 }
 
 #[test]

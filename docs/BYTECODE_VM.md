@@ -62,6 +62,7 @@ The VM uses the `VmValue` enum for all runtime values:
 - `Float64(f64)`: 64-bit floating point numbers.
 - `String(String)`: UTF-8 strings.
 - `Enum(String, String, Vec<VmValue>)`: Enum variants, represented as `(EnumName, VariantName, Payloads)`. Used for `Option` and `Result`.
+- `Tuple(Vec<VmValue>)`: First-class positional tuple values.
 - `Array(Rc<Vec<VmValue>>)`: Reference-counted collection of values.
 - `Slice { parent, start, end }`: A read-only view into a portion of an array or another slice.
 - `Struct { name, fields }`: A named struct with field-value pairs.
@@ -107,6 +108,7 @@ The experimental VM pipeline works as follows:
     - Slicing: `xs[a..b]` creates a view without copying data.
     - Length: `xs.len()` or `xs.len` retrieves the element count.
     - Iteration: `for x in xs` is supported via index-based lowering.
+- **Tuples**: Construction, equality, and accepted tuple destructuring patterns use first-class `VmValue::Tuple` values.
 - **Match Expressions**: Sequential arm checking for literals, wildcards, and variants.
 - **Bytecode Cache**: Persistent storage in `.tempra/cache/`.
 - **Peephole Optimization**: Conservative post-pass to eliminate redundant `StoreLocal/LoadLocal` pairs for intermediate temporary values.
@@ -127,7 +129,7 @@ A function is considered **hot** if its `call_count` or `backedge_count` exceeds
 ## VM Profiling & Trace Visibility (v0.x)
 
 The VM provides detailed execution traces when profiling is enabled:
-- **Opcode Histogram**: Global and per-function execution counts for all 52 opcodes.
+- **Opcode Histogram**: Global and per-function execution counts for all 53 opcodes.
 - **Superinstruction Visibility**: Tracks how many times fused instructions (like `AddI64LL`) were executed, helping validate optimizer effectiveness.
 - **Summary Report**: `VmProfile::summary()` generates a human-readable report of hot functions and top instructions.
 

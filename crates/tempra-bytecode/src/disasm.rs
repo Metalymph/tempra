@@ -102,6 +102,7 @@ pub fn disassemble_function(
                 out.push_str(&format!("Unwrap #{} idx={}\n", variant_id.0, idx));
             }
             BytecodeInstr::MakeArray(count) => out.push_str(&format!("MakeArray {}\n", count)),
+            BytecodeInstr::MakeTuple(count) => out.push_str(&format!("MakeTuple {}\n", count)),
             BytecodeInstr::GetIndex => out.push_str("GetIndex\n"),
             BytecodeInstr::Slice => out.push_str("Slice\n"),
             BytecodeInstr::Len => out.push_str("Len\n"),

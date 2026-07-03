@@ -306,6 +306,9 @@ impl<'a> FunctionLowerer<'a> {
                     TirType::Array(_) => {
                         self.emit(BytecodeInstr::MakeArray(args.len() as u16));
                     }
+                    TirType::Tuple(_) => {
+                        self.emit(BytecodeInstr::MakeTuple(args.len() as u16));
+                    }
                     _ => {
                         let enum_name = match ty {
                             tempra_tir::ir::TirType::Option(_) => "Option",
@@ -348,15 +351,20 @@ impl<'a> FunctionLowerer<'a> {
             }
             TirInstr::Get(res, target, key) => {
                 self.load_val(*target)?;
-                if let tempra_tir::ir::TirKey::Field(f) = key {
-                    let field_id = self
-                        .bc_module
-                        .add_constant(BytecodeConstant::String(f.clone()));
-                    self.emit(BytecodeInstr::GetField(field_id));
-                } else {
-                    return Err(BytecodeLowerError::UnsupportedInstr(
-                        "Get with non-field key".into(),
-                    ));
+                match key {
+                    tempra_tir::ir::TirKey::Field(f) => {
+                        let field_id = self
+                            .bc_module
+                            .add_constant(BytecodeConstant::String(f.clone()));
+                        self.emit(BytecodeInstr::GetField(field_id));
+                    }
+                    tempra_tir::ir::TirKey::Index(idx) => {
+                        let idx_id = self
+                            .bc_module
+                            .add_constant(BytecodeConstant::Int64(*idx as i64));
+                        self.emit(BytecodeInstr::ConstI64(idx_id));
+                        self.emit(BytecodeInstr::GetIndex);
+                    }
                 }
                 self.store_res(*res)?;
             }
@@ -584,6 +592,7 @@ fn map_type(ty: &TirType) -> Result<BytecodeType, BytecodeLowerError> {
         TirType::Option(_) => Ok(BytecodeType::Any),
         TirType::Array(_) => Ok(BytecodeType::Any),
         TirType::Slice(_) => Ok(BytecodeType::Any),
+        TirType::Tuple(_) => Ok(BytecodeType::Any),
         TirType::Struct(_) => Ok(BytecodeType::Any),
         TirType::Enum(_) => Ok(BytecodeType::Any),
         TirType::UInt8 => Ok(BytecodeType::UInt8),

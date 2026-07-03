@@ -39,7 +39,9 @@ pub fn map_type(ty: &Type) -> Result<TirType, TirLowerError> {
 
         Type::Array(inner) => Ok(TirType::Array(Box::new(map_type(inner)?))),
         Type::Slice(inner) => Ok(TirType::Slice(Box::new(map_type(inner)?))),
-        Type::Tuple(_) => Err(TirLowerError::UnsupportedType("Tuple".to_string())),
+        Type::Tuple(elems) => Ok(TirType::Tuple(
+            elems.iter().map(map_type).collect::<Result<Vec<_>, _>>()?,
+        )),
         Type::Struct(name, _) => Ok(TirType::Struct(name.clone())),
         Type::Command => Err(TirLowerError::UnsupportedType("Command".to_string())),
         Type::CommandResult => Err(TirLowerError::UnsupportedType("CommandResult".to_string())),
@@ -78,6 +80,12 @@ pub fn unmap_type(tir_ty: &TirType) -> Result<Type, TirLowerError> {
         TirType::Tag => Ok(Type::String),
         TirType::Array(inner) => Ok(Type::Array(Box::new(unmap_type(inner)?))),
         TirType::Slice(inner) => Ok(Type::Slice(Box::new(unmap_type(inner)?))),
+        TirType::Tuple(elems) => Ok(Type::Tuple(
+            elems
+                .iter()
+                .map(unmap_type)
+                .collect::<Result<Vec<_>, _>>()?,
+        )),
         TirType::Struct(name) => Ok(Type::Struct(name.clone(), vec![])),
         _ => Err(TirLowerError::UnsupportedType(format!("{:?}", tir_ty))),
     }
@@ -198,6 +206,12 @@ fn resolve_hir_type(
             let inner_ty = resolve_hir_type(inner_hir, _type_ctx, self_ty, generic_subs)?;
             Ok(Type::Array(Box::new(inner_ty)))
         }
+        HirType::Tuple(_, elems) => Ok(Type::Tuple(
+            elems
+                .iter()
+                .map(|elem| resolve_hir_type(elem, _type_ctx, self_ty, generic_subs))
+                .collect::<Result<Vec<_>, _>>()?,
+        )),
         HirType::Apply(_, callee, args) => {
             if let HirType::Named(_, name) = &**callee {
                 if name == "Slice" && args.len() == 1 {
@@ -366,6 +380,13 @@ impl<'a> LowerContext<'a> {
                 } else {
                     Ok(Type::Array(Box::new(Type::Unknown)))
                 }
+            }
+            HirExpression::Tuple(_, elements) => {
+                let mut types = Vec::with_capacity(elements.len());
+                for element in elements {
+                    types.push(self.infer_expr_type(element)?);
+                }
+                Ok(Type::Tuple(types))
             }
             HirExpression::Index(i) => {
                 let obj_ty = self.infer_expr_type(&i.object)?;
@@ -555,6 +576,7 @@ impl<'a> LowerContext<'a> {
             }
             HirExpression::IsPattern(_) => Ok(Type::Bool),
             HirExpression::Block(b) => self.infer_block_type(b),
+            HirExpression::Match(m) => self.infer_match_type(m),
             HirExpression::For(f) => {
                 let iterable_ty = self.infer_expr_type(&f.iterable)?;
                 let element_ty = match iterable_ty {
@@ -574,6 +596,39 @@ impl<'a> LowerContext<'a> {
                 format!("{:?}", expr),
                 expr.span(),
             )),
+        }
+    }
+
+    fn infer_match_type(&mut self, m: &HirMatch) -> Result<Type, TirLowerError> {
+        let scrutinee_ty = self.infer_expr_type(&m.value)?;
+        let mut match_ty = Type::Unknown;
+
+        for arm in &m.arms {
+            let old_locals = self.locals.clone();
+            self.bind_pattern_for_inference(&arm.pattern, &scrutinee_ty)?;
+            let arm_ty = self.infer_expr_type(&arm.value)?;
+            self.locals = old_locals;
+
+            if match_ty == Type::Unknown {
+                match_ty = arm_ty;
+            } else if arm_ty != match_ty && arm_ty != Type::Never && match_ty != Type::Never {
+                return Err(TirLowerError::TypeMismatch {
+                    expected: match_ty.to_string(),
+                    found: arm_ty.to_string(),
+                    span: arm.value.span(),
+                });
+            } else if match_ty == Type::Never && arm_ty != Type::Never {
+                match_ty = arm_ty;
+            }
+        }
+
+        if match_ty == Type::Unknown {
+            Err(TirLowerError::UnsupportedExpr(
+                "Match must have at least one arm".into(),
+                m.span,
+            ))
+        } else {
+            Ok(match_ty)
         }
     }
 
@@ -2185,6 +2240,17 @@ impl<'a> LowerContext<'a> {
                     .build_make(tir_ty, None, vals)
                     .map_err(|e| e.into())
             }
+            HirExpression::Tuple(_, elements) => {
+                let mut vals = Vec::new();
+                for e in elements {
+                    vals.push(self.lower_expression(e)?);
+                }
+                let hir_ty = self.infer_expr_type(expr)?;
+                let tir_ty = map_type(&hir_ty)?;
+                self.builder
+                    .build_make(tir_ty, None, vals)
+                    .map_err(|e| e.into())
+            }
             HirExpression::Index(i) => {
                 let obj_ty = self.infer_expr_type(&i.object)?;
                 if matches!(obj_ty, Type::String) {
@@ -2538,6 +2604,11 @@ impl<'a> LowerContext<'a> {
                         .build_condbr(cond, then_block, next_arm_block)?;
                     seen_variants.insert(name.clone());
                 }
+                HirPattern::Tuple(_, _) => {
+                    self.ensure_supported_tuple_pattern(&arm.pattern)?;
+                    has_wildcard = true;
+                    self.builder.build_br(then_block)?;
+                }
                 _ => {
                     return Err(TirLowerError::UnsupportedPattern(
                         format!(
@@ -2595,6 +2666,9 @@ impl<'a> LowerContext<'a> {
                             _ => return Err(TirLowerError::UnsupportedPattern(format!("Only simple bindings are supported in enum patterns for now, found {:?}", payload_pat), payload_pat.span())),
                         }
                     }
+                }
+                HirPattern::Tuple(_, _) => {
+                    self.bind_tuple_pattern(&arm.pattern, scrutinee_val, &scrutinee_ty)?;
                 }
                 _ => {}
             }
@@ -2674,6 +2748,77 @@ impl<'a> LowerContext<'a> {
             "cannot infer payload type for {}::{} at index {}",
             enum_ty, variant_name, index
         )))
+    }
+
+    fn ensure_supported_tuple_pattern(&self, pattern: &HirPattern) -> Result<(), TirLowerError> {
+        match pattern {
+            HirPattern::Identifier(_, _) | HirPattern::Wildcard(_) => Ok(()),
+            HirPattern::Tuple(_, items) => {
+                for item in items {
+                    self.ensure_supported_tuple_pattern(item)?;
+                }
+                Ok(())
+            }
+            _ => Err(TirLowerError::UnsupportedPattern(
+                format!(
+                    "Only identifiers, wildcards, and nested tuples are supported in tuple patterns for now, found {:?}",
+                    pattern
+                ),
+                pattern.span(),
+            )),
+        }
+    }
+
+    fn bind_tuple_pattern(
+        &mut self,
+        pattern: &HirPattern,
+        value: TirValueId,
+        value_ty: &Type,
+    ) -> Result<(), TirLowerError> {
+        match pattern {
+            HirPattern::Identifier(_, name) => {
+                let tir_ty = map_type(value_ty)?;
+                let slot = self.builder.build_slot(tir_ty.clone(), Some(name))?;
+                self.builder.build_store(slot, value)?;
+                self.locals.insert(name.clone(), (slot, tir_ty, false));
+                self.local_hir_types.insert(name.clone(), value_ty.clone());
+                Ok(())
+            }
+            HirPattern::Wildcard(_) => Ok(()),
+            HirPattern::Tuple(_, items) => {
+                let Type::Tuple(element_tys) = value_ty else {
+                    return Err(TirLowerError::UnsupportedPattern(
+                        format!("tuple pattern cannot bind non-tuple type {}", value_ty),
+                        pattern.span(),
+                    ));
+                };
+                if items.len() != element_tys.len() {
+                    return Err(TirLowerError::UnsupportedPattern(
+                        format!(
+                            "tuple pattern arity mismatch: expected {}, found {}",
+                            element_tys.len(),
+                            items.len()
+                        ),
+                        pattern.span(),
+                    ));
+                }
+
+                for (idx, (item_pat, item_ty)) in items.iter().zip(element_tys.iter()).enumerate() {
+                    let item_val = self
+                        .builder
+                        .build_get(value, tempra_tir::ir::TirKey::Index(idx))?;
+                    self.bind_tuple_pattern(item_pat, item_val, item_ty)?;
+                }
+                Ok(())
+            }
+            _ => Err(TirLowerError::UnsupportedPattern(
+                format!(
+                    "Only identifiers, wildcards, and nested tuples are supported in tuple patterns for now, found {:?}",
+                    pattern
+                ),
+                pattern.span(),
+            )),
+        }
     }
 
     fn check_match_exhaustiveness(
@@ -2774,6 +2919,27 @@ impl<'a> LowerContext<'a> {
                             ))
                         }
                     }
+                }
+            }
+            HirPattern::Tuple(_, items) => {
+                let Type::Tuple(element_tys) = scrutinee_ty else {
+                    return Err(TirLowerError::UnsupportedPattern(
+                        format!("tuple pattern cannot bind non-tuple type {}", scrutinee_ty),
+                        pattern.span(),
+                    ));
+                };
+                if items.len() != element_tys.len() {
+                    return Err(TirLowerError::UnsupportedPattern(
+                        format!(
+                            "tuple pattern arity mismatch: expected {}, found {}",
+                            element_tys.len(),
+                            items.len()
+                        ),
+                        pattern.span(),
+                    ));
+                }
+                for (item_pat, item_ty) in items.iter().zip(element_tys.iter()) {
+                    self.bind_pattern_for_inference(item_pat, item_ty)?;
                 }
             }
             _ => return Ok(()),

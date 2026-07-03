@@ -369,6 +369,12 @@ pub fn verify_function_direct(
                     }
                     state.stack.push(BytecodeType::Any);
                 }
+                BytecodeInstr::MakeTuple(count) => {
+                    for _ in 0..count {
+                        state.pop_ty()?;
+                    }
+                    state.stack.push(BytecodeType::Any);
+                }
                 BytecodeInstr::GetIndex => {
                     state.pop_ty()?; // pop index
                     state.pop_ty()?; // pop object

@@ -4,8 +4,7 @@ use crate::disasm::disassemble_function;
 use crate::function::{BytecodeFunction, BytecodeType, FunctionId, LocalId};
 use crate::opcode::{stack_effect, BytecodeInstr};
 use crate::serialize::{
-    decode_and_verify_artifact, decode_artifact, encode_artifact, encode_module,
-    BytecodeCacheArtifact, BytecodeSerializeError,
+    decode_and_verify_artifact, decode_artifact, encode_module, BytecodeSerializeError,
 };
 use crate::verify::{verify_function, BytecodeVerifyError};
 
@@ -270,6 +269,26 @@ fn test_serialize_roundtrip_complex() {
         dec_f.code[2],
         BytecodeInstr::JumpIfFalse(crate::opcode::InstrOffset(42))
     );
+}
+
+#[test]
+fn test_serialize_roundtrip_make_tuple() {
+    let mut module = BytecodeModule::new();
+    let c1 = module.add_constant(BytecodeConstant::Int64(1));
+    let c2 = module.add_constant(BytecodeConstant::Int64(2));
+
+    let mut func = BytecodeFunction::new("tuple".into(), vec![], BytecodeType::Any);
+    func.max_stack = 2;
+    func.code.push(BytecodeInstr::ConstI64(c1));
+    func.code.push(BytecodeInstr::ConstI64(c2));
+    func.code.push(BytecodeInstr::MakeTuple(2));
+    func.code.push(BytecodeInstr::Return);
+    module.add_function(func);
+
+    let bytes = encode_module(&module).unwrap();
+    let decoded = decode_and_verify_artifact(&bytes).unwrap();
+    let dec_f = &decoded.module.functions[0];
+    assert_eq!(dec_f.code[2], BytecodeInstr::MakeTuple(2));
 }
 
 #[test]

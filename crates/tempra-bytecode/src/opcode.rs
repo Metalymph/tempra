@@ -68,6 +68,7 @@ pub enum BytecodeInstr {
 
     // Array/Slice
     MakeArray(u16), // count
+    MakeTuple(u16), // count
     GetIndex,
     Slice,
     Len,
@@ -85,7 +86,7 @@ pub enum BytecodeInstr {
     AddI64LC(LocalId, ConstId), // LoadLocal a; ConstI64 b; AddI64
 }
 
-pub const BYTECODE_OPCODE_COUNT: usize = 52;
+pub const BYTECODE_OPCODE_COUNT: usize = 53;
 
 impl BytecodeInstr {
     pub fn opcode_id(&self) -> usize {
@@ -131,17 +132,18 @@ impl BytecodeInstr {
             BytecodeInstr::Tag => 38,
             BytecodeInstr::Unwrap(_, _) => 39,
             BytecodeInstr::MakeArray(_) => 40,
-            BytecodeInstr::GetIndex => 41,
-            BytecodeInstr::Slice => 42,
-            BytecodeInstr::Len => 43,
-            BytecodeInstr::Size => 44,
-            BytecodeInstr::Bytes => 45,
-            BytecodeInstr::MakeStruct(_, _, _) => 46,
-            BytecodeInstr::GetField(_) => 47,
-            BytecodeInstr::SetField(_) => 48,
-            BytecodeInstr::ArrayPush => 49,
-            BytecodeInstr::AddI64LL(_, _) => 50,
-            BytecodeInstr::AddI64LC(_, _) => 51,
+            BytecodeInstr::MakeTuple(_) => 41,
+            BytecodeInstr::GetIndex => 42,
+            BytecodeInstr::Slice => 43,
+            BytecodeInstr::Len => 44,
+            BytecodeInstr::Size => 45,
+            BytecodeInstr::Bytes => 46,
+            BytecodeInstr::MakeStruct(_, _, _) => 47,
+            BytecodeInstr::GetField(_) => 48,
+            BytecodeInstr::SetField(_) => 49,
+            BytecodeInstr::ArrayPush => 50,
+            BytecodeInstr::AddI64LL(_, _) => 51,
+            BytecodeInstr::AddI64LC(_, _) => 52,
         }
     }
 
@@ -188,6 +190,7 @@ impl BytecodeInstr {
             BytecodeInstr::Tag => "Tag",
             BytecodeInstr::Unwrap(_, _) => "Unwrap",
             BytecodeInstr::MakeArray(_) => "MakeArray",
+            BytecodeInstr::MakeTuple(_) => "MakeTuple",
             BytecodeInstr::GetIndex => "GetIndex",
             BytecodeInstr::Slice => "Slice",
             BytecodeInstr::Len => "Len",
@@ -269,6 +272,10 @@ pub fn stack_effect(
         BytecodeInstr::Tag => StackEffect { pops: 1, pushes: 1 },
         BytecodeInstr::Unwrap(_variant, _idx) => StackEffect { pops: 1, pushes: 1 },
         BytecodeInstr::MakeArray(count) => StackEffect {
+            pops: *count,
+            pushes: 1,
+        },
+        BytecodeInstr::MakeTuple(count) => StackEffect {
             pops: *count,
             pushes: 1,
         },

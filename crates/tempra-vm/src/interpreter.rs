@@ -365,17 +365,18 @@ impl<'a> Interpreter<'a> {
             38 => "Tag",
             39 => "Unwrap",
             40 => "MakeArray",
-            41 => "GetIndex",
-            42 => "Slice",
-            43 => "Len",
-            44 => "Size",
-            45 => "Bytes",
-            46 => "MakeStruct",
-            47 => "GetField",
-            48 => "SetField",
-            49 => "ArrayPush",
-            50 => "AddI64LL",
-            51 => "AddI64LC",
+            41 => "MakeTuple",
+            42 => "GetIndex",
+            43 => "Slice",
+            44 => "Len",
+            45 => "Size",
+            46 => "Bytes",
+            47 => "MakeStruct",
+            48 => "GetField",
+            49 => "SetField",
+            50 => "ArrayPush",
+            51 => "AddI64LL",
+            52 => "AddI64LC",
             _ => "Unknown",
         }
     }
@@ -1043,6 +1044,14 @@ impl<'a> Interpreter<'a> {
                     elements.reverse();
                     self.push(VmValue::Array(Rc::new(elements)))?;
                 }
+                BytecodeInstr::MakeTuple(count) => {
+                    let mut elements = Vec::with_capacity(count as usize);
+                    for _ in 0..count {
+                        elements.push(self.pop()?);
+                    }
+                    elements.reverse();
+                    self.push(VmValue::Tuple(elements))?;
+                }
                 BytecodeInstr::GetIndex => {
                     let index_val = self.pop()?;
                     let object = self.pop()?;
@@ -1064,6 +1073,12 @@ impl<'a> Interpreter<'a> {
                                 return Err(VmError::IndexOutOfBounds(index));
                             }
                             self.push(parent[start + index].clone())?;
+                        }
+                        VmValue::Tuple(elements) => {
+                            if index >= elements.len() {
+                                return Err(VmError::IndexOutOfBounds(index));
+                            }
+                            self.push(elements[index].clone())?;
                         }
                         _ => return Err(VmError::ExpectedArrayOrSlice),
                     }

@@ -11,6 +11,7 @@ pub enum VmValue {
     Float64(f64),
     String(String),
     Enum(String, String, Vec<VmValue>), // enum_name, variant_name, payloads
+    Tuple(Vec<VmValue>),
     Array(Rc<Vec<VmValue>>),
     Slice {
         parent: Rc<Vec<VmValue>>,
@@ -34,6 +35,7 @@ impl VmValue {
             VmValue::Float64(_) => "Float64",
             VmValue::String(_) => "String",
             VmValue::Enum(_, _, _) => "Enum",
+            VmValue::Tuple(_) => "Tuple",
             VmValue::Array(_) => "Array",
             VmValue::Slice { .. } => "Slice",
             VmValue::Struct { name: _, .. } => "Struct", // We could return the actual name, but matching the signature is simpler for now
@@ -64,6 +66,16 @@ impl fmt::Display for VmValue {
                     }
                     write!(f, ")")
                 }
+            }
+            VmValue::Tuple(elements) => {
+                write!(f, "(")?;
+                for (i, element) in elements.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", element)?;
+                }
+                write!(f, ")")
             }
             VmValue::Array(arr) => {
                 write!(f, "[")?;

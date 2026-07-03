@@ -1,0 +1,20 @@
+fn main() -> Int64 {
+    let pair: (Int, String) = (1, "a")
+    if pair != (1, "a") {
+        return 1
+    }
+    if pair == (2, "a") {
+        return 2
+    }
+
+    let nested = ((10, 20), 30)
+    let total = match nested {
+        ((a, _), b) => a + b,
+        _ => 0,
+    }
+    if total != 40 {
+        return 3
+    }
+
+    return 0
+}

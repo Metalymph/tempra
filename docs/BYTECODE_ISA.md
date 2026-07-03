@@ -162,6 +162,7 @@ The VM handles the following primitive types directly:
 | Opcode | Operands | Stack Effect | Description |
 |---|---|---|---|
 | `MakeArray` | count | `[args...] -> [array]` | Pops `count` elements and creates an array. |
+| `MakeTuple` | count | `[args...] -> [tuple]` | Pops `count` elements and creates a tuple. |
 | `GetIndex` | - | `[object, index] -> [T]` | Accesses an element by dynamic index. |
 | `Slice` | - | `[object, start, end] -> [slice]` | Creates a view into an array or slice. |
 | `Len` | - | `[object] -> [i64]` | Retrieves count of elements (Array/Slice) or chars (String). |

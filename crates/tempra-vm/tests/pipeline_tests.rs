@@ -554,6 +554,66 @@ fn test_experimental_vm_fold_boolean_reduction() {
 }
 
 #[test]
+fn test_experimental_vm_tuple_construction() {
+    let source = r#"
+        fn main() -> (Int, String) {
+            let pair: (Int, String) = (1, "a")
+            return pair
+        }
+    "#;
+    assert_eq!(
+        run_source(source, "main", vec![]),
+        VmValue::Tuple(vec![VmValue::Int64(1), VmValue::String("a".to_string())])
+    );
+}
+
+#[test]
+fn test_experimental_vm_tuple_equality() {
+    let source = r#"
+        fn main() -> Int64 {
+            if (1, 2) != (1, 2) {
+                return 1
+            }
+            if (1, 2) == (1, 3) {
+                return 2
+            }
+            return 0
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(0));
+}
+
+#[test]
+fn test_experimental_vm_tuple_destructuring_match() {
+    let source = r#"
+        fn main() -> Int64 {
+            let pair = (10, 20)
+            let res = match pair {
+                (a, b) => a + b,
+                _ => 0,
+            }
+            return res
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(30));
+}
+
+#[test]
+fn test_experimental_vm_nested_tuple_destructuring_match() {
+    let source = r#"
+        fn main() -> Int64 {
+            let nested = ((1, 2), 3)
+            let res = match nested {
+                ((a, _), b) => a + b,
+                _ => 0,
+            }
+            return res
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(4));
+}
+
+#[test]
 fn test_experimental_vm_for_expr_slice() {
     let source = r#"
         fn main() -> Int64 {

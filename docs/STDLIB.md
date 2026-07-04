@@ -72,38 +72,46 @@ std.io.print("Status: ")
 std.io.println("Running")
 ```
 
-## Array / Slice Methods
-*(Phase 19.2A — available via method-call syntax on arrays and slices)*
+## v0.1 Collections API Status
 
-- `.len() -> Int64` — number of elements
-- `.count() -> Int` — number of elements, lowered through `iter()` / `next()`
-- `.is_empty() -> Bool` — true if len == 0
-- `.first() -> Option<T>` — `Some(first_element)` or `None` if empty
-- `.last() -> Option<T>` — `Some(last_element)` or `None` if empty
-- `.map(fn(T) -> U) -> Array<U>` — eager transform into a new array
-- `.filter(fn(T) -> Bool) -> Array<T>` — eager filter into a new array
-- `.find(fn(T) -> Bool) -> Option<T>` — first matching element
-- `.any(fn(T) -> Bool) -> Bool` — true if any element matches
-- `.all(fn(T) -> Bool) -> Bool` — true if all elements match
-- `.for_each(fn(T) -> Unit) -> Unit` — eager side-effect loop
-- `.reduce(fn(T, T) -> T) -> Option<T>` — eager left reduction; `None` for empty collections
-- `.fold(init: U, fn(U, T) -> U) -> U` — eager left fold starting from `init`
-- `.enumerate() -> Array((Int64, T))` — eager index/value tuples, starting from index `0`
-- `.zip(other: Array(U) | Slice(U)) -> Array((T, U))` — eager pairwise tuples, stopping at the shortest input
-- `.take(count: Int64) -> Array(T)` — eager prefix copy; counts less than or equal to `0` return an empty array
-- `.skip(count: Int64) -> Array(T)` — eager suffix copy after dropping up to `count` elements
-- `.chain(other: Array(T) | Slice(T)) -> Array(T)` — eager concatenation into a new array, preserving left-to-right order
+This table freezes the implemented v0.1 collection API surface before the concurrency and AOT
+work continues. Entries marked eager execute immediately; helpers returning arrays allocate a new
+`Array` result unless noted otherwise.
 
-Functional helpers currently accept direct top-level function references only. Inline closures,
-stored callbacks, function values, lazy iterators, and generators are intentionally out of scope.
+| Receiver | API | Implemented | Eager | VM-supported | LSP-visible | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| `Array(T)`, `Slice(T)` | `.len() -> Int64` | Yes | Yes | Yes | Yes | Number of elements. |
+| `Array(T)`, `Slice(T)` | `.is_empty() -> Bool` | Yes | Yes | Yes | Yes | True when length is zero. |
+| `Array(T)`, `Slice(T)` | `.first() -> Option(T)` | Yes | Yes | Yes | Yes | `None` for empty collections. |
+| `Array(T)`, `Slice(T)` | `.last() -> Option(T)` | Yes | Yes | Yes | Yes | `None` for empty collections. |
+| `Array(T)`, `Slice(T)`, `String` | `.iter()` | Yes | Iterator protocol | Yes | Typechecked | `String.iter()` is byte-oriented and returns `SliceIter(UInt8)`. |
+| `ArrayIter(T)`, `SliceIter(T)` | `.next() -> Option(T)` | Yes | Stepwise | Yes | Typechecked | Used by `for` lowering and eager helpers. |
+| `Array(T)`, `Slice(T)` | `.count() -> Int` | Yes | Yes | Yes | Yes | Lowered through `iter()` / `next()`. |
+| `Array(T)`, `Slice(T)` | `.map(fn(T) -> U) -> Array(U)` | Yes | Yes | Yes | Yes | Direct top-level callback only. |
+| `Array(T)`, `Slice(T)` | `.filter(fn(T) -> Bool) -> Array(T)` | Yes | Yes | Yes | Yes | Direct top-level callback only. |
+| `Array(T)`, `Slice(T)` | `.find(fn(T) -> Bool) -> Option(T)` | Yes | Yes | Yes | Yes | First matching element. |
+| `Array(T)`, `Slice(T)` | `.any(fn(T) -> Bool) -> Bool` | Yes | Yes | Yes | Yes | True if any element matches. |
+| `Array(T)`, `Slice(T)` | `.all(fn(T) -> Bool) -> Bool` | Yes | Yes | Yes | Yes | True if all elements match. |
+| `Array(T)`, `Slice(T)` | `.for_each(fn(T) -> Unit) -> Unit` | Yes | Yes | Yes | Yes | Direct top-level callback only. |
+| `Array(T)`, `Slice(T)` | `.reduce(fn(T, T) -> T) -> Option(T)` | Yes | Yes | Yes | Yes | `None` for empty collections. |
+| `Array(T)`, `Slice(T)` | `.fold(init: U, fn(U, T) -> U) -> U` | Yes | Yes | Yes | Yes | Returns `init` for empty collections. |
+| `Array(T)`, `Slice(T)` | `.enumerate() -> Array((Int64, T))` | Yes | Yes | Yes | Yes | Index starts at `0`. |
+| `Array(T)`, `Slice(T)` | `.zip(other: Array(U) \| Slice(U)) -> Array((T, U))` | Yes | Yes | Yes | Yes | Stops at the shortest input. |
+| `Array(T)`, `Slice(T)` | `.take(count: Int64) -> Array(T)` | Yes | Yes | Yes | Yes | `count <= 0` returns empty; oversized count returns the full collection. |
+| `Array(T)`, `Slice(T)` | `.skip(count: Int64) -> Array(T)` | Yes | Yes | Yes | Yes | `count <= 0` returns the full collection; oversized count returns empty. |
+| `Array(T)`, `Slice(T)` | `.chain(other: Array(T) \| Slice(T)) -> Array(T)` | Yes | Yes | Yes | Yes | Preserves left-to-right order and always allocates a new array. |
+| `String` | `.bytes() -> Slice(UInt8)` | Yes | Yes | Yes | Typechecked | UTF-8 byte view. |
+| `std.strings` | `contains`, `starts_with`, `ends_with`, `trim`, `replace` | Yes | Yes | Yes | Module-visible | Native stdlib string helpers. |
 
-Tuple-returning collection helpers are eager: they consume the source collection immediately and
-return a new `Array`. `zip` consumes elements pairwise and stops as soon as either input is empty.
+### v0.1 Collection Limitations
 
-Linear collection helpers are also eager and always allocate a new `Array`. `take` with a count
-larger than the collection length returns the full collection. `skip` with a count larger than the
-collection length returns an empty array. `chain` appends all right-hand elements after all
-left-hand elements.
+- No lazy iterators, generators, `yield`, or `collect()`.
+- No `flat_map()`, `flatten()`, `chunks()`, or `windows()`.
+- No `Map` or `Set` collection types yet.
+- No function values or closure callbacks for collection helpers.
+- Functional helpers accept direct top-level function references only; callbacks must be resolvable
+  at compile time.
+- Eager helpers that produce collections allocate `Array` outputs.
 
 Reduction semantics:
 
@@ -142,6 +150,18 @@ The standard library adheres to strict error handling conventions to ensure stab
 2. **Result Enum**: Fallible native APIs return `VmValue::Enum("Result", "Ok"/"Err", payload)` which maps to Tempra `Result<T, Error>`. Pattern match on `Ok(...)` / `Err(...)` to handle failures.
 3. **Non-fallible APIs**: Boolean or value-returning APIs that cannot fail (e.g. `exists`, `contains`) return plain values directly.
 4. **`BuiltinError`**: The internal `Error` type in `Result<T, Error!>` signatures is lowered as `String` in TIR, carrying the error message.
+
+## Planned after v0.1
+
+- `Map`
+- `Set`
+- `flat_map`
+- `flatten`
+- `chunks`
+- `windows`
+- Lazy iterators
+- Generators / `yield`
+- Closure and function-value callbacks
 
 ## Legacy Code
 

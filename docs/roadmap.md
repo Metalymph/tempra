@@ -10,7 +10,7 @@ This document outlines the implementation strategy and developmental phases for 
 - **Semantics:** Initial symbol resolution, type checking for core compound types (`struct`, `enum`), and Zig-style generic stabilization.
 - **Pattern Matching:** Centralized pattern semantics with OR-patterns, nesting, and exhaustiveness checking for finite domains.
 - **Bytecode VM:** A lightweight stack-based interpreter for rapid cold-starts and low memory overhead in script mode. See [BYTECODE_ISA.md](BYTECODE_ISA.md).
-- **Minimal Stdlib:** Foundation for `io`, `env`, and basic string/collection manipulation.
+- **Minimal Stdlib:** Foundation for `io`, `env`, string helpers, and the frozen v0.1 eager collection helper surface.
 - **Script Mode:** Support for running `.tempra` files directly without a `main` entrypoint.
 
 ### Phase 2: Native Compilation (v0.2)
@@ -41,14 +41,16 @@ This document outlines the implementation strategy and developmental phases for 
 ### Immediate Priorities
 
 1. **Frontend Stability:** Ensuring the AST and IR (Intermediate Representation) are robust enough to support both interpretation and AOT.
-2. **Structural Interfaces:** Finalizing the rules for static duck typing to ensure zero-cost abstractions where possible.
-3. **IO/FS Basics:** Providing the essential tools needed for 80% of scripting tasks.
+2. **Collections Checkpoint:** v0.1 Array/Slice/String collection helpers are frozen as eager, VM-supported APIs before adding Map/Set or lazy adapters.
+3. **Concurrency Direction:** Start the lightweight concurrency design without expanding the collection helper surface further.
+4. **Structural Interfaces:** Finalizing the rules for static duck typing to ensure zero-cost abstractions where possible.
 
 ### Future Priorities
 
 1. **Memory Optimization:** Reducing ARC overhead in the AOT backend.
-2. **SIMD Support:** Exploiting hardware capabilities in `fast` build mode.
-3. **Minimal Effect System:** Exploring structured error handling and resource management.
+2. **Map/Set and Advanced Collections:** Add richer collection types and adapters after the v0.1 checkpoint.
+3. **SIMD Support:** Exploiting hardware capabilities in `fast` build mode.
+4. **Minimal Effect System:** Exploring structured error handling and resource management.
 
 ## 3. Explicitly Out of Scope (Non-Goals)
 
@@ -77,4 +79,3 @@ With Phase 17 consolidated, the development team faces a choice of four potentia
   - Implement full method calls, generic functions, and external module calls across the JIT execution boundary.
 - **Option 18D: Unified Native AOT & WebAssembly Pipelines**
   - Standardize lowering pipelines so AOT native compilations share optimal Cranelift IR optimizations and target-independent bytecode translations.
-

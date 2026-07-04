@@ -173,8 +173,8 @@ Tempra is rapidly evolving. We currently have a functional core with:
 - **Rich Syntax**: Arrays, Slices, Structs, Enums, Expressions-as-statements.
 - **Strong Type System**: Static type validation for variables, functions, and standard methods.
 - **Unicode Model**: String handling based on Unicode scalar values (`len()`) and UTF-8 bytes (`size()`).
-- **Standard Library**: Native bridge exposing `std.fs`, `std.path`, `std.strings`, `std.io`.
-- **Tooling**: A working CLI with `run` and `check` commands.
+- **Standard Library**: Native bridge exposing `std.fs`, `std.path`, `std.strings`, `std.io`, plus the v0.1 eager Array/Slice collection helper surface.
+- **Tooling**: A working CLI with `run` and `check` commands, plus LSP diagnostics, hover, definitions, completions, semantic tokens, references, highlights, and rename.
 
 ## Roadmap
 
@@ -185,11 +185,13 @@ Tempra is rapidly evolving. We currently have a functional core with:
 - [x] Native Command Execution (`cmd`).
 - [x] Array Slicing `xs[start..end]`.
 - [x] Shared backing storage for array slices.
+- [x] v0.1 eager collection helpers for `Array(T)` and `Slice(T)`.
+- [x] LSP support for diagnostics, completion, hover, definitions, semantic tokens, references, highlights, and rename.
 
 ### Next
 - [ ] Productions-ready Cranelift AOT.
 - [ ] Dedicated Wasm backend.
-- [ ] LSP support (completion, go-to-definition).
+- [ ] Lightweight concurrency design.
 - [ ] REPL enhancements.
 
 ### Long-term

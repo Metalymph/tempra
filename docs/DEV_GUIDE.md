@@ -82,6 +82,7 @@ cargo run -- run examples/feature_name.tempra
 
 - **Spans**: Always preserve `Span` information for better diagnostics.
 - **Value Semantics**: Tempra is value-oriented. Use `Rc` inside `Value` (like in `Value::Array`) for shared storage in slices.
+- **Collection Helpers**: The v0.1 Array/Slice helpers are eager. They lower through the existing iterator protocol, `Option`, loops, slots, and `ArrayPush`; do not add lazy adapter hierarchy, new TIR instructions, or VM opcodes for these helpers.
 - **Control Flow**: The interpreter uses `ControlFlow` to handle `Return`, `Break`, `Continue`, `Exit`, and `Crash`. Ensure these are propagated correctly.
 - **Lexical Scoping**: Use `env.push_scope()` and `env.pop_scope()` in blocks and loops.
 

@@ -283,6 +283,11 @@ To improve user experience, completions are:
    - Types: `"type"`
    - Modules: `"module"`
    - Fields: `"field: Type"` (e.g. `field: Int64`)
+   - Array/Slice collection methods: v0.1 helper signatures such as `map(fn(T) -> U) -> Array(U)`, `zip(other: Array(U) | Slice(U)) -> Array((T, U))`, and `chain(other: Array(T) | Slice(T)) -> Array(T)`
+
+Array/Slice member completions and hover strings are LSP-visible for the frozen v0.1 collection API:
+`count`, `map`, `filter`, `find`, `any`, `all`, `for_each`, `reduce`, `fold`, `enumerate`,
+`zip`, `take`, `skip`, and `chain`.
    - Methods/Functions: Signature if available
    - Locals: Binding signature/type if available
 
@@ -336,4 +341,3 @@ Communicates over **stdin / stdout** using the standard LSP JSON-RPC transport.
   }
 }
 ```
-

@@ -81,17 +81,18 @@ The verifier ensures the structural and type soundness of a TIR module:
 
 TIR evolution follows the project-wide dependency order rather than assigning concurrency instructions to the next TIR version:
 
-1. **E — Capability analysis:** direct operation classification, call graph propagation, stable per-function summaries, and deterministic provenance.
-2. **R — Result / value-use hardening:** future obligations against silent Result discard, not a capability/effect.
-3. **M — Acyclic ownership:** formalize legal strong-reference graphs and complete ARC-cycle prevention before concurrent transfer.
-4. **C — Pluggable actor concurrency:** add task, actor, channel, and selection operations only after the preceding foundations define their boundaries.
-5. **V — Verified functions:** consume prior facts for stronger proof obligations.
-6. **O — Deeper memory optimizations:** uniqueness, escape, stack promotion, reuse, and retain/release elimination.
+1. **E — Capability analysis and E6 tooling:** stable summaries, provenance, diagnostics and inspection.
+2. **K — Comptime consistency:** audit canonical authority and backend parity before semantic changes.
+3. **R — Result / value-use hardening:** future obligations against silent Result discard, not a capability/effect.
+4. **M — Acyclic ownership:** formalize legal strong-reference graphs and complete ARC-cycle prevention before concurrent transfer.
+5. **C — Pluggable actor concurrency:** add task, actor, channel, and selection operations only after the preceding foundations define their boundaries.
+6. **V — Verified functions:** consume prior facts for stronger proof obligations.
+7. **O — Deeper memory optimizations:** uniqueness, escape, stack promotion, reuse, and retain/release elimination.
+8. **P — Deep compiler performance/incremental:** later compilation latency and invalidation work.
 
-E1–E4 are implemented for the currently meaningful surface. E6 diagnostics and
-inspect/query tooling is next active and reuses current facts; it is not a
-complete TIR Graph. U — Unsafe Boundary is standalone DEFERRED / CONDITIONAL
-work listed after O, activated only by a real source operation requiring
+E1–E6 are implemented for the currently meaningful surface. E6 reuses current
+facts and is not a complete TIR Graph. U — Unsafe Boundary is standalone
+DEFERRED / CONDITIONAL work, activated only by a real source operation requiring
 memory/type-safety authorization. No current TIR capability origin emits Unsafe.
 
 This section does not define future TIR opcodes. Their exact representation belongs to the corresponding phase specifications.

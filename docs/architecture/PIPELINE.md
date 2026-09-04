@@ -141,12 +141,13 @@ E capability analysis
 This ordering separates memory correctness from memory optimization. R is a
 future value-use obligation, not a capability or an implemented pass.
 
-E1–E4 complete the currently meaningful semantic surface; TIR coverage gaps
-remain. E6 is the next active diagnostics/inspect-query milestone, projecting
-existing analysis, contracts, violations, witnesses and provenance without a
-second analyzer. A richer TIR Graph requires later ownership/actor facts.
+E1–E6 complete the currently meaningful semantic and tooling surface; TIR
+coverage gaps remain. `tempra effects` projects existing analysis, contracts,
+violations, witnesses and provenance without a second analyzer. A richer TIR
+Graph requires later ownership/actor facts. K1 comptime authority/backend parity
+is the next compiler milestone.
 
-U — Unsafe Boundary is standalone DEFERRED / CONDITIONAL work, listed after O
+U — Unsafe Boundary is standalone DEFERRED / CONDITIONAL work at the end of the roadmap,
 in the roadmap and triggered only by a real source operation requiring explicit
 memory/type-safety authorization. No current E1 origin emits Unsafe, and no
 unsafe pass or syntax is inserted into this pipeline.

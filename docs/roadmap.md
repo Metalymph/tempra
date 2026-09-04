@@ -22,11 +22,32 @@ V — Verified Functions
 O — Deeper Memory Optimizations
 ```
 
-This order is a dependency chain, not merely a list of preferences.
+The semantic dependency chain remains a design constraint. The immediate
+implementation sequence also includes tooling, consistency and performance work:
+
+```text
+E6 — Structured Effects Tooling (implemented)
+        ↓
+K  — Comptime Consistency + Latency Baseline
+        ↓
+R  — Result / Value-Use Hardening
+        ↓
+M  — Acyclic Ownership
+        ↓
+C  — Pluggable Actors
+        ↓
+V  — Verified Functions
+        ↓
+O  — Memory Optimization
+        ↓
+P  — Deep Compiler Performance / Incremental
+        ↓
+U  — Unsafe Boundary (conditional)
+```
 
 ### E — Light Capability / Effect System
 
-The E1–E4 semantic core is complete for the currently meaningful surface. The compiler computes stable per-function semantic summaries over verified TIR and propagates requirements transitively through calls. This does not close the existing TIR coverage gaps. E6 diagnostics/tooling is the next active milestone.
+The E1–E4 semantic core and E6 tooling projection are complete for the currently meaningful surface. The compiler computes stable per-function semantic summaries over verified TIR, propagates requirements transitively through calls, and exposes those facts without a second analysis. This does not close the existing TIR coverage gaps.
 
 The public contract surface remains deliberately small:
 
@@ -42,11 +63,18 @@ Phase E is subdivided as follows:
 3. **E3 — `@deny(...)` (implemented).** E3.1 acquires nonempty typed contracts, stable compilation-local TIR function binding and declaration/attribute provenance. E3.2 enforces denied transitive requirements, retains structured violations/witnesses, rejects annotated execution on non-capability-aware paths and invalidates pre-enforcement cache artifacts through the semantic fingerprint.
 4. **E4 — `@pure` (implemented).** The single convenience contract normalizes to denying `io`, `process`, `spawn`, and `nondeterminism` in the driver. Explicit deny is unioned; pure intent retains its own source span. E3 enforcement and cache semantic revision are unchanged; Alloc and Panic remain allowed by pure alone.
 
-**E6 — Structured capability diagnostics and inspect/query surface (NEXT ACTIVE).** Reuse `CapabilityAnalysis`, `FunctionCapabilityContract`, `CapabilityContractViolation`, `CapabilityWitness`, `TirFunctionId`, and current structural/source provenance for human CLI, IDE/LSP, tools and agents. E6 is tooling over the implemented semantic core, not a new analyzer or a commitment to a particular CLI/JSON schema.
+5. **E6 — Structured capability diagnostics and inspect/query surface (implemented).** `tempra effects [--json] <path>` compiles fresh and projects `CapabilityAnalysis`, contracts, violations, witnesses, TIR identities and current provenance for humans and tools. `TirFunctionId` remains authoritative; names are display-only. The current JSON schema is deterministic but not promised as a permanent protocol. E6 does not implement LSP integration or the future TIR Graph.
 
 E1 is TIR-only. HIR-only operations are coverage gaps for later integration, not justification for a second analyzer.
 
-The implemented E1–E4 design and boundaries are recorded in [E1 Capability Analysis](E1_CAPABILITY_ANALYSIS.md). The historical E5 audit found no intentional source-level primitive requiring unsafe authorization. It recorded narrow correctness debts in native signature integrity, comptime extern handling, and internal JIT pointer/ABI/lifetime assumptions, not new semantic phases or demonstrated exploits. `check` remains frontend/typechecking-only, not capability certification; E6 owns final diagnostic rendering.
+The implemented E1–E6 design and boundaries are recorded in [E1 Capability Analysis](E1_CAPABILITY_ANALYSIS.md). The historical E5 audit found no intentional source-level primitive requiring unsafe authorization. It recorded narrow correctness debts in native signature integrity, comptime extern handling, and internal JIT pointer/ABI/lifetime assumptions, not new semantic phases or demonstrated exploits. `check` remains frontend/typechecking-only, not capability certification.
+
+### K — Comptime Consistency + Latency Baseline
+
+K is the next active compiler milestone. K1 audits the canonical authority for
+comptime evaluation and parity across the frontend, TIR/VM and other backends
+before changing semantics. It also establishes a reproducible latency baseline.
+No K behavior is implemented by E6.
 
 ### R — Result / Value-Use Hardening
 
@@ -91,9 +119,19 @@ Only after the memory model and concurrency boundaries are established should op
 
 These are performance techniques, not prerequisites for memory correctness or concurrency.
 
+### P — Deep Compiler Performance / Incremental
+
+P follows the semantic and memory foundations. It may address incremental
+compilation, dependency-aware invalidation and deeper compiler latency work.
+E6 introduces no incremental cache, daemon or persistent capability facts.
+
 ### U — Unsafe Boundary (DEFERRED / CONDITIONAL)
 
-U is a small standalone milestone, listed after O but activated by a concrete trigger, not a prerequisite for completing E: the first real source-level operation capable of violating Tempra memory/type invariants unless explicitly authorized. No such intentional primitive exists today, so `@unsafe` is not implemented or accepted.
+U is a small standalone conditional milestone shown after P but activated by a
+concrete trigger, not by list position and not as a prerequisite for completing
+E: the first real source-level operation capable of violating Tempra memory/type
+invariants unless explicitly authorized. No such intentional primitive exists
+today, so `@unsafe` is not implemented or accepted.
 
 The intended direction is local authorization within small audited implementation islands, without automatically requiring annotations throughout the caller graph. Safe wrapper interfaces should remain callable from ordinary safe Tempra and must preserve safety for their admitted inputs. This does not settle unsafe-to-call rules or introduce hypothetical primitives. `@unsafe` must never disable `@deny` or `@pure`; `@deny(unsafe)` remains invalid and `Capability::Unsafe` remains internal/reserved.
 
@@ -107,8 +145,11 @@ The former "Spark mode" and global checked/verified mode proposals are not part 
 
 ## Other implementation tracks
 
-Native AOT, dedicated Wasm output, package maturity, REPL work, richer collections, and experimental JIT research remain valid engineering tracks. They must not reorder or weaken the E → R → M → C → V → O language dependency chain.
+Native AOT, dedicated Wasm output, REPL work, richer collections, experimental
+JIT research, the future TIR Graph and a safe CLI package manager remain explicit
+engineering tracks. They are not folded into E6 and must not weaken the semantic
+dependency chain.
 
-The richer **TIR Graph** is a later tooling milestone, not E6. It may eventually combine calls, CFG, capabilities, allocations, ownership edges, escapes, actor boundaries, specializations and source provenance. Some facts require M, C and later compiler work and cannot be promised by current capability inspection.
+The richer **TIR Graph** is a later tooling milestone. It may eventually combine calls, CFG, capabilities, allocations, ownership edges, escapes, actor boundaries, specializations and source provenance. Some facts require M, C and later compiler work and cannot be promised by current capability inspection.
 
 The Phase 15–18 JIT documents are historical implementation records for an opt-in experiment. They are not the normative language roadmap.

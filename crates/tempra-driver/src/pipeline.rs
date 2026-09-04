@@ -1,4 +1,7 @@
-use crate::compilation::{compile_tir_module, VmCompilation};
+use crate::compilation::{
+    analyze_tir_module, compile_tir_module, enforce_analyzed_tir, lower_analyzed_tir, AnalyzedTir,
+    VmCompilation,
+};
 use crate::contracts::{ContractBindings, ContractSource};
 use crate::error::DriverError;
 use std::fs;
@@ -363,6 +366,12 @@ pub fn run_file_with_experimental_vm_jit(
 /// Compiles a file and its module graph fresh, retaining TIR and capability facts.
 /// This path does not read or write a bytecode cache.
 pub fn compile_file_to_bytecode_with_analysis(path: &Path) -> Result<VmCompilation, DriverError> {
+    let analyzed = analyze_file_to_tir(path)?;
+    enforce_analyzed_tir(&analyzed)?;
+    lower_analyzed_tir(analyzed)
+}
+
+fn analyze_file_to_tir(path: &Path) -> Result<AnalyzedTir, DriverError> {
     use crate::module_graph::{load_module_graph, DiskDocumentLoader};
     use std::collections::HashMap;
     use tempra_typeck::{check_modules_always, ModuleToCheck};
@@ -462,7 +471,31 @@ pub fn compile_file_to_bytecode_with_analysis(path: &Path) -> Result<VmCompilati
         return Err(DriverError::UnsupportedExperimentalVm(errors.join("\n")));
     }
 
-    compile_tir_module(module_builder.module, bindings)
+    analyze_tir_module(module_builder.module, bindings)
+}
+
+/// Compiles a file fresh and projects its retained E1–E4 capability facts.
+///
+/// This operation never reads or writes the bytecode cache. A valid program is
+/// fully lowered and bytecode-verified before its inspection result is returned.
+pub fn inspect_effects_file(
+    path: &Path,
+) -> Result<crate::EffectInspection, crate::EffectQueryError> {
+    let analyzed = analyze_file_to_tir(path).map_err(crate::EffectQueryError::Compiler)?;
+    if let Err(error) = enforce_analyzed_tir(&analyzed) {
+        return match error {
+            DriverError::CapabilityContractViolations(violations) => {
+                let diagnostics = crate::project_effect_diagnostics(&analyzed.module, &violations)
+                    .map_err(crate::EffectQueryError::Projection)?;
+                Err(crate::EffectQueryError::Diagnostics(diagnostics))
+            }
+            other => Err(crate::EffectQueryError::Compiler(other)),
+        };
+    }
+    let compilation = lower_analyzed_tir(analyzed).map_err(crate::EffectQueryError::Compiler)?;
+    compilation
+        .effect_inspection()
+        .map_err(crate::EffectQueryError::Projection)
 }
 
 pub fn run_source_with_experimental_vm_jit(

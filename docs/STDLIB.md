@@ -170,11 +170,11 @@ their implementation is native.
 - Generators / `yield`
 - Closure and function-value callbacks
 
-E1 already classifies the current called-extern subset; E2–E4 integrate those facts
-and enforce deny/pure contracts in fresh VM compilation. See
+E1 classifies the current called-extern subset; E2–E4 integrate and enforce those
+facts, while E6 projects them for diagnostics and inspection. See
 [capability analysis](E1_CAPABILITY_ANALYSIS.md) for the mapping and coverage gaps.
 Allocation classification remains representation-dependent, not inferred only
-from a return type. E6 structured diagnostics/inspection is next active.
+from a return type. K1 comptime authority/backend parity is next active.
 
 ## Legacy Code
 

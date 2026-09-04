@@ -1,7 +1,7 @@
 # E1 Capability Analysis
 
 > [!NOTE]
-> **Status: E1–E4 implemented.** E1 provides pure analysis; E2 retains facts; E3 acquires/enforces `@deny` and prevents bypass; E4 adds `@pure` source intent and normalization through the same contracts.
+> **Status: E1–E6 implemented.** E1 provides pure analysis; E2 retains facts; E3 acquires/enforces `@deny` and prevents bypass; E4 adds `@pure`; E6 projects the existing facts for diagnostics and inspection.
 
 ## Goal and boundary
 
@@ -241,7 +241,9 @@ definitions: an ambiguous overwrite involving a contract returns structured
 
 Private `AnalyzedTir` retains the sorted side table. `VmCompilation::contract(id)`
 and `contracts()` expose immutable `FunctionCapabilityContract` records:
-`denied`, `declaration_span`, `attribute_spans`, `source`. Source is the single
+`explicit_denied`, effective `denied`, `declaration_span`, `attribute_spans`,
+`pure_span`, and `source`. The explicit set retains only `@deny` intent while
+enforcement continues to use the effective set. Source is the single
 `InMemory` input or the existing module graph's name and path. Spans remain
 byte offsets. IDs are local to the retained compilation, not persistent cache
 identifiers. No spans, source maps or contracts are added to `TirModule`.
@@ -279,7 +281,8 @@ call-graph construction. `CapabilityContractViolations` aggregates all violation
 in numeric function ID then stable capability order. Each record retains the
 function, capability, unchanged E1 witness and full E3.1 declaration contract.
 `MissingFunction`, `MissingSummary` and `MissingWitness` are typed invariant
-failures. Generic `Display` is not the final E6 diagnostic renderer.
+failures. E6 provides the structured and human-facing projection; the generic
+driver `Display` remains only a fallback boundary.
 
 `Alloc` remains representation-dependent and `Panic` remains may-panic: even
 `10 / 2` can violate `@deny(panic)`. E3.2 is not a verified proof layer.
@@ -324,8 +327,9 @@ at that marker. Both orders with explicit deny are valid; overlapping capabiliti
 normalize by union. Ordinary identifiers named `pure` remain valid.
 
 The driver creates a real `FunctionCapabilityContract` for either attribute.
-Its `denied` set is effective, `attribute_spans` contains explicit deny spans only,
-and `pure_span` separately preserves pure intent for future E6 consumers. Both
+Its `explicit_denied` set contains only explicit source arguments, `denied` is
+effective, `attribute_spans` contains explicit deny spans only, and `pure_span`
+separately preserves pure intent for E6 consumers. Both
 markers absent still means no contract. Existing ID binding, specialization
 inheritance, immutable accessors and structured violation provenance are reused.
 The enforcer does not know which source spelling contributed a capability.
@@ -348,14 +352,47 @@ frontend-to-driver provenance, method/specialization bindings, direct/transitive
 Io witnesses, non-entry enforcement, allowed Alloc/Panic/Result, explicit additional
 restrictions, deterministic aggregation and transactional execution rejection.
 
-## Post-E4 state and next tooling milestone
+## E6 structured diagnostics and inspection (implemented)
 
-E1–E4 complete the currently meaningful light capability/effect surface, not all
-TIR coverage. **E6 is NEXT ACTIVE:** structured capability diagnostics and an
-inspect/query surface for human CLI, IDE/LSP, tools and agents. It reuses
-`CapabilityAnalysis`, `FunctionCapabilityContract`, `CapabilityContractViolation`,
-`CapabilityWitness`, `TirFunctionId`, and current structural/source provenance.
-This is not a new analyzer or a commitment to a CLI/JSON schema.
+E6 adds no analysis pass. `tempra-driver` joins the retained module, summaries,
+contracts, violations and canonical E1 witnesses into immutable
+`EffectDiagnostic` and `EffectInspection` projections. Every join is keyed by
+`TirFunctionId`; TIR names are display metadata only. Per-capability contract
+origin is derived from `explicit_denied`, `pure_span` and the canonical pure set,
+so explicit deny, pure and overlapping intent remain distinguishable without
+duplicating derived provenance in the contract core.
+
+`tempra effects [--json] <path>` uses the multi-module fresh compilation path.
+Valid input completes TIR verification, one capability analysis, unchanged E3.2
+enforcement, bytecode lowering and bytecode verification before inspection.
+Violations retain the same typed `CapabilityContractViolation`; E6 projects them
+while the TIR remains available so structural IDs can receive display names.
+
+Human diagnostics use stable code `capability-denied`, real declaration/attribute
+spans and the existing witness path. Intermediate callsites remain structural
+function/block/instruction coordinates because no reliable TIR instruction source
+side table exists. Multiple `@deny` spans are retained in source order, but the
+frontend does not retain a capability-to-individual-attribute mapping; E6 does
+not fabricate one.
+
+JSON mode emits exactly one deterministic document on stdout and no duplicate
+diagnostic rendering on stderr. Its current tooling schema exposes diagnostics,
+functions, direct and required sets, contracts, source identity and structured
+witnesses; it is not a promised permanent protocol. Ordinary cache hits remain
+verified bytecode-only. Effect inspection never reads or writes cache metadata
+and leaves `semantics-1` unchanged.
+
+The current analysis/LSP path remains frontend/typechecking-only. E6 converts to
+the existing general `Diagnostic` model but does not make the LSP compile through
+the smaller TIR/VM surface. Future LSP work must consume this projection without
+adding a second analyzer.
+
+## Post-E6 state and next compiler milestone
+
+E1–E6 complete the currently meaningful light capability/effect and tooling
+surface, not all TIR coverage. K1 canonical comptime authority/backend-parity
+audit is next. E6 introduced no second analyzer and its JSON is a current tooling
+schema rather than a permanent protocol.
 
 The richer TIR Graph is later tooling: calls, CFG, capabilities, allocations,
 ownership edges, escapes, actor boundaries, specializations and source provenance
@@ -364,12 +401,9 @@ may eventually be combined, but some facts require M/C and later compiler work.
 Instruction-level source-span bridging, broader TIR coverage and native-boundary
 policy remain deferred; E3.1 adds declaration provenance only.
 
-The semantic roadmap is **E → R → M → C → V → O**. R is Result/value-use
-hardening, not an effect: future rules should prevent silent discard, including
-an accidental `let _ = ...` escape hatch, while allowing `?`, `match`, return/
-propagation and meaningful use. This does not implement wildcard bindings or
-commit an opt-out such as future `@discardable`. M then defines acyclic ownership;
-pluggable actor concurrency C, verified functions V and memory optimizations O follow.
+The immediate roadmap is **K → R → M → C → V → O → P**, with U conditional.
+R remains Result/value-use hardening rather than an effect. K and P do not alter
+the capability semantics documented here.
 
 ## Historical E5 audit and conditional U
 

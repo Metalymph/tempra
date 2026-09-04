@@ -75,6 +75,7 @@ tempra run file.tempra         # Execute script via interpreter
 tempra check file.tempra       # Verify syntax and types (supports --json)
 tempra diagnostics file.tmpr   # Emit structured compiler diagnostics (supports --json)
 tempra symbols file.tmpr       # Outline structural code symbols (supports --json)
+tempra effects file.tmpr       # Inspect capability facts (supports --json; compiles fresh)
 tempra test path               # Run Tempra tests under a path
 tempra repl                    # Start interactive session
 tempra emit-tir file.tmpr      # Inspect experimental TIR lowering
@@ -192,12 +193,14 @@ Tempra is rapidly evolving. We currently have a functional core with:
 
 ### Next language foundations
 
-1. **E — Light Capability / Effect System** (E1–E4 implemented)
-2. **R — Result / Value-Use Hardening**
-3. **M — Acyclic Ownership / Complete ARC-Cycle Prevention**
-4. **C — Pluggable Actor Concurrency**
-5. **V — Verified Functions**
-6. **O — Deeper Memory Optimizations**
+1. **E6 — Structured Effects Tooling** (implemented)
+2. **K — Comptime Consistency + Latency Baseline**
+3. **R — Result / Value-Use Hardening**
+4. **M — Acyclic Ownership / Complete ARC-Cycle Prevention**
+5. **C — Pluggable Actor Concurrency**
+6. **V — Verified Functions**
+7. **O — Deeper Memory Optimizations**
+8. **P — Deep Compiler Performance / Incremental**
 
 R is a future value-use obligation, not an effect: Result values must not be
 silently discarded. No `@discardable` syntax is committed. **U — Unsafe Boundary**
@@ -208,7 +211,7 @@ authorization. No such intentional primitive is exposed today.
 Memory correctness and memory optimization are separate milestones. Safe Tempra must first define legal ownership graphs and prevent strong-reference cycles. Uniqueness analysis, escape analysis, stack promotion, Perceus-inspired reuse, and retain/release elimination follow later and are not prerequisites for concurrency.
 
 See the [roadmap](docs/roadmap.md) for the Phase E subdivision and dependency rationale.
-The implemented [E1–E4 capability foundation](docs/E1_CAPABILITY_ANALYSIS.md) enforces `@deny(...)` and `@pure` through the same contracts in fresh VM compilation, retaining facts, provenance and structured violations. Pure means denying io/process/spawn/nondeterminism, not allocation or panic; explicit deny restrictions compose by union. Cache hits retain the enforcement-aware `semantics-1` fingerprint. HIR execution, REPL and source TIR interpretation explicitly reject annotated programs; `emit-tir` and frontend/typechecking-only `check` do not certify contracts. **E6 structured capability diagnostics and inspect/query tooling is next**, reusing existing facts for CLI, IDE/LSP, tools and agents. This is not the complete future TIR Graph, and existing TIR coverage gaps remain.
+The implemented [E1–E6 capability foundation](docs/E1_CAPABILITY_ANALYSIS.md) enforces `@deny(...)` and `@pure` through the same contracts in fresh VM compilation, retaining facts, provenance and structured violations. Pure means denying io/process/spawn/nondeterminism, not allocation or panic; explicit deny restrictions compose by union. `tempra effects` exposes the retained facts and deterministic witnesses in human or JSON form from a fresh compilation. Cache hits retain the enforcement-aware `semantics-1` fingerprint but no capability metadata. HIR execution, REPL and source TIR interpretation explicitly reject annotated programs; `emit-tir` and frontend/typechecking-only `check` do not certify contracts. This is not the complete future TIR Graph, and existing TIR coverage gaps remain. K1 comptime authority/backend-parity audit is the next compiler milestone.
 
 ---
 

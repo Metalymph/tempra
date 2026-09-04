@@ -1,15 +1,15 @@
 # Tempra Capability Contracts v0.1
 
 > [!NOTE]
-> **Status: E1–E4 implemented.** E3 acquires/enforces capability contracts and prevents execution bypass. E4 normalizes `@pure` through the same machinery. `@unsafe` and `@verified` remain unimplemented.
+> **Status: E1–E6 implemented.** E3 acquires/enforces capability contracts and prevents execution bypass. E4 normalizes `@pure`; E6 exposes existing facts through diagnostics and inspection. `@unsafe` and `@verified` remain unimplemented.
 
-Tempra's current capability-contract surface is small rather than a user-facing algebraic effect language. E1–E4 complete the currently meaningful surface, without closing TIR coverage gaps:
+Tempra's current capability-contract surface is small rather than a user-facing algebraic effect language. E1–E6 complete the currently meaningful semantic and tooling surface, without closing TIR coverage gaps:
 
 - `@deny(...)`
 - `@pure`
 
-The next active milestone is E6 diagnostics/inspection. `@unsafe` is a separate
-conditional future boundary under U, not an immediate Phase E requirement.
+K1 comptime authority/backend-parity audit is the next compiler milestone.
+`@unsafe` is a separate conditional future boundary under U, not a Phase E requirement.
 
 There is no public `effect`, `handle`, `perform`, `allow`, `@no_alloc`, `@no_panic`, `@deterministic`, or family of aliases.
 
@@ -93,7 +93,8 @@ even for a known nonzero divisor.
 
 AST and HIR retain a separate `pure_span`; `DenyContract` still represents only
 explicit `@deny` syntax. Only the driver defines the canonical four-capability
-pure set. `FunctionCapabilityContract.denied` is the effective union;
+pure set. `FunctionCapabilityContract.explicit_denied` contains only explicit
+arguments and `denied` is the effective union;
 `attribute_spans` contains explicit deny spans only, while `pure_span` identifies
 the original pure marker. A pure-only contract has no synthetic deny spans.
 Declaration spans and module/source identity retain their existing meaning.
@@ -108,11 +109,30 @@ test execution and REPL reject it explicitly even when its contract would pass;
 REPL state remains unchanged. `emit-tir` and frontend-only `check` accept it
 without certifying contracts. Raw TIR interpretation remains unchanged.
 
+## E6 diagnostics and inspection
+
+`tempra effects <path>` compiles fresh and prints direct and transitive capability
+sets for every defined emitted function. `--json` exposes the same facts, source
+contracts and canonical witnesses as exactly one deterministic machine document.
+A contract violation uses stable code `capability-denied`; explicit `@deny`,
+`@pure`, and overlapping intent remain distinguishable.
+
+`TirFunctionId` is authoritative in every query. Function names are display-only
+and never lookup keys. Diagnostics reuse E1 witnesses and do not rescan TIR,
+build another call graph or infer source coordinates for intermediate instructions.
+Declaration and attribute spans remain byte offsets qualified by source/module
+identity.
+
+Inspection requires facts and therefore uses fresh compilation. Ordinary VM
+cache hits remain bytecode-only; cache format and `semantics-1` are unchanged.
+`check` and the current LSP remain frontend/typechecking-only. The E6 JSON shape
+is a current tooling schema, not a permanent protocol.
+
 ## U — Unsafe Boundary (DEFERRED / CONDITIONAL)
 
 Tempra is safe and checked by default. The historical E5 audit found no intentional
 source-level primitive requiring unsafe authorization. `@unsafe` is not accepted
-or implemented. U is a standalone milestone listed after O in the
+or implemented. U is a standalone conditional milestone at the end of the
 [roadmap](../roadmap.md), triggered only by the first real source-level operation
 capable of violating memory/type invariants unless explicitly authorized.
 
@@ -219,15 +239,11 @@ E1 need not implement this presentation or source-span mapping. It must preserve
 2. **E2 (implemented):** post-verification integration in fresh VM compilation, retaining immutable TIR, capability facts and bytecode in `VmCompilation`;
 3. **E3 (implemented):** typed `@deny(...)` acquisition and declaration provenance (E3.1), then enforcement, retained witnesses and execution/cache non-bypass (E3.2);
 4. **E4 (implemented):** `@pure` syntax/provenance and driver-only normalization through existing E3 enforcement;
+5. **E6 (implemented):** immutable diagnostics and inspection projections plus
+   `tempra effects [--json]`, reusing existing analysis and witnesses.
 
-**E6 (NEXT ACTIVE):** structured capability diagnostics and an inspect/query
-surface, reusing `CapabilityAnalysis`, `FunctionCapabilityContract`,
-`CapabilityContractViolation`, `CapabilityWitness`, function IDs and existing
-provenance for human CLI, IDE/LSP, tools and agents. No new analysis or CLI schema
-is specified here. The complete future TIR Graph is a later tooling milestone.
-
-The semantic order is E → R → M → C → V → O. R adds future Result/value-use
-obligations, not capabilities. U remains conditional. The
+The immediate roadmap continues with K → R → M → C → V → O → P, with U
+conditional. R adds future Result/value-use obligations, not capabilities. The
 [post-E4 state and audit record](../E1_CAPABILITY_ANALYSIS.md) tracks native
 signature integrity, comptime extern handling and JIT API correctness debts;
 none is a justification for blanket `extern == unsafe`.
@@ -238,8 +254,8 @@ compilations. E3.2 combines its summaries with E3.1 contracts in the driver.
 `CapabilityContractViolations` retains every violation in ascending numeric
 function ID and stable capability order, with the unchanged E1 witness and
 declaration provenance. Missing functions, summaries or witnesses produce typed
-compiler invariant errors, never synthetic success. Final diagnostic rendering
-and capability CLI output remain E6 work.
+compiler invariant errors, never synthetic success. E6 projects these typed
+results without changing that enforcement.
 
 The bytecode cache stores no facts: trusted hits verify and execute bytecode
 without analysis. TIR emission remains analyzer-independent; HIR and source TIR

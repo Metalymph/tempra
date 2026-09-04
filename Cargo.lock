@@ -1111,9 +1111,11 @@ dependencies = [
  "serde_json",
  "tempra-diagnostics",
  "tempra-driver",
+ "tempra-effects",
  "tempra-interpreter",
  "tempra-repl",
  "tempra-session",
+ "tempra-span",
 ]
 
 [[package]]

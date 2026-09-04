@@ -6,6 +6,7 @@ use clap::Parser;
 
 fn main() {
     let cli = Cli::parse();
+    let suppress_empty_error = matches!(&cli.command, Commands::Effects(args) if args.json);
 
     let result = match cli.command {
         Commands::Run(args) => commands::run::run_command(
@@ -19,13 +20,16 @@ fn main() {
             commands::diagnostics::diagnostics_command(args.path, args.json)
         }
         Commands::Symbols(args) => commands::symbols::symbols_command(args.path, args.json),
+        Commands::Effects(args) => commands::effects::effects_command(args.path, args.json),
         Commands::Test(args) => commands::test::test_command(args.path),
         Commands::Repl => commands::repl::repl_command(),
         Commands::EmitTir(args) => commands::emit_tir::emit_tir_command(args.path),
     };
 
     if let Err(err) = result {
-        eprintln!("error: {}", err);
+        if !err.is_empty() || !suppress_empty_error {
+            eprintln!("error: {}", err);
+        }
         std::process::exit(1);
     }
 }

@@ -5,10 +5,10 @@ use tempra_tir::ir::{TirFunctionId, TirModule};
 
 // Keep the immutable analysis tied to exactly the module that produced it.
 #[derive(Debug)]
-struct AnalyzedTir {
-    module: TirModule,
-    capabilities: CapabilityAnalysis,
-    contracts: Vec<(TirFunctionId, FunctionCapabilityContract)>,
+pub(crate) struct AnalyzedTir {
+    pub(crate) module: TirModule,
+    pub(crate) capabilities: CapabilityAnalysis,
+    pub(crate) contracts: Vec<(TirFunctionId, FunctionCapabilityContract)>,
 }
 
 /// A fresh VM compilation with verified TIR, capability facts and verified bytecode.
@@ -60,25 +60,47 @@ impl VmCompilation {
     pub fn into_bytecode(self) -> BytecodeModule {
         self.bytecode
     }
+
+    /// Projects retained E1–E4 facts into the immutable E6 inspection model.
+    pub fn effect_inspection(
+        &self,
+    ) -> Result<crate::EffectInspection, crate::EffectProjectionError> {
+        crate::effect_tooling::inspect_compilation(self)
+    }
 }
 
 pub(crate) fn compile_tir_module(
     module: TirModule,
     bindings: ContractBindings,
 ) -> Result<VmCompilation, DriverError> {
+    let analyzed = analyze_tir_module(module, bindings)?;
+    enforce_analyzed_tir(&analyzed)?;
+    lower_analyzed_tir(analyzed)
+}
+
+pub(crate) fn analyze_tir_module(
+    module: TirModule,
+    bindings: ContractBindings,
+) -> Result<AnalyzedTir, DriverError> {
     tempra_tir::verifier::verify_module(&module).map_err(DriverError::TirVerificationError)?;
     let capabilities =
         tempra_effects::analyze(&module).map_err(DriverError::CapabilityAnalysisError)?;
-    let analyzed = AnalyzedTir {
+    Ok(AnalyzedTir {
         module,
         capabilities,
         contracts: bindings.finish(),
-    };
+    })
+}
+
+pub(crate) fn enforce_analyzed_tir(analyzed: &AnalyzedTir) -> Result<(), DriverError> {
     crate::enforcement::enforce_contracts(
         &analyzed.module,
         &analyzed.capabilities,
         &analyzed.contracts,
-    )?;
+    )
+}
+
+pub(crate) fn lower_analyzed_tir(analyzed: AnalyzedTir) -> Result<VmCompilation, DriverError> {
     let bytecode = tempra_bytecode_lower::lower_tir_module(&analyzed.module).map_err(|e| {
         DriverError::UnsupportedExperimentalVm(format!("bytecode lowering error: {:?}", e))
     })?;

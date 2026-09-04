@@ -1,7 +1,7 @@
 # E1 Capability Analysis
 
 > [!NOTE]
-> **Status: E1, E2 and E3.1 implemented.** E1 provides pure analysis; E2 retains facts in fresh VM compilation; E3.1 acquires typed `@deny` intent and declaration provenance. E3.2 enforcement is pending.
+> **Status: E1, E2 and E3 implemented.** E1 provides pure analysis; E2 retains facts; E3.1 acquires typed `@deny` intent and provenance; E3.2 enforces contracts and prevents cache/execution bypass.
 
 ## Goal and boundary
 
@@ -179,7 +179,8 @@ The driver owns private `AnalyzedTir` and public immutable `VmCompilation`:
 
 ```text
 fresh source or module graph → TIR → verify_module → analyze (once)
-  → AnalyzedTir → bytecode lowering → bytecode verification → VmCompilation
+  → AnalyzedTir + completed bindings → enforce (E3.2)
+  → bytecode lowering → bytecode verification → VmCompilation
 ```
 
 `compile_to_bytecode_with_analysis(source, cache_path)` always compiles fresh
@@ -191,15 +192,17 @@ and `into_bytecode()` expose the result without mutation or recomputation.
 
 `DriverError::TirVerificationError` retains verifier errors;
 `DriverError::CapabilityAnalysisError` retains the structured E1 failure.
-Capability presence is not enforcement. A called unclassified extern fails
+Capability presence alone is accepted; E3.2 rejects intersecting deny contracts.
+A called unclassified extern fails
 fresh capability-aware compilation, including in non-entry functions; an unused
 unknown extern does not fail it.
 
 Cache-hit execution verifies cached bytecode and executes it without rebuilding
 TIR or synthesizing capability facts. It is not an E2 analysis product.
-`emit-tir` verifies then formats; TIR interpretation verifies then interprets.
-Neither invokes capability analysis. The default HIR runtime and `check` remain
-outside E2. HIR-only operations remain uncovered, not analyzed in parallel.
+`emit-tir` verifies then formats. Raw TIR interpretation verifies then interprets.
+Neither invokes capability analysis. E3.2 rejects annotated source before HIR or
+source TIR execution. `check` remains frontend/typechecking-only, not contract
+certification. HIR-only operations remain uncovered, not analyzed in parallel.
 
 ### Provenance decision B
 
@@ -243,8 +246,9 @@ and `contracts()` expose immutable `FunctionCapabilityContract` records:
 byte offsets. IDs are local to the retained compilation, not persistent cache
 identifiers. No spans, source maps or contracts are added to `TirModule`.
 
-Tests explicitly retain both `deny(Io)` and required `Io` while compiling and
-executing successfully. Int and String specializations are separately lowered,
+E3.1 originally tested `deny(Io)` and required `Io` coexisting successfully.
+E3.2 updates that regression to require a typed violation retaining provenance.
+Int and String specializations are separately lowered,
 bound, verified and executed from one source declaration; source callback
 specialization and cross-module isolation also have integration coverage.
 
@@ -266,18 +270,47 @@ String restriction. These existing lowering issues are not repaired or relaxed
 by E3.1. Int/String binding is tested directly through the existing specialization
 lowerer; the integration tests use the established single-callback path.
 
-### Required E3.2 cache decision
+## E3.2 enforcement and execution boundaries (implemented)
 
-E3.1 does not change cache behavior, fingerprint, serialization or add contract
-metadata. This is safe only while contracts are informational. E3.2 must prevent
-cache-hit execution of older non-enforcing artifacts from bypassing `@deny`.
-Its implementation must choose and validate semantic/version invalidation,
-sufficient artifact metadata, or a required cache bypass. That choice and its
-implementation are deliberately deferred, not optional for E3.2 closure.
+The driver checks `contract.denied ∩ summary.required` after verified TIR analysis
+and before bytecode lowering. It uses exact emitted function IDs, including
+non-entry functions and specializations. There is no additional analysis or
+call-graph construction. `CapabilityContractViolations` aggregates all violations
+in numeric function ID then stable capability order. Each record retains the
+function, capability, unchanged E1 witness and full E3.1 declaration contract.
+`MissingFunction`, `MissingSummary` and `MissingWitness` are typed invariant
+failures. Generic `Display` is not the final E6 diagnostic renderer.
+
+`Alloc` remains representation-dependent and `Panic` remains may-panic: even
+`10 / 2` can violate `@deny(panic)`. E3.2 is not a verified proof layer.
+
+HIR execution, `test_source`, REPL and `interpret_tir_source` explicitly reject
+any contract before execution, including unused functions, templates and methods.
+The sole presence scan is `HirFile::contains_capability_contracts`; shared
+interpreter policy adapts this to an unsupported-enforcement error. REPL checks
+before type/runtime registration or state commit. No HIR analyzer or backend
+auto-routing is added. `emit-tir` and frontend-only `check` remain non-enforcing;
+raw TIR interpretation cannot recover contracts absent from its input.
+
+### Cache strategy A: existing compiler fingerprint
+
+E3.2 uses `tempra-{CARGO_PKG_VERSION}-semantics-1` in the existing header.
+`semantics-N` versions the guarantees required for reuse, not the bytecode format.
+Both ordinary and profiled VM execution use the same validity/load-or-compile
+path. Legacy fingerprints miss. Only successfully enforced, bytecode-verified
+fresh compilations write cache artifacts. Failure leaves an older artifact
+unchanged and incompatible; no deletion is required. Valid hits retain no TIR,
+capability facts, contracts or witness metadata. Source/contract edits are
+checked by the existing source identity mechanism. This is a local compiler cache,
+not an authenticated artifact format; see [cache policy](BYTECODE_CACHE.md).
+
+Regressions cover direct/transitive violations, exact witnesses, deterministic
+aggregation, non-entry functions, specialization IDs, invariant failures,
+legacy cache rejection, absence of writes after failure, valid bytecode-only
+hits, source/contract changes and transactional rejection by other execution paths.
 
 ## Deferred work
 
-- **E3.2:** compare retained contracts and required sets; return structured violations with capability, function ID, witness and declaration provenance. Prevent cache bypass before closing enforcement.
 - **E4:** `@pure` convenience contract.
 - **E5:** safe-by-default and `@unsafe` integration.
 - **E6:** rendered diagnostics, JSON, `tempra inspect`, and `tempra effects`.

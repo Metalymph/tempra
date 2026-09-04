@@ -167,7 +167,7 @@ pub fn main() -> Int64 { if helper.probe() { return 84 / 2 }; return 0 }
 }
 
 #[test]
-fn cache_hit_executes_verified_bytecode_without_requiring_analysis() {
+fn pre_enforcement_cache_is_no_longer_a_trusted_hit() {
     // Model a valid bytecode-only artifact produced before E2. The non-entry
     // extern is deliberately unclassified, but never executed.
     let ast = tempra_parser::parse_source(UNKNOWN_CALLED).unwrap();
@@ -213,8 +213,14 @@ fn cache_hit_executes_verified_bytecode_without_requiring_analysis() {
     } else {
         std::fs::remove_file(&path).unwrap();
     }
-    assert_eq!(result.unwrap(), VmValue::Int64(42));
-    assert_eq!(profiled.unwrap().0, VmValue::Int64(42));
+    assert!(matches!(
+        result,
+        Err(DriverError::CapabilityAnalysisError(_))
+    ));
+    assert!(matches!(
+        profiled,
+        Err(DriverError::CapabilityAnalysisError(_))
+    ));
     assert!(matches!(
         fresh,
         Err(DriverError::CapabilityAnalysisError(_))

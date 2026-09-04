@@ -34,11 +34,14 @@ fn typed_syntax_survives_hir_and_typechecking() {
 }
 
 #[test]
-fn all_public_names_map_canonically_and_alloc_is_not_enforced() {
+fn all_public_names_map_canonically_and_violation_preserves_provenance() {
     let source = "// è\n@deny(nondeterminism, alloc, spawn, process, io, panic, alloc)\n@deny(io)\nfn f() -> String { return \"x\" }\nfn main() -> String { return f() }";
-    let compilation = compile(source).unwrap();
-    let f = id(&compilation, "f");
-    let contract = compilation.contract(f).unwrap();
+    let DriverError::CapabilityContractViolations(violations) = compile(source).unwrap_err() else {
+        panic!("expected E3.2 enforcement failure")
+    };
+    assert_eq!(violations.len(), 1);
+    assert_eq!(violations[0].capability, Capability::Alloc);
+    let contract = &violations[0].contract;
     assert_eq!(
         contract.denied.iter().collect::<Vec<_>>(),
         vec![
@@ -60,34 +63,27 @@ fn all_public_names_map_canonically_and_alloc_is_not_enforced() {
     for span in &contract.attribute_spans {
         assert!(source[span.start as usize..span.end as usize].starts_with("@deny("));
     }
-    assert!(compilation
-        .capabilities()
-        .summary(f)
-        .unwrap()
-        .required
-        .contains(Capability::Alloc));
-    assert!(compilation.contract(id(&compilation, "main")).is_none());
-    assert_eq!(compilation.contracts().count(), 1);
-    let result = tempra_vm::run_function(compilation.bytecode(), "main", vec![]).unwrap();
-    assert_eq!(result, tempra_vm::VmValue::String("x".into()));
+    assert_eq!(
+        violations[0].witness.origin.location.function,
+        violations[0].function
+    );
 }
 
 #[test]
-fn module_io_contract_and_required_io_coexist_without_enforcement() {
+fn module_io_violation_preserves_module_provenance() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("app.tmpr");
     let source = "import std.io;\n@deny(io)\npub fn main() { std.io.println(\"E3.1\") }";
     std::fs::write(&path, source).unwrap();
-    let compilation = tempra_driver::compile_file_to_bytecode_with_analysis(&path).unwrap();
-    let function = id(&compilation, "app.main");
-    let contract = compilation.contract(function).unwrap();
+    let DriverError::CapabilityContractViolations(violations) =
+        tempra_driver::compile_file_to_bytecode_with_analysis(&path).unwrap_err()
+    else {
+        panic!("expected E3.2 enforcement failure")
+    };
+    assert_eq!(violations.len(), 1);
+    assert_eq!(violations[0].capability, Capability::Io);
+    let contract = &violations[0].contract;
     assert!(contract.denied.contains(Capability::Io));
-    assert!(compilation
-        .capabilities()
-        .summary(function)
-        .unwrap()
-        .required
-        .contains(Capability::Io));
     let ContractSource::Module { name, path: origin } = &contract.source else {
         panic!()
     };
@@ -98,19 +94,11 @@ fn module_io_contract_and_required_io_coexist_without_enforcement() {
             [contract.attribute_spans[0].start as usize..contract.attribute_spans[0].end as usize],
         "@deny(io)"
     );
-    tempra_vm::run_function_with_resolver(
-        compilation.bytecode(),
-        "app.main",
-        vec![],
-        Default::default(),
-        Some(tempra_native::registry::resolve),
-    )
-    .unwrap();
 }
 
 #[test]
 fn non_entry_contract_and_extend_method_bind_to_their_actual_ids() {
-    let source = "@deny(alloc) fn detached() -> String { return \"x\" }\nextend Int64 { @deny(panic) fn same(self) -> Int64 { return self } }\nfn main() -> Int64 { return 42 }";
+    let source = "@deny(io) fn detached() -> String { return \"x\" }\nextend Int64 { @deny(panic) fn same(self) -> Int64 { return self } }\nfn main() -> Int64 { return 42 }";
     let compilation = compile(source).unwrap();
     assert!(compilation.contract(id(&compilation, "detached")).is_some());
     assert!(compilation
@@ -249,16 +237,16 @@ pub fn main() -> Int64 {
 }
 
 #[test]
-fn tir_consumers_and_hir_check_accept_unenforced_contracts() {
+fn tooling_accepts_contracts_but_non_capability_aware_execution_rejects_them() {
     let source = "@deny(panic) fn main() -> Int64 { return 84 / 2 }";
     tempra_driver::check_source(source).unwrap();
     tempra_driver::emit_tir_source(source).unwrap();
-    assert_eq!(
-        tempra_driver::pipeline::interpret_tir_source(source, "main", vec![]).unwrap(),
-        tempra_tir_interp::TirRuntimeValue::Int64(42)
-    );
-    assert_eq!(
-        tempra_driver::run_source_hir(source, &[]).unwrap(),
-        tempra_interpreter::value::Value::Int64(42)
-    );
+    for error in [
+        tempra_driver::pipeline::interpret_tir_source(source, "main", vec![]).unwrap_err(),
+        tempra_driver::run_source_hir(source, &[]).unwrap_err(),
+        tempra_driver::pipeline::test_source(source).unwrap_err(),
+    ] {
+        assert!(matches!(error, DriverError::RuntimeError(ref message)
+            if message.contains("Capability-contract enforcement is not supported")));
+    }
 }

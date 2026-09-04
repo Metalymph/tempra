@@ -65,6 +65,11 @@ impl ReplSession {
             Ok(file) => {
                 let mut candidate_type_ctx = self.type_ctx.clone();
                 let mut hir_file = hir::lower_file(input, &file);
+                if let Err(message) =
+                    tempra_interpreter::ensure_capability_contracts_supported(&hir_file)
+                {
+                    return ReplOutcome::Diagnostic(message.to_owned());
+                }
 
                 // Re-register existing items in the AST is not needed since they are already in the context.
                 // We just need to check the NEW file with the cloned context.
@@ -150,5 +155,58 @@ impl ReplSession {
             }
             Err(e) => ReplOutcome::Diagnostic(format!("Parse Error: {:?}", e)),
         }
+    }
+}
+
+#[cfg(test)]
+mod contract_tests {
+    use super::*;
+
+    #[test]
+    fn rejected_input_is_transactional_before_type_or_runtime_registration() {
+        let mut session = ReplSession::new();
+        assert!(matches!(
+            session.eval_input("let old = 42"),
+            ReplOutcome::Empty
+        ));
+        for input in [
+            "@deny(io) fn bad() {} let partial = 9",
+            "@deny(io) fn generic(type T, value: T) -> T { return value }",
+            "extend Int64 { @deny(io) fn bad_method(self) -> Int64 { return self } }",
+            "@deny(panic) fn bad() -> Int64 { return 10 / 2 }",
+        ] {
+            assert!(
+                matches!(session.eval_input(input), ReplOutcome::Diagnostic(message)
+                if message.contains("Capability-contract enforcement is not supported"))
+            );
+            assert!(matches!(
+                session.eval_input("old"),
+                ReplOutcome::Value(Value::Int64(42))
+            ));
+        }
+        assert!(!session.interpreter.functions.contains_key("bad"));
+        assert!(!session.interpreter.functions.contains_key("generic"));
+        assert!(!session
+            .interpreter
+            .functions
+            .contains_key("Int64.bad_method"));
+        assert!(
+            matches!(session.eval_input("bad()"), ReplOutcome::Diagnostic(message) if message.starts_with("Type Error:"))
+        );
+        assert!(
+            matches!(session.eval_input("partial"), ReplOutcome::Diagnostic(message) if message.starts_with("Type Error:"))
+        );
+        // No stale type declaration prevents registering a differently typed function.
+        assert!(matches!(
+            session.eval_input("fn bad() -> String { return \"clean\" }"),
+            ReplOutcome::Empty
+        ));
+        assert!(
+            matches!(session.eval_input("bad()"), ReplOutcome::Value(Value::String(value)) if value == "clean")
+        );
+        assert!(matches!(
+            session.eval_input("old"),
+            ReplOutcome::Value(Value::Int64(42))
+        ));
     }
 }

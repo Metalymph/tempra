@@ -1,12 +1,14 @@
 pub mod cache;
 mod compilation;
 mod contracts;
+mod enforcement;
 pub mod error;
 pub mod module_graph;
 pub mod pipeline;
 
 pub use compilation::VmCompilation;
 pub use contracts::{ContractBindingError, ContractSource, FunctionCapabilityContract};
+pub use enforcement::{CapabilityContractInvariantError, CapabilityContractViolation};
 pub use error::DriverError;
 pub use pipeline::{
     check_file, check_source, compile_file_to_bytecode_with_analysis, compile_to_bytecode,

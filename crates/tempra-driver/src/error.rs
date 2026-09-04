@@ -13,6 +13,10 @@ pub enum DriverError {
     CapabilityAnalysisError(tempra_effects::CapabilityAnalysisError),
     /// A user contract could not be bound unambiguously to a concrete TIR function.
     ContractBindingError(Box<crate::ContractBindingError>),
+    /// Denied requirements in ascending function ID, then capability order.
+    CapabilityContractViolations(Vec<crate::CapabilityContractViolation>),
+    /// Inconsistent contract/analysis data; never treated as contract success.
+    CapabilityContractInvariantError(crate::CapabilityContractInvariantError),
     TirInterpError(tempra_tir_interp::TirInterpError),
     Exit(i32),
     BytecodeSerializeError(String),
@@ -41,6 +45,12 @@ impl std::fmt::Display for DriverError {
                 write!(f, "Capability analysis error: {}", e)
             }
             DriverError::ContractBindingError(e) => write!(f, "Contract binding error: {}", e),
+            DriverError::CapabilityContractViolations(violations) => {
+                write!(f, "Capability contract violation(s): {}", violations.len())
+            }
+            DriverError::CapabilityContractInvariantError(error) => {
+                write!(f, "Capability contract invariant error: {error:?}")
+            }
             DriverError::TirInterpError(e) => write!(f, "TIR interpreter error: {}", e),
             DriverError::Exit(code) => write!(f, "Exit signal ({})", code),
             DriverError::BytecodeSerializeError(e) => {

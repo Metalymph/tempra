@@ -20,11 +20,12 @@ Source
   → Lexer / Parser
   → AST
   → HIR lowering
+  → Reject capability contracts (execution only)
   → Type checking
   → HIR interpreter
 ```
 
-`tempra run` uses this path unless the experimental VM is selected. `tempra check` currently stops after parsing, HIR lowering, module resolution, and type checking.
+`tempra run` uses this path unless the experimental VM is selected. Annotated execution is explicitly unsupported here, not silently unchecked. `tempra check` currently stops after parsing, HIR lowering, module resolution, and type checking; it does not certify capability contracts.
 
 ### Experimental VM path
 
@@ -37,6 +38,7 @@ Source
   → TIR lowering
   → TIR verification
   → Capability analysis (fresh compilation)
+  → Deny contract enforcement
   → Bytecode lowering
   → Bytecode verification
   → VmCompilation (retained TIR, capability facts, bytecode)
@@ -47,9 +49,12 @@ Source
 TIR support covers a smaller language subset than the HIR interpreter. Generic templates are not emitted directly; requested concrete specializations are lowered where supported.
 
 This is the fresh source/multi-module VM path. Bytecode cache hits verify and
-execute cached bytecode without analysis or reconstructed TIR. TIR emission
-verifies then formats, and TIR interpretation verifies then interprets; neither
-depends on capability coverage. See [pipeline boundaries](PIPELINE.md).
+execute cached bytecode without analysis or reconstructed TIR, but require an
+enforcement-aware semantic fingerprint and matching source identity. TIR emission
+verifies then formats. Source TIR interpretation rejects contracts before lowering;
+raw TIR interpretation verifies then interprets. Neither needs analyzer coverage.
+HIR execution, REPL and test execution reject annotated input through one shared
+HIR presence scan before execution/state commit. See [pipeline boundaries](PIPELINE.md).
 
 ### Incomplete planned paths
 
@@ -72,17 +77,19 @@ E1 provides a pure `tempra-effects` crate that depends only on `tempra-tir`. It 
 E2 implements minimal driver integration: private `AnalyzedTir` ties immutable
 TIR to its facts, and public `VmCompilation` also retains verified bytecode.
 Source and multi-module fresh compilation analyze once immediately after TIR
-verification, without enforcement or UI. Typed verifier/analysis failures are
-retained in `DriverError`; capability presence itself is accepted.
+verification. E3.2 enforces contracts before bytecode lowering; typed failures
+are retained in `DriverError`. Capability presence without a denying contract is accepted.
 
 E3.1 preserves dedicated `@deny` syntax through AST/HIR. It adds no semantic
 capability logic to frontend crates. Driver-owned conversion and registration
 bind the concrete HIR declaration directly to the ID returned by lowering,
 including specializations, without a post-hoc name lookup. Immutable contract
 accessors on `VmCompilation` retain source/module identity and declaration and
-attribute spans alongside facts. No contract is enforced yet, and instruction
-source mapping remains absent. Cache behavior is unchanged in E3.1; E3.2 must
-prevent pre-enforcement bytecode cache hits from bypassing contracts.
+attribute spans alongside facts. E3.2 compares denied and transitively required
+sets, retaining deterministic violations and E1 witnesses; final rendering is E6.
+Instruction source mapping remains absent. E3.2 uses the existing cache header's
+fingerprint `tempra-{CARGO_PKG_VERSION}-semantics-1`; legacy artifacts miss and only
+successfully enforced compilations can write replacements. No facts are serialized.
 
 ```text
 tempra-tir

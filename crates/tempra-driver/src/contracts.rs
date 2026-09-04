@@ -1,4 +1,4 @@
-//! Declaration contracts and their compilation-local binding, without enforcement.
+//! Declaration contracts and their compilation-local binding.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -22,7 +22,7 @@ pub enum ContractSource {
 }
 
 /// Explicit user intent attached to one concrete TIR function.
-/// E3.1 retains this data but does not compare it with required capabilities.
+/// E3.2 compares this retained intent with the function's required capabilities.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionCapabilityContract {
     /// Canonical set obtained from validated public deny spellings.
@@ -150,6 +150,56 @@ impl ContractBindings {
 mod tests {
     use super::*;
     use tempra_tir::builder::ModuleBuilder;
+
+    #[test]
+    fn each_specialization_enforces_its_own_id_with_inherited_provenance() {
+        let source = "@deny(alloc) fn work(type T, value: T) -> T { let evidence = \"allocation\"; return value }";
+        let ast = tempra_parser::parse_source(source).unwrap();
+        let mut hir = tempra_hir::lower_file(source, &ast);
+        let context = tempra_typeck::check_file_with_context(&mut hir).unwrap();
+        let tempra_hir::HirItem::Function(function) = &hir.items[0] else {
+            panic!()
+        };
+        let origin = ContractSource::Module {
+            name: "a".into(),
+            path: PathBuf::from("a.tmpr"),
+        };
+        let mut module = ModuleBuilder::new();
+        let mut bindings = ContractBindings::default();
+        let mut ids = Vec::new();
+        for ty in [tempra_hir::Type::Int, tempra_hir::Type::String] {
+            let concrete = tempra_tir_lower::lower::lower_function_specialization(
+                function,
+                &context,
+                &mut module,
+                None,
+                Some("a"),
+                &[ty],
+            )
+            .unwrap();
+            bindings.register(concrete.id, function, &origin).unwrap();
+            ids.push(concrete.id);
+            module.add_function(concrete);
+        }
+        let analysis = tempra_effects::analyze(&module.module).unwrap();
+        let crate::DriverError::CapabilityContractViolations(errors) =
+            crate::compilation::compile_tir_module(module.module, bindings).unwrap_err()
+        else {
+            panic!("expected specialization violations")
+        };
+        assert_ne!(ids[0], ids[1]);
+        assert_eq!(errors.len(), 2);
+        assert_eq!(errors[0].contract, errors[1].contract);
+        for (id, error) in ids.into_iter().zip(errors) {
+            assert_eq!(error.function, id);
+            assert_eq!(error.contract.source, origin);
+            assert_eq!(error.contract.declaration_span, function.span);
+            assert_eq!(
+                error.witness,
+                analysis.witness(id, Capability::Alloc).unwrap()
+            );
+        }
+    }
 
     #[test]
     fn concrete_int_and_string_specializations_keep_independent_bindings() {

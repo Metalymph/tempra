@@ -14,8 +14,8 @@ struct AnalyzedTir {
 /// A fresh VM compilation with verified TIR, capability facts and verified bytecode.
 ///
 /// Cache-hit execution does not produce this value. Facts describe the retained
-/// TIR conservatively. Declaration contracts carry source provenance, but no
-/// contracts are enforced and instruction-level source mapping is not provided.
+/// TIR conservatively. All retained declaration contracts have passed enforcement.
+/// Declaration source provenance is retained; instruction-level mapping is absent.
 #[derive(Debug)]
 pub struct VmCompilation {
     analyzed: AnalyzedTir,
@@ -74,6 +74,11 @@ pub(crate) fn compile_tir_module(
         capabilities,
         contracts: bindings.finish(),
     };
+    crate::enforcement::enforce_contracts(
+        &analyzed.module,
+        &analyzed.capabilities,
+        &analyzed.contracts,
+    )?;
     let bytecode = tempra_bytecode_lower::lower_tir_module(&analyzed.module).map_err(|e| {
         DriverError::UnsupportedExperimentalVm(format!("bytecode lowering error: {:?}", e))
     })?;

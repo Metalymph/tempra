@@ -653,5 +653,7 @@ named top-level functions and `extend` methods, before optional `pub`.
 Each attribute needs a name; duplicates and repeated attributes merge.
 `unsafe`, unknown names, other attributes and unsupported placement are errors.
 Externs, closures, interface requirements, fields and non-function items cannot
-carry `@deny`. E3.1 acquires intent without enforcement. `@pure` and `@unsafe`
-remain planned and are not accepted by the parser.
+carry `@deny`. E3.1 acquires intent; E3.2 enforces it in VM compilation and rejects
+annotated execution on non-capability-aware paths. Emission and frontend-only
+`check` do not certify contracts. `@pure` and `@unsafe` remain planned and are
+not accepted by the parser.

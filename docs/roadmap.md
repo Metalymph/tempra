@@ -37,15 +37,15 @@ The internal initial vocabulary is `Alloc`, `Panic`, `IO`, `Process`, `Spawn`, `
 Phase E is subdivided as follows:
 
 1. **E1 — Internal capability model and TIR analysis (implemented).** `tempra-effects` provides pure analysis over `TirModule`, direct capability discovery, a reusable call graph, fixed-point propagation, deterministic provenance, and hand-built TIR fixture tests. It adds no public syntax.
-2. **E2 — Minimal pipeline integration (implemented).** Fresh source and multi-module VM compilations verify TIR, analyze it once, and retain TIR, capability facts and verified bytecode in `VmCompilation`. Cache-hit execution, TIR emission, TIR interpretation and HIR paths remain analysis-independent. No enforcement, UI, attributes, CLI output or source-span expansion.
-3. **E3 — `@deny(...)`.** E3.1 is implemented: nonempty typed contracts, stable compilation-local TIR function binding and declaration/attribute provenance, without enforcement. E3.2 remains pending: enforce denied transitive requirements and expose contract witnesses, with a mandatory cache non-bypass gate for artifacts from older non-enforcing compilers.
+2. **E2 — Minimal pipeline integration (implemented).** Fresh source and multi-module VM compilations verify TIR, analyze it once, and retain TIR, capability facts and verified bytecode in `VmCompilation`. Cache-hit execution, TIR emission, TIR interpretation and HIR paths remain analysis-independent. E2 itself added no enforcement, UI, attributes, CLI output or source-span expansion; E3 below defines the current contract behavior.
+3. **E3 — `@deny(...)` (implemented).** E3.1 acquires nonempty typed contracts, stable compilation-local TIR function binding and declaration/attribute provenance. E3.2 enforces denied transitive requirements, retains structured violations/witnesses, rejects annotated execution on non-capability-aware paths and invalidates pre-enforcement cache artifacts through the semantic fingerprint.
 4. **E4 — `@pure`.** Add the single convenience contract, equivalent to denying `io`, `process`, `spawn`, and `nondeterminism`.
 5. **E5 — `@unsafe`.** Connect the safe-by-default language direction to an explicit low-level boundary without redesigning the entire unsafe subsystem.
 6. **E6 — Diagnostics and introspection.** Expose structured paths and stable data for future `tempra inspect`, `tempra effects`, and JSON diagnostics.
 
 E1 is TIR-only. HIR-only operations are coverage gaps for later integration, not justification for a second analyzer.
 
-The implemented E1–E3.1 design and boundaries are recorded in [E1 Capability Analysis](E1_CAPABILITY_ANALYSIS.md). E3.2 is next; cache invalidation/metadata/bypass strategy must be settled before enforcement can be considered complete.
+The implemented E1–E3 design and boundaries are recorded in [E1 Capability Analysis](E1_CAPABILITY_ANALYSIS.md). E4 is next: `@pure` reuses the same contract/enforcement machinery. `check` remains frontend/typechecking-only, not capability certification; E6 owns final diagnostic rendering.
 
 ### M — Acyclic Ownership / Memory Model
 

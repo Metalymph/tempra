@@ -34,8 +34,9 @@ This index points to current source-of-truth files. A crate's presence in the wo
 - `crates/tempra-cli/src/app.rs`: CLI definitions and command dispatch.
 - `crates/tempra-cli/src/commands/`: implemented `run`, `check`, diagnostics, symbols, test, REPL, and TIR inspection commands.
 - `crates/tempra-driver/src/pipeline.rs`: default HIR interpreter and experimental VM orchestration.
-- `crates/tempra-driver/src/compilation.rs`: private verify/analyze/bytecode boundary and public immutable `VmCompilation` product for fresh compilation.
-- `crates/tempra-driver/src/contracts.rs`: canonical conversion, declaration provenance and compilation-local contract binding; no enforcement.
+- `crates/tempra-driver/src/compilation.rs`: private verify/analyze/enforce/bytecode boundary and public immutable `VmCompilation` product for fresh compilation.
+- `crates/tempra-driver/src/contracts.rs`: canonical conversion, declaration provenance and compilation-local contract binding.
+- `crates/tempra-driver/src/enforcement.rs`: contract/summary intersection, structured violations with E1 witnesses, and typed invariant failures.
 - `crates/tempra-driver/src/module_graph.rs`: filesystem module loading, ordering, and cycle detection.
 - `crates/tempra-driver/src/build.rs`, `install.rs`: incomplete build and install scaffolds.
 - `crates/tempra-interpreter/src/`: default HIR evaluator and runtime value representation.
@@ -89,6 +90,8 @@ E1 added `crates/tempra-effects/`, depending only on `tempra-tir`. It owns the i
 E2 integrates analysis only in fresh VM compilations, retaining the typed result
 in `VmCompilation`. Cache hits, TIR emission/interpreter and HIR paths remain
 independent. E3.1 adds syntax-only AST/HIR contracts and driver-owned declaration
-metadata exposed by `VmCompilation::contract`/`contracts`. Enforcement, other
-attributes, rendered diagnostics and inspection remain pending. Instruction-level
-source mapping remains deferred. E3.2 must prevent cache bypass of enforcement.
+metadata exposed by `VmCompilation::contract`/`contracts`. E3.2 adds driver
+enforcement before bytecode, semantic cache fingerprinting, and explicit rejection
+of annotated execution on HIR/REPL/source-TIR paths using the shared HIR presence
+scan. Other attributes, rendered diagnostics, inspection and instruction-level
+source mapping remain deferred. Frontend-only `check` does not certify contracts.

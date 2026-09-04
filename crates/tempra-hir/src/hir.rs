@@ -12,6 +12,22 @@ pub struct HirFile {
     pub top_level_statements: Vec<HirStatement>,
 }
 
+impl HirFile {
+    /// Whether any function declaration or extend method carries a capability contract.
+    /// This only inspects retained syntax, including unused generic templates;
+    /// it does not infer capabilities or decide whether a contract is satisfied.
+    pub fn contains_capability_contracts(&self) -> bool {
+        self.items.iter().any(|item| match item {
+            HirItem::Function(function) => function.deny_contract.is_some(),
+            HirItem::Extend(extension) => extension
+                .methods
+                .iter()
+                .any(|method| method.deny_contract.is_some()),
+            _ => false,
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum HirItem {
     Import(HirImport),

@@ -47,19 +47,7 @@ pub fn run_source_vm_with_options(
 
     let hash = crate::cache::compute_source_hash(source);
     let cache_path = crate::cache::get_cache_path(&hash);
-    let fingerprint = format!("tempra-{}", env!("CARGO_PKG_VERSION"));
-
-    let module = if let Ok(artifact) = crate::cache::read_cache_artifact(&cache_path) {
-        if artifact.header.compiler_fingerprint == fingerprint
-            && artifact.header.source_hash == hash
-        {
-            artifact.module
-        } else {
-            compile_and_cache_module(source, &hash, &cache_path, &fingerprint)?.into_bytecode()
-        }
-    } else {
-        compile_and_cache_module(source, &hash, &cache_path, &fingerprint)?.into_bytecode()
-    };
+    let module = load_or_compile_cached_module(source, &cache_path)?;
 
     let has_main = module.functions.iter().any(|f| f.name == "main");
     if !has_main {
@@ -84,19 +72,7 @@ pub fn run_source_vm_profiled(
 ) -> Result<(tempra_vm::VmValue, tempra_vm::VmProfile), DriverError> {
     let hash = crate::cache::compute_source_hash(source);
     let cache_path = crate::cache::get_cache_path(&hash);
-    let fingerprint = format!("tempra-{}", env!("CARGO_PKG_VERSION"));
-
-    let module = if let Ok(artifact) = crate::cache::read_cache_artifact(&cache_path) {
-        if artifact.header.compiler_fingerprint == fingerprint
-            && artifact.header.source_hash == hash
-        {
-            artifact.module
-        } else {
-            compile_and_cache_module(source, &hash, &cache_path, &fingerprint)?.into_bytecode()
-        }
-    } else {
-        compile_and_cache_module(source, &hash, &cache_path, &fingerprint)?.into_bytecode()
-    };
+    let module = load_or_compile_cached_module(source, &cache_path)?;
 
     let has_main = module.functions.iter().any(|f| f.name == "main");
     if !has_main {
@@ -115,11 +91,21 @@ pub fn run_source_vm_profiled(
     .map_err(|e| DriverError::VmError(format!("{:?}", e)))
 }
 
+fn load_or_compile_cached_module(
+    source: &str,
+    cache_path: &Path,
+) -> Result<tempra_bytecode::BytecodeModule, DriverError> {
+    let hash = crate::cache::compute_source_hash(source);
+    if let Some(module) = crate::cache::read_compatible_module(cache_path, &hash) {
+        return Ok(module);
+    }
+    compile_and_cache_module(source, &hash, cache_path).map(VmCompilation::into_bytecode)
+}
+
 fn compile_and_cache_module(
     source: &str,
     hash: &[u8; 32],
     cache_path: &std::path::Path,
-    fingerprint: &str,
 ) -> Result<VmCompilation, DriverError> {
     let ast = tempra_parser::parse_source(source)
         .map_err(|e| DriverError::ParseError(format!("{:?}", e)))?;
@@ -216,7 +202,7 @@ fn compile_and_cache_module(
 
     let compilation = compile_tir_module(module_builder.module, bindings)?;
     let header = tempra_bytecode::BytecodeCacheHeader {
-        compiler_fingerprint: fingerprint.to_string(),
+        compiler_fingerprint: crate::cache::compiler_fingerprint(),
         source_hash: *hash,
         ..Default::default()
     };
@@ -292,14 +278,13 @@ pub fn compile_to_bytecode(
 /// Compiles source fresh, retaining verified TIR and capability facts.
 ///
 /// Never reads the cache. Writes the same bytecode-only cache artifact as
-/// [`compile_to_bytecode`]; capability presence does not enforce a contract.
+/// [`compile_to_bytecode`]. Explicit deny contracts are enforced before bytecode.
 pub fn compile_to_bytecode_with_analysis(
     source: &str,
     cache_path: &Path,
 ) -> Result<VmCompilation, DriverError> {
     let hash = crate::cache::compute_source_hash(source);
-    let fingerprint = format!("tempra-{}", env!("CARGO_PKG_VERSION"));
-    compile_and_cache_module(source, &hash, cache_path, &fingerprint)
+    compile_and_cache_module(source, &hash, cache_path)
 }
 
 pub fn run_source_with_args(source: &str, args: &[String]) -> Result<(), DriverError> {
@@ -313,6 +298,9 @@ pub fn run_source_hir(source: &str, args: &[String]) -> Result<Value, DriverErro
     let ast = parse_source(source).map_err(|e| DriverError::ParseError(format!("{:?}", e)))?;
 
     let mut hir = lower_file(source, &ast);
+
+    tempra_interpreter::ensure_capability_contracts_supported(&hir)
+        .map_err(|message| DriverError::RuntimeError(message.to_owned()))?;
 
     typeck_check_file(&mut hir).map_err(|errs| DriverError::TypeError(format!("{:?}", errs)))?;
 
@@ -605,6 +593,8 @@ pub fn interpret_tir_source(
 ) -> Result<tempra_tir_interp::TirRuntimeValue, DriverError> {
     let ast = parse_source(source).map_err(|e| DriverError::ParseError(format!("{:?}", e)))?;
     let mut hir = lower_file(source, &ast);
+    tempra_interpreter::ensure_capability_contracts_supported(&hir)
+        .map_err(|message| DriverError::RuntimeError(message.to_owned()))?;
     let type_ctx = tempra_typeck::check_file_with_context(&mut hir)
         .map_err(|errs| DriverError::TypeError(format!("{:?}", errs)))?;
 
@@ -643,6 +633,9 @@ pub fn test_source(source: &str) -> Result<(), DriverError> {
     let ast = parse_source(source).map_err(|e| DriverError::ParseError(format!("{:?}", e)))?;
 
     let mut hir = lower_file(source, &ast);
+
+    tempra_interpreter::ensure_capability_contracts_supported(&hir)
+        .map_err(|message| DriverError::RuntimeError(message.to_owned()))?;
 
     typeck_check_file(&mut hir).map_err(|errs| DriverError::TypeError(format!("{:?}", errs)))?;
 
@@ -1148,5 +1141,129 @@ mod tests {
                 tempra_tir_interp::TirInterpError::UnknownFunction(_)
             ))
         ));
+    }
+}
+
+#[cfg(test)]
+mod enforcement_cache_tests {
+    use super::*;
+
+    const VALID: &str = "@deny(io) fn main() -> Int64 { return 10 / 2 }";
+    const VIOLATING: &str = "@deny(panic) fn main() -> Int64 { return 10 / 2 }";
+
+    fn legacy_artifact(source: &str) -> tempra_bytecode::BytecodeCacheArtifact {
+        // Reproduce the real pre-E3.2 compiler: preserve @deny in HIR, but lower
+        // without enforcement. Never manufacture an enforcement-aware stamp.
+        let ast = parse_source(source).unwrap();
+        let mut hir = lower_file(source, &ast);
+        let context = tempra_typeck::check_file_with_context(&mut hir).unwrap();
+        let mut builder = tempra_tir::builder::ModuleBuilder::new();
+        for item in &hir.items {
+            if let HirItem::Function(function) = item {
+                let lowered = tempra_tir_lower::lower::lower_function(
+                    function,
+                    &context,
+                    &mut builder,
+                    None,
+                    None,
+                )
+                .unwrap();
+                builder.add_function(lowered);
+            }
+        }
+        tempra_tir::verifier::verify_module(&builder.module).unwrap();
+        let module = tempra_bytecode_lower::lower_tir_module(&builder.module).unwrap();
+        tempra_bytecode::verify::verify_module(&module).unwrap();
+        tempra_bytecode::BytecodeCacheArtifact {
+            header: tempra_bytecode::BytecodeCacheHeader {
+                compiler_fingerprint: format!("tempra-{}", env!("CARGO_PKG_VERSION")),
+                source_hash: crate::cache::compute_source_hash(source),
+                ..Default::default()
+            },
+            module,
+        }
+    }
+
+    #[test]
+    fn old_semantics_cannot_bypass_enforcement_or_be_promoted_after_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("legacy.tbc");
+        crate::cache::write_cache_artifact(&path, &legacy_artifact(VIOLATING)).unwrap();
+        let before = fs::read(&path).unwrap();
+        assert!(crate::cache::read_compatible_module(
+            &path,
+            &crate::cache::compute_source_hash(VIOLATING)
+        )
+        .is_none());
+        assert!(matches!(
+            load_or_compile_cached_module(VIOLATING, &path),
+            Err(DriverError::CapabilityContractViolations(_))
+        ));
+        assert_eq!(fs::read(&path).unwrap(), before);
+        // The obsolete artifact remains an ignored miss, not a newly trusted entry.
+        assert!(crate::cache::read_compatible_module(
+            &path,
+            &crate::cache::compute_source_hash(VIOLATING)
+        )
+        .is_none());
+        let fresh_path = dir.path().join("must-not-exist.tbc");
+        assert!(matches!(
+            compile_to_bytecode_with_analysis(VIOLATING, &fresh_path),
+            Err(DriverError::CapabilityContractViolations(_))
+        ));
+        assert!(!fresh_path.exists());
+        assert!(matches!(
+            compile_to_bytecode(VIOLATING, &fresh_path),
+            Err(DriverError::CapabilityContractViolations(_))
+        ));
+        assert!(!fresh_path.exists());
+    }
+
+    #[test]
+    fn valid_semantics_hit_is_verified_bytecode_only_and_contract_edits_miss() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cache.tbc");
+        let fresh = compile_to_bytecode_with_analysis(VALID, &path).unwrap();
+        let artifact = crate::cache::read_cache_artifact(&path).unwrap();
+        assert_eq!(
+            artifact.header.compiler_fingerprint,
+            format!("tempra-{}-semantics-1", env!("CARGO_PKG_VERSION"))
+        );
+        let before = fs::read(&path).unwrap();
+        let modified = fs::metadata(&path).unwrap().modified().unwrap();
+        // The same production hit predicate returns BytecodeModule, not TIR/facts.
+        let cached =
+            crate::cache::read_compatible_module(&path, &crate::cache::compute_source_hash(VALID))
+                .unwrap();
+        assert_eq!(
+            tempra_bytecode::serialize::encode_module(&cached).unwrap(),
+            tempra_bytecode::serialize::encode_module(fresh.bytecode()).unwrap()
+        );
+        let hit = load_or_compile_cached_module(VALID, &path).unwrap();
+        assert_eq!(
+            tempra_vm::run_function(&hit, "main", vec![]).unwrap(),
+            VmValue::Int64(5)
+        );
+        assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), modified);
+        assert_eq!(fs::read(&path).unwrap(), before);
+        // Even at the same path, changing only the contract rejects the old identity.
+        let changed_hash = crate::cache::compute_source_hash(VIOLATING);
+        assert_ne!(
+            crate::cache::get_cache_path(&changed_hash),
+            crate::cache::get_cache_path(&crate::cache::compute_source_hash(VALID))
+        );
+        assert!(crate::cache::read_compatible_module(&path, &changed_hash).is_none());
+        assert!(matches!(
+            load_or_compile_cached_module(VIOLATING, &path),
+            Err(DriverError::CapabilityContractViolations(_))
+        ));
+        assert_eq!(fs::read(&path).unwrap(), before);
+        // Source-body changes also miss and successfully replace compatible data.
+        let changed = VALID.replace("10 / 2", "12 / 2");
+        let changed_module = load_or_compile_cached_module(&changed, &path).unwrap();
+        assert_eq!(
+            tempra_vm::run_function(&changed_module, "main", vec![]).unwrap(),
+            VmValue::Int64(6)
+        );
     }
 }

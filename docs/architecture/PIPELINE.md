@@ -11,11 +11,12 @@ source
   → lexer / parser
   → AST
   → HIR
+  → reject capability contracts (execution only)
   → type checking
   → HIR interpreter
 ```
 
-This is the default `tempra run` path and supports the broadest language surface. `tempra check` performs the frontend and semantic stages but does not currently lower to TIR.
+This is the default `tempra run` path and supports the broadest language surface. It explicitly rejects annotated programs rather than bypassing contracts. `tempra check` performs frontend/typechecking stages only: it neither lowers to TIR nor certifies capability contracts.
 
 ### Experimental VM
 
@@ -29,9 +30,10 @@ source
   → TIR verification
   → capability analysis (once; fresh compilation only)
   → internal AnalyzedTir
+  → deny contract enforcement
   → bytecode lowering
   → bytecode verification
-  → VmCompilation (TIR + capabilities + bytecode)
+  → VmCompilation (TIR + capabilities + contracts + bytecode)
   → VM
   → optional Cranelift JIT for eligible bytecode functions
 ```
@@ -45,15 +47,19 @@ returns only its bytecode. Multi-module compilation uses
 ### Analysis-independent paths
 
 ```text
-source VM cache hit → cached bytecode verification → execution
+source VM cache hit → semantic fingerprint + source identity + bytecode verification → execution
 emit-tir           → TIR → verification → formatting
-TIR interpreter    → TIR → verification → interpretation
+raw TIR interpreter → TIR → verification → interpretation
+source TIR interpreter → reject annotated HIR → TIR → verify → interpret
 ```
 
 Cache hits neither reconstruct TIR nor produce capability facts. Fresh source
-compilation still writes bytecode-only artifacts. Neither emission nor TIR
-interpretation requires extern capability coverage. The default HIR runtime and
-frontend-only `check` also remain outside capability analysis.
+compilation writes bytecode-only artifacts after enforcement succeeds. Neither
+emission nor TIR interpretation requires extern capability coverage. HIR execution,
+`test_source`, REPL and source TIR interpretation reject any capability contract.
+They share `HirFile::contains_capability_contracts` through the interpreter's
+unsupported-execution guard; REPL checks before registration or session mutation.
+Frontend-only `check` remains non-enforcing.
 
 ## Phase E insertion point
 
@@ -69,9 +75,9 @@ verified TIR
 ```
 
 E1 provides this transformation as a pure library operation. E2 integrates it
-into fresh VM compilation, retaining the typed result without enforcement or
-UI. TIR verification precedes analysis; both retain structured errors in the
-driver. No path currently enforces capability contracts.
+into fresh VM compilation, retaining the typed result. E3.2 adds enforcement
+before bytecode lowering. TIR verification precedes analysis; verifier, analyzer,
+contract violations and invariant failures retain structured errors in the driver.
 
 E3.1 adds a parallel metadata flow, not another capability analyzer:
 
@@ -85,8 +91,12 @@ The frontend does not depend on `tempra-effects`; canonical conversion belongs
 to the driver. `contract(id)` and ordered `contracts()` expose explicit intent
 immutably, including declaration/attribute spans and source/module identity.
 Templates only acquire concrete bindings when their specializations are emitted.
-E3.1 cache hits remain analysis/contract-free; E3.2 must introduce and validate a
-cache non-bypass policy for older non-enforcing artifacts before enforcement ships.
+E3.2 compares denied sets with transitive requirements and retains the unchanged
+E1 witness per violation. Errors are ordered by function ID then capability.
+Cache hits remain analysis/contract-free but require the shared
+`tempra-{CARGO_PKG_VERSION}-semantics-1` fingerprint. Older artifacts miss;
+fresh failures never populate or replace cache entries. The semantic revision
+versions reuse guarantees, not bytecode format. See [cache policy](../BYTECODE_CACHE.md).
 
 E2 retains structural provenance only: function/block/instruction identities,
 call edges, direct origins and witnesses. TIR has no reliable source mapping.

@@ -962,7 +962,7 @@ fn id_item(type T: Collection, value: T.Item) -> T.Item {
 ## 26. Capability Contracts
 
 The intended public capability surface is limited to `@deny(...)`, `@pure`, and
-`@unsafe`. E3.1 implements only typed acquisition of `@deny`, not enforcement.
+`@unsafe`. E3.1 acquires typed `@deny`; E3.2 enforces it in fresh VM compilation.
 
 `@deny(alloc, panic)` requires at least one public name: `alloc`, `panic`, `io`,
 `process`, `spawn`, `nondeterminism`. `@deny()` and `@deny(unsafe)` are errors.
@@ -970,14 +970,19 @@ Duplicates and repeated attributes merge; whitespace/newlines and a trailing
 comma are allowed. Place attributes before optional `pub`, on named top-level
 functions or methods inside `extend`. Externs, closures, interface requirements,
 fields and other items cannot carry them. Unannotated functions have no contract.
-Actual capability requirements do not cause rejection until E3.2.
+E3.2 rejects any intersection with the emitted function's transitive requirements,
+including non-entry functions and each concrete specialization.
 
-- `@deny(...)` will prohibit direct and transitive capability requirements.
+- `@deny(...)` prohibits the named direct and transitive capability requirements.
 - `@pure` will mean `@deny(io, process, spawn, nondeterminism)`; pure code may allocate and may panic.
 - `@unsafe` will mark an explicit low-level boundary and is not an alias for capability denial.
 
-`@pure`, `@unsafe` and `@verified` are not implemented. E3.1 leaves bytecode caches
-unchanged; E3.2 must ensure cached pre-enforcement artifacts cannot bypass contracts.
+`@pure`, `@unsafe` and `@verified` are not implemented. E3.2 cache hits require an
+enforcement-aware semantic fingerprint. HIR execution, REPL, test execution and
+source TIR interpretation explicitly reject annotated programs until they can
+enforce contracts. `emit-tir` may emit without enforcement; `check` certifies
+frontend/type correctness only. Neither is capability-contract certification.
+`Panic` remains conservative may-panic; this is not `@verified` reasoning.
 
 See [Capability Contracts v0.1](specs/effects-v0.1.md). Normal Tempra remains safe and checked by default; there is no `--checked`, global `--verified`, or Spark mode.
 

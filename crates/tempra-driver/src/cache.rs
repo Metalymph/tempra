@@ -5,6 +5,28 @@ use std::path::{Path, PathBuf};
 use tempra_bytecode::serialize::{decode_and_verify_artifact, encode_artifact};
 use tempra_bytecode::BytecodeCacheArtifact;
 
+// Versions guarantees required for artifact reuse, independently of bytecode format.
+// Increment when previously compiled artifacts no longer certify current semantics.
+const SEMANTIC_REVISION: u32 = 1;
+
+pub(crate) fn compiler_fingerprint() -> String {
+    format!(
+        "tempra-{}-semantics-{SEMANTIC_REVISION}",
+        env!("CARGO_PKG_VERSION")
+    )
+}
+
+// A cache hit is bytecode-only, not an analysis-producing compilation.
+pub(crate) fn read_compatible_module(
+    path: &Path,
+    source_hash: &[u8; 32],
+) -> Option<tempra_bytecode::BytecodeModule> {
+    let artifact = read_cache_artifact(path).ok()?;
+    (artifact.header.compiler_fingerprint == compiler_fingerprint()
+        && artifact.header.source_hash == *source_hash)
+        .then_some(artifact.module)
+}
+
 /// Computes a v0 non-cryptographic source hash.
 /// This is not stable across compiler/runtime versions.
 /// It is only a cache key hint, not an integrity/security primitive.

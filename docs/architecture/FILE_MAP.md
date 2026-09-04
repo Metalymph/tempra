@@ -5,10 +5,10 @@ This index points to current source-of-truth files. A crate's presence in the wo
 ## Project documentation
 
 - `README.md`: project overview and current high-level status.
-- `docs/roadmap.md`: normative implementation order, including E → M → C → V → O.
+- `docs/roadmap.md`: normative semantic order E → R → M → C → V → O, next active E6 tooling, and standalone conditional U.
 - `docs/TEMPRA_SURFACE_SPEC_v0.1.md`: current surface-language reference.
 - `docs/GRAMMAR.md`: parser-oriented grammar for implemented syntax.
-- `docs/specs/effects-v0.1.md`: implemented deny acquisition, planned enforcement and Phase E architecture.
+- `docs/specs/effects-v0.1.md`: implemented E1–E4 capability contracts, current enforcement and conditional U boundary.
 - `docs/E1_CAPABILITY_ANALYSIS.md`: implemented internal scope, API, and retained boundaries for E1.
 - `docs/TIR_SPEC.md`: TIR model, verifier role, and analysis insertion point.
 - `docs/architecture/ARCHITECTURE.md`: actual compiler paths and crate boundaries.
@@ -95,5 +95,9 @@ enforcement before bytecode, semantic cache fingerprinting, and explicit rejecti
 of annotated execution on HIR/REPL/source-TIR paths using the shared HIR presence
 scan. E4 adds AST/HIR `pure_span`, driver-only expansion into effective denied sets,
 and pure detection in that same scan; E3.2 enforcement and the cache fingerprint
-are unchanged. Unsafe, rendered diagnostics, inspection and instruction-level
-source mapping remain deferred. Frontend-only `check` does not certify contracts.
+are unchanged. E1–E4 complete the currently meaningful semantic surface, not all
+TIR coverage. E6 diagnostics and inspect/query tooling is next active, reusing
+existing facts; instruction-level source mapping remains absent. Unsafe belongs
+to standalone conditional U, not the immediate E sequence. Frontend-only `check`
+does not certify contracts. The historical E5 audit and its three correctness
+debts are recorded in `docs/E1_CAPABILITY_ANALYSIS.md`.

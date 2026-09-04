@@ -665,4 +665,7 @@ annotated execution on non-capability-aware paths. Emission and frontend-only
 `check` do not certify contracts. E4 accepts bare `@pure` in the same positions,
 composable with deny in either order. Parentheses/arguments and duplicate pure
 markers are errors (the second marker is reported). `pure` remains an identifier
-outside attribute position. `@unsafe` remains planned and is not accepted.
+outside attribute position. `@unsafe` is not accepted; it belongs to standalone
+U — Unsafe Boundary (DEFERRED / CONDITIONAL), not the immediate Phase E sequence.
+Its trigger is the first real source operation requiring explicit memory/type
+safety authorization. This adds no grammar production.

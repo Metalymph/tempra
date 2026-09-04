@@ -348,12 +348,67 @@ frontend-to-driver provenance, method/specialization bindings, direct/transitive
 Io witnesses, non-entry enforcement, allowed Alloc/Panic/Result, explicit additional
 restrictions, deterministic aggregation and transactional execution rejection.
 
-## Deferred work
+## Post-E4 state and next tooling milestone
 
-- **E5:** safe-by-default and `@unsafe` integration.
-- **E6:** rendered diagnostics, JSON, `tempra inspect`, and `tempra effects`.
+E1–E4 complete the currently meaningful light capability/effect surface, not all
+TIR coverage. **E6 is NEXT ACTIVE:** structured capability diagnostics and an
+inspect/query surface for human CLI, IDE/LSP, tools and agents. It reuses
+`CapabilityAnalysis`, `FunctionCapabilityContract`, `CapabilityContractViolation`,
+`CapabilityWitness`, `TirFunctionId`, and current structural/source provenance.
+This is not a new analyzer or a commitment to a CLI/JSON schema.
+
+The richer TIR Graph is later tooling: calls, CFG, capabilities, allocations,
+ownership edges, escapes, actor boundaries, specializations and source provenance
+may eventually be combined, but some facts require M/C and later compiler work.
 
 Instruction-level source-span bridging, broader TIR coverage and native-boundary
 policy remain deferred; E3.1 adds declaration provenance only.
 
-Phase M follows E and defines acyclic ownership. C, V, and O remain downstream in that order.
+The semantic roadmap is **E → R → M → C → V → O**. R is Result/value-use
+hardening, not an effect: future rules should prevent silent discard, including
+an accidental `let _ = ...` escape hatch, while allowing `?`, `match`, return/
+propagation and meaningful use. This does not implement wildcard bindings or
+commit an opt-out such as future `@discardable`. M then defines acyclic ownership;
+pluggable actor concurrency C, verified functions V and memory optimizations O follow.
+
+## Historical E5 audit and conditional U
+
+The audit found no intentional source-level primitive requiring unsafe authority.
+`@unsafe` is not implemented and no E1 instruction or extern origin produces
+`Capability::Unsafe`. The reserved bit and generic propagation/witness machinery
+remain available. Unsafe is removed from the immediate E sequence and retained
+as **U — Unsafe Boundary (DEFERRED / CONDITIONAL)** at the end of the roadmap.
+
+U activates only for the first real source-level operation that can violate
+memory/type invariants unless explicitly authorized. The future direction is
+small locally authorized, audited implementation islands with safe wrapper
+interfaces, not automatic caller contamination. Such interfaces must preserve
+safety for their admitted inputs; no unsafe-to-call syntax is settled here.
+Authorization must not disable deny/pure enforcement, and `@deny(unsafe)` remains
+invalid. Native implementation, IO, panic and allocation do not imply unsafe.
+
+### Correctness debts recorded by the audit
+
+These are separate narrow remediation items, not new roadmap phases or operations
+to authorize through `@unsafe`:
+
+- **Native/extern signature integrity.** The native registry resolves names to
+  `fn(&[VmValue]) -> Result<VmValue, String>` without canonical signature metadata.
+  Frontend and IR checks trust declared signatures; VM dispatch does not validate
+  the returned value against the declared result. The audit reproduced a verified
+  TIR call to `std.strings.contains` declared as Int returning Bool. Handler
+  argument checks do not close this type-preservation gap. See
+  [registry](../crates/tempra-native/src/registry.rs) and
+  [VM dispatch](../crates/tempra-vm/src/interpreter.rs).
+- **Comptime extern handling.** The HIR evaluator has no native registry dispatch;
+  a bodyless function can yield Unit rather than fail explicitly. The audit also
+  observed incorrect comptime materialization of that result. Unsupported extern
+  execution needs explicit rejection, not unsafe authorization. See
+  [HIR function evaluation](../crates/tempra-interpreter/src/interpreter.rs) and
+  [comptime evaluation](../crates/tempra-typeck/src/check_expr.rs).
+- **Internal JIT API audit.** Raw code/context pointers, ABI conversions and
+  lifetime/aliasing assumptions in public Rust wrappers require runtime/embedding
+  review. A null check is not a proof of pointer validity. These are not source
+  primitives; the audit did not demonstrate memory corruption or an exploit.
+  See [JIT wrappers](../crates/tempra-jit-cranelift/src/engine.rs) and
+  [context helpers](../crates/tempra-jit-cranelift/src/helpers.rs).

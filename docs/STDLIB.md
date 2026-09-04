@@ -144,12 +144,19 @@ match xs.last() {
 
 ## Native Error Convention
 
-The standard library adheres to strict error handling conventions to ensure stability across the Tempra-to-Rust native boundary:
+The standard library uses the following error handling conventions across the Tempra-to-Rust native boundary; these are not a compiler proof that handlers cannot panic:
 
-1. **No Panics**: Native Rust functions (`extern` implementations) must **never** panic. Any panic in a native function will crash the VM.
+1. **No Panics (authoring convention)**: Native Rust functions (`extern` implementations) should avoid panics. The bridge does not contain host panics; release builds use `panic = "abort"`. This is not a statically or dynamically enforced no-panic guarantee.
 2. **Result Enum**: Fallible native APIs return `VmValue::Enum("Result", "Ok"/"Err", payload)` which maps to Tempra `Result<T, Error>`. Pattern match on `Ok(...)` / `Err(...)` to handle failures.
 3. **Non-fallible APIs**: Boolean or value-returning APIs that cannot fail (e.g. `exists`, `contains`) return plain values directly.
 4. **`BuiltinError`**: The internal `Error` type in `Result<T, Error!>` signatures is lowered as `String` in TIR, carrying the error message.
+
+The registry resolves names without canonical signature metadata. Handlers check
+arguments, but the VM does not validate their returned value against the declared
+extern result type. Signature integrity is a narrow correctness/type-preservation
+debt from the [historical E5 audit](E1_CAPABILITY_ANALYSIS.md), not an operation to
+authorize with `@unsafe`. The current stdlib wrappers are not unsafe merely because
+their implementation is native.
 
 ## Planned after v0.1
 
@@ -163,7 +170,11 @@ The standard library adheres to strict error handling conventions to ensure stab
 - Generators / `yield`
 - Closure and function-value callbacks
 
-Capability classification of native functions will be introduced by Phase E. Until then, this document describes API behavior but does not assign normative capability summaries. In particular, allocation classifications must be confirmed against the current runtime representation rather than inferred only from a return type.
+E1 already classifies the current called-extern subset; E2–E4 integrate those facts
+and enforce deny/pure contracts in fresh VM compilation. See
+[capability analysis](E1_CAPABILITY_ANALYSIS.md) for the mapping and coverage gaps.
+Allocation classification remains representation-dependent, not inferred only
+from a return type. E6 structured diagnostics/inspection is next active.
 
 ## Legacy Code
 

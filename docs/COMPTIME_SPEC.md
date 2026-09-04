@@ -227,7 +227,15 @@ A `comptime match` works like compile-time branch selection:
 
 ### Capability-analysis boundary
 
-Selected `if comptime` branches and `comptime match` arms are retained in HIR; unselected alternatives are pruned before TIR lowering. Future capability analysis therefore observes only the selected semantic branch when specialization has resolved it. This is semantic pruning, not a promise that later optimization, inlining, or dead-code elimination will remove capability requirements.
+Selected `if comptime` branches and `comptime match` arms are retained in HIR; unselected alternatives are pruned before TIR lowering. The existing TIR capability analysis therefore observes only the selected semantic branch when specialization has resolved it. This is semantic pruning, not a promise that later optimization, inlining, or dead-code elimination will remove capability requirements.
+
+Comptime is an execution phase, not an effect or an unsafe authorization. Its
+restrictions are implemented by the HIR evaluator and frontend checks, not by E1.
+The evaluator has no dispatch to the VM native registry. The historical E5 audit
+found that unsupported/bodyless extern calls can instead yield Unit and be
+incorrectly materialized. Explicit rejection is separate correctness debt, not
+support for comptime native execution; see the
+[audit record](E1_CAPABILITY_ANALYSIS.md). No `@unsafe` interaction is implemented.
 
 ---
 

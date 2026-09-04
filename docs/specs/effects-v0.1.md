@@ -8,7 +8,9 @@ Tempra's current capability-contract surface is small rather than a user-facing 
 - `@deny(...)`
 - `@pure`
 
-K1 comptime authority/backend-parity audit is the next compiler milestone.
+K1 comptime authority/evaluator audit is the next compiler milestone: one
+backend-independent semantics, parity across VM/JIT/Wasm/future AOT,
+determinism, reproducibility, future parity tests and initial phase timings.
 `@unsafe` is a separate conditional future boundary under U, not a Phase E requirement.
 
 There is no public `effect`, `handle`, `perform`, `allow`, `@no_alloc`, `@no_panic`, `@deterministic`, or family of aliases.
@@ -243,7 +245,12 @@ E1 need not implement this presentation or source-span mapping. It must preserve
    `tempra effects [--json]`, reusing existing analysis and witnesses.
 
 The immediate roadmap continues with K → R → M → C → V → O → P, with U
-conditional. R adds future Result/value-use obligations, not capabilities. The
+conditional. R adds future Result/value-use obligations, not capabilities. K does
+not yet choose an HIR interpreter, VM or other evaluator as canonical. Compile
+latency is monitored during development; P is the later deep optimization
+milestone for cold latency, incremental invalidation/cache, specialization
+control, fact reuse, interning/arenas, data structures and profiled
+parallelization, including agent/IDE edit-to-compile responsiveness. The
 [post-E4 state and audit record](../E1_CAPABILITY_ANALYSIS.md) tracks native
 signature integrity, comptime extern handling and JIT API correctness debts;
 none is a justification for blanket `extern == unsafe`.

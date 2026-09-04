@@ -153,7 +153,9 @@ Unknown extern declarations are harmless until called. A call to an extern witho
 The current HIR runtime uses reference-counted and interior-mutable Rust representations for arrays, slices, closures, and captured cells. In particular, recursive closure `self` currently uses a strong cell-to-closure link. The runtime implementation therefore must not be cited as proof that safe Tempra already prevents ownership cycles.
 
 The immediate order is K → R → M → C → V → O → P, after completed E6, with U
-conditional. R is future Result/value-use hardening, not an effect. Phase M follows R and will define which ownership
+conditional. K keeps comptime semantics canonical and backend-independent; it
+does not yet choose the HIR interpreter, VM, JIT, Wasm or another evaluator as
+authority. R is future Result/value-use hardening, not an effect. Phase M follows R and will define which ownership
 graphs are legal across value semantics, `let`, `var`, `ref`, `inout`, `consume`,
 closure captures, recursive `self`, structs, enums, and escaping values. It
 precedes pluggable actor concurrency.
@@ -163,7 +165,9 @@ ARC optimization is a separate later concern. Escape analysis, stack promotion, 
 E1–E6 complete the currently meaningful capability-contract and tooling core
 while retaining known coverage gaps. E6 projects existing facts through
 `tempra effects` and immutable driver types; it does not add analysis. K1
-comptime authority/backend parity is next. The richer future TIR Graph still
+comptime authority/evaluator parity, determinism and initial responsiveness
+measurements are next. Compile latency is monitored during development; deep
+latency and incremental-build optimization belongs to P. The richer future TIR Graph still
 requires later ownership and actor facts.
 
 U — Unsafe Boundary is DEFERRED / CONDITIONAL standalone work at the end of the roadmap.

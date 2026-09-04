@@ -144,8 +144,12 @@ future value-use obligation, not a capability or an implemented pass.
 E1–E6 complete the currently meaningful semantic and tooling surface; TIR
 coverage gaps remain. `tempra effects` projects existing analysis, contracts,
 violations, witnesses and provenance without a second analyzer. A richer TIR
-Graph requires later ownership/actor facts. K1 comptime authority/backend parity
-is the next compiler milestone.
+Graph requires later ownership/actor facts. K1 comptime authority/evaluator
+parity, deterministic reproducibility and initial phase-timing/latency measures
+are the next compiler milestone. It must keep one backend-independent semantic
+result or error across VM, JIT, Wasm and future AOT; choosing the authority layer
+is an audit outcome, not a decision made here. Deep compilation optimization and
+incremental builds belong to P.
 
 U — Unsafe Boundary is standalone DEFERRED / CONDITIONAL work at the end of the roadmap,
 in the roadmap and triggered only by a real source operation requiring explicit

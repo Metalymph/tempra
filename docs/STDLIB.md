@@ -174,7 +174,9 @@ E1 classifies the current called-extern subset; E2–E4 integrate and enforce th
 facts, while E6 projects them for diagnostics and inspection. See
 [capability analysis](E1_CAPABILITY_ANALYSIS.md) for the mapping and coverage gaps.
 Allocation classification remains representation-dependent, not inferred only
-from a return type. K1 comptime authority/backend parity is next active.
+from a return type. K1 audits one backend-independent comptime authority and
+backend parity before choosing an evaluator; compile latency is monitored during
+development and deeper optimization belongs to P.
 
 ## Legacy Code
 

@@ -81,14 +81,15 @@ The verifier ensures the structural and type soundness of a TIR module:
 
 TIR evolution follows the project-wide dependency order rather than assigning concurrency instructions to the next TIR version:
 
-1. **E — Capability analysis and E6 tooling:** stable summaries, provenance, diagnostics and inspection.
-2. **K — Comptime consistency:** audit canonical authority and backend parity before semantic changes.
-3. **R — Result / value-use hardening:** future obligations against silent Result discard, not a capability/effect.
-4. **M — Acyclic ownership:** formalize legal strong-reference graphs and complete ARC-cycle prevention before concurrent transfer.
-5. **C — Pluggable actor concurrency:** add task, actor, channel, and selection operations only after the preceding foundations define their boundaries.
-6. **V — Verified functions:** consume prior facts for stronger proof obligations.
-7. **O — Deeper memory optimizations:** uniqueness, escape, stack promotion, reuse, and retain/release elimination.
-8. **P — Deep compiler performance/incremental:** later compilation latency and invalidation work.
+1. **E — Capability/effect semantic core (E1–E4 done):** stable summaries and provenance.
+2. **E6 — Structured diagnostics and inspect tooling (done):** projections over existing facts.
+3. **K — Comptime consistency and compiler responsiveness:** audit one canonical backend-independent semantics, backend parity, determinism and initial phase timings before semantic changes.
+4. **R — Result / value-use hardening:** future obligations against silent Result discard, not a capability/effect.
+5. **M — Acyclic ownership:** formalize legal strong-reference graphs and complete ARC-cycle prevention before concurrent transfer.
+6. **C — Pluggable actor concurrency:** add task, actor, channel, and selection operations only after the preceding foundations define their boundaries.
+7. **V — `@verified`:** consume prior facts for stronger proof obligations.
+8. **O — Deeper memory optimization:** uniqueness, escape, stack promotion, reuse, and retain/release elimination.
+9. **P — Fast compilation and incremental builds:** deep latency, invalidation, specialization-control and data-structure optimization work.
 
 E1–E6 are implemented for the currently meaningful surface. E6 reuses current
 facts and is not a complete TIR Graph. U — Unsafe Boundary is standalone

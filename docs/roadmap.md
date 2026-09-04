@@ -26,26 +26,28 @@ The semantic dependency chain remains a design constraint. The immediate
 implementation sequence also includes tooling, consistency and performance work:
 
 ```text
-E6 — Structured Effects Tooling (implemented)
+E — Capability / Effect Semantic Core (E1–E4 DONE)
         ↓
-K  — Comptime Consistency + Latency Baseline
+E6 — Structured Effects Tooling (DONE)
+        ↓
+K  — Comptime Consistency & Compiler Responsiveness
         ↓
 R  — Result / Value-Use Hardening
         ↓
 M  — Acyclic Ownership
         ↓
-C  — Pluggable Actors
+C  — Pluggable Actor Concurrency
         ↓
-V  — Verified Functions
+V  — @verified
         ↓
-O  — Memory Optimization
+O  — Deeper Memory Optimization
         ↓
-P  — Deep Compiler Performance / Incremental
+P  — Fast Compilation & Incremental Builds
         ↓
 U  — Unsafe Boundary (conditional)
 ```
 
-### E — Light Capability / Effect System
+### E — Capability / Effect Semantic Core (E1–E4 DONE)
 
 The E1–E4 semantic core and E6 tooling projection are complete for the currently meaningful surface. The compiler computes stable per-function semantic summaries over verified TIR, propagates requirements transitively through calls, and exposes those facts without a second analysis. This does not close the existing TIR coverage gaps.
 
@@ -69,12 +71,15 @@ E1 is TIR-only. HIR-only operations are coverage gaps for later integration, not
 
 The implemented E1–E6 design and boundaries are recorded in [E1 Capability Analysis](E1_CAPABILITY_ANALYSIS.md). The historical E5 audit found no intentional source-level primitive requiring unsafe authorization. It recorded narrow correctness debts in native signature integrity, comptime extern handling, and internal JIT pointer/ABI/lifetime assumptions, not new semantic phases or demonstrated exploits. `check` remains frontend/typechecking-only, not capability certification.
 
-### K — Comptime Consistency + Latency Baseline
+### K — Comptime Consistency & Compiler Responsiveness
 
-K is the next active compiler milestone. K1 audits the canonical authority for
-comptime evaluation and parity across the frontend, TIR/VM and other backends
-before changing semantics. It also establishes a reproducible latency baseline.
-No K behavior is implemented by E6.
+K is the next active compiler milestone. It must establish one canonical,
+backend-independent comptime semantics: VM, JIT, Wasm and future AOT must observe
+the same comptime result or error. K1 audits the real authority/evaluator layers
+before choosing a concrete one, then records determinism, reproducibility, future
+parity tests, phase timings and initial compiler-latency benchmarks. Compile
+latency is already monitored during development; K makes that monitoring
+reproducible and actionable. No deep optimization is implied or implemented yet.
 
 ### R — Result / Value-Use Hardening
 
@@ -119,11 +124,15 @@ Only after the memory model and concurrency boundaries are established should op
 
 These are performance techniques, not prerequisites for memory correctness or concurrency.
 
-### P — Deep Compiler Performance / Incremental
+### P — Fast Compilation & Incremental Builds
 
-P follows the semantic and memory foundations. It may address incremental
-compilation, dependency-aware invalidation and deeper compiler latency work.
-E6 introduces no incremental cache, daemon or persistent capability facts.
+P is the deep optimization milestone for compilation responsiveness. It may
+address cold-compile latency, incremental compilation, module-level
+invalidation/cache, specialization deduplication and control, reuse of stable
+facts, and interning/arena/data-structure optimization. Parallelization follows
+profiling rather than preceding it. Agent and IDE edit-to-compile latency is a
+product requirement. E6 introduces no incremental cache, daemon or persistent
+capability facts.
 
 ### U — Unsafe Boundary (DEFERRED / CONDITIONAL)
 

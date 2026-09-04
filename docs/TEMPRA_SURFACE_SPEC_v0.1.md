@@ -996,7 +996,8 @@ source identity, and existing enforcement remains authoritative. No contract
 metadata is serialized into cache.
 
 E1–E6 complete the currently meaningful semantic and tooling surface, not all
-TIR coverage. K1 comptime authority/backend parity is next. The immediate roadmap
+TIR coverage. K1 audits one backend-independent comptime authority and parity
+across VM/JIT/Wasm/future AOT without fixing the authority layer in advance. The immediate roadmap
 continues K → R → M → C → V → O → P, with U conditional. R is future Result/value-use hardening:
 no silent discard, including an accidental `let _ = ...` escape hatch; handling
 through `?`, `match`, return/propagation or meaningful use. Neither wildcard-binding

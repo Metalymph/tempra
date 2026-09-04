@@ -390,7 +390,8 @@ adding a second analyzer.
 ## Post-E6 state and next compiler milestone
 
 E1–E6 complete the currently meaningful light capability/effect and tooling
-surface, not all TIR coverage. K1 canonical comptime authority/backend-parity
+surface, not all TIR coverage. K1 canonical backend-independent comptime
+semantics, authority/evaluator parity, determinism and initial responsiveness
 audit is next. E6 introduced no second analyzer and its JSON is a current tooling
 schema rather than a permanent protocol.
 
@@ -402,8 +403,13 @@ Instruction-level source-span bridging, broader TIR coverage and native-boundary
 policy remain deferred; E3.1 adds declaration provenance only.
 
 The immediate roadmap is **K → R → M → C → V → O → P**, with U conditional.
-R remains Result/value-use hardening rather than an effect. K and P do not alter
-the capability semantics documented here.
+R remains Result/value-use hardening rather than an effect. K must first audit a
+single backend-independent comptime authority and parity; it does not yet fix an
+HIR interpreter, VM or other evaluator as canonical. Compile latency is monitored
+during development. P is the later deep optimization milestone for cold compile
+latency, incremental invalidation/cache, specialization control, fact reuse,
+interning/arenas, data structures and profiled parallelization, including agent
+and IDE edit-to-compile responsiveness.
 
 ## Historical E5 audit and conditional U
 

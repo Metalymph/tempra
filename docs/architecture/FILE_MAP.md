@@ -5,7 +5,7 @@ This index points to current source-of-truth files. A crate's presence in the wo
 ## Project documentation
 
 - `README.md`: project overview and current high-level status.
-- `docs/roadmap.md`: semantic dependencies, immediate K → R → M → C → V → O → P sequence, completed E6 tooling, and conditional U.
+- `docs/roadmap.md`: semantic dependencies, immediate K → R → M → C → V → O → P sequence, completed E6 tooling, compiler-responsiveness K, fast-builds P, and conditional U.
 - `docs/TEMPRA_SURFACE_SPEC_v0.1.md`: current surface-language reference.
 - `docs/GRAMMAR.md`: parser-oriented grammar for implemented syntax.
 - `docs/specs/effects-v0.1.md`: implemented E1–E6 capability contracts/tooling, current enforcement and conditional U boundary.
@@ -99,7 +99,8 @@ and pure detection in that same scan; E3.2 enforcement and the cache fingerprint
 are unchanged. E6 adds immutable driver projections and `tempra effects` without
 changing analysis or enforcement. E1–E6 complete the currently meaningful
 surface, not all TIR coverage; instruction-level source mapping remains absent.
-K1 is next. Unsafe belongs
+K1 audits backend-independent comptime authority/evaluator parity and initial
+responsiveness measurements next. Unsafe belongs
 to standalone conditional U, not the immediate E sequence. Frontend-only `check`
 does not certify contracts. The historical E5 audit and its three correctness
 debts are recorded in `docs/E1_CAPABILITY_ANALYSIS.md`.

@@ -192,16 +192,23 @@ Tempra is rapidly evolving. We currently have a functional core with:
 
 ### Next language foundations
 
-1. **E — Capability / Effect Analysis**
-2. **M — Acyclic Ownership / Memory Model**
-3. **C — Concurrency**
-4. **V — Verified Functions**
-5. **O — Deeper Memory Optimizations**
+1. **E — Light Capability / Effect System** (E1–E4 implemented)
+2. **R — Result / Value-Use Hardening**
+3. **M — Acyclic Ownership / Complete ARC-Cycle Prevention**
+4. **C — Pluggable Actor Concurrency**
+5. **V — Verified Functions**
+6. **O — Deeper Memory Optimizations**
+
+R is a future value-use obligation, not an effect: Result values must not be
+silently discarded. No `@discardable` syntax is committed. **U — Unsafe Boundary**
+is listed separately at the end of the roadmap as **DEFERRED / CONDITIONAL**,
+triggered by the first real source operation requiring memory/type-safety
+authorization. No such intentional primitive is exposed today.
 
 Memory correctness and memory optimization are separate milestones. Safe Tempra must first define legal ownership graphs and prevent strong-reference cycles. Uniqueness analysis, escape analysis, stack promotion, Perceus-inspired reuse, and retain/release elimination follow later and are not prerequisites for concurrency.
 
 See the [roadmap](docs/roadmap.md) for the Phase E subdivision and dependency rationale.
-The implemented [E1–E4 capability foundation](docs/E1_CAPABILITY_ANALYSIS.md) enforces `@deny(...)` and `@pure` through the same contracts in fresh VM compilation, retaining facts, provenance and structured violations. Pure means denying io/process/spawn/nondeterminism, not allocation or panic; explicit deny restrictions compose by union. Cache hits retain the enforcement-aware `semantics-1` fingerprint. HIR execution, REPL and source TIR interpretation explicitly reject annotated programs; `emit-tir` and frontend/typechecking-only `check` do not certify contracts. E5 (`@unsafe`) is next.
+The implemented [E1–E4 capability foundation](docs/E1_CAPABILITY_ANALYSIS.md) enforces `@deny(...)` and `@pure` through the same contracts in fresh VM compilation, retaining facts, provenance and structured violations. Pure means denying io/process/spawn/nondeterminism, not allocation or panic; explicit deny restrictions compose by union. Cache hits retain the enforcement-aware `semantics-1` fingerprint. HIR execution, REPL and source TIR interpretation explicitly reject annotated programs; `emit-tir` and frontend/typechecking-only `check` do not certify contracts. **E6 structured capability diagnostics and inspect/query tooling is next**, reusing existing facts for CLI, IDE/LSP, tools and agents. This is not the complete future TIR Graph, and existing TIR coverage gaps remain.
 
 ---
 

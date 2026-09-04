@@ -8,7 +8,15 @@ The goal of this prototype is to demonstrate the ability to compile hot bytecode
 1. Identify JIT-candidate functions.
 2. Lower Tempra bytecode to Cranelift IR.
 3. Compile and finalize native code.
-4. Execute native code via a safe wrapper.
+4. Execute native code via an internal Rust wrapper.
+
+The historical E5 audit identified pointer-validity, ABI and lifetime/aliasing
+assumptions in the public Rust JIT APIs that are not fully expressed by their
+types. These wrappers must not be described as an unconditional safe embedding
+boundary. This is runtime/embedding audit debt, not a Tempra source operation
+requiring `@unsafe`, and no memory-corruption exploit was demonstrated. See the
+[audit record](E1_CAPABILITY_ANALYSIS.md). The language boundary is deferred to
+conditional milestone U; this prototype does not implement it.
 
 ## Supported Scope (v0.1)
 

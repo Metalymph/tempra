@@ -152,9 +152,25 @@ Unknown extern declarations are harmless until called. A call to an extern witho
 
 The current HIR runtime uses reference-counted and interior-mutable Rust representations for arrays, slices, closures, and captured cells. In particular, recursive closure `self` currently uses a strong cell-to-closure link. The runtime implementation therefore must not be cited as proof that safe Tempra already prevents ownership cycles.
 
-Phase M will define which ownership graphs are legal across value semantics, `let`, `var`, `ref`, `inout`, `consume`, closure captures, recursive `self`, structs, enums, and escaping values. It precedes concurrency.
+The semantic order is E → R → M → C → V → O. R is future Result/value-use
+hardening, not an effect. Phase M follows R and will define which ownership
+graphs are legal across value semantics, `let`, `var`, `ref`, `inout`, `consume`,
+closure captures, recursive `self`, structs, enums, and escaping values. It
+precedes pluggable actor concurrency.
 
 ARC optimization is a separate later concern. Escape analysis, stack promotion, uniqueness, reuse, and retain/release elimination belong to O and are not prerequisites for C.
+
+E1–E4 complete the currently meaningful capability-contract core while retaining
+known coverage gaps. E6 structured diagnostics and inspect/query tooling is next
+active, reusing existing facts and provenance. It is not the richer future TIR
+Graph, whose ownership and actor facts require later compiler work.
+
+U — Unsafe Boundary is DEFERRED / CONDITIONAL, listed after O as standalone work.
+The trigger is the first real source operation requiring authorization to preserve
+memory/type invariants; none is intentionally exposed today. Future local audited
+islands must not automatically contaminate callers or waive deny/pure contracts.
+The [historical E5 audit](../E1_CAPABILITY_ANALYSIS.md) records native signature,
+comptime extern and internal JIT API debts separately from unsafe authorization.
 
 ## Major crate responsibilities
 

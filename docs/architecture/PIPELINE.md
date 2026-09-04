@@ -131,10 +131,22 @@ Cranelift remains native-only. Dedicated Wasm generation must not depend on Cran
 
 ```text
 E capability analysis
+  → R Result / value-use hardening
   → M acyclic ownership
-  → C concurrency boundaries
+  → C pluggable actor concurrency boundaries
   → V verified functions
   → O deeper memory optimizations
 ```
 
-This ordering separates memory correctness from memory optimization.
+This ordering separates memory correctness from memory optimization. R is a
+future value-use obligation, not a capability or an implemented pass.
+
+E1–E4 complete the currently meaningful semantic surface; TIR coverage gaps
+remain. E6 is the next active diagnostics/inspect-query milestone, projecting
+existing analysis, contracts, violations, witnesses and provenance without a
+second analyzer. A richer TIR Graph requires later ownership/actor facts.
+
+U — Unsafe Boundary is standalone DEFERRED / CONDITIONAL work, listed after O
+in the roadmap and triggered only by a real source operation requiring explicit
+memory/type-safety authorization. No current E1 origin emits Unsafe, and no
+unsafe pass or syntax is inserted into this pipeline.

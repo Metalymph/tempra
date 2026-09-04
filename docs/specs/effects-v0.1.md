@@ -3,11 +3,13 @@
 > [!NOTE]
 > **Status: E1–E4 implemented.** E3 acquires/enforces capability contracts and prevents execution bypass. E4 normalizes `@pure` through the same machinery. `@unsafe` and `@verified` remain unimplemented.
 
-Tempra's intended capability-contract surface is small rather than a user-facing algebraic effect language. `@deny(...)` and `@pure` are currently accepted; the complete planned surface is:
+Tempra's current capability-contract surface is small rather than a user-facing algebraic effect language. E1–E4 complete the currently meaningful surface, without closing TIR coverage gaps:
 
 - `@deny(...)`
 - `@pure`
-- `@unsafe`
+
+The next active milestone is E6 diagnostics/inspection. `@unsafe` is a separate
+conditional future boundary under U, not an immediate Phase E requirement.
 
 There is no public `effect`, `handle`, `perform`, `allow`, `@no_alloc`, `@no_panic`, `@deterministic`, or family of aliases.
 
@@ -106,16 +108,25 @@ test execution and REPL reject it explicitly even when its contract would pass;
 REPL state remains unchanged. `emit-tir` and frontend-only `check` accept it
 without certifying contracts. Raw TIR interpretation remains unchanged.
 
-## `@unsafe`
+## U — Unsafe Boundary (DEFERRED / CONDITIONAL)
 
-Tempra is safe and checked by default. `@unsafe` marks an explicit boundary where low-level operations unavailable to normal safe Tempra may be used.
+Tempra is safe and checked by default. The historical E5 audit found no intentional
+source-level primitive requiring unsafe authorization. `@unsafe` is not accepted
+or implemented. U is a standalone milestone listed after O in the
+[roadmap](../roadmap.md), triggered only by the first real source-level operation
+capable of violating memory/type invariants unless explicitly authorized.
+
+The future direction is authorization local to small audited implementation
+islands, without automatically contaminating callers. Safe wrapper interfaces
+should remain callable from ordinary safe Tempra and preserve safety for their
+admitted inputs. This does not define unsafe-to-call rules or new primitives.
 
 Unsafe is conceptually separate from capability denial:
 
 - `@unsafe` does not waive a `@deny(...)` contract;
 - `@pure` does not authorize unsafe operations;
 - `unsafe` is not a public argument accepted by `@deny(...)`;
-- this phase does not define the complete unsafe subsystem.
+- no current E1 instruction or extern origin produces `Unsafe`.
 
 ## Internal capability vocabulary
 
@@ -129,7 +140,7 @@ The initial internal vocabulary is:
 - `Nondeterminism`
 - `Unsafe`
 
-The public denial spellings are `alloc`, `panic`, `io`, `process`, `spawn`, and `nondeterminism`. `Unsafe` remains internal and is represented publicly only by the separate `@unsafe` boundary.
+The public denial spellings are `alloc`, `panic`, `io`, `process`, `spawn`, and `nondeterminism`. `Unsafe` remains internal/reserved; the separate `@unsafe` boundary is conditional future work, not current public syntax.
 
 The vocabulary is intentionally broader than current TIR coverage. Phase E must record unmapped operations as coverage gaps rather than invent semantics.
 
@@ -204,12 +215,22 @@ E1 need not implement this presentation or source-span mapping. It must preserve
 
 ## Phase E milestones
 
-1. **E1:** internal capability model and pure TIR analysis;
+1. **E1 (implemented):** internal capability model and pure TIR analysis;
 2. **E2 (implemented):** post-verification integration in fresh VM compilation, retaining immutable TIR, capability facts and bytecode in `VmCompilation`;
 3. **E3 (implemented):** typed `@deny(...)` acquisition and declaration provenance (E3.1), then enforcement, retained witnesses and execution/cache non-bypass (E3.2);
 4. **E4 (implemented):** `@pure` syntax/provenance and driver-only normalization through existing E3 enforcement;
-5. **E5:** `@unsafe` integration;
-6. **E6:** diagnostics, inspection, and structured output.
+
+**E6 (NEXT ACTIVE):** structured capability diagnostics and an inspect/query
+surface, reusing `CapabilityAnalysis`, `FunctionCapabilityContract`,
+`CapabilityContractViolation`, `CapabilityWitness`, function IDs and existing
+provenance for human CLI, IDE/LSP, tools and agents. No new analysis or CLI schema
+is specified here. The complete future TIR Graph is a later tooling milestone.
+
+The semantic order is E → R → M → C → V → O. R adds future Result/value-use
+obligations, not capabilities. U remains conditional. The
+[post-E4 state and audit record](../E1_CAPABILITY_ANALYSIS.md) tracks native
+signature integrity, comptime extern handling and JIT API correctness debts;
+none is a justification for blanket `extern == unsafe`.
 
 E1 remains a pure `tempra-effects` crate depending only on `tempra-tir`.
 E2 invokes it once after verification in fresh source and multi-module VM

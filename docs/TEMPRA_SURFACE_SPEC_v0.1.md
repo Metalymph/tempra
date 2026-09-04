@@ -961,8 +961,10 @@ fn id_item(type T: Collection, value: T.Item) -> T.Item {
 
 ## 26. Capability Contracts
 
-The intended public capability surface is limited to `@deny(...)`, `@pure`, and
-`@unsafe`. E3 acquires/enforces `@deny`; E4 normalizes `@pure` into the same contracts.
+The current public capability surface is limited to `@deny(...)` and `@pure`.
+E3 acquires/enforces `@deny`; E4 normalizes `@pure` into the same contracts.
+The separate future `@unsafe` boundary belongs to U (DEFERRED / CONDITIONAL),
+not the immediate Phase E sequence.
 
 `@deny(alloc, panic)` requires at least one public name: `alloc`, `panic`, `io`,
 `process`, `spawn`, `nondeterminism`. `@deny()` and `@deny(unsafe)` are errors.
@@ -975,7 +977,7 @@ including non-entry functions and each concrete specialization.
 
 - `@deny(...)` prohibits the named direct and transitive capability requirements.
 - `@pure` means `@deny(io, process, spawn, nondeterminism)`; pure code may allocate, may panic and may return `Result`.
-- `@unsafe` will mark an explicit low-level boundary and is not an alias for capability denial.
+- `@unsafe` is reserved as a future direction for local audited implementation islands, not an alias for capability denial or currently accepted syntax.
 
 Write bare `@pure` before optional `pub`, on the same functions/methods as deny.
 It takes no parentheses or arguments; a duplicate is an error on the second marker.
@@ -992,6 +994,20 @@ frontend/type correctness only. Neither is capability-contract certification.
 E4 retains `semantics-1`: pre-E4 parsing rejected pure, attribute edits change
 source identity, and existing enforcement remains authoritative. No contract
 metadata is serialized into cache.
+
+E1–E4 complete the currently meaningful surface, not all TIR coverage. E6
+diagnostics/inspection is next active. The semantic roadmap is E → R → M → C → V
+→ O, with U listed separately at the end. R is future Result/value-use hardening:
+no silent discard, including an accidental `let _ = ...` escape hatch; handling
+through `?`, `match`, return/propagation or meaningful use. Neither wildcard-binding
+syntax nor an opt-out such as `@discardable` is added or committed here.
+
+U activates only when a real source-level operation can violate memory/type
+invariants without explicit authorization. None is intentionally exposed today,
+and no E1 origin produces internal `Unsafe`. Future safe wrapper interfaces should
+remain callable without contaminating ordinary callers, while preserving safety
+for their admitted inputs and all deny/pure restrictions. Unsafe-to-call rules
+remain unspecified until a concrete operation needs them.
 
 See [Capability Contracts v0.1](specs/effects-v0.1.md). Normal Tempra remains safe and checked by default; there is no `--checked`, global `--verified`, or Spark mode.
 

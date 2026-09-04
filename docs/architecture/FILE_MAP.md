@@ -35,7 +35,7 @@ This index points to current source-of-truth files. A crate's presence in the wo
 - `crates/tempra-cli/src/commands/`: implemented `run`, `check`, diagnostics, symbols, test, REPL, and TIR inspection commands.
 - `crates/tempra-driver/src/pipeline.rs`: default HIR interpreter and experimental VM orchestration.
 - `crates/tempra-driver/src/compilation.rs`: private verify/analyze/enforce/bytecode boundary and public immutable `VmCompilation` product for fresh compilation.
-- `crates/tempra-driver/src/contracts.rs`: canonical conversion, declaration provenance and compilation-local contract binding.
+- `crates/tempra-driver/src/contracts.rs`: canonical conversion (including the sole pure expansion), distinct deny/pure provenance and compilation-local contract binding.
 - `crates/tempra-driver/src/enforcement.rs`: contract/summary intersection, structured violations with E1 witnesses, and typed invariant failures.
 - `crates/tempra-driver/src/module_graph.rs`: filesystem module loading, ordering, and cycle detection.
 - `crates/tempra-driver/src/build.rs`, `install.rs`: incomplete build and install scaffolds.
@@ -93,5 +93,7 @@ independent. E3.1 adds syntax-only AST/HIR contracts and driver-owned declaratio
 metadata exposed by `VmCompilation::contract`/`contracts`. E3.2 adds driver
 enforcement before bytecode, semantic cache fingerprinting, and explicit rejection
 of annotated execution on HIR/REPL/source-TIR paths using the shared HIR presence
-scan. Other attributes, rendered diagnostics, inspection and instruction-level
+scan. E4 adds AST/HIR `pure_span`, driver-only expansion into effective denied sets,
+and pure detection in that same scan; E3.2 enforcement and the cache fingerprint
+are unchanged. Unsafe, rendered diagnostics, inspection and instruction-level
 source mapping remain deferred. Frontend-only `check` does not certify contracts.

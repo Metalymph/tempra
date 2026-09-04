@@ -1148,6 +1148,79 @@ mod tests {
 mod enforcement_cache_tests {
     use super::*;
 
+    #[test]
+    fn pure_uses_semantics_one_and_source_identity_without_cache_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pure.tbc");
+        let pure = "@pure fn main() -> Int64 { return 10 / 2 }";
+        let plain = pure.replace("@pure", "");
+        // Adding pure must miss an existing same-path unannotated artifact.
+        compile_to_bytecode_with_analysis(&plain, &path).unwrap();
+        let pure_hash = crate::cache::compute_source_hash(pure);
+        assert!(crate::cache::read_compatible_module(&path, &pure_hash).is_none());
+        let fresh = load_or_compile_cached_module(pure, &path).unwrap();
+        assert_eq!(
+            tempra_vm::run_function(&fresh, "main", vec![]).unwrap(),
+            VmValue::Int64(5)
+        );
+        let header = crate::cache::read_cache_artifact(&path).unwrap().header;
+        assert_eq!(
+            header.compiler_fingerprint,
+            format!("tempra-{}-semantics-1", env!("CARGO_PKG_VERSION"))
+        );
+        assert_eq!(header.source_hash, pure_hash);
+        let bytes = fs::read(&path).unwrap();
+        let modified = fs::metadata(&path).unwrap().modified().unwrap();
+        let hit = load_or_compile_cached_module(pure, &path).unwrap();
+        assert_eq!(
+            tempra_vm::run_function(&hit, "main", vec![]).unwrap(),
+            VmValue::Int64(5)
+        );
+        assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), modified);
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+
+        let violating = pure.replace("@pure", "@pure @deny(panic)");
+        // Source hashing distinguishes removal, equivalent explicit spelling,
+        // and composition introducing an observed denied requirement.
+        for changed in [&plain, &pure.replace("@pure", "@deny(io)"), &violating] {
+            let hash = crate::cache::compute_source_hash(changed);
+            assert_ne!(hash, pure_hash);
+            assert!(crate::cache::read_compatible_module(&path, &hash).is_none());
+        }
+        let DriverError::CapabilityContractViolations(errors) =
+            load_or_compile_cached_module(&violating, &path).unwrap_err()
+        else {
+            panic!()
+        };
+        assert!(errors[0].contract.pure_span.is_some());
+        assert_eq!(errors[0].capability, tempra_effects::Capability::Panic);
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        let absent = dir.path().join("violating.tbc");
+        assert!(matches!(
+            compile_to_bytecode_with_analysis(&violating, &absent),
+            Err(DriverError::CapabilityContractViolations(_))
+        ));
+        assert!(!absent.exists());
+
+        load_or_compile_cached_module(&plain, &path).unwrap();
+        assert_eq!(
+            crate::cache::read_cache_artifact(&path)
+                .unwrap()
+                .header
+                .source_hash,
+            crate::cache::compute_source_hash(&plain)
+        );
+        // Facts-producing API still compiles fresh and retains original pure intent.
+        let compilation = compile_to_bytecode_with_analysis(pure, &path).unwrap();
+        assert!(compilation
+            .contracts()
+            .next()
+            .unwrap()
+            .1
+            .pure_span
+            .is_some());
+    }
+
     const VALID: &str = "@deny(io) fn main() -> Int64 { return 10 / 2 }";
     const VIOLATING: &str = "@deny(panic) fn main() -> Int64 { return 10 / 2 }";
 

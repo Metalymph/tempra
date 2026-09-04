@@ -66,6 +66,12 @@ if fresh enforcement fails it remains an incompatible miss, never a usable new e
 This policy assumes a local compiler-owned cache; headers are not authenticated
 against deliberate modification and the existing source hash is non-cryptographic.
 
+E4 (`@pure`) does not increment the semantic revision: it uses the same E3
+contract enforcement, and pre-E4 compilers rejected that attribute syntax.
+Adding, removing or changing pure changes source bytes and cache identity.
+Pure metadata is not serialized; successful pure compilation can populate/hit
+the same bytecode-only cache, while a failed contract cannot write a replacement.
+
 ## Future Plans
 
 - **Dependency Tracking**: Extend the cache format to handle multi-file dependencies (e.g., if an imported module changes, invalidate the cache).

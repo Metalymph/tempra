@@ -87,6 +87,14 @@ E3.1 adds a parallel metadata flow, not another capability analyzer:
   → VmCompilation contracts (alongside TIR, capability facts and bytecode)
 ```
 
+E4 also preserves a separate `pure_span` in AST/HIR. Driver normalization alone
+unions the four pure restrictions (Io, Process, Spawn, Nondeterminism) with explicit
+deny. `DenyContract` and its spans remain explicit-deny-only; immutable driver
+contracts retain both provenance forms. Alloc and Panic are allowed by pure alone.
+The existing enforcer is unchanged. The single HIR presence scan includes pure,
+so all existing execution guards reject it before execution/REPL state commit.
+No new analysis, execution routing or instruction metadata is introduced.
+
 The frontend does not depend on `tempra-effects`; canonical conversion belongs
 to the driver. `contract(id)` and ordered `contracts()` expose explicit intent
 immutably, including declaration/attribute spans and source/module identity.
@@ -97,6 +105,10 @@ Cache hits remain analysis/contract-free but require the shared
 `tempra-{CARGO_PKG_VERSION}-semantics-1` fingerprint. Older artifacts miss;
 fresh failures never populate or replace cache entries. The semantic revision
 versions reuse guarantees, not bytecode format. See [cache policy](../BYTECODE_CACHE.md).
+
+E4 keeps this fingerprint: pre-E4 parsing rejected pure and attribute edits alter
+source identity. Pure does not add cache metadata. `check` remains frontend-only,
+and emission of pure-annotated TIR does not certify the contract.
 
 E2 retains structural provenance only: function/block/instruction identities,
 call edges, direct origins and witnesses. TIR has no reliable source mapping.

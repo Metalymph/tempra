@@ -91,6 +91,14 @@ Instruction source mapping remains absent. E3.2 uses the existing cache header's
 fingerprint `tempra-{CARGO_PKG_VERSION}-semantics-1`; legacy artifacts miss and only
 successfully enforced compilations can write replacements. No facts are serialized.
 
+E4 adds only pure source intent and normalization: AST/HIR retain `pure_span`,
+and the driver unions Io/Process/Spawn/Nondeterminism with explicit deny. Effective
+contracts retain pure provenance separately from explicit deny spans. Neither
+E1 analysis nor E3.2 enforcement changes; pure allows allocation and may-panic
+operations unless explicitly denied. The shared HIR presence guard covers pure
+without changing the execution adapters. `semantics-1` remains valid because the
+old parser rejected pure and changed annotations change source identity.
+
 ```text
 tempra-tir
     ↑ dependency

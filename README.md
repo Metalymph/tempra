@@ -201,7 +201,7 @@ Tempra is rapidly evolving. We currently have a functional core with:
 Memory correctness and memory optimization are separate milestones. Safe Tempra must first define legal ownership graphs and prevent strong-reference cycles. Uniqueness analysis, escape analysis, stack promotion, Perceus-inspired reuse, and retain/release elimination follow later and are not prerequisites for concurrency.
 
 See the [roadmap](docs/roadmap.md) for the Phase E subdivision and dependency rationale.
-The implemented [E1–E3 capability foundation](docs/E1_CAPABILITY_ANALYSIS.md) enforces typed `@deny(...)` contracts in fresh VM compilation and retains facts, provenance and structured violations. Cache hits require an enforcement-aware semantic fingerprint. HIR execution, REPL and source TIR interpretation explicitly reject annotated programs until they support enforcement; `emit-tir` and frontend/typechecking-only `check` do not certify contracts. E4 (`@pure`) is next.
+The implemented [E1–E4 capability foundation](docs/E1_CAPABILITY_ANALYSIS.md) enforces `@deny(...)` and `@pure` through the same contracts in fresh VM compilation, retaining facts, provenance and structured violations. Pure means denying io/process/spawn/nondeterminism, not allocation or panic; explicit deny restrictions compose by union. Cache hits retain the enforcement-aware `semantics-1` fingerprint. HIR execution, REPL and source TIR interpretation explicitly reject annotated programs; `emit-tir` and frontend/typechecking-only `check` do not certify contracts. E5 (`@unsafe`) is next.
 
 ---
 

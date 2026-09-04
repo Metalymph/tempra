@@ -100,6 +100,7 @@ impl<'src> Lowerer<'src> {
         HirFunction {
             span: item.span,
             deny_contract: item.deny_contract.clone(),
+            pure_span: item.pure_span,
             visibility: item.visibility,
             name: self.text(item.name.span),
             generic_parameters: item

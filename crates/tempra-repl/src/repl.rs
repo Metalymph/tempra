@@ -174,6 +174,10 @@ mod contract_tests {
             "@deny(io) fn generic(type T, value: T) -> T { return value }",
             "extend Int64 { @deny(io) fn bad_method(self) -> Int64 { return self } }",
             "@deny(panic) fn bad() -> Int64 { return 10 / 2 }",
+            "@pure fn bad() {} let partial = 9",
+            "@pure fn generic(type T, value: T) -> T { return value }",
+            "extend Int64 { @pure fn bad_method(self) -> Int64 { return self } }",
+            "@pure fn bad() -> Int64 { return 10 / 2 }",
         ] {
             assert!(
                 matches!(session.eval_input(input), ReplOutcome::Diagnostic(message)

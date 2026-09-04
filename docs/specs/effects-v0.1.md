@@ -1,9 +1,9 @@
 # Tempra Capability Contracts v0.1
 
 > [!NOTE]
-> **Status: E1, E2 and E3 implemented.** E3.1 acquires typed `@deny(...)` contracts; E3.2 enforces them in fresh VM compilation and prevents execution bypass. `@pure`, `@unsafe` and `@verified` remain unimplemented.
+> **Status: E1–E4 implemented.** E3 acquires/enforces capability contracts and prevents execution bypass. E4 normalizes `@pure` through the same machinery. `@unsafe` and `@verified` remain unimplemented.
 
-Tempra's intended capability-contract surface is small rather than a user-facing algebraic effect language. Only `@deny(...)` is currently accepted; the complete planned surface is:
+Tempra's intended capability-contract surface is small rather than a user-facing algebraic effect language. `@deny(...)` and `@pure` are currently accepted; the complete planned surface is:
 
 - `@deny(...)`
 - `@pure`
@@ -35,7 +35,7 @@ only, not capability contracts. Raw TIR interpretation has no source-contract me
 
 ### Current syntax and placement (E3.1)
 
-Every attribute requires at least one case-sensitive name from `alloc`, `panic`,
+Every `@deny` attribute requires at least one case-sensitive name from `alloc`, `panic`,
 `io`, `process`, `spawn`, `nondeterminism`. `@deny()` and `@deny(unsafe)` are errors.
 Unknown attributes, names and non-identifier arguments are rejected. Whitespace,
 newlines and a trailing comma are accepted. Names remain ordinary identifiers
@@ -43,7 +43,7 @@ outside attributes.
 
 Repeated names are deduplicated. Repeated attributes merge by union, retaining
 all attribute spans in source order. An empty attribute is invalid even after
-another valid attribute. Absence of `@deny` produces no user contract.
+another valid attribute. Absence of both `@deny` and `@pure` produces no user contract.
 
 Place attributes before the optional `pub` on named top-level functions or
 methods inside `extend`. They cannot decorate externs, closures, interface
@@ -66,7 +66,45 @@ The analysis does not promise general optimization-sensitive elimination. It obs
 @pure = @deny(io, process, spawn, nondeterminism)
 ```
 
-Pure code may allocate. Pure code is not automatically panic-free.
+Pure code may allocate, conservatively require `Panic`, and return `Result`.
+`@pure` does **not** deny `Alloc`, `Panic` or internal `Unsafe`; it also does not
+authorize unsafe operations. This is not a totality or verified-proof annotation.
+
+Write bare `@pure`, before optional `pub`, on the same named top-level functions
+and `extend` methods supported by `@deny`. It takes no parentheses or arguments:
+`@pure()` and `@pure(io)` are errors. `pure` remains an ordinary identifier outside
+attribute position. A repeated `@pure` is rejected at the second annotation,
+including when `@deny` attributes occur between them.
+
+Composition is an unordered union:
+
+```tempra
+@pure
+@deny(panic)
+fn add(a: Int, b: Int) -> Int { return a + b }
+```
+
+Reversing the attributes has the same effective restrictions. Explicitly denying
+`io` alongside pure is redundant but valid; adding `alloc` or `panic` restricts
+capabilities that pure alone allows. E1 still classifies division as may-panic,
+even for a known nonzero divisor.
+
+AST and HIR retain a separate `pure_span`; `DenyContract` still represents only
+explicit `@deny` syntax. Only the driver defines the canonical four-capability
+pure set. `FunctionCapabilityContract.denied` is the effective union;
+`attribute_spans` contains explicit deny spans only, while `pure_span` identifies
+the original pure marker. A pure-only contract has no synthetic deny spans.
+Declaration spans and module/source identity retain their existing meaning.
+
+E3.2's unchanged intersection/witness machinery enforces pure directly and
+transitively, including non-entry functions and emitted specializations. There
+is no purity analyzer or special enforcer branch. Process, Spawn and
+Nondeterminism coverage gaps remain E1 gaps; E4 does not invent direct sources.
+
+The shared HIR contract-presence scan includes pure. HIR/source-TIR execution,
+test execution and REPL reject it explicitly even when its contract would pass;
+REPL state remains unchanged. `emit-tir` and frontend-only `check` accept it
+without certifying contracts. Raw TIR interpretation remains unchanged.
 
 ## `@unsafe`
 
@@ -169,7 +207,7 @@ E1 need not implement this presentation or source-span mapping. It must preserve
 1. **E1:** internal capability model and pure TIR analysis;
 2. **E2 (implemented):** post-verification integration in fresh VM compilation, retaining immutable TIR, capability facts and bytecode in `VmCompilation`;
 3. **E3 (implemented):** typed `@deny(...)` acquisition and declaration provenance (E3.1), then enforcement, retained witnesses and execution/cache non-bypass (E3.2);
-4. **E4:** `@pure`;
+4. **E4 (implemented):** `@pure` syntax/provenance and driver-only normalization through existing E3 enforcement;
 5. **E5:** `@unsafe` integration;
 6. **E6:** diagnostics, inspection, and structured output.
 
@@ -209,3 +247,7 @@ writes occur only after enforcement and bytecode verification succeed; a failure
 does not replace an older artifact or populate a new one. Post-E3.2 hits require
 matching source identity and fingerprint plus bytecode verification, without
 reconstructing TIR or serializing contracts/facts. See [cache policy](../BYTECODE_CACHE.md).
+
+E4 retains `semantics-1`: the existing enforcement guarantee is reused, and a
+pre-E4 compiler rejected the new attribute syntax. Adding/removing/changing pure
+changes source bytes and therefore cache identity. No pure metadata is serialized.

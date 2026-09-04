@@ -53,7 +53,13 @@ import .helper
 
 ```text
 NamedFunction
-  = DenyAttribute* ("pub")? Function
+  = CapabilityAttribute* ("pub")? Function
+
+CapabilityAttribute
+  = DenyAttribute | PureAttribute
+
+PureAttribute
+  = "@" "pure"
 
 DenyAttribute
   = "@" "deny" "(" DenyName ("," DenyName)* (",")? ")"
@@ -650,10 +656,13 @@ The following items were intentionally deferred during that bootstrap:
 
 This list is historical, not the current roadmap. E3.1 now accepts `@deny` on
 named top-level functions and `extend` methods, before optional `pub`.
-Each attribute needs a name; duplicates and repeated attributes merge.
+Each `@deny` attribute needs a capability name; duplicate names and repeated
+`@deny` attributes merge.
 `unsafe`, unknown names, other attributes and unsupported placement are errors.
 Externs, closures, interface requirements, fields and non-function items cannot
-carry `@deny`. E3.1 acquires intent; E3.2 enforces it in VM compilation and rejects
+carry capability attributes. E3.1 acquires deny intent; E3.2 enforces contracts in VM compilation and rejects
 annotated execution on non-capability-aware paths. Emission and frontend-only
-`check` do not certify contracts. `@pure` and `@unsafe` remain planned and are
-not accepted by the parser.
+`check` do not certify contracts. E4 accepts bare `@pure` in the same positions,
+composable with deny in either order. Parentheses/arguments and duplicate pure
+markers are errors (the second marker is reported). `pure` remains an identifier
+outside attribute position. `@unsafe` remains planned and is not accepted.

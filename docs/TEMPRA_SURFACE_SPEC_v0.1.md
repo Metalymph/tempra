@@ -962,11 +962,11 @@ fn id_item(type T: Collection, value: T.Item) -> T.Item {
 ## 26. Capability Contracts
 
 The intended public capability surface is limited to `@deny(...)`, `@pure`, and
-`@unsafe`. E3.1 acquires typed `@deny`; E3.2 enforces it in fresh VM compilation.
+`@unsafe`. E3 acquires/enforces `@deny`; E4 normalizes `@pure` into the same contracts.
 
 `@deny(alloc, panic)` requires at least one public name: `alloc`, `panic`, `io`,
 `process`, `spawn`, `nondeterminism`. `@deny()` and `@deny(unsafe)` are errors.
-Duplicates and repeated attributes merge; whitespace/newlines and a trailing
+Duplicate capability names and repeated `@deny` attributes merge; whitespace/newlines and a trailing
 comma are allowed. Place attributes before optional `pub`, on named top-level
 functions or methods inside `extend`. Externs, closures, interface requirements,
 fields and other items cannot carry them. Unannotated functions have no contract.
@@ -974,15 +974,24 @@ E3.2 rejects any intersection with the emitted function's transitive requirement
 including non-entry functions and each concrete specialization.
 
 - `@deny(...)` prohibits the named direct and transitive capability requirements.
-- `@pure` will mean `@deny(io, process, spawn, nondeterminism)`; pure code may allocate and may panic.
+- `@pure` means `@deny(io, process, spawn, nondeterminism)`; pure code may allocate, may panic and may return `Result`.
 - `@unsafe` will mark an explicit low-level boundary and is not an alias for capability denial.
 
-`@pure`, `@unsafe` and `@verified` are not implemented. E3.2 cache hits require an
+Write bare `@pure` before optional `pub`, on the same functions/methods as deny.
+It takes no parentheses or arguments; a duplicate is an error on the second marker.
+Compose pure and deny in either order: restrictions are unioned. Pure does not
+deny Alloc or Panic unless explicitly added through deny. Pure provenance is
+preserved separately from explicit deny spans; `pure` is still an ordinary identifier.
+
+`@unsafe` and `@verified` are not implemented. E3.2 cache hits require an
 enforcement-aware semantic fingerprint. HIR execution, REPL, test execution and
 source TIR interpretation explicitly reject annotated programs until they can
 enforce contracts. `emit-tir` may emit without enforcement; `check` certifies
 frontend/type correctness only. Neither is capability-contract certification.
 `Panic` remains conservative may-panic; this is not `@verified` reasoning.
+E4 retains `semantics-1`: pre-E4 parsing rejected pure, attribute edits change
+source identity, and existing enforcement remains authoritative. No contract
+metadata is serialized into cache.
 
 See [Capability Contracts v0.1](specs/effects-v0.1.md). Normal Tempra remains safe and checked by default; there is no `--checked`, global `--verified`, or Spark mode.
 

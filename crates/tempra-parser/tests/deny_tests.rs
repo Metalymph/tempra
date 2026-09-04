@@ -90,7 +90,6 @@ fn empty_or_malformed_attributes_are_rejected() {
         "@deny(\"alloc\")",
         "@deny(1)",
         "@deny(alloc",
-        "@pure",
         "@unsafe",
         "@verified",
         "@discardable",

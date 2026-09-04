@@ -1145,6 +1145,7 @@ dependencies = [
  "tempra-bytecode",
  "tempra-bytecode-lower",
  "tempra-diagnostics",
+ "tempra-effects",
  "tempra-fs",
  "tempra-hir",
  "tempra-interpreter",
@@ -1163,6 +1164,13 @@ dependencies = [
  "tempra-tir-lower",
  "tempra-typeck",
  "tempra-vm",
+]
+
+[[package]]
+name = "tempra-effects"
+version = "0.1.0"
+dependencies = [
+ "tempra-tir",
 ]
 
 [[package]]

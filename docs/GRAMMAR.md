@@ -15,11 +15,11 @@ File
 
 ```text
 Item
-  = ("pub")? ItemKind
+  = NamedFunction
+  | ("pub")? ItemKind
 
 ItemKind
   = Import
-  | Function
   | Struct
   | Enum
   | Extend
@@ -52,6 +52,15 @@ import .helper
 ## 3. Functions
 
 ```text
+NamedFunction
+  = DenyAttribute* ("pub")? Function
+
+DenyAttribute
+  = "@" "deny" "(" DenyName ("," DenyName)* (",")? ")"
+
+DenyName
+  = "alloc" | "panic" | "io" | "process" | "spawn" | "nondeterminism"
+
 Function
   = "fn" Identifier "(" ParamList? ")" ReturnType? Block
 
@@ -179,7 +188,7 @@ interface Iterator {
 
 ```text
 Extend
-  = "extend" Type "{" Function* "}"
+  = "extend" Type "{" NamedFunction* "}"
 ```
 
 Example:
@@ -623,20 +632,26 @@ cmd("cat", ["file.txt"]) | cmd("grep", ["error"])
 
 ---
 
-## 33. Implementation Strategy
+## 33. Historical Bootstrap Strategy
 
-Start with:
+The original parser bootstrap proceeded in this order:
 
 1. lexer (tokens + spans)
 2. parser (AST only, no types)
 3. minimal evaluator / interpreter
 4. incremental feature completion
 
-Do NOT implement early:
+The following items were intentionally deferred during that bootstrap:
 
 - full pattern matching
 - advanced type system
 - generics
-- effects system
+- capability analysis
 
-Focus on correctness and clarity first.
+This list is historical, not the current roadmap. E3.1 now accepts `@deny` on
+named top-level functions and `extend` methods, before optional `pub`.
+Each attribute needs a name; duplicates and repeated attributes merge.
+`unsafe`, unknown names, other attributes and unsupported placement are errors.
+Externs, closures, interface requirements, fields and non-function items cannot
+carry `@deny`. E3.1 acquires intent without enforcement. `@pure` and `@unsafe`
+remain planned and are not accepted by the parser.

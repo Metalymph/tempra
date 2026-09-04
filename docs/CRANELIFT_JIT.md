@@ -216,7 +216,7 @@ As the JIT expands beyond primitives, it adopts a strict **Heap Boundary** desig
 - **Fallible ABI**: Soft errors (bounds checks) use a `(Value, Status)` return pattern to avoid unnecessary traps.
 - **Generic Intrinsics (Phase 17.5)**: Source-level JIT execution routes generic instructions (`Len`, `Size`, `GetIndex`) through generic helper intrinsics (`tmpr_jit_generic_len`, `tmpr_jit_generic_size`, `tmpr_jit_generic_get_i64`). These dynamic dispatchers enforce language-level type correctness and routing, while specialized type-specific helpers act as granular building blocks.
 
-See [JIT_HEAP_BOUNDARY.md](file:///Users/lorenzopirro/coding/rust/tempra/docs/JIT_HEAP_BOUNDARY.md) for full details.
+See [JIT_HEAP_BOUNDARY.md](JIT_HEAP_BOUNDARY.md) for full details.
 
 ## Running Heap-aware JIT Examples
 

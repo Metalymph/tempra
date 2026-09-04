@@ -7,6 +7,12 @@ pub enum DriverError {
     TypeError(String),
     RuntimeError(String),
     TirLowerError(String),
+    /// Structural TIR verification failures, retained before capability analysis.
+    TirVerificationError(Vec<tempra_tir::verifier::VerifierError>),
+    /// A structural capability analysis failure, not a denied capability.
+    CapabilityAnalysisError(tempra_effects::CapabilityAnalysisError),
+    /// A user contract could not be bound unambiguously to a concrete TIR function.
+    ContractBindingError(Box<crate::ContractBindingError>),
     TirInterpError(tempra_tir_interp::TirInterpError),
     Exit(i32),
     BytecodeSerializeError(String),
@@ -30,6 +36,11 @@ impl std::fmt::Display for DriverError {
             DriverError::TypeError(e) => write!(f, "Type error:\n{}", e),
             DriverError::RuntimeError(e) => write!(f, "{}", e),
             DriverError::TirLowerError(e) => write!(f, "TIR lowering error:\n{}", e),
+            DriverError::TirVerificationError(e) => write!(f, "TIR verification error: {:?}", e),
+            DriverError::CapabilityAnalysisError(e) => {
+                write!(f, "Capability analysis error: {}", e)
+            }
+            DriverError::ContractBindingError(e) => write!(f, "Contract binding error: {}", e),
             DriverError::TirInterpError(e) => write!(f, "TIR interpreter error: {}", e),
             DriverError::Exit(code) => write!(f, "Exit signal ({})", code),
             DriverError::BytecodeSerializeError(e) => {

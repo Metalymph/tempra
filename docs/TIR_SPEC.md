@@ -15,9 +15,14 @@ The goal of this phase is to establish the minimal data model and verification l
 - Removing the current HIR interpreter.
 
 ## Pipeline
-`Source -> AST -> HIR -> Typeck -> TIR -> (Interpreter / VM / Compiler)`
+`Source -> AST -> HIR -> Typeck -> TIR -> TIR verification -> analyses -> VM / Compiler`
 
-Currently, HIR interpreter continues to be used. TIR generation will be incrementally integrated.
+The HIR interpreter remains the default runtime. TIR generation is used by experimental VM and inspection paths and supports a smaller language subset.
+
+E2 inserts capability analysis after TIR verification in fresh VM compilations,
+retaining the TIR and facts. E1 remains a pure TIR analyzer. TIR emission and
+interpretation verify without capability analysis; cache hits and HIR paths do
+not construct an E2 analysis product.
 
 ## TIR v0.1 Types
 TIR supports a minimal subset of types in v0.1:
@@ -47,7 +52,9 @@ Variables in TIR are managed explicitly through memory slots:
 - `len`: Retrieve the length of an Array or Slice (element count) or String (scalar count).
 - `size`: Retrieve the UTF-8 byte size of a String.
 - `bytes`: Retrieve a read-only Slice view of a String's bytes as UInt8.
-- `tag` / `unwrap`: Support for algebraic data type destructuring.
+- `tag` / `unwrap`: Support for algebraic data type destructuring. `tag` produces
+  `String` in the current TIR/bytecode/VM representation, not the reserved `Tag`
+  type. Comparisons require the same operand type, including tag/string comparisons.
 - `add`, `sub`, `mul`, `div`: Numeric arithmetic operations.
 - `eq`, `lt`, `gt`: Numeric comparison, producing boolean results.
 - `and`, `or`, `not`: Boolean logic operations.
@@ -70,8 +77,26 @@ The verifier ensures the structural and type soundness of a TIR module:
 - `load` and `store` must operate on declared slots, matching their type.
 - `get`, `set`, `tag`, and `unwrap` have smoke validation but defer strict structural layout type checking until fully implemented.
 
-## Future Roadmap
-- **v0.1**: Core (Constants, Slots, Branching, Primitives). *(Current)*
-- **v0.2**: Memory references (`ref`), async execution (`spawn`, `await`).
-- **v0.3**: Channels, message passing (`channel`, `send`, `recv`, `select`).
-- **v0.4**: Actor model invocations (`actor_call`).
+## Analysis Roadmap
+
+TIR evolution follows the project-wide dependency order rather than assigning concurrency instructions to the next TIR version:
+
+1. **E — Capability analysis:** direct operation classification, call graph propagation, stable per-function summaries, and deterministic provenance.
+2. **M — Acyclic ownership:** formalize legal strong-reference graphs before concurrent transfer.
+3. **C — Concurrency:** add task, actor, channel, and selection operations only after E and M define their boundaries.
+4. **V — Verified functions:** consume prior facts for stronger proof obligations.
+5. **O — Deeper memory optimizations:** uniqueness, escape, stack promotion, reuse, and retain/release elimination.
+
+This section does not define future TIR opcodes. Their exact representation belongs to the corresponding phase specifications.
+
+## Capability-analysis contract
+
+E1 scans `TirInstr::Call` to build a function call graph. E2 retains structural
+provenance (`TirFunctionId`, function-scoped `TirBlockId`, instruction index),
+edges, origins and witnesses. It adds no source mapping: TIR does not retain a
+reliable one. A future lowering side table maps locations to module identity and
+existing source spans.
+
+Direct `Alloc` classification is based on semantic runtime allocation in the current representation; `const` and `make` are not normative allocation sites by syntax alone. Direct `Panic` classification is conservative may-panic information. Later verified analysis may prove individual divisions or bounds accesses safe without changing E1's collection policy.
+
+An extern requires a known capability classification only when a TIR call targets it. Unused extern declarations do not invalidate a module.

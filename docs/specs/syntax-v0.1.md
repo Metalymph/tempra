@@ -1,5 +1,8 @@
 # Tempra Syntax Specification v0.1
 
+> [!WARNING]
+> **Historical design sketch.** The current [surface specification](../TEMPRA_SURFACE_SPEC_v0.1.md) and [parser grammar](../GRAMMAR.md) are authoritative where this document differs.
+
 Tempra syntax is designed to be direct and readable, taking inspiration from Swift, Rust, and Go. It balances the ergonomics of a scripting language with the rigor of a compiled language.
 
 ## 1. Core Principles
@@ -11,7 +14,7 @@ Tempra syntax is designed to be direct and readable, taking inspiration from Swi
 Variables are immutable by default.
 ```tempra
 let name = "Tempra"      // Immutable
-let mut count = 0      // Mutable
+var count = 0          // Mutable
 count = 1
 ```
 

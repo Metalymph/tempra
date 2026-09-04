@@ -1,5 +1,8 @@
 # JIT Heap Boundary Design
 
+> [!WARNING]
+> **Historical experimental boundary.** This document describes the opt-in Cranelift JIT runtime prototype. Its handle ownership and possible-GC language do not define Tempra's normative ownership model. The safe-language acyclic ownership rules belong to roadmap Phase M.
+
 This document defines the interface and ownership model for the Tempra Cranelift JIT to support heap-allocated types in future phases.
 
 ## 1. Objective

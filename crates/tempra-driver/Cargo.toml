@@ -21,6 +21,7 @@ tempra-linker.workspace = true
 tempra-fs.workspace = true
 tempra-package.workspace = true
 tempra-tir.workspace = true
+tempra-effects.workspace = true
 tempra-tir-lower.workspace = true
 tempra-tir-interp.workspace = true
 tempra-bytecode.workspace = true

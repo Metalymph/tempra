@@ -28,6 +28,7 @@ members = [
   "crates/tempra-analysis",
   "crates/tempra-testing",
   "crates/tempra-tir",
+  "crates/tempra-effects",
   "crates/tempra-tir-lower",
   "crates/tempra-tir-interp",
   "crates/tempra-bytecode",
@@ -77,6 +78,7 @@ tempra-analysis = { path = "crates/tempra-analysis" }
 tempra-testing = { path = "crates/tempra-testing" }
 tempra-driver = { path = "crates/tempra-driver" }
 tempra-tir = { path = "crates/tempra-tir" }
+tempra-effects = { path = "crates/tempra-effects" }
 tempra-tir-lower = { path = "crates/tempra-tir-lower" }
 tempra-tir-interp = { path = "crates/tempra-tir-interp" }
 tempra-bytecode = { path = "crates/tempra-bytecode" }

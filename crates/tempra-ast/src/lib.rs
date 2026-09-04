@@ -118,9 +118,53 @@ impl Capture {
 // Functions
 // ----------------------------------------------------------------------------
 
+/// Validated public spellings in `@deny`, not analyzer capabilities.
+/// Declaration order is the normalization order of the syntax list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum DenyCapability {
+    /// The `alloc` spelling.
+    Alloc,
+    /// The `panic` spelling.
+    Panic,
+    /// The `io` spelling.
+    Io,
+    /// The `process` spelling.
+    Process,
+    /// The `spawn` spelling.
+    Spawn,
+    /// The `nondeterminism` spelling.
+    Nondeterminism,
+}
+
+impl DenyCapability {
+    /// Recognizes a public deny argument. This performs syntax validation only.
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "alloc" => Some(Self::Alloc),
+            "panic" => Some(Self::Panic),
+            "io" => Some(Self::Io),
+            "process" => Some(Self::Process),
+            "spawn" => Some(Self::Spawn),
+            "nondeterminism" => Some(Self::Nondeterminism),
+            _ => None,
+        }
+    }
+}
+
+/// Syntax-only intent from one or more `@deny` attributes on a function.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DenyContract {
+    /// Nonempty, sorted, deduplicated public capability spellings.
+    pub denied: Vec<DenyCapability>,
+    /// Complete attribute spans (`@` through `)`), in source order.
+    pub attribute_spans: Vec<Span>,
+}
+
 #[derive(Debug, Clone)]
 pub struct FunctionItem {
     pub span: Span,
+    /// Optional validated deny syntax; no capability enforcement is performed.
+    pub deny_contract: Option<DenyContract>,
     pub visibility: Visibility,
     pub name: Token,
     pub generic_parameters: Vec<GenericParameter>,

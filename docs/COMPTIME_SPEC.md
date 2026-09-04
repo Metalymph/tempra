@@ -225,6 +225,10 @@ A `comptime match` works like compile-time branch selection:
 4. **Arm Pruning**: ONLY the selected arm is typechecked. Unselected arms are erased from the HIR.
 5. **Exhaustiveness**: At specialization time, at least one arm MUST match (or an `else` arm must be provided).
 
+### Capability-analysis boundary
+
+Selected `if comptime` branches and `comptime match` arms are retained in HIR; unselected alternatives are pruned before TIR lowering. Future capability analysis therefore observes only the selected semantic branch when specialization has resolved it. This is semantic pruning, not a promise that later optimization, inlining, or dead-code elimination will remove capability requirements.
+
 ---
 
 ## Not Yet Implemented

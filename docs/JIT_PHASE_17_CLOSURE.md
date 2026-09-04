@@ -43,12 +43,12 @@ To maintain absolute stability, the JIT boundary for Phase 17 is frozen to the f
 
 ## 3. Examples & Demonstration Commands
 
-The canonical heap JIT demonstration suite is located in [examples/jit_heap/](file:///Users/lorenzopirro/coding/rust/tempra/examples/jit_heap/):
-1. [string_len.tmpr](file:///Users/lorenzopirro/coding/rust/tempra/examples/jit_heap/string_len.tmpr) (expected: 2)
-2. [string_size.tmpr](file:///Users/lorenzopirro/coding/rust/tempra/examples/jit_heap/string_size.tmpr) (expected: 3)
-3. [array_len.tmpr](file:///Users/lorenzopirro/coding/rust/tempra/examples/jit_heap/array_len.tmpr) (expected: 3)
-4. [array_get.tmpr](file:///Users/lorenzopirro/coding/rust/tempra/examples/jit_heap/array_get.tmpr) (expected: 20)
-5. [mixed_heap_int.tmpr](file:///Users/lorenzopirro/coding/rust/tempra/examples/jit_heap/mixed_heap_int.tmpr) (expected: 28)
+The canonical heap JIT demonstration suite is located in [`examples/jit_heap/`](../examples/jit_heap/):
+1. [`string_len.tmpr`](../examples/jit_heap/string_len.tmpr) (expected: 2)
+2. [`string_size.tmpr`](../examples/jit_heap/string_size.tmpr) (expected: 3)
+3. [`array_len.tmpr`](../examples/jit_heap/array_len.tmpr) (expected: 3)
+4. [`array_get.tmpr`](../examples/jit_heap/array_get.tmpr) (expected: 20)
+5. [`mixed_heap_int.tmpr`](../examples/jit_heap/mixed_heap_int.tmpr) (expected: 28)
 
 ---
 

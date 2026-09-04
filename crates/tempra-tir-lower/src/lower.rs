@@ -696,7 +696,7 @@ impl<'a> LowerContext<'a> {
                     HirExpression::Array(_, elements) if elements.is_empty() => {
                         self.builder.build_make(tir_ty.clone(), None, vec![])?
                     }
-                    _ => self.lower_expression(&l.value)?,
+                    _ => self.lower_expression_with_expected_type(&l.value, &tir_ty)?,
                 };
                 self.builder.build_store(slot, val)?;
                 Ok(())
@@ -726,13 +726,14 @@ impl<'a> LowerContext<'a> {
                     HirExpression::Array(_, elements) if elements.is_empty() => {
                         self.builder.build_make(tir_ty.clone(), None, vec![])?
                     }
-                    _ => self.lower_expression(&v.value)?,
+                    _ => self.lower_expression_with_expected_type(&v.value, &tir_ty)?,
                 };
                 self.builder.build_store(slot, val)?;
                 Ok(())
             }
             HirStatement::Return(Some(expr)) => {
-                let val = self.lower_expression(expr)?;
+                let return_type = self.builder.func.return_type.clone();
+                let val = self.lower_expression_with_expected_type(expr, &return_type)?;
                 self.builder.build_ret(Some(val))?;
                 Ok(())
             }
@@ -2030,6 +2031,58 @@ impl<'a> LowerContext<'a> {
         }
     }
 
+    // Constructors need the complete contextual type, including the unselected
+    // Result payload. This is lowering of an already checked type, not inference.
+    fn lower_expression_with_expected_type(
+        &mut self,
+        expr: &HirExpression,
+        expected: &TirType,
+    ) -> Result<TirValueId, TirLowerError> {
+        if let HirExpression::Name(_, name) = expr {
+            if name == "None" && matches!(expected, TirType::Option(_)) {
+                return self
+                    .builder
+                    .build_make(expected.clone(), Some(name.clone()), vec![])
+                    .map_err(Into::into);
+            }
+        }
+        if let HirExpression::Call(call) = expr {
+            if let HirExpression::Name(_, name) = &*call.callee {
+                if matches!(name.as_str(), "Some" | "Ok" | "Err") {
+                    let payload_type = match (name.as_str(), expected) {
+                        ("Some", TirType::Option(inner)) => inner,
+                        ("Ok", TirType::Result(ok, _)) => ok,
+                        ("Err", TirType::Result(_, err)) => err,
+                        _ => {
+                            return Err(TirLowerError::UnsupportedExpr(
+                                format!(
+                                    "constructor {name} does not match expected type {expected:?}"
+                                ),
+                                call.span,
+                            ))
+                        }
+                    };
+                    if call.args.len() != 1 {
+                        return Err(TirLowerError::UnsupportedExpr(
+                            format!("wrong arity for {name}"),
+                            call.span,
+                        ));
+                    }
+                    let payload = match &call.args[0] {
+                        HirCallArgument::Positional(expr) => expr,
+                        HirCallArgument::Named(named) => &named.value,
+                    };
+                    let value = self.lower_expression_with_expected_type(payload, payload_type)?;
+                    return self
+                        .builder
+                        .build_make(expected.clone(), Some(name.clone()), vec![value])
+                        .map_err(Into::into);
+                }
+            }
+        }
+        self.lower_expression(expr)
+    }
+
     pub fn lower_expression(&mut self, expr: &HirExpression) -> Result<TirValueId, TirLowerError> {
         match expr {
             HirExpression::Integer(span, s) => {
@@ -2577,7 +2630,13 @@ impl<'a> LowerContext<'a> {
                 }
 
                 if let HirExpression::Name(span, name) = &*c.callee {
-                    if matches!(name.as_str(), "Some" | "Ok" | "Err") {
+                    if matches!(name.as_str(), "Ok" | "Err") {
+                        return Err(TirLowerError::UnsupportedExpr(
+                            format!("constructor {name} requires a complete expected Result type"),
+                            c.span,
+                        ));
+                    }
+                    if name == "Some" {
                         if c.args.len() != 1 {
                             return Err(TirLowerError::UnsupportedExpr(
                                 format!("wrong arity for {}", name),
@@ -2591,11 +2650,7 @@ impl<'a> LowerContext<'a> {
                         let arg_val = self.lower_expression(arg_expr)?;
                         let arg_hir_ty = self.infer_expr_type(arg_expr)?;
                         let arg_tir_ty = map_type(&arg_hir_ty)?;
-                        let ty = if name == "Some" {
-                            TirType::Option(Box::new(arg_tir_ty))
-                        } else {
-                            TirType::Result(Box::new(arg_tir_ty), Box::new(TirType::Unit))
-                        };
+                        let ty = TirType::Option(Box::new(arg_tir_ty));
                         return self
                             .builder
                             .build_make(ty, Some(name.clone()), vec![arg_val])
@@ -2641,13 +2696,18 @@ impl<'a> LowerContext<'a> {
             HirExpression::Try(e) => {
                 // Desugar expr? into: tag/eq/condbr/unwrap/make/ret
                 // Step 1: Lower the inner expression
-                let r_val = self.lower_expression(&e.expr)?;
+                let operand_type = self.infer_expr_type(&e.expr)?;
+                if !matches!(operand_type, Type::Result(_, _)) {
+                    return Err(TirLowerError::UnsupportedExpr(
+                        "'?' operator expects a Result type".into(),
+                        e.span,
+                    ));
+                }
+                let result_type = map_type(&operand_type)?;
+                let r_val = self.lower_expression_with_expected_type(&e.expr, &result_type)?;
 
                 // Step 2: Store in a slot so both branches can access it
-                let tmp_slot = self.builder.build_slot(
-                    TirType::Result(Box::new(TirType::Unit), Box::new(TirType::Unit)),
-                    Some("__try_tmp"),
-                )?;
+                let tmp_slot = self.builder.build_slot(result_type, Some("__try_tmp"))?;
                 self.builder.build_store(tmp_slot, r_val)?;
 
                 // Step 3: Tag the result and compare to "Err"

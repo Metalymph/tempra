@@ -109,7 +109,10 @@ pub fn verify_function(
                     if !value_types.contains_key(target) {
                         errors.push(VerifierError::UndeclaredValue(*target));
                     }
-                    value_types.insert(*res, Some(TirType::Tag));
+                    // Tag extracts the variant name, represented as a String by
+                    // the current bytecode lowerer and VM. Comparisons still
+                    // require identical operand types; there is no tag coercion.
+                    value_types.insert(*res, Some(TirType::String));
                 }
                 TirInstr::Unwrap(res, target, _variant, _index) => {
                     if !value_types.contains_key(target) {

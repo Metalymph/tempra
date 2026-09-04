@@ -27,6 +27,34 @@ fn test_identifiers() {
 }
 
 #[test]
+fn deny_names_remain_identifiers() {
+    assert_tokens!(
+        "@deny(alloc)",
+        [
+            TokenKind::At,
+            TokenKind::Identifier,
+            TokenKind::LeftParen,
+            TokenKind::Identifier,
+            TokenKind::RightParen
+        ]
+    );
+    for name in [
+        "deny",
+        "alloc",
+        "panic",
+        "io",
+        "process",
+        "spawn",
+        "nondeterminism",
+        "unsafe",
+    ] {
+        assert_tokens!(name, [TokenKind::Identifier]);
+    }
+    let tokens = tokenize(" @deny");
+    assert_eq!(tokens[0].span, tempra_span::Span::new(1, 2));
+}
+
+#[test]
 fn test_keywords() {
     assert_tokens!(
         "fn if else for match is",

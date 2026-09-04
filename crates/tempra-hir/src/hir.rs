@@ -39,6 +39,8 @@ pub struct HirGenericParam {
 #[derive(Debug, Clone)]
 pub struct HirFunction {
     pub span: Span,
+    /// Preserved syntax-only intent. Canonical capability conversion belongs to the driver.
+    pub deny_contract: Option<tempra_ast::DenyContract>,
     pub visibility: Visibility,
     pub name: String,
     pub generic_parameters: Vec<HirGenericParam>,

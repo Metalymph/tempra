@@ -34,6 +34,10 @@ impl<'src> Lexer<'src> {
             b'a'..=b'z' | b'A'..=b'Z' | b'_' => self.lex_identifier_or_keyword(start),
             b'0'..=b'9' => self.lex_number(start),
             b'"' => self.lex_string(start),
+            b'@' => {
+                self.advance();
+                self.make_token(TokenKind::At, start, self.position)
+            }
 
             b'(' => {
                 self.advance();

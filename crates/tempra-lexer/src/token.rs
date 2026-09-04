@@ -43,6 +43,7 @@ pub enum TokenKind {
     Extern,
 
     // Delimiters
+    At,           // @
     LeftParen,    // (
     RightParen,   // )
     LeftBrace,    // {
@@ -157,6 +158,7 @@ impl std::fmt::Display for TokenKind {
             TokenKind::Comptime => "'comptime'",
             TokenKind::Interface => "'interface'",
             TokenKind::Extern => "'extern'",
+            TokenKind::At => "'@'",
             TokenKind::LeftParen => "'('",
             TokenKind::RightParen => "')'",
             TokenKind::LeftBrace => "'{'",

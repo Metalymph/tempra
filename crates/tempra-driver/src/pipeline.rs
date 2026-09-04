@@ -1,3 +1,5 @@
+use crate::compilation::{compile_tir_module, VmCompilation};
+use crate::contracts::{ContractBindings, ContractSource};
 use crate::error::DriverError;
 use std::fs;
 use std::path::Path;
@@ -53,10 +55,10 @@ pub fn run_source_vm_with_options(
         {
             artifact.module
         } else {
-            compile_and_cache_module(source, &hash, &cache_path, &fingerprint)?
+            compile_and_cache_module(source, &hash, &cache_path, &fingerprint)?.into_bytecode()
         }
     } else {
-        compile_and_cache_module(source, &hash, &cache_path, &fingerprint)?
+        compile_and_cache_module(source, &hash, &cache_path, &fingerprint)?.into_bytecode()
     };
 
     let has_main = module.functions.iter().any(|f| f.name == "main");
@@ -90,10 +92,10 @@ pub fn run_source_vm_profiled(
         {
             artifact.module
         } else {
-            compile_and_cache_module(source, &hash, &cache_path, &fingerprint)?
+            compile_and_cache_module(source, &hash, &cache_path, &fingerprint)?.into_bytecode()
         }
     } else {
-        compile_and_cache_module(source, &hash, &cache_path, &fingerprint)?
+        compile_and_cache_module(source, &hash, &cache_path, &fingerprint)?.into_bytecode()
     };
 
     let has_main = module.functions.iter().any(|f| f.name == "main");
@@ -118,7 +120,7 @@ fn compile_and_cache_module(
     hash: &[u8; 32],
     cache_path: &std::path::Path,
     fingerprint: &str,
-) -> Result<tempra_bytecode::BytecodeModule, DriverError> {
+) -> Result<VmCompilation, DriverError> {
     let ast = tempra_parser::parse_source(source)
         .map_err(|e| DriverError::ParseError(format!("{:?}", e)))?;
     let mut hir = tempra_hir::lower_file(source, &ast);
@@ -126,6 +128,8 @@ fn compile_and_cache_module(
         .map_err(|errs| DriverError::TypeError(format!("{:?}", errs)))?;
 
     let mut module_builder = tempra_tir::builder::ModuleBuilder::new();
+    let mut bindings = ContractBindings::default();
+    let source_identity = ContractSource::InMemory;
     let mut errors = Vec::new();
     for item in &hir.items {
         match item {
@@ -141,6 +145,7 @@ fn compile_and_cache_module(
                     None,
                 ) {
                     Ok(tir_func) => {
+                        bindings.register(tir_func.id, func, &source_identity)?;
                         module_builder.add_function(tir_func);
                     }
                     Err(e) => {
@@ -181,6 +186,7 @@ fn compile_and_cache_module(
                         None,
                     ) {
                         Ok(tir_func) => {
+                            bindings.register(tir_func.id, method, &source_identity)?;
                             module_builder.add_function(tir_func);
                         }
                         Err(e) => {
@@ -201,34 +207,30 @@ fn compile_and_cache_module(
         &mut module_builder,
         &mut errors,
         None,
-    );
+        &mut bindings,
+        &source_identity,
+    )?;
     if !errors.is_empty() {
         return Err(DriverError::UnsupportedExperimentalVm(errors.join("\n")));
     }
 
-    let bc_module =
-        tempra_bytecode_lower::lower_tir_module(&module_builder.module).map_err(|e| {
-            DriverError::UnsupportedExperimentalVm(format!("bytecode lowering error: {:?}", e))
-        })?;
-
-    tempra_bytecode::verify::verify_module(&bc_module).map_err(|e| {
-        DriverError::UnsupportedExperimentalVm(format!("verification error: {:?}", e))
-    })?;
-
-    let mut header = tempra_bytecode::BytecodeCacheHeader::default();
-    header.compiler_fingerprint = fingerprint.to_string();
-    header.source_hash = *hash;
+    let compilation = compile_tir_module(module_builder.module, bindings)?;
+    let header = tempra_bytecode::BytecodeCacheHeader {
+        compiler_fingerprint: fingerprint.to_string(),
+        source_hash: *hash,
+        ..Default::default()
+    };
 
     let artifact = tempra_bytecode::BytecodeCacheArtifact {
         header,
-        module: bc_module.clone(),
+        module: compilation.bytecode().clone(),
     };
 
     if let Err(e) = crate::cache::write_cache_artifact(cache_path, &artifact) {
         eprintln!("Warning: failed to write cache artifact: {}", e);
     }
 
-    Ok(bc_module)
+    Ok(compilation)
 }
 
 fn lower_requested_function_specializations(
@@ -237,15 +239,18 @@ fn lower_requested_function_specializations(
     module_builder: &mut tempra_tir::builder::ModuleBuilder,
     errors: &mut Vec<String>,
     module_prefix: Option<&str>,
-) {
+    bindings: &mut ContractBindings,
+    source_identity: &ContractSource,
+) -> Result<(), DriverError> {
     for key in &type_ctx.specialization_log {
-        let requested_name = key
-            .function_name
-            .rsplit('.')
-            .next()
-            .unwrap_or(&key.function_name);
         let Some(func) = items.iter().find_map(|item| match item {
-            tempra_hir::HirItem::Function(func) if func.name == requested_name => Some(func),
+            tempra_hir::HirItem::Function(func) => {
+                let qualified = match module_prefix.filter(|prefix| !prefix.is_empty()) {
+                    Some(prefix) => format!("{prefix}.{}", func.name),
+                    None => func.name.clone(),
+                };
+                (qualified == key.function_name).then_some(func)
+            }
             _ => None,
         }) else {
             continue;
@@ -262,13 +267,17 @@ fn lower_requested_function_specializations(
             module_prefix,
             &key.type_args,
         ) {
-            Ok(tir_func) => module_builder.add_function(tir_func),
+            Ok(tir_func) => {
+                bindings.register(tir_func.id, func, source_identity)?;
+                module_builder.add_function(tir_func);
+            }
             Err(e) => errors.push(format!(
                 "unsupported in specialization '{}': {}",
                 key.function_name, e
             )),
         }
     }
+    Ok(())
 }
 
 /// Internal helper for benchmarking and testing the experimental VM pipeline.
@@ -277,6 +286,17 @@ pub fn compile_to_bytecode(
     source: &str,
     cache_path: &Path,
 ) -> Result<tempra_bytecode::BytecodeModule, DriverError> {
+    compile_to_bytecode_with_analysis(source, cache_path).map(VmCompilation::into_bytecode)
+}
+
+/// Compiles source fresh, retaining verified TIR and capability facts.
+///
+/// Never reads the cache. Writes the same bytecode-only cache artifact as
+/// [`compile_to_bytecode`]; capability presence does not enforce a contract.
+pub fn compile_to_bytecode_with_analysis(
+    source: &str,
+    cache_path: &Path,
+) -> Result<VmCompilation, DriverError> {
     let hash = crate::cache::compute_source_hash(source);
     let fingerprint = format!("tempra-{}", env!("CARGO_PKG_VERSION"));
     compile_and_cache_module(source, &hash, cache_path, &fingerprint)
@@ -320,15 +340,44 @@ pub fn run_file_with_experimental_vm_jit(
     args: &[String],
     jit_enabled: bool,
 ) -> Result<tempra_vm::value::VmValue, DriverError> {
-    use crate::module_graph::{load_module_graph, DiskDocumentLoader};
-    use std::collections::HashMap;
-    use tempra_typeck::{check_modules_always, ModuleToCheck};
-
     if !args.is_empty() {
         return Err(DriverError::UnsupportedExperimentalVm(
             "CLI arguments are not yet supported in experimental VM".into(),
         ));
     }
+
+    let compilation = compile_file_to_bytecode_with_analysis(path)?;
+    let bc_module = compilation.bytecode();
+    let main_name = bc_module
+        .functions
+        .iter()
+        .find(|f| f.name == "main" || f.name.ends_with(".main"))
+        .map(|f| f.name.as_str())
+        .ok_or_else(|| {
+            DriverError::UnsupportedExperimentalVm(
+                "experimental VM currently requires main()".into(),
+            )
+        })?;
+    let options = tempra_vm::profile::VmOptions {
+        jit_enabled,
+        ..Default::default()
+    };
+    tempra_vm::run_function_with_resolver(
+        bc_module,
+        main_name,
+        vec![],
+        options,
+        Some(tempra_native::registry::resolve),
+    )
+    .map_err(|e| DriverError::VmError(format!("{:?}", e)))
+}
+
+/// Compiles a file and its module graph fresh, retaining TIR and capability facts.
+/// This path does not read or write a bytecode cache.
+pub fn compile_file_to_bytecode_with_analysis(path: &Path) -> Result<VmCompilation, DriverError> {
+    use crate::module_graph::{load_module_graph, DiskDocumentLoader};
+    use std::collections::HashMap;
+    use tempra_typeck::{check_modules_always, ModuleToCheck};
 
     let mut diagnostics = Vec::new();
     let mut graph = match load_module_graph(path, &DiskDocumentLoader, &mut diagnostics) {
@@ -343,13 +392,18 @@ pub fn run_file_with_experimental_vm_jit(
     for name in &graph.order {
         if let Some(node) = graph.modules.get_mut(name) {
             if let Some(hir) = node.hir.take() {
-                files.push((node.name.clone(), node.imports.clone(), hir));
+                files.push((
+                    node.name.clone(),
+                    node.path.clone(),
+                    node.imports.clone(),
+                    hir,
+                ));
             }
         }
     }
 
     let mut modules_to_check = Vec::new();
-    for (name, imports, hir) in &mut files {
+    for (name, _path, imports, hir) in &mut files {
         modules_to_check.push(ModuleToCheck {
             name: name.clone(),
             imports: imports.clone(),
@@ -367,7 +421,12 @@ pub fn run_file_with_experimental_vm_jit(
     let mut module_builder = tempra_tir::builder::ModuleBuilder::new();
     let mut errors = Vec::new();
 
-    for (name, _imports, hir) in &files {
+    let mut bindings = ContractBindings::default();
+    for (name, path, _imports, hir) in &files {
+        let source_identity = ContractSource::Module {
+            name: name.clone(),
+            path: path.clone(),
+        };
         for item in &hir.items {
             if let tempra_hir::HirItem::Function(func) = item {
                 if is_generic_template(func) {
@@ -386,6 +445,7 @@ pub fn run_file_with_experimental_vm_jit(
                     prefix,
                 ) {
                     Ok(tir_func) => {
+                        bindings.register(tir_func.id, func, &source_identity)?;
                         module_builder.add_function(tir_func);
                     }
                     Err(e) => {
@@ -405,47 +465,16 @@ pub fn run_file_with_experimental_vm_jit(
             &mut module_builder,
             &mut errors,
             prefix,
-        );
+            &mut bindings,
+            &source_identity,
+        )?;
     }
 
     if !errors.is_empty() {
         return Err(DriverError::UnsupportedExperimentalVm(errors.join("\n")));
     }
 
-    let bc_module =
-        tempra_bytecode_lower::lower_tir_module(&module_builder.module).map_err(|e| {
-            DriverError::UnsupportedExperimentalVm(format!("bytecode lowering error: {:?}", e))
-        })?;
-
-    tempra_bytecode::verify::verify_module(&bc_module).map_err(|e| {
-        DriverError::UnsupportedExperimentalVm(format!("verification error: {:?}", e))
-    })?;
-
-    let main_name = bc_module
-        .functions
-        .iter()
-        .find(|f| f.name == "main" || f.name.ends_with(".main"))
-        .map(|f| f.name.clone());
-    let main_name = match main_name {
-        Some(name) => name,
-        None => {
-            return Err(DriverError::UnsupportedExperimentalVm(
-                "experimental VM currently requires main()".into(),
-            ));
-        }
-    };
-
-    let mut options = tempra_vm::profile::VmOptions::default();
-    options.jit_enabled = jit_enabled;
-
-    tempra_vm::run_function_with_resolver(
-        &bc_module,
-        &main_name,
-        vec![],
-        options,
-        Some(tempra_native::registry::resolve),
-    )
-    .map_err(|e| DriverError::VmError(format!("{:?}", e)))
+    compile_tir_module(module_builder.module, bindings)
 }
 
 pub fn run_source_with_experimental_vm_jit(

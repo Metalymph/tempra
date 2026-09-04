@@ -18,6 +18,7 @@ fn create_test_ctx() -> TypeContext {
 
 fn create_function(name: &str, ret_ty: HirType, stmts: Vec<HirStatement>) -> HirFunction {
     HirFunction {
+        deny_contract: None,
         name: name.to_string(),
         span: empty_span(),
         visibility: tempra_ast::Visibility::Private,

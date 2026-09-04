@@ -1,77 +1,94 @@
 # Tempra Repository File Map
 
-This document provides a precise mapping of the Tempra repository structure. It serves as a guide for contributors to locate specific logic within the multi-crate workspace.
+This index points to current source-of-truth files. A crate's presence in the workspace does not imply production completeness.
 
-## 1. Root Files
+## Project documentation
 
-- **`Cargo.toml`**: The workspace configuration file, defining all crates and shared dependencies.
-- **`rust-toolchain.toml`**: Pins the Rust version and required components to ensure build reproducibility.
-- **`README.md`**: Project overview, architectural rules, and high-level design summary.
-- **`docs/roadmap.md`**: The strategic implementation timeline and priority tracking.
+- `README.md`: project overview and current high-level status.
+- `docs/roadmap.md`: normative implementation order, including E → M → C → V → O.
+- `docs/TEMPRA_SURFACE_SPEC_v0.1.md`: current surface-language reference.
+- `docs/GRAMMAR.md`: parser-oriented grammar for implemented syntax.
+- `docs/specs/effects-v0.1.md`: implemented deny acquisition, planned enforcement and Phase E architecture.
+- `docs/E1_CAPABILITY_ANALYSIS.md`: implemented internal scope, API, and retained boundaries for E1.
+- `docs/TIR_SPEC.md`: TIR model, verifier role, and analysis insertion point.
+- `docs/architecture/ARCHITECTURE.md`: actual compiler paths and crate boundaries.
+- `docs/architecture/PIPELINE.md`: current default and experimental data flow.
+- `docs/DEV_GUIDE.md`: contributor workflow.
+- `docs/TOOLING.md`: current CLI diagnostics and LSP behavior.
 
-## 2. Documentation & Specifications
+`docs/specs/syntax-v0.1.md` is an early historical sketch. It is not authoritative where it conflicts with the surface spec or grammar. Phase-numbered JIT, VM, and lowering documents are implementation records for their named prototypes, not the current language roadmap.
 
-- **`docs/architecture/ARCHITECTURE.md`**: The central design document explaining the compiler philosophy and crate boundaries.
-- **`docs/architecture/FILE_MAP.md`**: This document; a precise index of the repository.
-- **`docs/architecture/PIPELINE.md`**: Documentation of the data flow from source to backend emission.
-- **`specs/syntax-v0.1.md`**: Reference specification for the Tempra language grammar and keywords.
-- **`specs/module-system-v0.1.md`**: Specification for package layout, imports, and the role of the entrypoint.
-- **`specs/effects-v0.1.md`**: [FUTURE] Preliminary design for the algebraic effects system.
+## Frontend and semantic analysis
 
-## 3. CLI (Command Line Interface)
+- `crates/tempra-lexer/src/`: tokens and lexical analysis.
+- `crates/tempra-parser/src/`: recursive-descent parsing.
+- `crates/tempra-ast/src/`: source-shaped AST definitions.
+- `crates/tempra-hir/src/hir.rs`: HIR definitions.
+- `crates/tempra-hir/src/lower.rs`: AST-to-HIR lowering.
+- `crates/tempra-typeck/src/check_file.rs`: file-level typechecking coordination.
+- `crates/tempra-typeck/src/check_item.rs`, `check_stmt.rs`, `check_expr.rs`: item, statement, and expression checking.
+- `crates/tempra-typeck/src/context.rs`: semantic context and collected facts.
 
-- **`crates/tempra-cli/src/main.rs`**: The actual binary entrypoint; responsible for initializing the driver.
-- **`crates/tempra-cli/src/app.rs`**: Manages the application state and top-level CLI configuration.
-- **`crates/tempra-cli/src/commands/run.rs`**: Orchestrates the "run" command for direct source execution via the interpreter.
-- **`crates/tempra-cli/src/commands/check.rs`**: Orchestrates the "check" command for verification-only passes.
-- **`crates/tempra-cli/src/commands/build.rs`**: Orchestrates the "build" command, selecting between Native AOT and Wasm targets.
-- **`crates/tempra-cli/src/commands/install.rs`**: Manages local installation of Tempra binaries to the system path.
+## Driver and execution
 
-## 4. Pipeline Orchestration
+- `crates/tempra-cli/src/app.rs`: CLI definitions and command dispatch.
+- `crates/tempra-cli/src/commands/`: implemented `run`, `check`, diagnostics, symbols, test, REPL, and TIR inspection commands.
+- `crates/tempra-driver/src/pipeline.rs`: default HIR interpreter and experimental VM orchestration.
+- `crates/tempra-driver/src/compilation.rs`: private verify/analyze/bytecode boundary and public immutable `VmCompilation` product for fresh compilation.
+- `crates/tempra-driver/src/contracts.rs`: canonical conversion, declaration provenance and compilation-local contract binding; no enforcement.
+- `crates/tempra-driver/src/module_graph.rs`: filesystem module loading, ordering, and cycle detection.
+- `crates/tempra-driver/src/build.rs`, `install.rs`: incomplete build and install scaffolds.
+- `crates/tempra-interpreter/src/`: default HIR evaluator and runtime value representation.
 
-- **`crates/tempra-driver/src/pipeline.rs`**: The central coordinator that executes compiler stages in sequence.
-- **`crates/tempra-driver/src/build.rs`**: Orchestrates the emission of build artifacts (Wasm modules or Native binaries).
-- **`crates/tempra-driver/src/install.rs`**: Handles filesystem moves and metadata updates for installed tools.
+## TIR and experimental VM
 
-## 5. Frontend Stages
+- `crates/tempra-tir/src/ir.rs`: TIR IDs, types, instructions, blocks, functions, and modules.
+- `crates/tempra-tir/src/builder.rs`: deterministic TIR construction and function table.
+- `crates/tempra-tir/src/verifier.rs`: structural and type verification.
+- `crates/tempra-tir-lower/src/lower.rs`: typed-HIR-to-TIR lowering for the supported subset.
+- `crates/tempra-tir-interp/src/`: focused TIR interpreter used for validation.
+- `crates/tempra-bytecode/src/`: bytecode model, verifier, cache format, and profiling support.
+- `crates/tempra-bytecode-lower/src/`: TIR-to-bytecode lowering.
+- `crates/tempra-vm/src/`: experimental bytecode VM.
+- `crates/tempra-jit-cranelift/src/`: opt-in Cranelift JIT for eligible VM functions.
 
-- **`crates/tempra-lexer/src/lexer.rs`**: The implementation of the lexical scanner that transforms text into tokens.
-- **`crates/tempra-parser/src/parser.rs`**: The recursive descent parser that produces the Abstract Syntax Tree (AST).
-- **`crates/tempra-ast/src/exprs.rs`**: Definitions for expression-level AST nodes (loops, matches, if-expressions).
-- **`crates/tempra-hir/src/lower.rs`**: Lowers the AST into the High-level Intermediate Representation (HIR), performing name resolution.
-- **`crates/tempra-typeck/src/check_expr.rs`**: The core type-checking logic for expressions and structural interface matching.
+## Standard library and native boundary
 
-## 6. Common IR & Middle-end
+- `std/`: Tempra declarations for standard modules and extern functions.
+- `crates/tempra-native/src/registry.rs`: native extern registry and lookup.
+- `crates/tempra-native/src/std/`: implemented filesystem, path, strings, and console I/O externs.
+- `crates/tempra-stdlib/`: legacy placeholder; new standard-library work belongs in `std/` and `tempra-native`.
 
-- **`crates/tempra-mir/src/lower.rs`**: Lowers HIR into the Mid-level IR (MIR), focusing on control-flow graphs and explicit side effects.
-- **`crates/tempra-ir/src/module.rs`**: The top-level container for a compiled Tempra program units.
-- **`crates/tempra-ir/src/function.rs`**: Defines the structure of functions at the IR level, including signature and metadata.
-- **`crates/tempra-ir/src/instr.rs`**: The definition of the Tempra IR instruction set (the platform-neutral "bytecode").
-- **`crates/tempra-ir/src/types.rs`**: The representation of types at the IR level, used for backend lowering.
+## Diagnostics and tooling
 
-## 7. Execution & Runtime
+- `crates/tempra-diagnostics/src/lib.rs`: structured diagnostics, labels, notes, spans, and JSON conversion.
+- `crates/tempra-analysis/src/lib.rs`: editor-oriented semantic analysis over driver/frontend data.
+- `crates/tempra-lsp/src/server.rs`: active LSP server implementation.
 
-- **`crates/tempra-interpreter/src/eval.rs`**: The core execution loop for the stack-based Tempra VM.
-- **`crates/tempra-interpreter/src/frame.rs`**: Manages activation records, local variables, and the call stack.
-- **`crates/tempra-runtime/src/value.rs`**: The unified representation of runtime data (Integers, Strings, ADT payloads).
-- **`crates/tempra-stdlib/src/process.rs`**: Bridge logic for system process execution and piping.
+## Capability analysis
 
-## 8. WebAssembly (Wasm)
+- `crates/tempra-effects/src/capability.rs`: internal capability identifiers and compact stable set representation.
+- `crates/tempra-effects/src/analysis.rs`: pure TIR scan, call graph, fixed-point propagation, structured errors, and witness reconstruction.
+- `crates/tempra-effects/src/externs.rs`: called-extern classification for the current native registry.
 
-- **`crates/tempra-backend-wasm/src/lower.rs`**: The lowering pass from Tempra IR directly to Wasm instructions.
-- **`crates/tempra-backend-wasm/src/module.rs`**: Handles the serialization of the binary WebAssembly module format (.wasm).
-- **`crates/tempra-wasm-host/src/module.rs`**: Integration layer for executing third-party Wasm modules within Tempra.
-- **`crates/tempra-component-host/src/bindgen.rs`**: [FUTURE] Placeholder for Wasm Component Model binding generation.
+## Incomplete and planned middle-end/backend crates
 
-## 9. Native AOT (Ahead-Of-Time)
+- `crates/tempra-mir/`: MIR scaffold; lowering is not implemented.
+- `crates/tempra-ir/`: small generic IR scaffold, separate from the active TIR path.
+- `crates/tempra-opt/`: optimization scaffold; ARC and escape work are not implemented language guarantees.
+- `crates/tempra-runtime/`: shared runtime scaffold.
+- `crates/tempra-backend-cranelift/`: native AOT scaffold, distinct from the experimental JIT.
+- `crates/tempra-backend-wasm/`: dedicated Wasm backend scaffold.
+- `crates/tempra-wasm-host/`, `crates/tempra-component-host/`: Wasm hosting scaffolds, not compiler backends.
+- `crates/tempra-linker/`: linker scaffold.
 
-- **`crates/tempra-backend-cranelift/src/lower.rs`**: Translates Tempra IR instructions into Cranelift IR for machine code generation.
-- **`crates/tempra-backend-cranelift/src/abi.rs`**: Implements the Application Binary Interface (ABI) for native platform calling conventions.
-- **`crates/tempra-linker/src/exe.rs`**: The wrapper around system linkers (ld, lld) to produce final executables.
+## Phase E ownership
 
-## 10. Future-Focused Files
+E1 added `crates/tempra-effects/`, depending only on `tempra-tir`. It owns the internal capability vocabulary, sets, per-function summaries, direct discovery, call graph, fixed-point propagation, structured analysis errors, and deterministic provenance.
 
-- **`crates/tempra-opt/src/passes/arc.rs`**: [FUTURE] Placeholder for automated ARC elimination and optimization passes.
-- **`crates/tempra-opt/src/passes/escape.rs`**: [FUTURE] Placeholder for escape analysis to enable stack promotion of heap values.
-- **`crates/tempra-lsp/src/server.rs`**: [FUTURE] Implementation of the Language Server Protocol for IDE integration.
-- **`crates/tempra-repl/src/loop.rs`**: [FUTURE] Implementation of the interactive Read-Eval-Print Loop.
+E2 integrates analysis only in fresh VM compilations, retaining the typed result
+in `VmCompilation`. Cache hits, TIR emission/interpreter and HIR paths remain
+independent. E3.1 adds syntax-only AST/HIR contracts and driver-owned declaration
+metadata exposed by `VmCompilation::contract`/`contracts`. Enforcement, other
+attributes, rendered diagnostics and inspection remain pending. Instruction-level
+source mapping remains deferred. E3.2 must prevent cache bypass of enforcement.

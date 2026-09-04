@@ -242,3 +242,64 @@ fn test_pretty_printer() {
     assert!(out.contains("%1 = const 10i64"));
     assert!(out.contains("store $0, %1"));
 }
+
+#[test]
+fn tag_is_a_string_but_comparisons_remain_same_type() {
+    for compare_to_string in [true, false] {
+        let mut module = ModuleBuilder::new();
+        let mut function = module.new_function("tag_compare", TirType::Bool);
+        let entry = function.new_block();
+        function.set_current_block(entry);
+        let value = function
+            .build_make(
+                TirType::Option(Box::new(TirType::Int64)),
+                Some("None".into()),
+                vec![],
+            )
+            .unwrap();
+        let tag = function.build_tag(value).unwrap();
+        let literal = if compare_to_string {
+            TirConst::String("None".into())
+        } else {
+            TirConst::Int64(0)
+        };
+        let wanted = function.build_const(literal).unwrap();
+        let condition = function.build_eq(tag, wanted).unwrap();
+        function.build_ret(Some(condition)).unwrap();
+        module.add_function(function.build());
+        if compare_to_string {
+            assert!(verify_module(&module.module).is_ok());
+        } else {
+            assert!(verify_module(&module.module).unwrap_err().contains(
+                &VerifierError::TypeMismatch {
+                    expected: TirType::String,
+                    actual: TirType::Int64,
+                },
+            ));
+        }
+    }
+}
+
+#[test]
+fn mismatched_result_store_and_return_are_still_rejected() {
+    let expected = TirType::Result(Box::new(TirType::Int64), Box::new(TirType::String));
+    let wrong = TirType::Result(Box::new(TirType::Int64), Box::new(TirType::Unit));
+    let mut module = ModuleBuilder::new();
+    let mut function = module.new_function("wrong_result", expected.clone());
+    let entry = function.new_block();
+    function.set_current_block(entry);
+    let payload = function.build_const(TirConst::Int64(1)).unwrap();
+    let value = function
+        .build_make(wrong.clone(), Some("Ok".into()), vec![payload])
+        .unwrap();
+    let slot = function.build_slot(expected.clone(), None).unwrap();
+    function.build_store(slot, value).unwrap();
+    function.build_ret(Some(value)).unwrap();
+    module.add_function(function.build());
+    let mismatch = VerifierError::TypeMismatch {
+        expected,
+        actual: wrong,
+    };
+    let errors = verify_module(&module.module).unwrap_err();
+    assert_eq!(errors.iter().filter(|error| **error == mismatch).count(), 2);
+}

@@ -831,7 +831,9 @@ Capture
 ### Storage and Escaping
 
 - **Storage**: The closure storage strategy and runtime representation are implementation-defined. The language does not guarantee specific memory layouts or allocation strategies (e.g., heap vs stack).
-- **Escaping**: Closures may be stored and passed as values. Lifetime and escape restrictions are implementation-defined in v1 and will be hardened in future versions with ownership/borrow analysis.
+- **Escaping**: Closures may be stored and passed as values. The formal escape and ownership restrictions are not yet specified.
+
+The next ownership phase will define an acyclic invariant for safe Tempra across `ref`, `inout`, `consume`, explicit captures, recursive `self`, structs, enums, and escaping values. The current runtime representation is not the normative ownership model and must not be used to infer that strong cycles are already prevented. This work will not introduce Rust-style lifetime syntax or Pony-style reference capabilities.
 
 > [!NOTE]
 > The runtime representation of recursive closures is implementation-defined and must not be relied upon by user code.
@@ -872,17 +874,17 @@ let c = cmd("git", ["status"])
 Supported import forms:
 
 ```tempra
-import std/fs
-import std/process
-import ./util
-import pkg/json
+import std.fs
+import std.process
+import .util
+import pkg.json
 ```
 
 Rules:
 
-- `std/...` for standard library modules
-- `./...` for relative imports
-- `pkg/...` for package imports
+- `std...` for standard library modules
+- a leading `.` for relative imports
+- dot-separated package module paths
 ---
 
 ## 24. Subscript Hooks
@@ -957,10 +959,35 @@ fn id_item(type T: Collection, value: T.Item) -> T.Item {
 
 ---
 
-## 26. Future Directions (v0.2+)
+## 26. Capability Contracts
+
+The intended public capability surface is limited to `@deny(...)`, `@pure`, and
+`@unsafe`. E3.1 implements only typed acquisition of `@deny`, not enforcement.
+
+`@deny(alloc, panic)` requires at least one public name: `alloc`, `panic`, `io`,
+`process`, `spawn`, `nondeterminism`. `@deny()` and `@deny(unsafe)` are errors.
+Duplicates and repeated attributes merge; whitespace/newlines and a trailing
+comma are allowed. Place attributes before optional `pub`, on named top-level
+functions or methods inside `extend`. Externs, closures, interface requirements,
+fields and other items cannot carry them. Unannotated functions have no contract.
+Actual capability requirements do not cause rejection until E3.2.
+
+- `@deny(...)` will prohibit direct and transitive capability requirements.
+- `@pure` will mean `@deny(io, process, spawn, nondeterminism)`; pure code may allocate and may panic.
+- `@unsafe` will mark an explicit low-level boundary and is not an alias for capability denial.
+
+`@pure`, `@unsafe` and `@verified` are not implemented. E3.1 leaves bytecode caches
+unchanged; E3.2 must ensure cached pre-enforcement artifacts cannot bypass contracts.
+
+See [Capability Contracts v0.1](specs/effects-v0.1.md). Normal Tempra remains safe and checked by default; there is no `--checked`, global `--verified`, or Spark mode.
+
+## 27. Future Directions (v0.2+)
 
 - Iterators and `Iterable` interface
 - `for-in` protocol lowering
 - Associated constants
 - Existential interfaces and dynamic dispatch
-- Ownership and borrow analysis
+- Capability analysis
+- Acyclic ownership analysis
+- Concurrency based on owned/share-safe values
+- Verified functions

@@ -1,81 +1,101 @@
 # Tempra Roadmap
 
-This document outlines the implementation strategy and developmental phases for Tempra, a fast, lightweight scripting language that compiles to native binaries.
+This document defines Tempra's current implementation order. Phase-numbered prototype documents record completed experiments, but they do not override this roadmap or the current language specifications.
 
-## 1. Implementation Phases
+## Current implementation baseline
 
-### Phase 1: Core Foundation (v0.1) - Current Focus
+Tempra has a working lexer, parser, AST-to-HIR lowering, typechecker, HIR interpreter, module graph, native standard-library bridge, and language tooling. TIR, TIR verification, bytecode lowering, the bytecode VM, and the Cranelift JIT exist as experimental paths with a smaller supported language subset. MIR, general-purpose optimization, native AOT, and dedicated Wasm emission remain incomplete scaffolds.
 
-- **Compiler Frontend:** Implementation of the lexer, recursive descent parser, and Abstract Tree (AST).
-- **Semantics:** Initial symbol resolution, type checking for core compound types (`struct`, `enum`), and Zig-style generic stabilization.
-- **Pattern Matching:** Centralized pattern semantics with OR-patterns, nesting, and exhaustiveness checking for finite domains.
-- **Bytecode VM:** A lightweight stack-based interpreter for rapid cold-starts and low memory overhead in script mode. See [BYTECODE_ISA.md](BYTECODE_ISA.md).
-- **Minimal Stdlib:** Foundation for `io`, `env`, string helpers, and the frozen v0.1 eager collection helper surface.
-- **Script Mode:** Support for running `.tempra` files directly without a `main` entrypoint.
+## Language implementation order
 
-### Phase 2: Native Compilation (v0.2)
+```text
+E — Capability / Effect Analysis
+        ↓
+M — Acyclic Ownership / Memory Model
+        ↓
+C — Concurrency
+        ↓
+V — Verified Functions
+        ↓
+O — Deeper Memory Optimizations
+```
 
-- **Cranelift Backend:** Integration with Cranelift for Ahead-Of-Time (AOT) native code generation.
-- **Build Modes:**
-  - `light`: Default AOT mode optimized for binary size.
-  - `fast`: Initial runtime optimizations.
-- **App Mode:** Formalization of the package system and `main` entrypoint requirement for binaries.
-- **Extended Stdlib:** Implementation of `fs`, `path`, and basic `process` execution.
+This order is a dependency chain, not merely a list of preferences.
 
-### Phase 3: Wasm & Advanced Runtime (v0.3)
+### E — Capability / Effect Analysis
 
-- **Wasm Backend:** Dedicated output support for WebAssembly MVP.
-- **ARC Core:** Implementation of the base Automatic Reference Counting (ARC) memory management.
-- **Module System:** Full versioning and dependency resolution for external packages.
-- **Standard Library:** Completion of `os`, `time`, and advanced `cmd` piping support.
+Capability analysis is the immediate language implementation target. The compiler will compute stable per-function semantic summaries over verified TIR and propagate requirements transitively through calls.
 
-### Phase 4: Optimization & Maturity (v1.0)
+The public contract surface remains deliberately small:
 
-- **Fast Mode Enhancements:** Perceus-inspired ARC elimination and escape analysis for stack promotion.
-- **Comptime:** Design and implementation of compile-time execution for generics and specialization.
-- **Wasm Hosting:** Integration with Wasmtime for specialized Wasm component hosting.
-- **Concurrency:** Introduction of lightweight event-loop mechanics or explicit threading/channels.
+- `@deny(...)`
+- `@pure`
+- `@unsafe`
 
-## 2. Technical Priorities
+The internal initial vocabulary is `Alloc`, `Panic`, `IO`, `Process`, `Spawn`, `Nondeterminism`, and `Unsafe`. Public denial names exclude `unsafe`; `@unsafe` is a separate low-level boundary.
 
-### Immediate Priorities
+Phase E is subdivided as follows:
 
-1. **Frontend Stability:** Ensuring the AST and IR (Intermediate Representation) are robust enough to support both interpretation and AOT.
-2. **Collections Checkpoint:** v0.1 Array/Slice/String collection helpers are frozen as eager, VM-supported APIs before adding Map/Set or lazy adapters.
-3. **Concurrency Direction:** Start the lightweight concurrency design without expanding the collection helper surface further.
-4. **Structural Interfaces:** Finalizing the rules for static duck typing to ensure zero-cost abstractions where possible.
+1. **E1 — Internal capability model and TIR analysis (implemented).** `tempra-effects` provides pure analysis over `TirModule`, direct capability discovery, a reusable call graph, fixed-point propagation, deterministic provenance, and hand-built TIR fixture tests. It adds no public syntax.
+2. **E2 — Minimal pipeline integration (implemented).** Fresh source and multi-module VM compilations verify TIR, analyze it once, and retain TIR, capability facts and verified bytecode in `VmCompilation`. Cache-hit execution, TIR emission, TIR interpretation and HIR paths remain analysis-independent. No enforcement, UI, attributes, CLI output or source-span expansion.
+3. **E3 — `@deny(...)`.** E3.1 is implemented: nonempty typed contracts, stable compilation-local TIR function binding and declaration/attribute provenance, without enforcement. E3.2 remains pending: enforce denied transitive requirements and expose contract witnesses, with a mandatory cache non-bypass gate for artifacts from older non-enforcing compilers.
+4. **E4 — `@pure`.** Add the single convenience contract, equivalent to denying `io`, `process`, `spawn`, and `nondeterminism`.
+5. **E5 — `@unsafe`.** Connect the safe-by-default language direction to an explicit low-level boundary without redesigning the entire unsafe subsystem.
+6. **E6 — Diagnostics and introspection.** Expose structured paths and stable data for future `tempra inspect`, `tempra effects`, and JSON diagnostics.
 
-### Future Priorities
+E1 is TIR-only. HIR-only operations are coverage gaps for later integration, not justification for a second analyzer.
 
-1. **Memory Optimization:** Reducing ARC overhead in the AOT backend.
-2. **Map/Set and Advanced Collections:** Add richer collection types and adapters after the v0.1 checkpoint.
-3. **SIMD Support:** Exploiting hardware capabilities in `fast` build mode.
-4. **Minimal Effect System:** Exploring structured error handling and resource management.
+The implemented E1–E3.1 design and boundaries are recorded in [E1 Capability Analysis](E1_CAPABILITY_ANALYSIS.md). E3.2 is next; cache invalidation/metadata/bypass strategy must be settled before enforcement can be considered complete.
 
-## 3. Explicitly Out of Scope (Non-Goals)
+### M — Acyclic Ownership / Memory Model
 
-- **Production-wide JIT Compilation:** While a fully-featured, production-wide JIT is not a core goal for standard v0.2 releases, a robust experimental, opt-in Cranelift JIT prototype has been established (Phases 15-17) specifically for performance exploration on hot `Int64` and read-only heap workloads.
-- **Heavy VM Runtime:** No GC pause or heavy virtual machine environments.
-- **Async/Await Sprawl:** Avoiding the "colored function" problem; preferring lightweight concurrency or explicit event-loop management.
-- **Nominal Trait Hierarchies:** No complex inheritance or rigid trait implementations.
+Memory correctness is distinct from memory optimization. The intended invariant is:
 
----
+> Safe Tempra must not permit construction of strong ownership cycles that prevent ARC from reclaiming otherwise unreachable values.
 
-## 4. Experimental JIT Development & Decision Gates
+The dedicated Phase M specification must define this rule across value semantics, `let`/`var`, `ref`, `inout`, `consume`, explicit closure captures, recursive closure `self`, structs, enums, and escaping values. The current interpreter representation does not yet establish this guarantee.
 
-### Phase 17: Heap-Aware JIT Prototype Slice (COMPLETE)
-Established a highly secure, isolated type-safe JIT boundary:
-- **Lifetime Isolation**: Context-based heap object tracking (`JitRuntimeContext`), preventing handle identifier leaks.
-- **Generic Intrinsics**: Dynamic routing of core operations (`Len`, `Size`, `GetIndex`) through runtime Rust dispatch helper boundaries.
-- **Rejection & Fallback Hardening**: Formulated descriptive per-opcode rejection diagnostics and guaranteed transparent fallback execution to the stack interpreter on unsupported operations.
+Phase M must keep the source language substantially simpler than Rust lifetimes or Pony reference capabilities. Formal acyclic ownership rules are the next design and implementation phase after E.
 
-### Phase 18 Decision Gate: Next Pathways
-With Phase 17 consolidated, the development team faces a choice of four potential pipelines for Phase 18:
-- **Option 18A: Heap Mutation & Allocation Support**
-  - Add source-level heap-producing operations to the JIT (e.g. `String.concat`, `Array.push`, `Struct` construction, and dynamic variant payloads).
-- **Option 18B: Advanced Diagnostics & IDE Tooling**
-  - Integrate structural JIT checks inside LSP/tooling to warn developers of bytecode functions rejected by JIT, and output tracing tools for deoptimization analysis.
-- **Option 18C: Language Semantics & Method Dispatch**
-  - Implement full method calls, generic functions, and external module calls across the JIT execution boundary.
-- **Option 18D: Unified Native AOT & WebAssembly Pipelines**
-  - Standardize lowering pipelines so AOT native compilations share optimal Cranelift IR optimizations and target-independent bytecode translations.
+### C — Concurrency
+
+Concurrency depends on both capability summaries and the acyclic ownership model. The retained direction is:
+
+- `Task[T]`, `spawn`, and `.await()`;
+- structured `TaskGroup`;
+- `actor`;
+- `Channel[T]` and `select`.
+
+Normal Tempra will not use `async fn`, locks, raw threads as its primary model, or user-facing atomics. `ref` and `inout` must not cross task, actor, or channel boundaries. Owned values, immutable share-safe values, and concurrency-safe handles will form the communication basis; their exact formal rules belong to Phase C after M.
+
+### V — Verified Functions
+
+`@verified` will request stronger static proof that runtime failures are impossible or explicitly represented. It is not an alias for capability denial.
+
+Future checks include panic/crash paths, unsafe operations, overflow and underflow, division by zero, bounds accesses, numeric narrowing, fallible allocation, partial operations, and transitive calls. The initial design has no `requires`, `ensures`, `invariant`, separate proof language, or global `--verified` mode. Normal Tempra syntax, types, control-flow narrowing, `Result`, `Option`, and checked APIs express proof conditions.
+
+### O — Deeper Memory Optimizations
+
+Only after the memory model and concurrency boundaries are established should optimization aggressively reduce ARC overhead through:
+
+- uniqueness analysis;
+- escape analysis;
+- stack promotion;
+- Perceus-inspired reuse;
+- retain/release elimination.
+
+These are performance techniques, not prerequisites for memory correctness or concurrency.
+
+## Terminology
+
+- **checked**: normal Tempra semantics; safe and implicit, with no `--checked` flag;
+- **verified**: stronger local static guarantees requested by future `@verified`;
+- **unsafe**: an explicit boundary for low-level operations unavailable to normal safe Tempra.
+
+The former "Spark mode" and global checked/verified mode proposals are not part of the current design.
+
+## Other implementation tracks
+
+Native AOT, dedicated Wasm output, package maturity, REPL work, richer collections, and experimental JIT research remain valid engineering tracks. They must not reorder or weaken the E → M → C → V → O language dependency chain.
+
+The Phase 15–18 JIT documents are historical implementation records for an opt-in experiment. They are not the normative language roadmap.

@@ -99,6 +99,7 @@ impl<'src> Lowerer<'src> {
         let hir_body = item.body.as_ref().map(|b| self.lower_block(b));
         HirFunction {
             span: item.span,
+            deny_contract: item.deny_contract.clone(),
             visibility: item.visibility,
             name: self.text(item.name.span),
             generic_parameters: item

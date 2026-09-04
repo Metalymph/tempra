@@ -78,16 +78,16 @@ on user input. Notable error cases:
 - **UnsupportedInstr** — clean error for `make`/`get`/`set`/`tag`/`unwrap`
 - **WrongArity** / **UnknownFunction** — checked at call sites
 
-## Differences from Future Bytecode VM
+## Differences from the Experimental Bytecode VM
 
-| Aspect | TIR Interpreter (current) | Bytecode VM (future) |
+| Aspect | TIR Interpreter | Experimental Bytecode VM |
 |---|---|---|
 | Input | TIR Module (tree) | Flat bytecode |
 | Dispatch | Match on enum variant | Opcode table |
 | Performance | Not optimized | Optimized dispatch loop |
-| Scope | Validation only | Production runtime |
-| Heap/GC | None | Required |
-| Stdlib | None | Full |
+| Scope | Validation only | Opt-in execution path |
+| Heap values | None | Current VM value representations |
+| Stdlib | None | Current native extern subset |
 
 ## Non-Goals
 

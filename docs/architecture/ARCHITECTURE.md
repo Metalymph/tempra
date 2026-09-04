@@ -1,280 +1,167 @@
 # Tempra Architecture
 
-This document defines the architectural principles, crate responsibilities, and implementation constraints for the Tempra programming language.
+This document describes the compiler as it exists today and the intended insertion point for the next semantic analyses. Planned components are labeled explicitly.
+
+## Design principles
+
+- **Script first:** the default execution path favors a small, direct HIR interpreter.
+- **Forward semantic flow:** source representations lower from AST to HIR and, for the experimental VM, to verified TIR.
+- **Typed shared facts:** cross-cutting analyses should publish stable per-function facts instead of independently rebuilding semantic information.
+- **Small public language:** compiler sophistication must not require a large source-level effect, ownership, or proof language.
+- **Backend isolation:** native and Wasm code generation remain separate targets; Wasm output must not be routed through Cranelift.
+- **Structured diagnostics:** analysis results should retain identities and provenance suitable for terminal, JSON, LSP, and inspection tools.
+
+## Current compiler paths
+
+### Default run path
+
+```text
+Source
+  → Lexer / Parser
+  → AST
+  → HIR lowering
+  → Type checking
+  → HIR interpreter
+```
+
+`tempra run` uses this path unless the experimental VM is selected. `tempra check` currently stops after parsing, HIR lowering, module resolution, and type checking.
+
+### Experimental VM path
+
+```text
+Source
+  → Lexer / Parser
+  → AST
+  → HIR lowering
+  → Type checking and comptime pruning
+  → TIR lowering
+  → TIR verification
+  → Capability analysis (fresh compilation)
+  → Bytecode lowering
+  → Bytecode verification
+  → VmCompilation (retained TIR, capability facts, bytecode)
+  → Bytecode VM
+  → optional experimental Cranelift JIT for eligible functions
+```
 
-## 1. Design Summary
+TIR support covers a smaller language subset than the HIR interpreter. Generic templates are not emitted directly; requested concrete specializations are lowered where supported.
+
+This is the fresh source/multi-module VM path. Bytecode cache hits verify and
+execute cached bytecode without analysis or reconstructed TIR. TIR emission
+verifies then formats, and TIR interpretation verifies then interprets; neither
+depends on capability coverage. See [pipeline boundaries](PIPELINE.md).
+
+### Incomplete planned paths
+
+The `tempra-mir`, `tempra-ir`, `tempra-opt`, native AOT, Wasm backend, linker, and build crates contain varying levels of scaffold or prototype code. They are not a single production pipeline today. Historical design documents that describe them as complete do not override this status.
+
+## Capability analysis insertion point
+
+Phase E uses verified TIR as its only semantic substrate:
+
+```text
+TIR lowering
+  → TIR verification
+  → capability analysis
+  → later semantic analyses
+  → bytecode, native, or Wasm backends
+```
+
+E1 provides a pure `tempra-effects` crate that depends only on `tempra-tir`. It consumes a `TirModule` and returns stable summaries, a call graph, and deterministic provenance. It does not mutate TIR, change bytecode formats, parse attributes, or add an HIR analyzer.
+
+E2 implements minimal driver integration: private `AnalyzedTir` ties immutable
+TIR to its facts, and public `VmCompilation` also retains verified bytecode.
+Source and multi-module fresh compilation analyze once immediately after TIR
+verification, without enforcement or UI. Typed verifier/analysis failures are
+retained in `DriverError`; capability presence itself is accepted.
+
+E3.1 preserves dedicated `@deny` syntax through AST/HIR. It adds no semantic
+capability logic to frontend crates. Driver-owned conversion and registration
+bind the concrete HIR declaration directly to the ID returned by lowering,
+including specializations, without a post-hoc name lookup. Immutable contract
+accessors on `VmCompilation` retain source/module identity and declaration and
+attribute spans alongside facts. No contract is enforced yet, and instruction
+source mapping remains absent. Cache behavior is unchanged in E3.1; E3.2 must
+prevent pre-enforcement bytecode cache hits from bypassing contracts.
+
+```text
+tempra-tir
+    ↑ dependency
+tempra-effects
+    ↑ dependency
+tempra-driver
+    ↑ consumed by
+tempra-analysis / tempra-lsp / tempra-cli
+```
+
+Source-span mapping remains deferred: TIR has no reliable source mapping.
+E2 retains structural locations, edges, origins and witnesses. The future
+bridge belongs in a lowering side table from `TirLocation` to module identity
+plus existing `Span`; debug names are not a source map. HIR-only operations,
+cache-hit facts and unresolved E1 native/cloning mappings remain coverage gaps.
+
+## Semantic analysis order
 
-Tempra is a script-first programming language designed to transition seamlessly from interpreted execution to native binaries. The architecture is built around a multi-stage compilation pipeline that lowers high-level source code into a platform-agnostic intermediate representation (Tempra IR). This IR is the single source of truth for all three execution backends:
+The language-level dependency order is:
 
-1. **Interpreter**: Direct execution of Tempra IR for rapid development and scripting.
-2. **Wasm Backend**: Generation of standalone WebAssembly modules and components.
-3. **Cranelift Backend**: AOT (Ahead-Of-Time) native machine code generation for performant binaries.
+```text
+E — Capability / Effect Analysis
+        ↓
+M — Acyclic Ownership / Memory Model
+        ↓
+C — Concurrency
+        ↓
+V — Verified Functions
+        ↓
+O — Deeper Memory Optimizations
+```
 
-## 2. Architectural Rules
+Capability summaries become reusable inputs for ownership checks, concurrency-boundary checks, verified functions, diagnostics, and tooling.
 
-- **Unidirectional Flow**: Information flows only "forward" through the pipeline stages (AST -> HIR -> MIR -> Tempra IR).
-- **Representation Purity**: Each stage must have its own distinct data structures. Mixing AST nodes with Typechecked HIR nodes is prohibited.
-- **Backend Isolation**: Backends (Interpreter, Wasm, Cranelift) must be entirely isolated and communicate only via Tempra IR.
-- **Cranelift usage**: Cranelift is strictly for native AOT. It must **not** be used to generate WebAssembly output.
-- **Host vs. Backend**: A backend *generates* code; a host *executes* code. Wasm output and Wasm hosting are separate concerns handled by separate crates.
-- **Diagnostic Agnosticism**: Error reporting and source spans are managed independently of the compilation backend.
+## Capability summary architecture
 
-## 3. Compiler Pipeline
+E1 derives direct capability requirements by scanning verified TIR instructions and called extern functions. A call graph built from `TirInstr::Call` propagates requirements to callers through reverse internal edges until a fixed point.
 
-1. **Source** (`tempra-fs`)
-2. **Lexer** (`tempra-lexer`)
-3. **Parser** (`tempra-parser`) -> **AST** (`tempra-ast`)
-4. **Lowering** -> **HIR** (`tempra-hir`)
-5. **Type Checking** (`tempra-typeck`)
-6. **Lowering** -> **MIR** (`tempra-mir`)
-7. **Optimization** (`tempra-opt`) -> **Tempra IR** (`tempra-ir`)
-8. **Backend Emission**:
-    - `tempra-interpreter` (Virtual Machine execution)
-    - `tempra-backend-wasm` (Wasm output)
-    - `tempra-backend-cranelift` (Native AOT output)
+Provenance must retain:
 
----
+- the function containing a direct requirement;
+- its `TirBlockId` and instruction index;
+- each callsite along a transitive path;
+- deterministic ordering and tie-breaking.
 
-## 4. Crate Responsibilities & File Layouts
+Unknown extern declarations are harmless until called. A call to an extern without a known classification is an analysis error, including calls in non-entry TIR functions.
 
-### Infrastructure Core
+`Alloc` classification follows semantic runtime allocation in the current representation. TIR string constants and construction instructions are not normative allocation sites without runtime confirmation. `Panic` is a conservative may-panic capability in E1; later verified analysis may prove individual operations safe.
 
-#### tempra-cli
+## Memory architecture boundary
 
-**Purpose**: CLI entrypoint and argument parsing.
+The current HIR runtime uses reference-counted and interior-mutable Rust representations for arrays, slices, closures, and captured cells. In particular, recursive closure `self` currently uses a strong cell-to-closure link. The runtime implementation therefore must not be cited as proof that safe Tempra already prevents ownership cycles.
 
-- `src/main.rs`: Entrypoint logic.
-- `src/args.rs`: CLI argument definitions (using clap or equivalent).
-- `src/commands//`: Individual command implementations (run, build, check).
+Phase M will define which ownership graphs are legal across value semantics, `let`, `var`, `ref`, `inout`, `consume`, closure captures, recursive `self`, structs, enums, and escaping values. It precedes concurrency.
 
-#### tempra-driver
+ARC optimization is a separate later concern. Escape analysis, stack promotion, uniqueness, reuse, and retain/release elimination belong to O and are not prerequisites for C.
 
-**Purpose**: Orchestrates the compilation pipeline.
+## Major crate responsibilities
 
-- `src/lib.rs`: The main `Driver` struct.
-- `src/session_ext.rs`: Integration with `tempra-session`.
-- `src/pipeline.rs`: Definition of stages and execution flow.
+- `tempra-lexer`, `tempra-parser`, `tempra-ast`: surface syntax and AST construction.
+- `tempra-hir`: normalized semantic representation and AST lowering.
+- `tempra-typeck`: type checking, specialization facts, narrowing, interfaces, and pattern analysis.
+- `tempra-driver`: module loading and orchestration of current execution and checking paths.
+- `tempra-interpreter`: default checked-HIR runtime.
+- `tempra-tir`, `tempra-tir-lower`, `tempra-tir-interp`: typed backend-facing IR, lowering, verification, and focused interpretation tests.
+- `tempra-bytecode`, `tempra-bytecode-lower`, `tempra-vm`: experimental bytecode path.
+- `tempra-native` and `std/`: native implementations and Tempra extern declarations for the current standard library.
+- `tempra-diagnostics`: structured diagnostic data and rendering support.
+- `tempra-analysis`, `tempra-lsp`: editor-facing semantic analysis and LSP behavior.
+- `tempra-jit-cranelift`: opt-in JIT experiment over eligible bytecode functions.
+- `tempra-effects`: pure TIR capability analysis, summaries, call edges, structured errors and deterministic provenance; E2 integration is owned by `tempra-driver`.
 
-#### tempra-session
+## Public semantic terminology
 
-**Purpose**: Global compilation state, target configuration, and inter-crate session data.
+- **checked:** normal safe Tempra behavior, implicit and without a mode flag;
+- **verified:** future stronger local proof through `@verified`;
+- **unsafe:** future explicit low-level boundary through `@unsafe`.
 
-- `src/session.rs`: The `Session` struct containing target info and global options.
-- `src/config.rs`: Build profiles and configuration file parsing.
+There is no current Spark mode, global `--checked`, or global `--verified` design.
 
-#### tempra-span
-
-**Purpose**: Source code location tracking (SourceMap) and spans.
-
-- `src/source.rs`: `SourceFile` and `SourceMap`.
-- `src/span.rs`: `Span` and `BytePos` definitions.
-
-#### tempra-diagnostics
-
-**Purpose**: Error reporting, warnings, and diagnostic emission.
-
-- `src/handler.rs`: Central diagnostic handling.
-- `src/emitter.rs`: Formatting and terminal output.
-- `src/error.rs`: Standardized error codes.
-
-#### tempra-fs
-
-**Purpose**: Abstraction over the filesystem for source loading and artifact emission.
-
-- `src/vfs.rs`: Virtual File System interface for testing and LSP support.
-- `src/loader.rs`: Source file loading logic.
-
-### Frontend Stages
-
-#### tempra-lexer
-
-**Purpose**: Tokenization of raw source code.
-
-- `src/lex.rs`: Lexing engine.
-- `src/token.rs`: Token definitions and keywords.
-
-#### tempra-parser
-
-**Purpose**: Recursive descent parsing and AST construction.
-
-- `src/parser.rs`: Main parser implementation.
-- `src/grammar/`: Individual grammar rules (expressions, statements, declarations).
-
-#### tempra-ast
-
-**Purpose**: Abstract Syntax Tree definitions.
-
-- `src/ast.rs`: AST node structures.
-- `src/visit.rs`: Visitor patterns for AST traversal.
-
-#### tempra-hir
-
-**Purpose**: High-level IR (desugared AST, resolved names).
-
-- `src/hir.rs`: HIR node structures.
-- `src/lower.rs`: Lowering logic from AST to HIR.
-
-#### tempra-typeck
-
-**Purpose**: Type inference and static analysis.
-
-- `src/check.rs`: Main type checking loop.
-- `src/inference.rs`: Type unification and inference engine.
-- `src/interface.rs`: Structural interface matching logic.
-- `src/refinement.rs`: Branch-local fact tracking and variable narrowing.
-- `src/patterns/`: Pattern semantic analysis and exhaustiveness (Domain/Space model).
-
-#### Refinement Architecture
-
-The `Refinement` system manages branch-local semantic facts derived from `is` tests and `match` arms.
-- **Refinement facts**: Contains pattern bindings and the identity of the narrowed variable.
-- **Context injection**: facts are injected into the scope of the "true" branch.
-- **Isolation**: No hidden scope mutation occurs outside the direct refinement path.
-
-#### Pattern & Exhaustiveness
-
-Pattern matching follows a centralized semantic model:
-- **Domain**: Represents the set of all possible values for a type (e.g., variants for Enums, True/False for Bool).
-- **Space**: Represents the coverage provided by specific patterns.
-- **Analysis**: Exhaustiveness is determined by subtracting Space from Domain.
-- **Topology**: Generic exhaustiveness is topological; it ignores type parameters and focuses on variant structure.
-
-### Intermediate Stages
-
-#### tempra-mir
-
-**Purpose**: Mid-level IR (Control-flow oriented, explicit side effects).
-
-- `src/mir.rs`: MIR graph structures (Basic Blocks).
-- `src/lower.rs`: Lowering logic from HIR to MIR.
-
-#### tempra-ir
-
-**Purpose**: Platform-neutral final IR for all backends.
-
-- `src/ir.rs`: IR instruction set and program representation.
-- `src/repr.rs`: Binary/Textual serialization of Tempra IR.
-
-#### tempra-opt
-
-**Purpose**: IR-level optimizations.
-
-- `src/pass.rs`: Optimization pass traits.
-- `src/passes/`: Specific optimizations (DCE, inlining, constant folding).
-
-### Execution & Backends
-
-#### tempra-interpreter
-
-**Purpose**: Virtual Machine executing Tempra IR directly.
-
-- `src/vm.rs`: Execution loop and stack management.
-- `src/opcodes.rs`: Implementation of IR instructions.
-
-#### tempra-runtime
-
-**Purpose**: Shared runtime primitives (ARC management, intrinsic functions).
-
-- `src/mem.rs`: ARC implementation and allocation strategies.
-- `src/intrinsics.rs`: Low-level system functions available to all backends.
-
-#### tempra-stdlib
-
-**Purpose**: The Tempra standard library written in Tempra.
-
-- `io/`, `fs/`, `os/`: Core namespaces.
-
-#### tempra-backend-wasm
-
-**Purpose**: Generates Wasm output (.wasm) from Tempra IR.
-
-- `src/emitter.rs`: Generation of WebAssembly binary format.
-- `src/lower.rs`: Lowering Tempra IR to Wasm instructions.
-
-#### tempra-wasm-host
-
-**Purpose**: Execution of third-party Wasm modules (non-Tempra modules).
-
-- `src/host.rs`: Integration with Wasmtime.
-- `src/import.rs`: Standardizing imports for external Wasm modules.
-
-#### tempra-component-host
-
-**Purpose**: Wasm Component Model integration and execution.
-
-- `src/component.rs`: Interaction with Wasm component binaries.
-
-#### tempra-backend-cranelift
-
-**Purpose**: Generates native AOT object/binary output using Cranelift.
-
-- `src/translator.rs`: Translating Tempra IR to Cranelift IR.
-- `src/codegen.rs`: Native code generation and machine target handling.
-
-#### tempra-linker
-
-**Purpose**: Invokes system linkers to produce final executables.
-
-- `src/bin.rs`: Native binary linking logic.
-
-### Tooling & Support
-
-#### tempra-package
-
-**Purpose**: Dependency management and `tempra.mod` resolution.
-
-- `src/resolver.rs`: Dependency graph resolution.
-
-#### tempra-repl
-
-**Purpose**: Interactive Read-Eval-Print-Loop.
-
-- `src/loop.rs`: Input handling and incremental compilation.
-
-#### tempra-lsp
-
-**Purpose**: Language Server Protocol implementation.
-
-- `src/server.rs`: LSP message handling.
-
-#### tempra-testing
-
-**Purpose**: Compilation and integration test framework.
-
-- `src/expect.rs`: UI/Snapshot testing utilities.
-
----
-
-## 5. Backend Separation & Build Modes
-
-### Backend Rules
-
-- **Interpretation**: Focused on instant startup. Debug symbols should be preserved.
-- **Wasm**: Focused on isolation and interoperability. Should not assume a specific native host.
-- **Native AOT**: Focused on performance. Leverages Cranelift for backend machine optimizations.
-
-### Build Modes
-
-- **`fast`**:
-  - Target: `tempra-backend-cranelift`.
-  - Optimizations: O3 (via `tempra-opt`) + Native codegen opts.
-  - Runtime: Aggressive ARC elimination and stack promotion.
-- **`light`**:
-  - Target: Any (usually Native or Wasm).
-  - Optimizations: Size-oriented passes (OZ).
-  - Runtime: Minimum runtime footprint, stripped symbols.
-
-## 6. Implementation Ordering & Constraints
-
-### Sequencing
-
-1. **Core Foundation**: `tempra-span`, `tempra-session`, `tempra-diagnostics`.
-2. **Frontend Plumbing**: `tempra-lexer`, `tempra-parser`, `tempra-ast`.
-3. **Semantic Analysis**: `tempra-hir`, `tempra-typeck`.
-4. **Backend Target**: `tempra-ir`.
-5. **Execution (Priority 1)**: `tempra-interpreter` (essential for rapid iteration).
-6. **Codegen (Priority 2)**: `tempra-backend-cranelift`, `tempra-backend-wasm`.
-
-### Source of Truth
-
-The **Tempra IR** remains the canonical representation of a program once semantic checks pass. No backend is permitted to perform proprietary semantic changes to the program logic. Any logic optimization that affects program semantics must occur in `tempra-opt` before reaching the backend emitters.
+See the [roadmap](../roadmap.md), [pipeline](PIPELINE.md), [TIR specification](../TIR_SPEC.md), and [capability contract specification](../specs/effects-v0.1.md) for the corresponding details.

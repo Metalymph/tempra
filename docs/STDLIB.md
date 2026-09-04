@@ -74,8 +74,8 @@ std.io.println("Running")
 
 ## v0.1 Collections API Status
 
-This table freezes the implemented v0.1 collection API surface before the concurrency and AOT
-work continues. Entries marked eager execute immediately; helpers returning arrays allocate a new
+This table freezes the implemented v0.1 collection API surface independently of the current
+capability, ownership, concurrency, and backend roadmap. Entries marked eager execute immediately; helpers returning arrays allocate a new
 `Array` result unless noted otherwise.
 
 | Receiver | API | Implemented | Eager | VM-supported | LSP-visible | Notes |
@@ -162,6 +162,8 @@ The standard library adheres to strict error handling conventions to ensure stab
 - Lazy iterators
 - Generators / `yield`
 - Closure and function-value callbacks
+
+Capability classification of native functions will be introduced by Phase E. Until then, this document describes API behavior but does not assign normative capability summaries. In particular, allocation classifications must be confirmed against the current runtime representation rather than inferred only from a return type.
 
 ## Legacy Code
 

@@ -1,6 +1,6 @@
 # Tempra
 
-**Tempra** is a fast, lightweight scripting language that compiles to native binaries.
+**Tempra** is a fast, lightweight scripting language designed to grow from direct script execution to native binaries.
 
 > Write scripts. Ship binaries.
 
@@ -32,21 +32,21 @@ for f in files {
 # Run as a script
 tempra run script.tempra
 
-# Compile to a native binary
-tempra build script.tempra
-./script
+# Planned workflow: compile to a native binary
+# tempra build script.tempra
+# ./script
 ```
 
 ---
 
 ## Core Design
 
-Tempra follows a simple, high-performance architecture:
+Tempra follows a small, staged architecture:
 
 - **Interpreter-first**: Fast startup, minimal overhead for scripting.
-- **Native AOT (Cranelift)**: High-performance binaries for production.
-- **Wasm Backend**: Portable output for web and sandboxed environments.
-- **No JIT / Heavy VM**: Keeps the footprint small and predictable.
+- **Typed middle-end**: Experimental TIR and bytecode paths provide a backend-independent foundation.
+- **Native and Wasm direction**: Dedicated AOT backends remain planned work.
+- **Optional experimentation**: The bytecode VM and Cranelift JIT are opt-in and are not the default language runtime.
 
 ### Design Principles
 
@@ -75,11 +75,9 @@ tempra run file.tempra         # Execute script via interpreter
 tempra check file.tempra       # Verify syntax and types (supports --json)
 tempra diagnostics file.tmpr   # Emit structured compiler diagnostics (supports --json)
 tempra symbols file.tmpr       # Outline structural code symbols (supports --json)
-tempra build file.tempra       # Compile to binary/Wasm
-tempra install file.tempra     # Install native binary to path
-tempra test                  # Run package tests
-tempra fmt                   # Format source code
-tempra repl                  # Start interactive session
+tempra test path               # Run Tempra tests under a path
+tempra repl                    # Start interactive session
+tempra emit-tir file.tmpr      # Inspect experimental TIR lowering
 ```
 
 ### Experimental JIT (Heap-aware, opt-in)
@@ -125,7 +123,9 @@ just jit-heap-perf    # Performance harness
 
 See [docs/CRANELIFT_JIT.md](docs/CRANELIFT_JIT.md) for full technical details.
 
-### Build Examples
+### Planned Build CLI
+
+The following command shape is a design target; `build` is not exposed by the current CLI:
 
 ```bash
 # Optimized native build
@@ -137,7 +137,7 @@ tempra build app.tempra --target wasm32-wasi --mode light
 
 ---
 
-## Build Modes
+## Planned Build Modes
 
 - **`fast`**: Optimized for runtime performance. Enables aggressive optimizations like ARC elimination and inlining.
 - **`light`**: Optimized for small binaries. Focuses on reduced code size and footprint.
@@ -146,13 +146,15 @@ tempra build app.tempra --target wasm32-wasi --mode light
 
 ## Compiler Pipeline
 
-Tempra IR is the central representation used by all execution paths:
+The current default execution path is:
 
-`Source` → `Lexer` → `Parser` → `AST` → `HIR` → `Type Checking` → `MIR` → **`Tempra IR`** → `Interpreter` \| `Wasm` \| `Native (Cranelift)`
+`Source` → `Lexer` → `Parser` → `AST` → `HIR` → `Type Checking` → `HIR Interpreter`
+
+The experimental VM path continues from typed HIR through TIR, TIR verification, bytecode lowering, bytecode verification, and the VM. TIR is the intended backend-independent substrate for capability analysis and later compiler backends. MIR, native AOT, and dedicated Wasm emission are not part of the current default pipeline.
 
 ---
 
-## Wasm Strategy
+## Planned Wasm Strategy
 
 Tempra treats WebAssembly as a first-class target.
 
@@ -161,7 +163,7 @@ Tempra treats WebAssembly as a first-class target.
 
 ---
 
-## Native AOT Strategy
+## Planned Native AOT Strategy
 
 - **Powered by Cranelift**: Generates highly optimized machine code (x86_64, AArch64).
 - **Native Only**: Cranelift is utilized strictly for native compilation, not for Wasm output.
@@ -188,19 +190,18 @@ Tempra is rapidly evolving. We currently have a functional core with:
 - [x] v0.1 eager collection helpers for `Array(T)` and `Slice(T)`.
 - [x] LSP support for diagnostics, completion, hover, definitions, semantic tokens, references, highlights, and rename.
 
-### Next
-- [ ] Productions-ready Cranelift AOT.
-- [ ] Dedicated Wasm backend.
-- [ ] Lightweight concurrency design.
-- [ ] REPL enhancements.
+### Next language foundations
 
-### Long-term
+1. **E — Capability / Effect Analysis**
+2. **M — Acyclic Ownership / Memory Model**
+3. **C — Concurrency**
+4. **V — Verified Functions**
+5. **O — Deeper Memory Optimizations**
 
-- Advanced ARC optimization & elimination.
-- Escape analysis for stack promotion.
-- First-class SIMD support.
-- Lightweight, scalable concurrency.
-- Minimal effects system.
+Memory correctness and memory optimization are separate milestones. Safe Tempra must first define legal ownership graphs and prevent strong-reference cycles. Uniqueness analysis, escape analysis, stack promotion, Perceus-inspired reuse, and retain/release elimination follow later and are not prerequisites for concurrency.
+
+See the [roadmap](docs/roadmap.md) for the Phase E subdivision and dependency rationale.
+The implemented [E1–E3.1 capability foundation](docs/E1_CAPABILITY_ANALYSIS.md) retains capability facts and typed `@deny(...)` intent in fresh VM compilations, without enforcement. Cache hits, TIR emission/interpreter and HIR paths remain analyzer-independent. E3.2 is next and must prevent cache hits from bypassing enforcement.
 
 ---
 
@@ -216,13 +217,14 @@ tempra/
 └─ tests/              # Integration and unit tests
 ```
 
-See [docs/architecture](file:///Users/lorenzopirro/coding/rust/tempra/docs/architecture/ARCHITECTURE.md) for full technical details.
-Take a look at [docs/STDLIB_TUTORIAL.md](file:///Users/lorenzopirro/coding/rust/tempra/docs/STDLIB_TUTORIAL.md) for a guide on how to add new stdlib features.
+See the [architecture documentation](docs/architecture/ARCHITECTURE.md) for full technical details.
+See the [standard library tutorial](docs/STDLIB_TUTORIAL.md) for a guide on how to add new stdlib features.
 Detailed language documentation:
-- [Surface Syntax Spec](file:///Users/lorenzopirro/coding/rust/tempra/docs/TEMPRA_SURFACE_SPEC_v0.1.md)
-- [Grammar](file:///Users/lorenzopirro/coding/rust/tempra/docs/GRAMMAR.md)
-- [Developer Guide](file:///Users/lorenzopirro/coding/rust/tempra/docs/DEV_GUIDE.md)
-- [Tooling & Diagnostics Guide](file:///Users/lorenzopirro/coding/rust/tempra/docs/TOOLING.md)
+- [Surface Syntax Spec](docs/TEMPRA_SURFACE_SPEC_v0.1.md)
+- [Grammar](docs/GRAMMAR.md)
+- [Capability Contracts](docs/specs/effects-v0.1.md)
+- [Developer Guide](docs/DEV_GUIDE.md)
+- [Tooling & Diagnostics Guide](docs/TOOLING.md)
 
 ---
 

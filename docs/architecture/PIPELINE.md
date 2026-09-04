@@ -1,63 +1,118 @@
 # Tempra Pipeline
 
-## Overview
+## Current paths
 
-Tempra keeps one canonical compilation path and multiple execution or emission targets.
+Tempra does not yet have one fully unified execution and emission pipeline.
+
+### Default interpreter
 
 ```text
 source
-  -> lexer
-  -> parser
-  -> AST
-  -> HIR
-  -> typeck
-  -> MIR
-  -> Tempra IR
-  -> interpreter
-  -> wasm backend
-  -> cranelift backend
+  → lexer / parser
+  → AST
+  → HIR
+  → type checking
+  → HIR interpreter
 ```
 
-## Phase Intent
+This is the default `tempra run` path and supports the broadest language surface. `tempra check` performs the frontend and semantic stages but does not currently lower to TIR.
 
-- `lexer`: token boundaries, trivia handling, and lexical diagnostics
-- `parser`: syntax tree construction and syntax recovery
-- `AST`: user-shaped syntax representation
-- `HIR`: normalized semantic program structure
-- `typeck`: interface validation, inference boundaries, explicit errors
-- `MIR`: control-flow and value lifetime planning
-- `Tempra IR`: backend-facing, target-neutral representation
+### Experimental VM
 
-## Execution Modes
+```text
+source
+  → lexer / parser
+  → AST
+  → HIR
+  → type checking and comptime pruning
+  → TIR lowering
+  → TIR verification
+  → capability analysis (once; fresh compilation only)
+  → internal AnalyzedTir
+  → bytecode lowering
+  → bytecode verification
+  → VmCompilation (TIR + capabilities + bytecode)
+  → VM
+  → optional Cranelift JIT for eligible bytecode functions
+```
 
-### Script mode
+Experimental execution requires `main` and supports a narrower subset. The
+compilation API can also return modules without `main`. Source fresh compilation
+uses `compile_to_bytecode_with_analysis`; the legacy `compile_to_bytecode`
+returns only its bytecode. Multi-module compilation uses
+`compile_file_to_bytecode_with_analysis`, without a new cache.
 
-- source file is loaded directly
-- no mandatory `main`
-- interpreter is the default target
+### Analysis-independent paths
 
-### Package mode
+```text
+source VM cache hit → cached bytecode verification → execution
+emit-tir           → TIR → verification → formatting
+TIR interpreter    → TIR → verification → interpretation
+```
 
-- package metadata selects entrypoint and output configuration
-- `main` is required for apps
-- build target selects native or Wasm output
+Cache hits neither reconstruct TIR nor produce capability facts. Fresh source
+compilation still writes bytecode-only artifacts. Neither emission nor TIR
+interpretation requires extern capability coverage. The default HIR runtime and
+frontend-only `check` also remain outside capability analysis.
 
-## Backend Split
+## Phase E insertion point
 
-### Native
+Capability analysis belongs after semantic lowering and TIR verification:
 
-- `tempra-backend-cranelift` consumes Tempra IR
-- `tempra-linker` plans system linker invocation
-- `--mode fast` and `--mode light` influence codegen priorities
+```text
+verified TIR
+  → direct capability scan
+  → call graph construction
+  → fixed-point propagation
+  → CapabilityAnalysis
+  → later analyses and backends
+```
 
-### Wasm
+E1 provides this transformation as a pure library operation. E2 integrates it
+into fresh VM compilation, retaining the typed result without enforcement or
+UI. TIR verification precedes analysis; both retain structured errors in the
+driver. No path currently enforces capability contracts.
 
-- `tempra-backend-wasm` consumes Tempra IR directly
-- no Cranelift dependency in the Wasm emission path
-- future WASI-focused packaging can be layered in `tempra-package`
+E3.1 adds a parallel metadata flow, not another capability analyzer:
 
-### Wasm Hosting
+```text
+@deny syntax → typed AST contract → HIR preserved
+  → concrete function lowering → ID + declaration contract registration
+  → VmCompilation contracts (alongside TIR, capability facts and bytecode)
+```
 
-- `tempra-wasm-host` will host generic Wasm modules
-- `tempra-component-host` will host Wasm components
-- both are runtime integration layers, not compiler backends
+The frontend does not depend on `tempra-effects`; canonical conversion belongs
+to the driver. `contract(id)` and ordered `contracts()` expose explicit intent
+immutably, including declaration/attribute spans and source/module identity.
+Templates only acquire concrete bindings when their specializations are emitted.
+E3.1 cache hits remain analysis/contract-free; E3.2 must introduce and validate a
+cache non-bypass policy for older non-enforcing artifacts before enforcement ships.
+
+E2 retains structural provenance only: function/block/instruction identities,
+call edges, direct origins and witnesses. TIR has no reliable source mapping.
+The future bridge is a lowering-owned side table
+`TirLocation → { module identity, existing Span }`, not per-instruction metadata.
+
+Only operations present in TIR are analyzed. HIR-only builtins remain explicit coverage gaps; the architecture must not grow a parallel HIR capability analyzer.
+
+## Comptime interaction
+
+The typechecker removes unselected `if comptime` branches and `comptime match` arms from HIR. TIR therefore contains only the selected semantic branch where specialization is available. Capability analysis may rely on that semantic pruning, but it must not assume later dead-code elimination, inlining, escape analysis, or allocation elimination.
+
+## Planned backends
+
+MIR, general Tempra IR, native AOT, and dedicated Wasm output remain incomplete. The intended long-term direction is that verified TIR and stable per-function semantic facts feed backend-independent later analyses before target-specific lowering.
+
+Cranelift remains native-only. Dedicated Wasm generation must not depend on Cranelift. Wasm hosting and Wasm code generation remain separate concerns.
+
+## Language analysis order
+
+```text
+E capability analysis
+  → M acyclic ownership
+  → C concurrency boundaries
+  → V verified functions
+  → O deeper memory optimizations
+```
+
+This ordering separates memory correctness from memory optimization.

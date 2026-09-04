@@ -5,11 +5,11 @@ This index points to current source-of-truth files. A crate's presence in the wo
 ## Project documentation
 
 - `README.md`: project overview and current high-level status.
-- `docs/roadmap.md`: normative semantic order E → R → M → C → V → O, next active E6 tooling, and standalone conditional U.
+- `docs/roadmap.md`: semantic dependencies, immediate K → R → M → C → V → O → P sequence, completed E6 tooling, and conditional U.
 - `docs/TEMPRA_SURFACE_SPEC_v0.1.md`: current surface-language reference.
 - `docs/GRAMMAR.md`: parser-oriented grammar for implemented syntax.
-- `docs/specs/effects-v0.1.md`: implemented E1–E4 capability contracts, current enforcement and conditional U boundary.
-- `docs/E1_CAPABILITY_ANALYSIS.md`: implemented internal scope, API, and retained boundaries for E1.
+- `docs/specs/effects-v0.1.md`: implemented E1–E6 capability contracts/tooling, current enforcement and conditional U boundary.
+- `docs/E1_CAPABILITY_ANALYSIS.md`: implemented analysis, integration, contracts and E6 projection boundaries.
 - `docs/TIR_SPEC.md`: TIR model, verifier role, and analysis insertion point.
 - `docs/architecture/ARCHITECTURE.md`: actual compiler paths and crate boundaries.
 - `docs/architecture/PIPELINE.md`: current default and experimental data flow.
@@ -32,11 +32,12 @@ This index points to current source-of-truth files. A crate's presence in the wo
 ## Driver and execution
 
 - `crates/tempra-cli/src/app.rs`: CLI definitions and command dispatch.
-- `crates/tempra-cli/src/commands/`: implemented `run`, `check`, diagnostics, symbols, test, REPL, and TIR inspection commands.
+- `crates/tempra-cli/src/commands/`: implemented runtime, frontend tooling, TIR emission and fresh effect-inspection commands.
 - `crates/tempra-driver/src/pipeline.rs`: default HIR interpreter and experimental VM orchestration.
 - `crates/tempra-driver/src/compilation.rs`: private verify/analyze/enforce/bytecode boundary and public immutable `VmCompilation` product for fresh compilation.
 - `crates/tempra-driver/src/contracts.rs`: canonical conversion (including the sole pure expansion), distinct deny/pure provenance and compilation-local contract binding.
 - `crates/tempra-driver/src/enforcement.rs`: contract/summary intersection, structured violations with E1 witnesses, and typed invariant failures.
+- `crates/tempra-driver/src/effect_tooling.rs`: immutable E6 diagnostic/inspection projection keyed by TIR IDs.
 - `crates/tempra-driver/src/module_graph.rs`: filesystem module loading, ordering, and cycle detection.
 - `crates/tempra-driver/src/build.rs`, `install.rs`: incomplete build and install scaffolds.
 - `crates/tempra-interpreter/src/`: default HIR evaluator and runtime value representation.
@@ -95,9 +96,10 @@ enforcement before bytecode, semantic cache fingerprinting, and explicit rejecti
 of annotated execution on HIR/REPL/source-TIR paths using the shared HIR presence
 scan. E4 adds AST/HIR `pure_span`, driver-only expansion into effective denied sets,
 and pure detection in that same scan; E3.2 enforcement and the cache fingerprint
-are unchanged. E1–E4 complete the currently meaningful semantic surface, not all
-TIR coverage. E6 diagnostics and inspect/query tooling is next active, reusing
-existing facts; instruction-level source mapping remains absent. Unsafe belongs
+are unchanged. E6 adds immutable driver projections and `tempra effects` without
+changing analysis or enforcement. E1–E6 complete the currently meaningful
+surface, not all TIR coverage; instruction-level source mapping remains absent.
+K1 is next. Unsafe belongs
 to standalone conditional U, not the immediate E sequence. Frontend-only `check`
 does not certify contracts. The historical E5 audit and its three correctness
 debts are recorded in `docs/E1_CAPABILITY_ANALYSIS.md`.

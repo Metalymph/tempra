@@ -139,6 +139,44 @@ Dumps all structural symbols and their signatures present within the source file
 tempra symbols --json examples/jit_heap/string_len.tmpr
 ```
 
+### D. Capability and Effect Inspection (E6)
+
+`tempra effects` uses a fresh capability-aware VM compilation and exposes the
+already-computed E1–E4 facts. It does not rescan TIR or read the bytecode cache.
+
+```bash
+tempra effects path/to/app.tmpr
+tempra effects --json path/to/app.tmpr
+```
+
+Human output lists every defined TIR function by numeric ID and display name,
+with direct capabilities, transitive required capabilities and the retained
+source contract. Contract failures use stable code `capability-denied` and show
+the canonical E1 witness path.
+
+JSON output always writes exactly one document to stdout. It contains top-level
+`diagnostics` and `functions` arrays. Capability diagnostics include function
+ID/name, capability, deny/pure origin, source identity, byte spans and a structured
+witness. Function inspection includes direct/required sets, effective and explicit
+deny sets, pure intent and one witness per required capability. Array order is
+deterministic. The schema is the current E6 tooling format, not a permanent
+versioned protocol.
+
+With `--json`, stderr contains no duplicate diagnostic rendering. A successful
+inspection exits zero; a contract violation exits one. Other compilation failures
+use the existing diagnostic object shape and also exit nonzero without synthetic
+spans.
+
+`TirFunctionId` is the join identity. TIR names are display information only.
+Intermediate witness callsites expose structural function/block/instruction
+coordinates because no instruction-level TIR-to-source side table exists.
+
+The current LSP remains frontend/typechecking-only: making it compile through
+the smaller experimental TIR/VM surface would change its architecture and language
+coverage. E6 exposes a reusable driver projection and conversion to the general
+`Diagnostic` model for later integration instead. The future TIR Graph and safe
+CLI package manager remain separate tooling tracks.
+
 ---
 
 ## 5. Verification Tasks

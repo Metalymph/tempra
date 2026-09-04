@@ -119,6 +119,7 @@ mod tests {
 
     fn contract() -> FunctionCapabilityContract {
         FunctionCapabilityContract {
+            explicit_denied: CapabilitySet::singleton(Capability::Io),
             denied: CapabilitySet::singleton(Capability::Io),
             declaration_span: Span::new(0, 1),
             attribute_spans: vec![Span::new(0, 1)],

@@ -48,6 +48,7 @@ fn pure_intent_survives_frontend_and_normalizes_only_in_driver() {
         assert!(!contract.denied.contains(allowed));
     }
     assert_eq!(contract.pure_span, Some(span));
+    assert_eq!(contract.explicit_denied.iter().count(), 0);
     assert!(contract.attribute_spans.is_empty());
     assert_eq!(contract.declaration_span, function.span);
     assert_eq!(contract.source, ContractSource::InMemory);
@@ -82,6 +83,10 @@ fn composition_is_union_in_either_order_without_synthetic_deny_spans() {
             ]
         );
         assert_eq!(contract.attribute_spans.len(), 1);
+        assert_eq!(
+            contract.explicit_denied.iter().collect::<Vec<_>>(),
+            vec![Capability::Alloc, Capability::Panic, Capability::Io]
+        );
         let explicit = contract.attribute_spans[0];
         assert_eq!(
             &source[explicit.start as usize..explicit.end as usize],

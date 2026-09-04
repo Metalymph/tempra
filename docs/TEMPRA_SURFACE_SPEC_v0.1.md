@@ -995,9 +995,9 @@ E4 retains `semantics-1`: pre-E4 parsing rejected pure, attribute edits change
 source identity, and existing enforcement remains authoritative. No contract
 metadata is serialized into cache.
 
-E1–E4 complete the currently meaningful surface, not all TIR coverage. E6
-diagnostics/inspection is next active. The semantic roadmap is E → R → M → C → V
-→ O, with U listed separately at the end. R is future Result/value-use hardening:
+E1–E6 complete the currently meaningful semantic and tooling surface, not all
+TIR coverage. K1 comptime authority/backend parity is next. The immediate roadmap
+continues K → R → M → C → V → O → P, with U conditional. R is future Result/value-use hardening:
 no silent discard, including an accidental `let _ = ...` escape hatch; handling
 through `?`, `match`, return/propagation or meaningful use. Neither wildcard-binding
 syntax nor an opt-out such as `@discardable` is added or committed here.

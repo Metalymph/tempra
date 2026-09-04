@@ -25,6 +25,11 @@ pub enum ContractSource {
 /// E3.2 compares this retained intent with the function's required capabilities.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionCapabilityContract {
+    /// Capabilities written explicitly in one or more `@deny` attributes.
+    ///
+    /// This remains separate from [`Self::denied`] so tooling can distinguish
+    /// explicit source intent from the capabilities contributed by `@pure`.
+    pub explicit_denied: CapabilitySet,
     /// Effective denied capabilities: explicit deny spellings union the pure restriction set.
     pub denied: CapabilitySet,
     /// Existing function declaration span, excluding preceding attributes.
@@ -66,7 +71,7 @@ impl std::error::Error for ContractBindingError {}
 
 // This is the sole frontend-to-canonical capability conversion. Neither AST nor
 // HIR imports analyzer types or reasons about capability requirements.
-const PURE_DENIED: CapabilitySet = CapabilitySet::singleton(Capability::Io)
+pub(crate) const PURE_DENIED: CapabilitySet = CapabilitySet::singleton(Capability::Io)
     .union(CapabilitySet::singleton(Capability::Process))
     .union(CapabilitySet::singleton(Capability::Spawn))
     .union(CapabilitySet::singleton(Capability::Nondeterminism));
@@ -104,19 +109,21 @@ impl ContractBindings {
         source: &ContractSource,
     ) -> Result<(), crate::DriverError> {
         let contract = if declaration.deny_contract.is_some() || declaration.pure_span.is_some() {
-            let mut denied = if declaration.pure_span.is_some() {
-                PURE_DENIED
-            } else {
-                CapabilitySet::empty()
-            };
+            let mut explicit_denied = CapabilitySet::empty();
             let mut attribute_spans = Vec::new();
             if let Some(syntax) = &declaration.deny_contract {
                 for name in &syntax.denied {
-                    denied.insert(canonical_capability(*name));
+                    explicit_denied.insert(canonical_capability(*name));
                 }
                 attribute_spans.clone_from(&syntax.attribute_spans);
             }
+            let denied = if declaration.pure_span.is_some() {
+                explicit_denied.union(PURE_DENIED)
+            } else {
+                explicit_denied
+            };
             Some(FunctionCapabilityContract {
+                explicit_denied,
                 denied,
                 declaration_span: declaration.span,
                 attribute_spans,

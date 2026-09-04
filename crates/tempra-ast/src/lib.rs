@@ -165,6 +165,8 @@ pub struct FunctionItem {
     pub span: Span,
     /// Optional validated deny syntax; no capability enforcement is performed.
     pub deny_contract: Option<DenyContract>,
+    /// Explicit `@pure` source intent (`@` through `pure`), not expanded capabilities.
+    pub pure_span: Option<Span>,
     pub visibility: Visibility,
     pub name: Token,
     pub generic_parameters: Vec<GenericParameter>,

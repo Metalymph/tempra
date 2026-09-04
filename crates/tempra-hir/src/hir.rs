@@ -18,11 +18,13 @@ impl HirFile {
     /// it does not infer capabilities or decide whether a contract is satisfied.
     pub fn contains_capability_contracts(&self) -> bool {
         self.items.iter().any(|item| match item {
-            HirItem::Function(function) => function.deny_contract.is_some(),
+            HirItem::Function(function) => {
+                function.deny_contract.is_some() || function.pure_span.is_some()
+            }
             HirItem::Extend(extension) => extension
                 .methods
                 .iter()
-                .any(|method| method.deny_contract.is_some()),
+                .any(|method| method.deny_contract.is_some() || method.pure_span.is_some()),
             _ => false,
         })
     }
@@ -57,6 +59,8 @@ pub struct HirFunction {
     pub span: Span,
     /// Preserved syntax-only intent. Canonical capability conversion belongs to the driver.
     pub deny_contract: Option<tempra_ast::DenyContract>,
+    /// Preserved `@pure` intent; canonical expansion belongs exclusively to the driver.
+    pub pure_span: Option<Span>,
     pub visibility: Visibility,
     pub name: String,
     pub generic_parameters: Vec<HirGenericParam>,

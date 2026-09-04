@@ -63,16 +63,17 @@ impl<'src> Parser<'src> {
     }
 
     fn parse_item(&mut self) -> Result<Item, ParseError> {
-        let deny_contract = self.parse_deny_contract()?;
+        let (deny_contract, pure_span) = self.parse_capability_contracts()?;
         let mut visibility = if self.eat(TokenKind::Pub) {
             Visibility::Public
         } else {
             Visibility::Private
         };
 
-        if deny_contract.is_some() && !self.at(TokenKind::Fn) {
+        if (deny_contract.is_some() || pure_span.is_some()) && !self.at(TokenKind::Fn) {
             return Err(ParseError {
-                message: "@deny is only supported on named non-extern functions".into(),
+                message: "capability attributes are only supported on named non-extern functions"
+                    .into(),
                 span: self.current().span,
             });
         }
@@ -99,6 +100,7 @@ impl<'src> Parser<'src> {
             self.expect(TokenKind::Fn)?;
             let mut function = self.parse_function(visibility, false)?;
             function.deny_contract = deny_contract;
+            function.pure_span = pure_span;
             Ok(Item::Function(function))
         } else if self.at(TokenKind::Struct) {
             Ok(Item::Struct(self.parse_struct(visibility)?))
@@ -127,15 +129,35 @@ impl<'src> Parser<'src> {
     }
 
     // Dedicated syntax, deliberately not a general attribute or macro framework.
-    fn parse_deny_contract(&mut self) -> Result<Option<DenyContract>, ParseError> {
+    fn parse_capability_contracts(
+        &mut self,
+    ) -> Result<(Option<DenyContract>, Option<Span>), ParseError> {
         let mut denied = Vec::new();
         let mut attribute_spans = Vec::new();
+        let mut pure_span = None;
         while self.at(TokenKind::At) {
             let start = self.expect(TokenKind::At)?.span.start;
             let name = self.expect_identifier()?;
+            if self.text(name.span) == "pure" {
+                let span = Span::new(start, name.span.end);
+                if pure_span.is_some() {
+                    return Err(ParseError {
+                        message: "duplicate @pure attribute".into(),
+                        span,
+                    });
+                }
+                if self.at(TokenKind::LeftParen) {
+                    return Err(ParseError {
+                        message: "@pure does not accept arguments or parentheses".into(),
+                        span: self.current().span,
+                    });
+                }
+                pure_span = Some(span);
+                continue;
+            }
             if self.text(name.span) != "deny" {
                 return Err(ParseError {
-                    message: "only @deny is supported".into(),
+                    message: "only @deny and @pure are supported".into(),
                     span: name.span,
                 });
             }
@@ -162,14 +184,17 @@ impl<'src> Parser<'src> {
             attribute_spans.push(Span::new(start, end));
         }
         if attribute_spans.is_empty() {
-            return Ok(None);
+            return Ok((None, pure_span));
         }
         denied.sort_unstable();
         denied.dedup();
-        Ok(Some(DenyContract {
-            denied,
-            attribute_spans,
-        }))
+        Ok((
+            Some(DenyContract {
+                denied,
+                attribute_spans,
+            }),
+            pure_span,
+        ))
     }
 
     fn parse_import(&mut self) -> Result<ImportItem, ParseError> {
@@ -351,6 +376,7 @@ impl<'src> Parser<'src> {
         Ok(FunctionItem {
             span,
             deny_contract: None,
+            pure_span: None,
             visibility,
             name,
             generic_parameters,
@@ -615,7 +641,7 @@ impl<'src> Parser<'src> {
 
         let mut methods = Vec::new();
         while !self.at(TokenKind::RightBrace) && !self.at(TokenKind::EndOfFile) {
-            let deny_contract = self.parse_deny_contract()?;
+            let (deny_contract, pure_span) = self.parse_capability_contracts()?;
             let v = if self.eat(TokenKind::Pub) {
                 Visibility::Public
             } else {
@@ -624,6 +650,7 @@ impl<'src> Parser<'src> {
             self.expect(TokenKind::Fn)?;
             let mut method = self.parse_function(v, false)?;
             method.deny_contract = deny_contract;
+            method.pure_span = pure_span;
             methods.push(method);
         }
         let end_token = self.expect(TokenKind::RightBrace)?;

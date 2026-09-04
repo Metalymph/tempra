@@ -1,7 +1,7 @@
 # E1 Capability Analysis
 
 > [!NOTE]
-> **Status: E1, E2 and E3 implemented.** E1 provides pure analysis; E2 retains facts; E3.1 acquires typed `@deny` intent and provenance; E3.2 enforces contracts and prevents cache/execution bypass.
+> **Status: E1–E4 implemented.** E1 provides pure analysis; E2 retains facts; E3 acquires/enforces `@deny` and prevents bypass; E4 adds `@pure` source intent and normalization through the same contracts.
 
 ## Goal and boundary
 
@@ -228,7 +228,7 @@ Each attribute must contain at least one public capability. Empty lists,
 Duplicates normalize; repeated attributes union while preserving every span.
 Only named top-level functions and `extend` methods accept attributes, placed
 before optional `pub`. Externs, closures, interface requirements and other
-items do not. No attribute means no synthetic empty user contract.
+items do not. No capability attribute means no synthetic empty user contract.
 
 At each successful lowering of a concrete declaration, the driver registers
 the returned `TirFunctionId` together with that exact HIR function and its source
@@ -309,9 +309,47 @@ aggregation, non-entry functions, specialization IDs, invariant failures,
 legacy cache rejection, absence of writes after failure, valid bytecode-only
 hits, source/contract changes and transactional rejection by other execution paths.
 
+## E4 pure normalization (implemented)
+
+`@pure == @deny(io, process, spawn, nondeterminism)`. Pure does not deny Alloc,
+Panic or internal Unsafe, does not grant unsafe permissions, and may return Result.
+The only canonical expansion lives in the driver's contract conversion module.
+E1 analysis/propagation and E3.2's `denied ∩ required` enforcement are unchanged.
+
+`FunctionItem` and `HirFunction` retain `pure_span: Option<Span>` alongside the
+unchanged explicit `DenyContract`. The marker spans `@` through `pure`; it is not
+expanded into synthetic source attributes. `@pure` takes no parentheses or
+arguments and shares deny's placement. A second pure annotation is a parse error
+at that marker. Both orders with explicit deny are valid; overlapping capabilities
+normalize by union. Ordinary identifiers named `pure` remain valid.
+
+The driver creates a real `FunctionCapabilityContract` for either attribute.
+Its `denied` set is effective, `attribute_spans` contains explicit deny spans only,
+and `pure_span` separately preserves pure intent for future E6 consumers. Both
+markers absent still means no contract. Existing ID binding, specialization
+inheritance, immutable accessors and structured violation provenance are reused.
+The enforcer does not know which source spelling contributed a capability.
+
+`HirFile::contains_capability_contracts` now checks pure presence too; existing
+HIR, test, source-TIR and REPL guards require no second scanner or semantic pass.
+REPL rejection occurs before state registration/commit. `check` remains frontend
+correctness only, and `emit-tir` remains non-enforcing. Raw TIR interpretation
+has no source-contract metadata. E1's incomplete Process/Spawn/Nondeterminism
+coverage and known lowering limitations remain unchanged.
+
+Cache code and the `semantics-1` fingerprint are unchanged: E3 already required
+enforcement, pre-E4 parsing rejected `@pure`, and source hashing distinguishes
+attribute edits. Tests cover real temporary-cache population/hits, source changes
+and failed pure-plus-deny compilation leaving no new/replacement artifact.
+No pure metadata, capability facts, contracts, spans or witnesses are serialized.
+
+Regressions cover parser placement/duplicates, canonical expansion and composition,
+frontend-to-driver provenance, method/specialization bindings, direct/transitive
+Io witnesses, non-entry enforcement, allowed Alloc/Panic/Result, explicit additional
+restrictions, deterministic aggregation and transactional execution rejection.
+
 ## Deferred work
 
-- **E4:** `@pure` convenience contract.
 - **E5:** safe-by-default and `@unsafe` integration.
 - **E6:** rendered diagnostics, JSON, `tempra inspect`, and `tempra effects`.
 

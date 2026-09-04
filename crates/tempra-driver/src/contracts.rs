@@ -25,12 +25,14 @@ pub enum ContractSource {
 /// E3.2 compares this retained intent with the function's required capabilities.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionCapabilityContract {
-    /// Canonical set obtained from validated public deny spellings.
+    /// Effective denied capabilities: explicit deny spellings union the pure restriction set.
     pub denied: CapabilitySet,
     /// Existing function declaration span, excluding preceding attributes.
     pub declaration_span: Span,
-    /// Complete spans of the merged attributes, in source order.
+    /// Complete spans of explicit `@deny` attributes only, in source order.
     pub attribute_spans: Vec<Span>,
+    /// Original `@pure` intent, separate from explicit deny provenance.
+    pub pure_span: Option<Span>,
     /// Identity qualifying the file-relative spans.
     pub source: ContractSource,
 }
@@ -64,6 +66,11 @@ impl std::error::Error for ContractBindingError {}
 
 // This is the sole frontend-to-canonical capability conversion. Neither AST nor
 // HIR imports analyzer types or reasons about capability requirements.
+const PURE_DENIED: CapabilitySet = CapabilitySet::singleton(Capability::Io)
+    .union(CapabilitySet::singleton(Capability::Process))
+    .union(CapabilitySet::singleton(Capability::Spawn))
+    .union(CapabilitySet::singleton(Capability::Nondeterminism));
+
 fn canonical_capability(name: tempra_ast::DenyCapability) -> Capability {
     use tempra_ast::DenyCapability;
     match name {
@@ -96,18 +103,29 @@ impl ContractBindings {
         declaration: &HirFunction,
         source: &ContractSource,
     ) -> Result<(), crate::DriverError> {
-        let contract = declaration.deny_contract.as_ref().map(|syntax| {
-            let mut denied = CapabilitySet::empty();
-            for name in &syntax.denied {
-                denied.insert(canonical_capability(*name));
+        let contract = if declaration.deny_contract.is_some() || declaration.pure_span.is_some() {
+            let mut denied = if declaration.pure_span.is_some() {
+                PURE_DENIED
+            } else {
+                CapabilitySet::empty()
+            };
+            let mut attribute_spans = Vec::new();
+            if let Some(syntax) = &declaration.deny_contract {
+                for name in &syntax.denied {
+                    denied.insert(canonical_capability(*name));
+                }
+                attribute_spans.clone_from(&syntax.attribute_spans);
             }
-            FunctionCapabilityContract {
+            Some(FunctionCapabilityContract {
                 denied,
                 declaration_span: declaration.span,
-                attribute_spans: syntax.attribute_spans.clone(),
+                attribute_spans,
+                pure_span: declaration.pure_span,
                 source: source.clone(),
-            }
-        });
+            })
+        } else {
+            None
+        };
         if let Some(previous) = self.seen.get(&function) {
             let same_binding = previous.source == *source
                 && previous.span == declaration.span
@@ -150,6 +168,48 @@ impl ContractBindings {
 mod tests {
     use super::*;
     use tempra_tir::builder::ModuleBuilder;
+
+    #[test]
+    fn pure_specializations_keep_distinct_ids_and_shared_source_intent() {
+        let source = "@pure fn work(type T, value: T) -> T { return value }";
+        let ast = tempra_parser::parse_source(source).unwrap();
+        let mut hir = tempra_hir::lower_file(source, &ast);
+        let context = tempra_typeck::check_file_with_context(&mut hir).unwrap();
+        let tempra_hir::HirItem::Function(function) = &hir.items[0] else {
+            panic!()
+        };
+        let mut module = ModuleBuilder::new();
+        let mut bindings = ContractBindings::default();
+        let origin = ContractSource::Module {
+            name: "a".into(),
+            path: PathBuf::from("a.tmpr"),
+        };
+        let mut ids = Vec::new();
+        for ty in [tempra_hir::Type::Int, tempra_hir::Type::String] {
+            let concrete = tempra_tir_lower::lower::lower_function_specialization(
+                function,
+                &context,
+                &mut module,
+                None,
+                Some("a"),
+                &[ty],
+            )
+            .unwrap();
+            bindings.register(concrete.id, function, &origin).unwrap();
+            bindings.register(concrete.id, function, &origin).unwrap();
+            ids.push(concrete.id);
+            module.add_function(concrete);
+        }
+        let compilation = crate::compilation::compile_tir_module(module.module, bindings).unwrap();
+        assert_ne!(ids[0], ids[1]);
+        assert_eq!(compilation.contracts().count(), 2);
+        assert_eq!(compilation.contract(ids[0]), compilation.contract(ids[1]));
+        let contract = compilation.contract(ids[0]).unwrap();
+        assert_eq!(contract.source, origin);
+        assert_eq!(contract.pure_span, function.pure_span);
+        assert!(contract.attribute_spans.is_empty());
+        assert_eq!(contract.denied, PURE_DENIED);
+    }
 
     #[test]
     fn each_specialization_enforces_its_own_id_with_inherited_provenance() {

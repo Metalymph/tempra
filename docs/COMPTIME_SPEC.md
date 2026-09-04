@@ -1,6 +1,25 @@
 # Tempra Comptime Specification
 
-`comptime` is an explicit compile-time evaluation form. The model is small, typed, and deterministic.
+`comptime` is an explicit compile-time evaluation form. The intended model is
+small, typed, deterministic and independent of the selected runtime backend.
+
+## K1 implementation status
+
+The K1 audit selected the existing HIR interpreter as Tempra's canonical
+comptime semantic kernel. K1.1 adds one documented evaluation facade: it owns
+entry into comptime mode, installs the shared one-million expression-step
+budget, normalizes the value/error/control-flow boundary, and restores the
+interpreter's previous mode and fuel after every ordinary return. The
+typechecker remains responsible for converting accepted primitive values into
+HIR literals.
+
+Nested `comptime` nodes reuse the active session and its remaining fuel instead
+of opening a second session. Resolved values and selected branches are committed
+to HIR before TIR lowering; TIR and its backends do not evaluate comptime.
+
+K1 remains in progress. Multi-module, file-check, analysis and REPL integration,
+arithmetic panic hardening, complete effect restrictions, extern rejection,
+recursion limits and specialization correctness are separate later slices.
 
 ---
 
@@ -9,7 +28,7 @@
 - `comptime expr`
 - `comptime { ... }`
 - Primitive materialization: `Int`, `Float`, `Bool`, `String`, `Unit`
-- Restricted evaluator mode (deterministic, no IO)
+- Canonical restricted-evaluator entrypoint with shared mode/fuel setup
 - Rejection of runtime locals and parameters inside `comptime` expressions
 - Rejection of filesystem, environment, OS, and process operations during `comptime` evaluation
 - `compile_error("message")` in `comptime` contexts
@@ -231,6 +250,9 @@ Selected `if comptime` branches and `comptime match` arms are retained in HIR; u
 
 Comptime is an execution phase, not an effect or an unsafe authorization. Its
 restrictions are implemented by the HIR evaluator and frontend checks, not by E1.
+All currently supported single-source evaluation entrypoints now enter the HIR
+kernel through the K1.1 facade; this centralizes execution setup but does not yet
+harden the policy itself.
 The evaluator has no dispatch to the VM native registry. The historical E5 audit
 found that unsupported/bodyless extern calls can instead yield Unit and be
 incorrectly materialized. Explicit rejection is separate correctness debt, not

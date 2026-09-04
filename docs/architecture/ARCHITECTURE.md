@@ -22,6 +22,7 @@ Source
   → HIR lowering
   → Reject capability contracts (execution only)
   → Type checking
+      → canonical comptime facade when evaluation is required
   → HIR interpreter
 ```
 
@@ -34,7 +35,8 @@ Source
   → Lexer / Parser
   → AST
   → HIR lowering
-  → Type checking and comptime pruning
+  → Type checking
+      → canonical comptime facade and HIR pruning/materialization
   → TIR lowering
   → TIR verification
   → Capability analysis (fresh compilation)
@@ -59,6 +61,21 @@ HIR presence scan before execution/state commit. See [pipeline boundaries](PIPEL
 ### Incomplete planned paths
 
 The `tempra-mir`, `tempra-ir`, `tempra-opt`, native AOT, Wasm backend, linker, and build crates contain varying levels of scaffold or prototype code. They are not a single production pipeline today. Historical design documents that describe them as complete do not override this status.
+
+## Canonical comptime authority
+
+The K1 audit selected the existing HIR interpreter as the semantic kernel for
+comptime. K1.1 adds a single public compiler-facing facade in
+`tempra-interpreter`; it owns comptime mode and fuel installation, boundary
+normalization, and restoration of prior interpreter state. `tempra-typeck`
+invokes that facade and separately materializes supported primitive results into
+HIR. Nested comptime syntax shares the active evaluation session.
+
+This establishes one entrypoint, not complete K1 semantics. The facade is not
+yet wired into multi-module, file-check, analysis/LSP or REPL typechecking, and
+it intentionally preserves current arithmetic, extern, effect-policy,
+recursion and specialization behavior. TIR, VM, JIT, Wasm and future AOT remain
+consumers of already resolved semantics rather than comptime authorities.
 
 ## Capability analysis insertion point
 
@@ -153,9 +170,10 @@ Unknown extern declarations are harmless until called. A call to an extern witho
 The current HIR runtime uses reference-counted and interior-mutable Rust representations for arrays, slices, closures, and captured cells. In particular, recursive closure `self` currently uses a strong cell-to-closure link. The runtime implementation therefore must not be cited as proof that safe Tempra already prevents ownership cycles.
 
 The immediate order is K → R → M → C → V → O → P, after completed E6, with U
-conditional. K keeps comptime semantics canonical and backend-independent; it
-does not yet choose the HIR interpreter, VM, JIT, Wasm or another evaluator as
-authority. R is future Result/value-use hardening, not an effect. Phase M follows R and will define which ownership
+conditional. K keeps comptime semantics canonical and backend-independent. Its
+audit selected the existing HIR interpreter kernel, and K1.1 provides the
+canonical session facade without making a runtime backend authoritative. R is
+future Result/value-use hardening, not an effect. Phase M follows R and will define which ownership
 graphs are legal across value semantics, `let`, `var`, `ref`, `inout`, `consume`,
 closure captures, recursive `self`, structs, enums, and escaping values. It
 precedes pluggable actor concurrency.
@@ -164,9 +182,10 @@ ARC optimization is a separate later concern. Escape analysis, stack promotion, 
 
 E1–E6 complete the currently meaningful capability-contract and tooling core
 while retaining known coverage gaps. E6 projects existing facts through
-`tempra effects` and immutable driver types; it does not add analysis. K1
-comptime authority/evaluator parity, determinism and initial responsiveness
-measurements are next. Compile latency is monitored during development; deep
+`tempra effects` and immutable driver types; it does not add analysis. K1's
+audit/spec and K1.1 facade are complete; integration and semantic hardening
+remain in progress before evaluator parity, determinism and responsiveness
+measurements. Compile latency is monitored during development; deep
 latency and incremental-build optimization belongs to P. The richer future TIR Graph still
 requires later ownership and actor facts.
 

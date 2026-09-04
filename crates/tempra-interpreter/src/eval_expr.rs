@@ -212,7 +212,7 @@ impl Interpreter {
         if self.mode == crate::interpreter::EvalMode::Comptime {
             if let Some(fuel) = &mut self.fuel {
                 if *fuel == 0 {
-                    return Err("comptime evaluation exceeded step limit".to_string());
+                    return Err(crate::comptime::FUEL_EXHAUSTED_MESSAGE.to_string());
                 }
                 *fuel -= 1;
             }
@@ -2102,11 +2102,17 @@ impl Interpreter {
                 Ok(ControlFlow::Value(val))
             }
             HirExpression::Comptime(e) => {
-                let old_mode = self.mode;
-                self.mode = crate::interpreter::EvalMode::Comptime;
-                let res = self.eval_expression(&e.expression, env);
-                self.mode = old_mode;
-                res
+                if self.mode == crate::interpreter::EvalMode::Comptime {
+                    self.eval_expression(&e.expression, env)
+                } else {
+                    self.evaluate_comptime(
+                        &e.expression,
+                        env,
+                        crate::comptime::ComptimeEvalConfig::default(),
+                    )
+                    .map(ControlFlow::Value)
+                    .map_err(|error| error.to_string())
+                }
             }
         }
     }

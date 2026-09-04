@@ -75,11 +75,26 @@ The implemented E1–E6 design and boundaries are recorded in [E1 Capability Ana
 
 K is the next active compiler milestone. It must establish one canonical,
 backend-independent comptime semantics: VM, JIT, Wasm and future AOT must observe
-the same comptime result or error. K1 audits the real authority/evaluator layers
-before choosing a concrete one, then records determinism, reproducibility, future
-parity tests, phase timings and initial compiler-latency benchmarks. Compile
-latency is already monitored during development; K makes that monitoring
-reproducible and actionable. No deep optimization is implied or implemented yet.
+the same comptime result or error. The K1 audit/spec selected the existing HIR
+interpreter as the semantic kernel. K1.1 adds one canonical facade that owns
+comptime mode/fuel setup, value/error/control-flow normalization and state
+restoration for the existing single-source paths. The typechecker remains the
+owner of primitive HIR materialization, and TIR/backends consume resolved code.
+
+Current status:
+
+```text
+K1 audit/spec       DONE
+K1.1 facade         DONE
+K1 implementation   IN PROGRESS
+```
+
+Multi-module/REPL/analysis integration and arithmetic, effect, extern,
+termination and specialization hardening remain later K1/K2 work. K then records
+determinism, reproducibility, parity tests, phase timings and initial
+compiler-latency benchmarks. Compile latency is already monitored during
+development; K makes that monitoring reproducible and actionable. No deep
+optimization is implied or implemented yet.
 
 ### R — Result / Value-Use Hardening
 

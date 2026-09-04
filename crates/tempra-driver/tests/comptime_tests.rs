@@ -1,4 +1,4 @@
-use tempra_driver::pipeline::test_source;
+use tempra_driver::pipeline::{emit_tir_source, test_source};
 
 #[test]
 fn test_comptime_arithmetic() {
@@ -9,6 +9,20 @@ fn test_comptime_arithmetic() {
     }
     "#;
     assert!(test_source(source).is_ok());
+}
+
+#[test]
+fn test_comptime_arithmetic_is_resolved_before_tir() {
+    let source = r#"
+    fn main() -> Int64 {
+        return comptime 1 + 2
+    }
+    "#;
+
+    let tir = emit_tir_source(source).unwrap();
+
+    assert!(tir.contains("const 3i64"), "unexpected TIR:\n{tir}");
+    assert!(!tir.contains("comptime"), "unexpected TIR:\n{tir}");
 }
 
 #[test]

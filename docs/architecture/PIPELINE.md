@@ -13,6 +13,7 @@ source
   → HIR
   → reject capability contracts (execution only)
   → type checking
+      → canonical comptime facade where evaluation is required
   → HIR interpreter
 ```
 
@@ -25,7 +26,8 @@ source
   → lexer / parser
   → AST
   → HIR
-  → type checking and comptime pruning
+  → type checking
+      → canonical comptime facade and HIR pruning/materialization
   → TIR lowering
   → TIR verification
   → capability analysis (once; fresh compilation only)
@@ -119,7 +121,24 @@ Only operations present in TIR are analyzed. HIR-only builtins remain explicit c
 
 ## Comptime interaction
 
-The typechecker removes unselected `if comptime` branches and `comptime match` arms from HIR. TIR therefore contains only the selected semantic branch where specialization is available. Capability analysis may rely on that semantic pruning, but it must not assume later dead-code elimination, inlining, escape analysis, or allocation elimination.
+The K1 audit selected the existing HIR interpreter as the canonical comptime
+semantic kernel. K1.1 places a single facade in `tempra-interpreter` around that
+kernel. The facade alone starts a comptime session, installs the current fuel
+policy, normalizes its boundary result, and restores prior interpreter state.
+`tempra-typeck` consumes this API and retains ownership of value-to-HIR-literal
+materialization. A nested `HirExpression::Comptime` continues within the active
+session and shares its remaining budget.
+
+The typechecker removes unselected `if comptime` branches and `comptime match`
+arms from HIR. TIR therefore contains only the selected semantic branch where
+specialization is available. Capability analysis may rely on that semantic
+pruning, but it must not assume later dead-code elimination, inlining, escape
+analysis, or allocation elimination.
+
+K1.1 covers the existing working single-source entrypoints only. It does not
+initialize the evaluator for multi-module checking, file-based `check`, analysis,
+LSP or REPL typechecking. Arithmetic, extern/effect policy, recursion and
+specialization hardening also remain pending K1/K2 work.
 
 ## Planned backends
 
@@ -144,12 +163,12 @@ future value-use obligation, not a capability or an implemented pass.
 E1–E6 complete the currently meaningful semantic and tooling surface; TIR
 coverage gaps remain. `tempra effects` projects existing analysis, contracts,
 violations, witnesses and provenance without a second analyzer. A richer TIR
-Graph requires later ownership/actor facts. K1 comptime authority/evaluator
-parity, deterministic reproducibility and initial phase-timing/latency measures
-are the next compiler milestone. It must keep one backend-independent semantic
-result or error across VM, JIT, Wasm and future AOT; choosing the authority layer
-is an audit outcome, not a decision made here. Deep compilation optimization and
-incremental builds belong to P.
+Graph requires later ownership/actor facts. The K1 audit selected the HIR
+interpreter kernel as the backend-independent comptime authority, and K1.1 now
+provides its canonical evaluation facade. Remaining K1 work must connect the
+other frontend paths and harden semantics before parity, deterministic
+reproducibility and phase-timing/latency measures can close K. Deep compilation
+optimization and incremental builds belong to P.
 
 U — Unsafe Boundary is standalone DEFERRED / CONDITIONAL work at the end of the roadmap,
 in the roadmap and triggered only by a real source operation requiring explicit

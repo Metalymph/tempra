@@ -40,6 +40,7 @@ This index points to current source-of-truth files. A crate's presence in the wo
 - `crates/tempra-driver/src/effect_tooling.rs`: immutable E6 diagnostic/inspection projection keyed by TIR IDs.
 - `crates/tempra-driver/src/module_graph.rs`: filesystem module loading, ordering, and cycle detection.
 - `crates/tempra-driver/src/build.rs`, `install.rs`: incomplete build and install scaffolds.
+- `crates/tempra-interpreter/src/comptime.rs`: canonical K1.1 comptime session facade, configuration and typed boundary errors.
 - `crates/tempra-interpreter/src/`: default HIR evaluator and runtime value representation.
 
 ## TIR and experimental VM
@@ -99,8 +100,9 @@ and pure detection in that same scan; E3.2 enforcement and the cache fingerprint
 are unchanged. E6 adds immutable driver projections and `tempra effects` without
 changing analysis or enforcement. E1–E6 complete the currently meaningful
 surface, not all TIR coverage; instruction-level source mapping remains absent.
-K1 audits backend-independent comptime authority/evaluator parity and initial
-responsiveness measurements next. Unsafe belongs
+The K1 audit selected the HIR interpreter kernel and K1.1 adds its canonical
+comptime facade. Remaining K1 integration, hardening, parity and initial
+responsiveness work follows. Unsafe belongs
 to standalone conditional U, not the immediate E sequence. Frontend-only `check`
 does not certify contracts. The historical E5 audit and its three correctness
 debts are recorded in `docs/E1_CAPABILITY_ANALYSIS.md`.

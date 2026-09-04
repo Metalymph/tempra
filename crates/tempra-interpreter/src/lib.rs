@@ -1,3 +1,4 @@
+pub mod comptime;
 pub mod control_flow;
 pub mod env;
 pub mod eval_expr;
@@ -6,6 +7,7 @@ pub mod eval_stmt;
 pub mod interpreter;
 pub mod value;
 
+pub use crate::comptime::{ComptimeEvalConfig, ComptimeEvalError, DEFAULT_COMPTIME_FUEL};
 use crate::interpreter::Interpreter;
 pub use crate::interpreter::RuntimeSignal;
 use crate::value::Value;

@@ -14,22 +14,9 @@ impl TypeContext {
     ) -> Result<tempra_interpreter::value::Value, String> {
         if let Some(interpreter) = &mut self.interpreter {
             let mut env = tempra_interpreter::env::RuntimeEnv::new();
-            let old_mode = interpreter.mode;
-            let old_fuel = interpreter.fuel;
-            interpreter.mode = tempra_interpreter::interpreter::EvalMode::Comptime;
-            interpreter.fuel = Some(1000000); // 1M steps
-            let res = match interpreter.eval_expression(expr, &mut env) {
-                Ok(tempra_interpreter::control_flow::ControlFlow::Value(v)) => Ok(v),
-                Ok(cf) => Err(format!(
-                    "comptime evaluation produced non-value control flow: {:?}",
-                    cf
-                )),
-                Err(e) => Err(e),
-            };
-
-            interpreter.mode = old_mode;
-            interpreter.fuel = old_fuel;
-            res
+            interpreter
+                .evaluate_comptime(expr, &mut env, Default::default())
+                .map_err(|error| error.to_string())
         } else {
             Err("interpreter not available for comptime evaluation".into())
         }
@@ -4319,62 +4306,32 @@ fn check_comptime_expr(
         return Type::Error;
     }
 
-    if let Some(interpreter) = &mut ctx.interpreter {
-        let mut env = tempra_interpreter::env::RuntimeEnv::new();
-        let old_mode = interpreter.mode;
-        let old_fuel = interpreter.fuel;
-        interpreter.mode = tempra_interpreter::interpreter::EvalMode::Comptime;
-        interpreter.fuel = Some(1000000); // 1M steps
-
-        match interpreter.eval_expression(&comptime_node.expression, &mut env) {
-            Ok(tempra_interpreter::control_flow::ControlFlow::Value(v)) => {
-                interpreter.mode = old_mode;
-                interpreter.fuel = old_fuel;
-                if let Some(lit) = materialize_primitive(&v, comptime_node.span) {
-                    *expr = lit;
-                    return ty;
-                } else {
-                    ctx.error(
-                        format!(
-                            "value of type {} cannot be materialized from comptime in v1",
-                            v.type_name()
-                        ),
-                        comptime_node.span,
-                    );
-                    return Type::Error;
-                }
-            }
-            Ok(cf) => {
-                interpreter.mode = old_mode;
-                interpreter.fuel = old_fuel;
+    match ctx.eval_comptime_expr(&comptime_node.expression) {
+        Ok(value) => {
+            if let Some(literal) = materialize_primitive(&value, comptime_node.span) {
+                *expr = literal;
+                ty
+            } else {
                 ctx.error(
                     format!(
-                        "comptime evaluation resulted in unexpected control flow: {:?}",
-                        cf
+                        "value of type {} cannot be materialized from comptime in v1",
+                        value.type_name()
                     ),
                     comptime_node.span,
                 );
-                return Type::Error;
-            }
-            Err(e) => {
-                interpreter.mode = old_mode;
-                interpreter.fuel = old_fuel;
-                if depends_on_generic_param(&comptime_node.expression, ctx) {
-                    return ty;
-                }
-                ctx.error(
-                    format!("comptime evaluation error: {}", e),
-                    comptime_node.span,
-                );
-                return Type::Error;
+                Type::Error
             }
         }
-    } else {
-        ctx.error(
-            "interpreter not available for comptime evaluation",
-            comptime_node.span,
-        );
-        return Type::Error;
+        Err(error) => {
+            if depends_on_generic_param(&comptime_node.expression, ctx) {
+                return ty;
+            }
+            ctx.error(
+                format!("comptime evaluation error: {error}"),
+                comptime_node.span,
+            );
+            Type::Error
+        }
     }
 }
 

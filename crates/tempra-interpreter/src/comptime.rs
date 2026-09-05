@@ -68,7 +68,8 @@ impl Interpreter {
     ///
     /// The interpreter's previous execution mode and fuel are restored after
     /// success or any ordinary evaluation failure. Host panics are not caught;
-    /// eliminating those is a later comptime-hardening step.
+    /// the shared arithmetic kernel instead returns deterministic errors for
+    /// supported integer overflow and invalid division.
     ///
     /// This method is the outer session boundary. Nested `comptime` expressions
     /// are evaluated by the interpreter kernel inside the active session, so

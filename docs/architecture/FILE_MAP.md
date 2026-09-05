@@ -41,6 +41,7 @@ This index points to current source-of-truth files. A crate's presence in the wo
 - `crates/tempra-driver/src/module_graph.rs`: filesystem module loading, ordering, and cycle detection.
 - `crates/tempra-driver/src/build.rs`, `install.rs`: incomplete build and install scaffolds.
 - `crates/tempra-interpreter/src/comptime.rs`: canonical K1.1 comptime session facade, configuration and typed boundary errors.
+- `crates/tempra-interpreter/src/arithmetic.rs`: panic-free checked `Int64` operations and controlled integer-division failures shared by runtime and comptime evaluation.
 - `crates/tempra-interpreter/src/`: default HIR evaluator and runtime value representation.
 
 ## TIR and experimental VM

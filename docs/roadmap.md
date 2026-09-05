@@ -80,8 +80,10 @@ interpreter as the semantic kernel. K1.1 adds one canonical facade that owns
 comptime mode/fuel setup, value/error/control-flow normalization and state
 restoration. K1.2 extends the same authority to ordinary multi-module and
 file-based typechecking through a module-aware lookup adapter over separate HIR
-files. The typechecker remains the owner of primitive HIR materialization, and
-TIR/backends consume resolved code.
+files. K1.3 makes supported integer arithmetic in the shared HIR kernel
+panic-free and profile-independent without changing float semantics. The
+typechecker remains the owner of primitive HIR materialization, and TIR/backends
+consume resolved code.
 
 Current status:
 
@@ -89,11 +91,12 @@ Current status:
 K1 audit/spec       DONE
 K1.1 facade         DONE
 K1.2 multi-module   DONE
+K1.3 arithmetic     DONE
 K1 implementation   IN PROGRESS
 ```
 
-REPL/analysis integration and arithmetic, effect, extern,
-termination and specialization hardening remain later K1/K2 work. K then records
+REPL/analysis integration and effect, extern, termination and specialization
+hardening remain later K1/K2 work. K then records
 determinism, reproducibility, parity tests, phase timings and initial
 compiler-latency benchmarks. Compile latency is already monitored during
 development; K makes that monitoring reproducible and actionable. No deep

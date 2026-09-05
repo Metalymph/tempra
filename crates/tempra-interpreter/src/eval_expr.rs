@@ -1,9 +1,22 @@
+use crate::arithmetic::{
+    add_i64, div_i64, div_u8, mul_i64, neg_i64, sub_i64, IntegerArithmeticError,
+};
 use crate::control_flow::ControlFlow;
 use crate::env::RuntimeEnv;
 use crate::interpreter::Interpreter;
 use crate::value::{OptionValue, RegexValue, StructInstance, Value};
 use std::collections::HashMap;
 use tempra_hir::*;
+
+fn integer_value<T>(
+    result: Result<T, IntegerArithmeticError>,
+    into_value: impl FnOnce(T) -> Value,
+) -> Result<ControlFlow, String> {
+    result
+        .map(into_value)
+        .map(ControlFlow::Value)
+        .map_err(|error| error.to_string())
+}
 
 fn run_command(c: &crate::value::CommandValue) -> Result<Value, String> {
     let mut cmd = std::process::Command::new(&c.program);
@@ -298,7 +311,7 @@ impl Interpreter {
                         }
                     }
                     HirUnaryOp::Negate => match val {
-                        Value::Int64(i) => Ok(ControlFlow::Value(Value::Int64(-i))),
+                        Value::Int64(i) => integer_value(neg_i64(i), Value::Int64),
                         Value::Float64(f) => Ok(ControlFlow::Value(Value::Float64(-f))),
                         _ => Err("- requires a numeric type".into()),
                     },
@@ -663,7 +676,7 @@ impl Interpreter {
                 match binary.op {
                     HirBinaryOp::Add => match (left, right) {
                         (Value::Int64(a), Value::Int64(b)) => {
-                            Ok(ControlFlow::Value(Value::Int64(a + b)))
+                            integer_value(add_i64(a, b), Value::Int64)
                         }
                         (Value::UInt8(a), Value::UInt8(b)) => {
                             Ok(ControlFlow::Value(Value::UInt8(a.wrapping_add(b))))
@@ -678,7 +691,7 @@ impl Interpreter {
                     },
                     HirBinaryOp::Sub => match (left, right) {
                         (Value::Int64(a), Value::Int64(b)) => {
-                            Ok(ControlFlow::Value(Value::Int64(a - b)))
+                            integer_value(sub_i64(a, b), Value::Int64)
                         }
                         (Value::UInt8(a), Value::UInt8(b)) => {
                             Ok(ControlFlow::Value(Value::UInt8(a.wrapping_sub(b))))
@@ -690,7 +703,7 @@ impl Interpreter {
                     },
                     HirBinaryOp::Mul => match (left, right) {
                         (Value::Int64(a), Value::Int64(b)) => {
-                            Ok(ControlFlow::Value(Value::Int64(a * b)))
+                            integer_value(mul_i64(a, b), Value::Int64)
                         }
                         (Value::UInt8(a), Value::UInt8(b)) => {
                             Ok(ControlFlow::Value(Value::UInt8(a.wrapping_mul(b))))
@@ -702,10 +715,10 @@ impl Interpreter {
                     },
                     HirBinaryOp::Div => match (left, right) {
                         (Value::Int64(a), Value::Int64(b)) => {
-                            Ok(ControlFlow::Value(Value::Int64(a / b)))
+                            integer_value(div_i64(a, b), Value::Int64)
                         }
                         (Value::UInt8(a), Value::UInt8(b)) => {
-                            Ok(ControlFlow::Value(Value::UInt8(a / b)))
+                            integer_value(div_u8(a, b), Value::UInt8)
                         }
                         (Value::Float64(a), Value::Float64(b)) => {
                             Ok(ControlFlow::Value(Value::Float64(a / b)))

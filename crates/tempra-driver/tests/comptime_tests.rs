@@ -26,6 +26,29 @@ fn test_comptime_arithmetic_is_resolved_before_tir() {
 }
 
 #[test]
+fn comptime_arithmetic_failure_is_controlled_and_does_not_poison_later_compilation() {
+    let invalid = r#"
+    fn main() -> Int64 {
+        return comptime 1 / 0
+    }
+    "#;
+    let error = emit_tir_source(invalid).expect_err("division by zero must fail");
+    assert!(
+        error.to_string().contains("integer division by zero"),
+        "unexpected error: {error}"
+    );
+
+    let valid = r#"
+    fn main() -> Int64 {
+        return comptime 40 + 2
+    }
+    "#;
+    let tir = emit_tir_source(valid).expect("later compilation must remain usable");
+    assert!(tir.contains("const 42i64"), "unexpected TIR:\n{tir}");
+    assert!(!tir.contains("comptime"), "unexpected TIR:\n{tir}");
+}
+
+#[test]
 fn file_check_uses_canonical_comptime_authority() {
     let directory = tempfile::tempdir().unwrap();
     let helper = directory.path().join("helper.tmpr");

@@ -1,3 +1,4 @@
+mod arithmetic;
 pub mod comptime;
 pub mod control_flow;
 pub mod env;

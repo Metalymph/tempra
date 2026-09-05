@@ -53,3 +53,38 @@ fn evaluation_failure_does_not_corrupt_the_following_module() {
     );
     assert_eq!(interpreter.fuel, None);
 }
+
+#[test]
+fn arithmetic_failure_in_a_non_entry_module_does_not_corrupt_later_evaluation() {
+    let bad_source = "fn unused() -> Int64 { return comptime 1 / 0 }";
+    let good_source = "fn good() -> Int64 { return comptime 20 + 22 }";
+    let mut bad = lower(bad_source);
+    let mut good = lower(good_source);
+    let mut modules = [
+        ModuleToCheck {
+            name: "bad".to_string(),
+            imports: HashMap::new(),
+            file: &mut bad,
+        },
+        ModuleToCheck {
+            name: "good".to_string(),
+            imports: HashMap::new(),
+            file: &mut good,
+        },
+    ];
+
+    let context = check_modules_always_with_comptime(&mut modules, &HashMap::new(), false);
+    drop(modules);
+
+    assert!(context
+        .errors
+        .iter()
+        .any(|error| error.message.contains("integer division by zero")));
+    assert_eq!(returned_integer(&good, "good"), Some("42"));
+    let interpreter = context.interpreter.expect("canonical interpreter missing");
+    assert_eq!(
+        interpreter.mode,
+        tempra_interpreter::interpreter::EvalMode::Runtime
+    );
+    assert_eq!(interpreter.fuel, None);
+}

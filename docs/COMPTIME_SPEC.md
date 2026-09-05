@@ -22,9 +22,18 @@ typechecking by giving the interpreter a module-aware lookup adapter. Module HIR
 files remain separate and imports retain their qualified identities. The
 analysis/LSP and REPL typechecking paths remain intentionally deferred.
 
-K1 remains in progress. Arithmetic panic hardening, complete effect restrictions,
-extern rejection, recursion limits and specialization correctness are separate
-later slices.
+K1.3 makes the shared HIR integer-arithmetic kernel panic-free for supported
+operations. `Int64` addition, subtraction and multiplication report overflow;
+division reports zero and signed `MIN / -1` separately; unary negation reports
+overflow. `UInt8` division by zero is controlled. Existing `UInt8`
+addition/subtraction/multiplication wrapping behavior is unchanged by K1.3 and
+is not made a normative language rule here. Float arithmetic, including IEEE
+division by zero, is unchanged.
+
+Remainder/modulo is not current source syntax. Right shift is parsed but rejected
+by the typechecker, so neither is part of the supported K1.3 arithmetic boundary.
+K1 remains in progress. Complete effect restrictions, extern rejection,
+recursion limits and specialization correctness are separate later slices.
 
 ---
 

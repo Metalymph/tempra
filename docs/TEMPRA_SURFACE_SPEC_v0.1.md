@@ -995,9 +995,15 @@ E4 retains `semantics-1`: pre-E4 parsing rejected pure, attribute edits change
 source identity, and existing enforcement remains authoritative. No contract
 metadata is serialized into cache.
 
+K1.7 subsequently raises the current compiler fingerprint to `semantics-2` so
+artifacts predating the canonical comptime guarantees cannot bypass fresh
+evaluation. This is independent of bytecode format version and adds no contract
+or capability metadata to cache artifacts.
+
 E1–E6 complete the currently meaningful semantic and tooling surface, not all
-TIR coverage. K1 audits one backend-independent comptime authority and parity
-across VM/JIT/Wasm/future AOT without fixing the authority layer in advance. The immediate roadmap
+TIR coverage. K1 has completed its canonical backend-independent comptime
+authority and cache trust boundary. K2–K6 continue determinism, runtime parity,
+timings, latency baselines and regression budgets. The immediate roadmap
 continues K → R → M → C → V → O → P, with U conditional. R is future Result/value-use hardening:
 no silent discard, including an accidental `let _ = ...` escape hatch; handling
 through `?`, `match`, return/propagation or meaningful use. Neither wildcard-binding

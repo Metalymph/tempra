@@ -380,7 +380,9 @@ diagnostic rendering on stderr. Its current tooling schema exposes diagnostics,
 functions, direct and required sets, contracts, source identity and structured
 witnesses; it is not a promised permanent protocol. Ordinary cache hits remain
 verified bytecode-only. Effect inspection never reads or writes cache metadata
-and leaves `semantics-1` unchanged.
+and E6 itself left `semantics-1` unchanged. K1.7 later raises the compiler
+semantic revision to `semantics-2` so pre-K1 comptime artifacts are incompatible;
+no capability metadata is added and compatible hits remain bytecode-only.
 
 The current analysis/LSP path remains frontend/typechecking-only. E6 converts to
 the existing general `Diagnostic` model but does not make the LSP compile through
@@ -390,10 +392,10 @@ adding a second analyzer.
 ## Post-E6 state and next compiler milestone
 
 E1–E6 complete the currently meaningful light capability/effect and tooling
-surface, not all TIR coverage. K1 canonical backend-independent comptime
-semantics, authority/evaluator parity, determinism and initial responsiveness
-audit is next. E6 introduced no second analyzer and its JSON is a current tooling
-schema rather than a permanent protocol.
+surface, not all TIR coverage. K1 has since completed its canonical comptime
+authority and semantic-cache trust boundary. Determinism, runtime parity and
+responsiveness work continue in K2–K6. E6 introduced no second analyzer and its
+JSON is a current tooling schema rather than a permanent protocol.
 
 The richer TIR Graph is later tooling: calls, CFG, capabilities, allocations,
 ownership edges, escapes, actor boundaries, specializations and source provenance

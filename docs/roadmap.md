@@ -105,20 +105,20 @@ K1.3 arithmetic     DONE
 K1.4 extern/bodyless DONE
 K1.5 effect policy   DONE
 K1.6 termination     DONE
-K1 implementation   IN PROGRESS
+K1.7 cache revision  DONE
+K1 implementation   DONE
 ```
 
-REPL/analysis integration and specialization hardening remain later K1/K2
-work. K1.6 does not change the
-`tempra-{CARGO_PKG_VERSION}-semantics-1` fingerprint; stale artifacts must be
-re-audited before K1 closes so they cannot bypass the comptime authority.
-Native signature integrity
-remains separate from the
-now-explicit HIR bodyless rejection. K then records
-determinism, reproducibility, parity tests, phase timings and initial
-compiler-latency benchmarks. Compile latency is already monitored during
-development; K makes that monitoring reproducible and actionable. No deep
-optimization is implied or implemented yet.
+K1.7 raises the cache trust fingerprint from `semantics-1` to `semantics-2`, so
+artifacts predating K1.3–K1.6 cannot bypass current comptime semantics. Bytecode
+format and semantic revision are independent even though both currently equal 2.
+Native signature integrity remains separate from the now-explicit HIR bodyless
+rejection. Specialization ordering and host/order reproducibility continue in
+K2; VM/JIT/Wasm runtime parity continues in K3; phase timings, latency baseline
+and regression budgets continue in K4–K6. Analysis/LSP/REPL comptime integration
+remains tooling work, while full comptime specialization is separate compiler
+feature/debt. Compile latency remains monitored throughout development; no deep
+optimization is implied by K1.
 
 ### R — Result / Value-Use Hardening
 

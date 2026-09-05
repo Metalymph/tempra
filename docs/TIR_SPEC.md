@@ -83,7 +83,7 @@ TIR evolution follows the project-wide dependency order rather than assigning co
 
 1. **E — Capability/effect semantic core (E1–E4 done):** stable summaries and provenance.
 2. **E6 — Structured diagnostics and inspect tooling (done):** projections over existing facts.
-3. **K — Comptime consistency and compiler responsiveness:** audit one canonical backend-independent semantics, backend parity, determinism and initial phase timings before semantic changes.
+3. **K — Comptime consistency and compiler responsiveness:** K1's canonical evaluator and semantic-cache trust boundary are complete; determinism, runtime parity, phase timings and latency gates continue in K2–K6.
 4. **R — Result / value-use hardening:** future obligations against silent Result discard, not a capability/effect.
 5. **M — Acyclic ownership:** formalize legal strong-reference graphs and complete ARC-cycle prevention before concurrent transfer.
 6. **C — Pluggable actor concurrency:** add task, actor, channel, and selection operations only after the preceding foundations define their boundaries.
@@ -95,6 +95,10 @@ E1–E6 are implemented for the currently meaningful surface. E6 reuses current
 facts and is not a complete TIR Graph. U — Unsafe Boundary is standalone
 DEFERRED / CONDITIONAL work, activated only by a real source operation requiring
 memory/type-safety authorization. No current TIR capability origin emits Unsafe.
+
+K1.7 changes only cache trust to `semantics-2`. The bytecode format remains an
+independent structural version, and neither TIR nor capability facts are rebuilt
+on a compatible bytecode-only cache hit.
 
 This section does not define future TIR opcodes. Their exact representation belongs to the corresponding phase specifications.
 

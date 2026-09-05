@@ -77,11 +77,28 @@ semantic cost per invocation (C); `while` is unsupported by the current HIR
 0). A tick measures evaluator progress, not proportional CPU, memory, or
 per-byte work.
 
-K1 implementation remains in progress. Specialization correctness and other
-termination-policy refinements are separate later work. The cache fingerprint
-`tempra-{CARGO_PKG_VERSION}-semantics-1` is unchanged by K1.6; stale-artifact
-reuse must be re-audited before K1 closes so cached bytecode cannot bypass the
-new comptime authority.
+K1.7 raises the cache fingerprint to
+`tempra-{CARGO_PKG_VERSION}-semantics-2`. Artifacts stamped with revision 1 remain
+readable where structurally valid but are never trusted as hits: fresh compilation
+must reapply K1.3–K1.6 semantics. This changes neither bytecode format nor cache
+schema, and successful revision-2 hits remain verified-bytecode-only.
+
+```text
+K1 audit/spec        DONE
+K1.1 facade          DONE
+K1.2 multi-module    DONE
+K1.3 arithmetic      DONE
+K1.4 extern/bodyless DONE
+K1.5 effect policy   DONE
+K1.6 termination     DONE
+K1.7 cache revision  DONE
+K1 implementation   DONE
+```
+
+Specialization ordering and host/order reproducibility continue in K2; runtime
+VM/JIT/Wasm parity continues in K3; timings, latency baselines and budgets continue
+in K4–K6. Analysis/LSP/REPL integration remains a tooling follow-up, and full
+comptime specialization remains separate compiler feature/debt.
 
 ---
 

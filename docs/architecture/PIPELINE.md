@@ -155,8 +155,10 @@ default safety limit is 8 active frames, nested comptime shares the active
 session, and builtins have constant semantic cost in v0.1. The compiler-defined
 call-depth limit is revisionable as the evaluator evolves. These limits bound
 evaluator progress only: there is no wall-clock, per-byte, CPU or memory quota.
-The current HIR has no `while` surface. The cache `semantics-1` fingerprint is
-unchanged, but stale artifacts must be re-audited before K1 closes.
+The current HIR has no `while` surface. K1.7 requires the `semantics-2` cache
+fingerprint so revision-1 artifacts cannot bypass fresh K1 evaluation. Bytecode
+format version and semantic revision remain independent; compatible hits still
+produce verified bytecode only, without reconstructing TIR or compiler facts.
 
 ## Planned backends
 

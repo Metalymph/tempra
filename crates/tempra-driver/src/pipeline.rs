@@ -1182,7 +1182,7 @@ mod enforcement_cache_tests {
     use super::*;
 
     #[test]
-    fn pure_uses_semantics_one_and_source_identity_without_cache_metadata() {
+    fn pure_uses_semantics_two_and_source_identity_without_cache_metadata() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("pure.tbc");
         let pure = "@pure fn main() -> Int64 { return 10 / 2 }";
@@ -1199,7 +1199,7 @@ mod enforcement_cache_tests {
         let header = crate::cache::read_cache_artifact(&path).unwrap().header;
         assert_eq!(
             header.compiler_fingerprint,
-            format!("tempra-{}-semantics-1", env!("CARGO_PKG_VERSION"))
+            format!("tempra-{}-semantics-2", env!("CARGO_PKG_VERSION"))
         );
         assert_eq!(header.source_hash, pure_hash);
         let bytes = fs::read(&path).unwrap();
@@ -1256,6 +1256,43 @@ mod enforcement_cache_tests {
 
     const VALID: &str = "@deny(io) fn main() -> Int64 { return 10 / 2 }";
     const VIOLATING: &str = "@deny(panic) fn main() -> Int64 { return 10 / 2 }";
+
+    const K1_STALE_SOURCES: [(&str, &str, &str); 4] = [
+        (
+            "arithmetic",
+            "fn main() -> Int64 { return comptime 9223372036854775807 + 1 }",
+            "integer addition overflow",
+        ),
+        (
+            "bodyless extern",
+            "pub extern fn missing() -> Unit\nfn main() { comptime missing() }",
+            "function 'missing' has no executable HIR body",
+        ),
+        (
+            "forbidden effect",
+            "fn hidden() { dbg(\"hidden\") }\nfn main() { comptime hidden() }",
+            "operation 'dbg' is not allowed during comptime evaluation",
+        ),
+        (
+            "termination",
+            "fn recurse() -> Int64 { return recurse() }\nfn main() -> Int64 { return comptime recurse() }",
+            "comptime call depth exceeded",
+        ),
+    ];
+
+    fn semantics_one_artifact(
+        source: &str,
+        module: tempra_bytecode::BytecodeModule,
+    ) -> tempra_bytecode::BytecodeCacheArtifact {
+        tempra_bytecode::BytecodeCacheArtifact {
+            header: tempra_bytecode::BytecodeCacheHeader {
+                compiler_fingerprint: format!("tempra-{}-semantics-1", env!("CARGO_PKG_VERSION")),
+                source_hash: crate::cache::compute_source_hash(source),
+                ..Default::default()
+            },
+            module,
+        }
+    }
 
     fn legacy_artifact(source: &str) -> tempra_bytecode::BytecodeCacheArtifact {
         // Reproduce the real pre-E3.2 compiler: preserve @deny in HIR, but lower
@@ -1326,6 +1363,73 @@ mod enforcement_cache_tests {
     }
 
     #[test]
+    fn semantics_one_artifacts_cannot_bypass_k1_comptime_failures() {
+        let dir = tempfile::tempdir().unwrap();
+        let seed_path = dir.path().join("seed.tbc");
+        let seed = compile_to_bytecode_with_analysis("fn main() -> Int64 { return 7 }", &seed_path)
+            .unwrap();
+        let stale_module = seed.bytecode().clone();
+        assert_eq!(
+            tempra_vm::run_function(&stale_module, "main", vec![]).unwrap(),
+            VmValue::Int64(7)
+        );
+
+        for (index, (family, source, expected_error)) in K1_STALE_SOURCES.iter().enumerate() {
+            let path = dir.path().join(format!("stale-{index}.tbc"));
+            let artifact = semantics_one_artifact(source, stale_module.clone());
+            crate::cache::write_cache_artifact(&path, &artifact).unwrap();
+            let before = fs::read(&path).unwrap();
+            let source_hash = crate::cache::compute_source_hash(source);
+            let decoded = crate::cache::read_cache_artifact(&path)
+                .expect("stale artifact must be structurally valid and verified");
+
+            assert_eq!(decoded.header.source_hash, source_hash);
+            assert_eq!(
+                decoded.header.compiler_fingerprint,
+                format!("tempra-{}-semantics-1", env!("CARGO_PKG_VERSION"))
+            );
+            assert_eq!(
+                tempra_vm::run_function(&decoded.module, "main", vec![]).unwrap(),
+                VmValue::Int64(7),
+                "stale {family} bytecode must otherwise be executable"
+            );
+
+            assert!(
+                crate::cache::read_compatible_module(&path, &source_hash).is_none(),
+                "semantics-1 {family} artifact must be incompatible"
+            );
+
+            let error = load_or_compile_cached_module(source, &path)
+                .expect_err("fresh K1 compilation must reject stale source semantics");
+            let message = error.to_string();
+            assert!(
+                matches!(error, DriverError::TypeError(_)),
+                "unexpected {family} error: {message}"
+            );
+            assert!(
+                message.contains(expected_error),
+                "fresh {family} compilation produced the wrong error: {message}"
+            );
+            assert_eq!(
+                fs::read(&path).unwrap(),
+                before,
+                "failed {family} compilation must not replace the stale artifact"
+            );
+            let unchanged = crate::cache::read_cache_artifact(&path).unwrap();
+            assert_eq!(unchanged.header.source_hash, source_hash);
+            assert_eq!(
+                unchanged.header.compiler_fingerprint,
+                format!("tempra-{}-semantics-1", env!("CARGO_PKG_VERSION")),
+                "failed {family} compilation must not promote the stale artifact"
+            );
+            assert!(
+                crate::cache::read_compatible_module(&path, &source_hash).is_none(),
+                "stale {family} artifact must remain an incompatible miss"
+            );
+        }
+    }
+
+    #[test]
     fn valid_semantics_hit_is_verified_bytecode_only_and_contract_edits_miss() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("cache.tbc");
@@ -1333,7 +1437,7 @@ mod enforcement_cache_tests {
         let artifact = crate::cache::read_cache_artifact(&path).unwrap();
         assert_eq!(
             artifact.header.compiler_fingerprint,
-            format!("tempra-{}-semantics-1", env!("CARGO_PKG_VERSION"))
+            format!("tempra-{}-semantics-2", env!("CARGO_PKG_VERSION"))
         );
         let before = fs::read(&path).unwrap();
         let modified = fs::metadata(&path).unwrap().modified().unwrap();
@@ -1345,6 +1449,7 @@ mod enforcement_cache_tests {
             tempra_bytecode::serialize::encode_module(&cached).unwrap(),
             tempra_bytecode::serialize::encode_module(fresh.bytecode()).unwrap()
         );
+        std::thread::sleep(std::time::Duration::from_millis(100));
         let hit = load_or_compile_cached_module(VALID, &path).unwrap();
         assert_eq!(
             tempra_vm::run_function(&hit, "main", vec![]).unwrap(),

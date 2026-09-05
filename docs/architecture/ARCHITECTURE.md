@@ -90,9 +90,9 @@ explicit ticks, while builtins remain constant-cost in v0.1. A call-depth guard
 allows 8 active frames by default and rejects the 9th; nested comptime shares
 the active session. This is a conservative compiler-defined v0.1 safety limit,
 revisionable as the evaluator evolves, not
-a timeout, wall-clock limit, or resource quota. The `semantics-1` cache
-fingerprint is unchanged, but stale-artifact reuse must be reviewed before K1
-closes.
+a timeout, wall-clock limit, or resource quota. K1.7 completes the trust boundary
+by requiring `semantics-2`; revision-1 artifacts miss and must pass through fresh
+K1 evaluation. This semantic revision is independent of bytecode format version.
 
 ## Capability analysis insertion point
 
@@ -200,11 +200,10 @@ ARC optimization is a separate later concern. Escape analysis, stack promotion, 
 E1–E6 complete the currently meaningful capability-contract and tooling core
 while retaining known coverage gaps. E6 projects existing facts through
 `tempra effects` and immutable driver types; it does not add analysis. K1's
-audit/spec, K1.1 facade, K1.2 multi-module authority, K1.3 arithmetic hardening,
-K1.4 explicit bodyless rejection, K1.5 effect policy and K1.6 deterministic
-termination are complete; remaining integration and semantic hardening remain
-in progress before evaluator parity, determinism and responsiveness
-measurements. Compile latency is monitored during development; deep
+audit/spec and K1.1–K1.7 implementation are complete, including the semantic
+cache revision that prevents older artifacts from bypassing current comptime
+guarantees. Determinism continues in K2, runtime parity in K3, and responsiveness
+measurements in K4–K6. Compile latency is monitored during development; deep
 latency and incremental-build optimization belongs to P. The richer future TIR Graph still
 requires later ownership and actor facts.
 

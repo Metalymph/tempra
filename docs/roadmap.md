@@ -90,8 +90,9 @@ allocation remain allowed, while process execution, output/input, filesystem,
 environment, host-OS access, `dbg` and `exit` are rejected at their effect
 boundaries. The typechecker remains the owner of primitive HIR materialization,
 and TIR/backends consume resolved code. K1.6 adds deterministic
-evaluator-progress fuel ticks and a compiler-defined v0.1 call-depth limit of
-128 active Tempra frames. Nested comptime shares the active session without
+evaluator-progress fuel ticks and a conservative compiler-defined v0.1
+call-depth safety limit of 8 active Tempra frames. The limit is revisionable as
+the evaluator evolves; nested comptime shares the active session without
 resetting its budget.
 
 Current status:

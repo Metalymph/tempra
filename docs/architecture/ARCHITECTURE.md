@@ -87,8 +87,9 @@ Wasm and future AOT remain consumers of already resolved semantics rather than
 comptime authorities. K1.6 centralizes deterministic evaluator-progress fuel:
 expression/statement entries, Tempra call frames and executed `for` bodies are
 explicit ticks, while builtins remain constant-cost in v0.1. A call-depth guard
-allows 128 active frames by default and rejects the 129th; nested comptime
-shares the active session. This is a compiler-defined, revisionable bound, not
+allows 8 active frames by default and rejects the 9th; nested comptime shares
+the active session. This is a conservative compiler-defined v0.1 safety limit,
+revisionable as the evaluator evolves, not
 a timeout, wall-clock limit, or resource quota. The `semantics-1` cache
 fingerprint is unchanged, but stale-artifact reuse must be reviewed before K1
 closes.

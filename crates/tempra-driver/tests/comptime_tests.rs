@@ -92,6 +92,29 @@ fn comptime_effect_policy_is_enforced_transitively_by_the_interpreter() {
 }
 
 #[test]
+fn comptime_recursion_stops_before_tir_and_does_not_poison_later_compilation() {
+    let recursive = r#"
+    fn recurse() -> Int64 { return recurse() }
+    fn main() -> Int64 { return comptime recurse() }
+    "#;
+    let result = std::panic::catch_unwind(|| emit_tir_source(recursive));
+    let error = result
+        .expect("default comptime call depth must prevent a host unwind")
+        .expect_err("recursive comptime evaluation must fail before TIR");
+    assert!(
+        error.to_string().contains("comptime call depth exceeded"),
+        "unexpected error: {error}"
+    );
+
+    let valid = r#"
+    fn main() -> Int64 { return comptime 1 + 2 }
+    "#;
+    let tir = emit_tir_source(valid).expect("later compilation must remain usable");
+    assert!(tir.contains("const 3i64"), "unexpected TIR:\n{tir}");
+    assert!(!tir.contains("comptime"), "unexpected TIR:\n{tir}");
+}
+
+#[test]
 fn file_check_uses_canonical_comptime_authority() {
     let directory = tempfile::tempdir().unwrap();
     let helper = directory.path().join("helper.tmpr");

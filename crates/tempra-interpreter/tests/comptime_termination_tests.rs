@@ -96,7 +96,7 @@ fn fuel_exhaustion_is_typed_and_does_not_unwind() {
 #[test]
 fn default_call_depth_is_the_revisionable_v01_limit() {
     let config = ComptimeEvalConfig::default();
-    assert_eq!(config.max_call_depth(), 128);
+    assert_eq!(config.max_call_depth(), 8);
     assert_eq!(
         ComptimeEvalConfig::with_fuel(7)
             .with_max_call_depth(3)
@@ -151,6 +151,40 @@ fn recursive_computation_reports_call_depth_when_fuel_is_high() {
 }
 
 #[test]
+fn default_call_depth_precedes_host_stack_exhaustion_for_direct_recursion() {
+    let file = lower("fn recurse() { recurse() } fn main() { recurse() }");
+    let expression = expression_in(&file, "main");
+    let mut interpreter = Interpreter::new(&file);
+    interpreter.mode = EvalMode::Runtime;
+    interpreter.fuel = Some(41);
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        interpreter.evaluate_comptime(
+            &expression,
+            &mut RuntimeEnv::new(),
+            ComptimeEvalConfig::default(),
+        )
+    }));
+
+    assert_eq!(
+        result.expect("default call depth must stop direct recursion without unwinding"),
+        Err(ComptimeEvalError::CallDepthExceeded)
+    );
+    assert_eq!(interpreter.mode, EvalMode::Runtime);
+    assert_eq!(interpreter.fuel, Some(41));
+
+    let finite = lower("fn main() { 1 + 2 }");
+    assert_eq!(
+        interpreter.evaluate_comptime(
+            &expression_in(&finite, "main"),
+            &mut RuntimeEnv::new(),
+            Default::default(),
+        ),
+        Ok(Value::Int64(3))
+    );
+}
+
+#[test]
 fn mutual_recursion_uses_the_same_call_depth_guard() {
     let file = lower("fn a() { b() } fn b() { a() } fn main() { a() }");
     let expression = expression_in(&file, "main");
@@ -163,6 +197,54 @@ fn mutual_recursion_uses_the_same_call_depth_guard() {
         ),
         Err(ComptimeEvalError::CallDepthExceeded)
     );
+}
+
+#[test]
+fn default_call_depth_precedes_host_stack_exhaustion_for_mutual_recursion() {
+    let file = lower("fn a() { b() } fn b() { a() } fn main() { a() }");
+    let expression = expression_in(&file, "main");
+    let mut interpreter = Interpreter::new(&file);
+    interpreter.mode = EvalMode::Runtime;
+    interpreter.fuel = Some(43);
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        interpreter.evaluate_comptime(
+            &expression,
+            &mut RuntimeEnv::new(),
+            ComptimeEvalConfig::default(),
+        )
+    }));
+
+    assert_eq!(
+        result.expect("default call depth must stop mutual recursion without unwinding"),
+        Err(ComptimeEvalError::CallDepthExceeded)
+    );
+    assert_eq!(interpreter.mode, EvalMode::Runtime);
+    assert_eq!(interpreter.fuel, Some(43));
+}
+
+#[test]
+fn default_call_depth_precedes_host_stack_exhaustion_for_recursive_closures() {
+    let file = lower("fn main() { comptime { let recurse = fn[self]() { self() }; recurse() } }");
+    let expression = expression_in(&file, "main");
+    let mut interpreter = Interpreter::new(&file);
+    interpreter.mode = EvalMode::Runtime;
+    interpreter.fuel = Some(47);
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        interpreter.evaluate_comptime(
+            &expression,
+            &mut RuntimeEnv::new(),
+            ComptimeEvalConfig::default(),
+        )
+    }));
+
+    assert_eq!(
+        result.expect("default call depth must stop closure recursion without unwinding"),
+        Err(ComptimeEvalError::CallDepthExceeded)
+    );
+    assert_eq!(interpreter.mode, EvalMode::Runtime);
+    assert_eq!(interpreter.fuel, Some(47));
 }
 
 #[test]
@@ -197,6 +279,52 @@ fn cross_module_recursion_preserves_the_caller_module() {
     let local = expression_in(&caller, "local");
     assert_eq!(
         interpreter.evaluate_comptime(&local, &mut RuntimeEnv::new(), Default::default()),
+        Ok(Value::Int64(7))
+    );
+}
+
+#[test]
+fn default_call_depth_precedes_host_stack_exhaustion_cross_module() {
+    let dependency = lower("pub fn recurse() { recurse() }");
+    let caller = lower("fn local() -> Int64 { return 7 } fn main() { dep.recurse() }");
+    let imports = HashMap::from([("dep".to_string(), "dependency".to_string())]);
+    let empty_imports = HashMap::new();
+    let mut interpreter = Interpreter::new_for_modules([
+        InterpreterModule {
+            name: "dependency",
+            imports: &empty_imports,
+            file: &dependency,
+        },
+        InterpreterModule {
+            name: "caller",
+            imports: &imports,
+            file: &caller,
+        },
+    ]);
+    assert!(interpreter.select_module("caller"));
+    interpreter.mode = EvalMode::Runtime;
+    interpreter.fuel = Some(53);
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        interpreter.evaluate_comptime(
+            &expression_in(&caller, "main"),
+            &mut RuntimeEnv::new(),
+            ComptimeEvalConfig::default(),
+        )
+    }));
+
+    assert_eq!(
+        result.expect("default call depth must stop cross-module recursion without unwinding"),
+        Err(ComptimeEvalError::CallDepthExceeded)
+    );
+    assert_eq!(interpreter.mode, EvalMode::Runtime);
+    assert_eq!(interpreter.fuel, Some(53));
+    assert_eq!(
+        interpreter.evaluate_comptime(
+            &expression_in(&caller, "local"),
+            &mut RuntimeEnv::new(),
+            Default::default(),
+        ),
         Ok(Value::Int64(7))
     );
 }

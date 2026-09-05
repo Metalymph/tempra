@@ -10,8 +10,11 @@ use tempra_hir::HirExpression;
 
 /// The default evaluator-progress budget for one comptime evaluation session.
 pub const DEFAULT_COMPTIME_FUEL: u64 = 1_000_000;
-/// Compiler-defined v0.1 maximum number of active Tempra call frames.
-pub const DEFAULT_COMPTIME_CALL_DEPTH: u32 = 128;
+/// Compiler-defined v0.1 safety limit for active Tempra call frames.
+///
+/// This conservative limit is revisionable as the evaluator evolves; it is
+/// not a permanent language-level recursion guarantee.
+pub const DEFAULT_COMPTIME_CALL_DEPTH: u32 = 8;
 
 pub(crate) const FUEL_EXHAUSTED_MESSAGE: &str = "comptime evaluation fuel exhausted";
 pub(crate) const CALL_DEPTH_EXCEEDED_MESSAGE: &str = "comptime call depth exceeded";
@@ -349,6 +352,40 @@ mod tests {
         );
         assert_eq!(interpreter.mode, EvalMode::Runtime);
         assert_eq!(interpreter.fuel, Some(19));
+    }
+
+    #[test]
+    fn restores_call_depth_state_after_depth_failure() {
+        let source = "fn recurse() { recurse() } fn main() { recurse() }";
+        let ast = parse_source(source).unwrap();
+        let hir = lower_file(source, &ast);
+        let main = hir
+            .items
+            .iter()
+            .find_map(|item| match item {
+                HirItem::Function(function) if function.name == "main" => function.body.as_ref(),
+                _ => None,
+            })
+            .unwrap();
+        let expression = match main.statements.last().unwrap() {
+            HirStatement::Expr(expression) => expression,
+            statement => panic!("expected expression statement, found {statement:?}"),
+        };
+        let mut interpreter = Interpreter::new(&hir);
+        interpreter.mode = EvalMode::Runtime;
+        interpreter.fuel = Some(31);
+        interpreter.comptime_call_depth = 3;
+        interpreter.max_comptime_call_depth = Some(5);
+
+        let error = interpreter
+            .evaluate_comptime(expression, &mut RuntimeEnv::new(), Default::default())
+            .unwrap_err();
+
+        assert_eq!(error, ComptimeEvalError::CallDepthExceeded);
+        assert_eq!(interpreter.mode, EvalMode::Runtime);
+        assert_eq!(interpreter.fuel, Some(31));
+        assert_eq!(interpreter.comptime_call_depth, 3);
+        assert_eq!(interpreter.max_comptime_call_depth, Some(5));
     }
 
     #[test]

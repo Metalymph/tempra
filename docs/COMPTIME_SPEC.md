@@ -55,8 +55,10 @@ fuel is an evaluator-progress budget: each expression entry, statement entry,
 Tempra call frame and actually executed `for` body consumes one tick. A budget
 of `N` permits exactly `N` successful ticks; a tick at zero reports
 `FuelExhausted`. Call frames are bounded separately: the compiler-defined v0.1
-default is 128 active frames (frames 1–128 are allowed and frame 129 reports
-`CallDepthExceeded`). The limit is revisionable; there is no timeout or
+default safety limit is 8 active frames (frames 1–8 are allowed and frame 9
+reports `CallDepthExceeded`). The compiler-defined v0.1 limit is revisionable
+as the evaluator evolves and is not a permanent language-level recursion
+guarantee; there is no timeout or
 wall-clock, CPU, memory, or per-byte quota. Builtin, regex, string and
 collection helper invocations have constant semantic cost in this version.
 Nested `comptime`

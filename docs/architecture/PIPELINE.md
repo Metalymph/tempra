@@ -135,10 +135,12 @@ specialization is available. Capability analysis may rely on that semantic
 pruning, but it must not assume later dead-code elimination, inlining, escape
 analysis, or allocation elimination.
 
-K1.1 covers the existing working single-source entrypoints only. It does not
-initialize the evaluator for multi-module checking, file-based `check`, analysis,
-LSP or REPL typechecking. Arithmetic, extern/effect policy, recursion and
-specialization hardening also remain pending K1/K2 work.
+K1.2 now uses the same canonical facade for ordinary multi-module and file-based
+typechecking. The interpreter receives separate module-owned HIR files and a
+qualified lookup context; no synthetic aggregate HIR file is created.
+`tempra-analysis`, LSP and REPL typechecking remain on their existing
+non-comptime-aware paths. Arithmetic, extern/effect policy, recursion and
+specialization hardening remain later K1/K2 work.
 
 ## Planned backends
 

@@ -17,9 +17,14 @@ Nested `comptime` nodes reuse the active session and its remaining fuel instead
 of opening a second session. Resolved values and selected branches are committed
 to HIR before TIR lowering; TIR and its backends do not evaluate comptime.
 
-K1 remains in progress. Multi-module, file-check, analysis and REPL integration,
-arithmetic panic hardening, complete effect restrictions, extern rejection,
-recursion limits and specialization correctness are separate later slices.
+K1.2 extends the same authority to ordinary multi-module and file-based
+typechecking by giving the interpreter a module-aware lookup adapter. Module HIR
+files remain separate and imports retain their qualified identities. The
+analysis/LSP and REPL typechecking paths remain intentionally deferred.
+
+K1 remains in progress. Arithmetic panic hardening, complete effect restrictions,
+extern rejection, recursion limits and specialization correctness are separate
+later slices.
 
 ---
 
@@ -250,9 +255,10 @@ Selected `if comptime` branches and `comptime match` arms are retained in HIR; u
 
 Comptime is an execution phase, not an effect or an unsafe authorization. Its
 restrictions are implemented by the HIR evaluator and frontend checks, not by E1.
-All currently supported single-source evaluation entrypoints now enter the HIR
-kernel through the K1.1 facade; this centralizes execution setup but does not yet
-harden the policy itself.
+All currently supported single-source and ordinary multi-module/file-check
+evaluation entrypoints now enter the HIR kernel through the K1.1 facade; K1.2
+supplies module-aware lookup without flattening HIR. This centralizes execution
+setup but does not yet harden the policy itself.
 The evaluator has no dispatch to the VM native registry. The historical E5 audit
 found that unsupported/bodyless extern calls can instead yield Unit and be
 incorrectly materialized. Explicit rejection is separate correctness debt, not

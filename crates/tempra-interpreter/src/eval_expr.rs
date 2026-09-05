@@ -826,6 +826,37 @@ impl Interpreter {
             }
             HirExpression::Call(call) => {
                 if let HirExpression::Member(member) = &*call.callee {
+                    if let Some((identity, function)) =
+                        self.resolve_module_member_function(member, env)
+                    {
+                        let mut positional_values = Vec::new();
+                        let mut named_values = HashMap::new();
+                        for argument in &call.args {
+                            match argument {
+                                HirCallArgument::Positional(expression) => {
+                                    match self.eval_expression(expression, env)? {
+                                        ControlFlow::Value(value) => positional_values.push(value),
+                                        flow => return Ok(flow),
+                                    }
+                                }
+                                HirCallArgument::Named(named) => {
+                                    match self.eval_expression(&named.value, env)? {
+                                        ControlFlow::Value(value) => {
+                                            named_values.insert(named.name.clone(), value);
+                                        }
+                                        flow => return Ok(flow),
+                                    }
+                                }
+                            }
+                        }
+                        return self.bind_and_call_user_function(
+                            call,
+                            &identity,
+                            &function,
+                            positional_values,
+                            named_values,
+                        );
+                    }
                     if let HirExpression::Name(_, ref obj_name) = *member.object {
                         if obj_name == "fs" {
                             if self.mode == crate::interpreter::EvalMode::Comptime {
@@ -1173,7 +1204,9 @@ impl Interpreter {
 
                             // Phase 6: Check for methods (e.g. TypeName.methodName)
                             let method_name = format!("{}.{}", s.name, member.field);
-                            if let Some(func) = self.functions.get(&method_name).cloned() {
+                            if let Some((identity, function)) =
+                                self.resolve_user_function(&method_name)
+                            {
                                 let mut args = Vec::new();
                                 args.push(Value::Struct(s.clone())); // Pass self
                                 for arg in &call.args {
@@ -1192,7 +1225,8 @@ impl Interpreter {
                                         }
                                     }
                                 }
-                                return self.call_function(&func, None, args);
+                                return self
+                                    .call_resolved_function(&identity, &function, None, args);
                             }
 
                             return Err(format!(
@@ -1439,93 +1473,16 @@ impl Interpreter {
                     }
 
                     // User function
-                    let func = self
-                        .functions
-                        .get(name)
-                        .cloned()
+                    let (identity, function) = self
+                        .resolve_user_function(name)
                         .ok_or_else(|| format!("Function {} not found", name))?;
-
-                    let mut final_args = vec![None; func.parameters.len()];
-                    let num_positional_args = positional_values.len();
-                    let mut type_params_skipped = 0;
-                    let mut param_idx = 0;
-
-                    for v in positional_values {
-                        // Determine if we should skip 'type' parameters
-                        while param_idx < func.parameters.len()
-                            && func.parameters[param_idx].kind == ParameterKind::Type
-                        {
-                            let already_satisfied = call.type_args.is_some();
-                            let not_enough_args = (num_positional_args
-                                - (param_idx - type_params_skipped))
-                                < (func.parameters.len() - param_idx);
-
-                            if already_satisfied || not_enough_args {
-                                param_idx += 1;
-                                type_params_skipped += 1;
-                            } else {
-                                break;
-                            }
-                        }
-
-                        if param_idx < final_args.len() {
-                            final_args[param_idx] = Some(v);
-                            param_idx += 1;
-                        } else {
-                            return Err(format!("Too many arguments for {}", name));
-                        }
-                    }
-                    for (n, v) in named_values {
-                        if let Some(idx) = func.parameters.iter().position(|p| p.name == n) {
-                            if final_args[idx].is_some() {
-                                return Err(format!("Duplicate argument for parameter {}", n));
-                            }
-                            final_args[idx] = Some(v);
-                        } else {
-                            return Err(format!(
-                                "Unknown named argument {} for function {}",
-                                n, name
-                            ));
-                        }
-                    }
-
-                    let mut args = Vec::new();
-                    for (i, opt_v) in final_args.into_iter().enumerate() {
-                        match opt_v {
-                            Some(v) => args.push(v),
-                            None => {
-                                let param = &func.parameters[i];
-                                let mut satisfied_by_type_arg = false;
-                                if param.kind == ParameterKind::Type {
-                                    if let Some(t_args) = &call.type_args {
-                                        if t_args.len() == func.generic_parameters.len() {
-                                            satisfied_by_type_arg = true;
-                                        }
-                                    }
-                                }
-
-                                if !satisfied_by_type_arg {
-                                    return Err(format!(
-                                        "Missing argument for parameter {}",
-                                        param.name
-                                    ));
-                                } else {
-                                    // Push a dummy value, it will be overridden by the actual type argument in call_function
-                                    args.push(Value::Unit);
-                                }
-                            }
-                        }
-                    }
-
-                    let type_args = call.type_args.as_ref().map(|targs| {
-                        targs
-                            .iter()
-                            .map(|t| self.resolve_hir_type(t))
-                            .map(Value::Type)
-                            .collect()
-                    });
-
-                    return self.call_function(&func, type_args, args);
+                    return self.bind_and_call_user_function(
+                        call,
+                        &identity,
+                        &function,
+                        positional_values,
+                        named_values,
+                    );
                 } else {
                     // Try evaluating callee as a complex expression (e.g. (fn(x){x})(1))
                     let callee_val = match self.eval_expression(&call.callee, env)? {
@@ -1728,7 +1685,7 @@ impl Interpreter {
 
                 let struct_name = Self::get_type_name(&s.ty);
                 // Fill defaults
-                if let Some(def) = self.structs.get(&struct_name).cloned() {
+                if let Some(def) = self.resolve_struct(&struct_name) {
                     for field in &def.fields {
                         if !fields.contains_key(&field.name) {
                             if let Some(default_expr) = &field.default_value {
@@ -1780,12 +1737,17 @@ impl Interpreter {
                     Value::Struct(s) => {
                         // Custom Iterable: call iter() method
                         let method_name = format!("{}.iter", s.name);
-                        if let Some(func) = self.functions.get(&method_name).cloned() {
-                            let iter_val =
-                                match self.call_function(&func, None, vec![iterable.clone()])? {
-                                    ControlFlow::Value(v) => v,
-                                    cf => return Ok(cf),
-                                };
+                        if let Some((identity, function)) = self.resolve_user_function(&method_name)
+                        {
+                            let iter_val = match self.call_resolved_function(
+                                &identity,
+                                &function,
+                                None,
+                                vec![iterable.clone()],
+                            )? {
+                                ControlFlow::Value(v) => v,
+                                cf => return Ok(cf),
+                            };
                             iterator = Some(iter_val);
                         } else {
                             return Err(format!(
@@ -1888,14 +1850,17 @@ impl Interpreter {
                                 // Custom Iterator: call next(inout self)
                                 // Use call_function_with_env to recover the mutated self from the env.
                                 let method_name = format!("{}.next", s.name);
-                                if let Some(func) = self.functions.get(&method_name).cloned() {
-                                    let self_param_name = func
+                                if let Some((identity, function)) =
+                                    self.resolve_user_function(&method_name)
+                                {
+                                    let self_param_name = function
                                         .parameters
                                         .first()
                                         .map(|p| p.name.clone())
                                         .unwrap_or_else(|| "self".to_string());
-                                    let (cf, post_env) = self.call_function_with_env(
-                                        &func,
+                                    let (cf, post_env) = self.call_resolved_function_with_env(
+                                        &identity,
+                                        &function,
                                         None,
                                         vec![iter_val.clone()],
                                     )?;
@@ -2820,6 +2785,114 @@ impl Interpreter {
         }
     }
 
+    fn resolve_module_member_function(
+        &self,
+        member: &HirMember,
+        env: &RuntimeEnv,
+    ) -> Option<(String, HirFunction)> {
+        let (root, namespace) = Self::module_namespace(&member.object)?;
+        if env.get(&root).is_some() {
+            return None;
+        }
+        self.resolve_module_function(&namespace, &member.field)
+    }
+
+    fn module_namespace(expression: &HirExpression) -> Option<(String, String)> {
+        match expression {
+            HirExpression::Name(_, name) => Some((name.clone(), name.clone())),
+            HirExpression::Member(member) => {
+                let (root, prefix) = Self::module_namespace(&member.object)?;
+                Some((root, format!("{prefix}.{}", member.field)))
+            }
+            _ => None,
+        }
+    }
+
+    fn bind_and_call_user_function(
+        &mut self,
+        call: &HirCall,
+        identity: &str,
+        function: &HirFunction,
+        positional_values: Vec<Value>,
+        named_values: HashMap<String, Value>,
+    ) -> Result<ControlFlow, String> {
+        let mut final_args = vec![None; function.parameters.len()];
+        let num_positional_args = positional_values.len();
+        let mut type_params_skipped = 0;
+        let mut param_idx = 0;
+
+        for value in positional_values {
+            while param_idx < function.parameters.len()
+                && function.parameters[param_idx].kind == ParameterKind::Type
+            {
+                let already_satisfied = call.type_args.is_some();
+                let not_enough_args = (num_positional_args - (param_idx - type_params_skipped))
+                    < (function.parameters.len() - param_idx);
+
+                if already_satisfied || not_enough_args {
+                    param_idx += 1;
+                    type_params_skipped += 1;
+                } else {
+                    break;
+                }
+            }
+
+            if param_idx < final_args.len() {
+                final_args[param_idx] = Some(value);
+                param_idx += 1;
+            } else {
+                return Err(format!("Too many arguments for {identity}"));
+            }
+        }
+
+        for (name, value) in named_values {
+            if let Some(index) = function
+                .parameters
+                .iter()
+                .position(|parameter| parameter.name == name)
+            {
+                if final_args[index].is_some() {
+                    return Err(format!("Duplicate argument for parameter {name}"));
+                }
+                final_args[index] = Some(value);
+            } else {
+                return Err(format!(
+                    "Unknown named argument {name} for function {identity}"
+                ));
+            }
+        }
+
+        let mut args = Vec::new();
+        for (index, value) in final_args.into_iter().enumerate() {
+            match value {
+                Some(value) => args.push(value),
+                None => {
+                    let parameter = &function.parameters[index];
+                    let satisfied_by_type_arg = parameter.kind == ParameterKind::Type
+                        && call.type_args.as_ref().is_some_and(|type_args| {
+                            type_args.len() == function.generic_parameters.len()
+                        });
+
+                    if !satisfied_by_type_arg {
+                        return Err(format!("Missing argument for parameter {}", parameter.name));
+                    }
+                    // The concrete type value is installed by `call_function`.
+                    args.push(Value::Unit);
+                }
+            }
+        }
+
+        let type_args = call.type_args.as_ref().map(|type_args| {
+            type_args
+                .iter()
+                .map(|ty| self.resolve_hir_type(ty))
+                .map(Value::Type)
+                .collect()
+        });
+
+        self.call_resolved_function(identity, function, type_args, args)
+    }
+
     /// Phase 7: Dispatch a read-only method call on a receiver value.
     /// Used for user-defined `get` and `slice` hooks.
     fn eval_method_call(
@@ -2841,10 +2914,10 @@ impl Interpreter {
             }
         };
         let mangled = format!("{}.{}", type_name, method_name);
-        if let Some(func) = self.functions.get(&mangled).cloned() {
+        if let Some((identity, function)) = self.resolve_user_function(&mangled) {
             let mut call_args = vec![receiver];
             call_args.extend(args);
-            self.call_function(&func, None, call_args)
+            self.call_resolved_function(&identity, &function, None, call_args)
         } else {
             Err(format!(
                 "no method '{}' found on type '{}'",
@@ -2878,10 +2951,11 @@ impl Interpreter {
             }
         };
         let mangled = format!("{}.{}", type_name, method_name);
-        if let Some(func) = self.functions.get(&mangled).cloned() {
+        if let Some((identity, function)) = self.resolve_user_function(&mangled) {
             let mut call_args = vec![receiver];
             call_args.extend(args);
-            let (result, call_env) = self.call_function_with_env(&func, None, call_args)?;
+            let (result, call_env) =
+                self.call_resolved_function_with_env(&identity, &function, None, call_args)?;
             // Writeback: extract the mutated 'self' and update it in the caller's environment
             if let Some(mutated_self) = call_env.get("self") {
                 env.update(receiver_name, mutated_self);

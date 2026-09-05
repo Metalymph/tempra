@@ -107,16 +107,9 @@ impl ReplSession {
                 self.type_ctx = candidate_type_ctx;
 
                 // Evaluate
-                let mut candidate_interpreter = Interpreter {
-                    functions: self.interpreter.functions.clone(),
-                    structs: self.interpreter.structs.clone(),
-                    enums: self.interpreter.enums.clone(),
-                    interfaces: self.interpreter.interfaces.clone(),
-                    top_level_statements: vec![],
-                    args: vec![],
-                    mode: self.interpreter.mode,
-                    fuel: self.interpreter.fuel,
-                };
+                let mut candidate_interpreter = self.interpreter.clone();
+                candidate_interpreter.top_level_statements.clear();
+                candidate_interpreter.args.clear();
 
                 // Register new items
                 for item in &hir_file.items {

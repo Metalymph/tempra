@@ -71,10 +71,12 @@ normalization, and restoration of prior interpreter state. `tempra-typeck`
 invokes that facade and separately materializes supported primitive results into
 HIR. Nested comptime syntax shares the active evaluation session.
 
-This establishes one entrypoint, not complete K1 semantics. The facade is not
-yet wired into multi-module, file-check, analysis/LSP or REPL typechecking, and
-it intentionally preserves current arithmetic, extern, effect-policy,
-recursion and specialization behavior. TIR, VM, JIT, Wasm and future AOT remain
+This establishes one entrypoint, not complete K1 semantics. K1.2 wires the same
+facade into ordinary multi-module and file-based typechecking through a
+module-aware lookup adapter while retaining separate HIR files. Analysis/LSP
+and REPL typechecking remain deferred, and the implementation intentionally
+preserves current arithmetic, extern, effect-policy, recursion and
+specialization behavior. TIR, VM, JIT, Wasm and future AOT remain
 consumers of already resolved semantics rather than comptime authorities.
 
 ## Capability analysis insertion point
@@ -183,8 +185,9 @@ ARC optimization is a separate later concern. Escape analysis, stack promotion, 
 E1–E6 complete the currently meaningful capability-contract and tooling core
 while retaining known coverage gaps. E6 projects existing facts through
 `tempra effects` and immutable driver types; it does not add analysis. K1's
-audit/spec and K1.1 facade are complete; integration and semantic hardening
-remain in progress before evaluator parity, determinism and responsiveness
+audit/spec, K1.1 facade and K1.2 multi-module authority are complete; remaining
+integration and semantic hardening remain in progress before evaluator parity,
+determinism and responsiveness
 measurements. Compile latency is monitored during development; deep
 latency and incremental-build optimization belongs to P. The richer future TIR Graph still
 requires later ownership and actor facts.

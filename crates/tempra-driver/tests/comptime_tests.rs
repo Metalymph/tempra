@@ -1,4 +1,4 @@
-use tempra_driver::pipeline::{emit_tir_source, test_source};
+use tempra_driver::pipeline::{check_file, emit_tir_source, test_source};
 
 #[test]
 fn test_comptime_arithmetic() {
@@ -22,6 +22,119 @@ fn test_comptime_arithmetic_is_resolved_before_tir() {
     let tir = emit_tir_source(source).unwrap();
 
     assert!(tir.contains("const 3i64"), "unexpected TIR:\n{tir}");
+    assert!(!tir.contains("comptime"), "unexpected TIR:\n{tir}");
+}
+
+#[test]
+fn file_check_uses_canonical_comptime_authority() {
+    let directory = tempfile::tempdir().unwrap();
+    let helper = directory.path().join("helper.tmpr");
+    let main = directory.path().join("main.tmpr");
+    std::fs::write(
+        helper,
+        r#"
+fn local_value() -> Int64 { return 40 }
+pub fn value() -> Int64 { return local_value() }
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        &main,
+        r#"
+import helper
+fn main() -> Int64 { return comptime helper.value() + 2 }
+"#,
+    )
+    .unwrap();
+
+    let result = check_file(&main);
+
+    assert!(result.is_ok(), "unexpected file-check result: {result:?}");
+}
+
+#[test]
+fn multi_module_vm_resolves_comptime_before_tir() {
+    let directory = tempfile::tempdir().unwrap();
+    let helper = directory.path().join("helper.tmpr");
+    let main = directory.path().join("main.tmpr");
+    std::fs::write(helper, "pub fn value() -> Int64 { return 40 }").unwrap();
+    std::fs::write(
+        &main,
+        r#"
+import helper
+fn main() -> Int64 { return comptime helper.value() + 2 }
+"#,
+    )
+    .unwrap();
+
+    let compilation = tempra_driver::compile_file_to_bytecode_with_analysis(&main).unwrap();
+    let tir = tempra_tir::pretty::format_tir_module(compilation.tir());
+
+    assert!(tir.contains("fn main.main"), "unexpected TIR:\n{tir}");
+    assert!(tir.contains("const 42i64"), "unexpected TIR:\n{tir}");
+    assert!(!tir.contains("comptime"), "unexpected TIR:\n{tir}");
+}
+
+#[test]
+fn duplicate_module_function_names_keep_their_qualified_identity() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tmpr");
+    std::fs::write(
+        directory.path().join("a.tmpr"),
+        "pub fn helper() -> Int64 { return 4 }",
+    )
+    .unwrap();
+    std::fs::write(
+        directory.path().join("b.tmpr"),
+        "pub fn helper() -> Int64 { return 2 }",
+    )
+    .unwrap();
+    std::fs::write(
+        &main,
+        r#"
+import a
+import b
+fn main() -> Int64 { return comptime a.helper() * 10 + b.helper() }
+"#,
+    )
+    .unwrap();
+
+    let compilation = tempra_driver::compile_file_to_bytecode_with_analysis(&main).unwrap();
+    let tir = tempra_tir::pretty::format_tir_module(compilation.tir());
+
+    assert!(tir.contains("const 42i64"), "unexpected TIR:\n{tir}");
+}
+
+#[test]
+fn non_entry_module_comptime_is_materialized_independently() {
+    let directory = tempfile::tempdir().unwrap();
+    let dependency = directory.path().join("dependency.tmpr");
+    let main = directory.path().join("main.tmpr");
+    std::fs::write(
+        dependency,
+        "pub fn value() -> Int64 { return comptime 20 + 1 }",
+    )
+    .unwrap();
+    std::fs::write(
+        &main,
+        r#"
+import dependency
+fn main() -> Int64 { return dependency.value() + 21 }
+"#,
+    )
+    .unwrap();
+
+    let compilation = tempra_driver::compile_file_to_bytecode_with_analysis(&main).unwrap();
+    let tir = tempra_tir::pretty::format_tir_module(compilation.tir());
+
+    let dependency_tir = tir
+        .split("fn dependency.value")
+        .nth(1)
+        .expect("dependency function missing from TIR");
+    assert!(
+        dependency_tir.contains("const 21i64"),
+        "unexpected TIR:\n{tir}"
+    );
     assert!(!tir.contains("comptime"), "unexpected TIR:\n{tir}");
 }
 

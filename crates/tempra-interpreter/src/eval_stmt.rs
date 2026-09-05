@@ -70,12 +70,17 @@ impl Interpreter {
                     }
                     Value::Struct(s) => {
                         let method_name = format!("{}.iter", s.name);
-                        if let Some(func) = self.functions.get(&method_name).cloned() {
-                            let iter_val =
-                                match self.call_function(&func, None, vec![iterable.clone()])? {
-                                    ControlFlow::Value(v) => v,
-                                    cf => return Ok(cf),
-                                };
+                        if let Some((identity, function)) = self.resolve_user_function(&method_name)
+                        {
+                            let iter_val = match self.call_resolved_function(
+                                &identity,
+                                &function,
+                                None,
+                                vec![iterable.clone()],
+                            )? {
+                                ControlFlow::Value(v) => v,
+                                cf => return Ok(cf),
+                            };
                             iterator = Some(iter_val);
                         } else {
                             return Err(format!(
@@ -185,14 +190,17 @@ impl Interpreter {
                             }
                             Value::Struct(s) => {
                                 let method_name = format!("{}.next", s.name);
-                                if let Some(func) = self.functions.get(&method_name).cloned() {
-                                    let self_param_name = func
+                                if let Some((identity, function)) =
+                                    self.resolve_user_function(&method_name)
+                                {
+                                    let self_param_name = function
                                         .parameters
                                         .first()
                                         .map(|p| p.name.clone())
                                         .unwrap_or_else(|| "self".to_string());
-                                    let (cf, post_env) = self.call_function_with_env(
-                                        &func,
+                                    let (cf, post_env) = self.call_resolved_function_with_env(
+                                        &identity,
+                                        &function,
                                         None,
                                         vec![iter_val.clone()],
                                     )?;

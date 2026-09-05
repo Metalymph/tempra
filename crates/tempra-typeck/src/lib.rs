@@ -22,7 +22,7 @@ pub mod types;
 
 pub use check_file::{
     check_file, check_file_with_context, check_file_with_context_always, check_modules,
-    check_modules_always, ModuleToCheck,
+    check_modules_always, check_modules_always_with_comptime, ModuleToCheck,
 };
 pub use env::VariableInfo;
 pub use error::TypeError;

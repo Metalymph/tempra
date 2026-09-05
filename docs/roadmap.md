@@ -78,18 +78,21 @@ backend-independent comptime semantics: VM, JIT, Wasm and future AOT must observ
 the same comptime result or error. The K1 audit/spec selected the existing HIR
 interpreter as the semantic kernel. K1.1 adds one canonical facade that owns
 comptime mode/fuel setup, value/error/control-flow normalization and state
-restoration for the existing single-source paths. The typechecker remains the
-owner of primitive HIR materialization, and TIR/backends consume resolved code.
+restoration. K1.2 extends the same authority to ordinary multi-module and
+file-based typechecking through a module-aware lookup adapter over separate HIR
+files. The typechecker remains the owner of primitive HIR materialization, and
+TIR/backends consume resolved code.
 
 Current status:
 
 ```text
 K1 audit/spec       DONE
 K1.1 facade         DONE
+K1.2 multi-module   DONE
 K1 implementation   IN PROGRESS
 ```
 
-Multi-module/REPL/analysis integration and arithmetic, effect, extern,
+REPL/analysis integration and arithmetic, effect, extern,
 termination and specialization hardening remain later K1/K2 work. K then records
 determinism, reproducibility, parity tests, phase timings and initial
 compiler-latency benchmarks. Compile latency is already monitored during

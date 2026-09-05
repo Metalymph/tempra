@@ -374,7 +374,7 @@ pub fn compile_file_to_bytecode_with_analysis(path: &Path) -> Result<VmCompilati
 fn analyze_file_to_tir(path: &Path) -> Result<AnalyzedTir, DriverError> {
     use crate::module_graph::{load_module_graph, DiskDocumentLoader};
     use std::collections::HashMap;
-    use tempra_typeck::{check_modules_always, ModuleToCheck};
+    use tempra_typeck::{check_modules_always_with_comptime, ModuleToCheck};
 
     let mut diagnostics = Vec::new();
     let mut graph = match load_module_graph(path, &DiskDocumentLoader, &mut diagnostics) {
@@ -409,7 +409,7 @@ fn analyze_file_to_tir(path: &Path) -> Result<AnalyzedTir, DriverError> {
     }
 
     let source_texts = HashMap::new();
-    let type_ctx = check_modules_always(&mut modules_to_check, &source_texts, false);
+    let type_ctx = check_modules_always_with_comptime(&mut modules_to_check, &source_texts, false);
     if !type_ctx.errors.is_empty() {
         let err_msgs: Vec<String> = type_ctx.errors.iter().map(|e| format!("{:?}", e)).collect();
         return Err(DriverError::TypeError(err_msgs.join("\n")));
@@ -811,7 +811,7 @@ pub fn diagnose_source_with_facts(source: &str) -> AnalysisFactsResult {
 pub fn diagnose_file(path: &Path) -> Vec<tempra_diagnostics::Diagnostic> {
     use crate::module_graph::{load_module_graph, DiskDocumentLoader};
     use std::collections::HashMap;
-    use tempra_typeck::{check_modules_always, ModuleToCheck};
+    use tempra_typeck::{check_modules_always_with_comptime, ModuleToCheck};
 
     let mut diagnostics = Vec::new();
     let mut graph = match load_module_graph(path, &DiskDocumentLoader, &mut diagnostics) {
@@ -839,7 +839,7 @@ pub fn diagnose_file(path: &Path) -> Vec<tempra_diagnostics::Diagnostic> {
         });
     }
 
-    let ctx = check_modules_always(&mut modules_to_check, &source_texts, false);
+    let ctx = check_modules_always_with_comptime(&mut modules_to_check, &source_texts, false);
     for err in ctx.errors {
         let mut d = tempra_diagnostics::Diagnostic::error(err.span, err.message);
         if let Some(ref m_name) = err.module_name {

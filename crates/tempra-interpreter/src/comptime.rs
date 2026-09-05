@@ -13,6 +13,65 @@ pub const DEFAULT_COMPTIME_FUEL: u64 = 1_000_000;
 
 pub(crate) const FUEL_EXHAUSTED_MESSAGE: &str = "comptime evaluation exceeded step limit";
 
+/// Effect categories for host-observable operations currently implemented by
+/// the HIR interpreter. This is deliberately narrower than the capability
+/// vocabulary used by TIR analysis: it describes only operations that can be
+/// executed by this evaluator today.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ComptimeEffect {
+    Output,
+    Input,
+    Filesystem,
+    Environment,
+    HostOs,
+    Process,
+    Exit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ForbiddenComptimeEffect {
+    effect: ComptimeEffect,
+    operation: String,
+}
+
+impl fmt::Display for ForbiddenComptimeEffect {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.effect {
+            ComptimeEffect::Process => {
+                formatter.write_str("command execution is not allowed during comptime evaluation")
+            }
+            ComptimeEffect::Exit => {
+                formatter.write_str("exit is not allowed during comptime evaluation")
+            }
+            ComptimeEffect::Output
+            | ComptimeEffect::Input
+            | ComptimeEffect::Filesystem
+            | ComptimeEffect::Environment
+            | ComptimeEffect::HostOs => write!(
+                formatter,
+                "operation '{}' is not allowed during comptime evaluation",
+                self.operation
+            ),
+        }
+    }
+}
+
+pub(crate) fn reject_effect_during_comptime(
+    mode: EvalMode,
+    effect: ComptimeEffect,
+    operation: impl Into<String>,
+) -> Result<(), String> {
+    if mode == EvalMode::Comptime {
+        Err(ForbiddenComptimeEffect {
+            effect,
+            operation: operation.into(),
+        }
+        .to_string())
+    } else {
+        Ok(())
+    }
+}
+
 /// Configuration for one canonical comptime evaluation session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ComptimeEvalConfig {

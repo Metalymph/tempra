@@ -77,8 +77,12 @@ module-aware lookup adapter while retaining separate HIR files. Analysis/LSP
 and REPL typechecking remain deferred. K1.3 makes supported shared-kernel integer
 arithmetic panic-free. K1.4 rejects functions without executable HIR bodies,
 including extern declarations reached during comptime, instead of synthesizing
-`Unit`; it does not route comptime through the VM native resolver. Effect policy,
-recursion and specialization behavior remain later hardening. TIR, VM, JIT,
+`Unit`; it does not route comptime through the VM native resolver. Recursion and
+specialization behavior remain later hardening. K1.5 applies one
+interpreter-boundary policy to currently executable host-observable operations:
+deterministic local work, allocation and `cmd` construction remain allowed,
+while process execution, output/input, filesystem, environment, host-OS access,
+`dbg` and `exit` are rejected. TIR, VM, JIT,
 Wasm and future AOT remain consumers of already resolved semantics rather than
 comptime authorities.
 

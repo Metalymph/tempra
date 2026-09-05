@@ -40,7 +40,16 @@ comptime: the evaluator reports a controlled error instead of synthesizing
 extern dispatch remains a separate runtime path. K1.4 does not add native
 execution to comptime or validate native signatures.
 
-K1 remains in progress. Complete effect restrictions, recursion limits and
+K1.5 makes the HIR interpreter the sole policy authority for effects reached
+during comptime execution. Deterministic local computation and temporary
+allocation remain allowed. Output, input, filesystem, environment, host-OS,
+process execution and exit are rejected at their execution boundaries; `dbg`
+is included in output. `cmd(...)` only constructs a local command value and is
+allowed, while executing that value is forbidden. `std.io.print/println` remain
+bodyless externs and are rejected by K1.4. The typechecker preflight validates
+runtime dependencies only and does not duplicate effect policy.
+
+K1 remains in progress. Deterministic fuel/recursion semantics and
 specialization correctness are separate later slices.
 
 ---
@@ -271,11 +280,32 @@ A `comptime match` works like compile-time branch selection:
 Selected `if comptime` branches and `comptime match` arms are retained in HIR; unselected alternatives are pruned before TIR lowering. The existing TIR capability analysis therefore observes only the selected semantic branch when specialization has resolved it. This is semantic pruning, not a promise that later optimization, inlining, or dead-code elimination will remove capability requirements.
 
 Comptime is an execution phase, not an effect or an unsafe authorization. Its
-restrictions are implemented by the HIR evaluator and frontend checks, not by E1.
+effect policy is enforced by the HIR interpreter at the operation boundary,
+not by E1 or a second HIR analyzer.
 All currently supported single-source and ordinary multi-module/file-check
 evaluation entrypoints now enter the HIR kernel through the K1.1 facade; K1.2
 supplies module-aware lookup without flattening HIR. This centralizes execution
-setup but does not yet harden the policy itself.
+setup while leaving effect enforcement at the interpreter boundary.
+K1.5 centralizes the policy for currently executable host-observable operations;
+allocation and deterministic local transforms remain permitted. `cmd` is a
+local value constructor, whereas process execution is forbidden. Future
+capability categories without a current HIR origin remain outside this policy.
+
+The K1.5 audit classifies each current operation as **A** (allowed deterministic
+local), **B** (forbidden by the canonical policy), **C** (unavailable/bodyless
+and rejected by K1.4), **D** (unsupported source surface), or **E** (an
+unresolved policy defect). K1.5 is complete only when `E = 0`: `cmd` is A;
+process execution, output/input, filesystem, environment, host-OS access,
+`dbg` and `exit` are B; `std.io.print/println` are C; and spawn, random, time
+and unsafe have no current HIR origin and are D.
+
+| Operation | Class |
+| --- | --- |
+| Local arithmetic, strings, regex, collections, loops, allocation, `cmd` construction | A |
+| Output/input, filesystem, environment, host OS, process execution, `dbg`, `exit` | B |
+| `std.io.print`, `std.io.println` reached as bodyless externs | C |
+| Spawn, random, time and unsafe source operations (no current HIR origin) | D |
+| Unresolved K1.5 policy defects | E — must remain zero |
 The evaluator has no dispatch to the VM native registry. K1.4 explicitly rejects
 unsupported/bodyless calls rather than yielding and materializing synthetic
 `Unit`. This rejection is not support for comptime native execution; native

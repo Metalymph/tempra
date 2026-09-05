@@ -4354,6 +4354,9 @@ fn semantic_check_comptime_expr(
     expr: &HirExpression,
     ctx: &TypeContext,
 ) -> Result<(), (String, Span)> {
+    // This preflight validates runtime dependencies only. Effect policy is
+    // enforced by the HIR interpreter at the operation boundary so helper
+    // calls and module-qualified paths cannot bypass it.
     match expr {
         HirExpression::Name(span, name) => {
             if let Some(info) = ctx.scopes.lookup(name) {
@@ -4379,30 +4382,6 @@ fn semantic_check_comptime_expr(
             semantic_check_comptime_expr(&b.right, ctx)
         }
         HirExpression::Call(c) => {
-            if let HirExpression::Member(member) = &*c.callee {
-                if let HirExpression::Name(_, namespace) = &*member.object {
-                    if matches!(namespace.as_str(), "fs" | "os" | "env") {
-                        return Err((
-                            format!(
-                                "operation '{}.{}' is not allowed during comptime evaluation",
-                                namespace, member.field
-                            ),
-                            member.span,
-                        ));
-                    }
-                }
-            }
-            if let HirExpression::Name(span, name) = &*c.callee {
-                if matches!(name.as_str(), "print" | "read_line" | "cmd" | "exit") {
-                    return Err((
-                        format!(
-                            "operation '{}' is not allowed during comptime evaluation",
-                            name
-                        ),
-                        *span,
-                    ));
-                }
-            }
             semantic_check_comptime_expr(&c.callee, ctx)?;
             for arg in &c.args {
                 match arg {

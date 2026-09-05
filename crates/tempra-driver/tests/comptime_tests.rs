@@ -75,6 +75,23 @@ fn comptime_bodyless_extern_fails_before_tir_and_does_not_poison_later_compilati
 }
 
 #[test]
+fn comptime_effect_policy_is_enforced_transitively_by_the_interpreter() {
+    let source = r#"
+    fn inner() { dbg("hidden") }
+    fn outer() { inner() }
+    fn main() { comptime outer() }
+    "#;
+
+    let error = emit_tir_source(source).expect_err("transitive dbg must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("operation 'dbg' is not allowed during comptime evaluation"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
 fn file_check_uses_canonical_comptime_authority() {
     let directory = tempfile::tempdir().unwrap();
     let helper = directory.path().join("helper.tmpr");

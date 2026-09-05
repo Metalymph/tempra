@@ -142,8 +142,11 @@ qualified lookup context; no synthetic aggregate HIR file is created.
 non-comptime-aware paths. K1.3 routes supported integer arithmetic through a
 panic-free shared kernel. K1.4 makes shared HIR call dispatch reject missing
 executable bodies, including comptime calls to extern declarations, without
-adding VM-native dispatch to the HIR evaluator. Effect policy, recursion and
-specialization hardening remain later K1/K2 work.
+adding VM-native dispatch to the HIR evaluator. Further recursion and
+specialization hardening remain later K1/K2 work. K1.5 applies one policy at
+the interpreter's effect boundary: deterministic local work, allocation and
+`cmd` construction remain allowed, while process execution, output/input,
+filesystem, environment, host-OS access, `dbg` and `exit` are rejected.
 
 ## Planned backends
 

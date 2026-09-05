@@ -84,8 +84,12 @@ files. K1.3 makes supported integer arithmetic in the shared HIR kernel
 panic-free and profile-independent without changing float semantics. The
 K1.4 shared call dispatch rejects functions without executable HIR bodies rather
 than producing synthetic `Unit`; comptime still does not execute VM-native
-externs. The typechecker remains the owner of primitive HIR materialization, and
-TIR/backends consume resolved code.
+externs. K1.5 makes the HIR interpreter the sole effect-policy authority for
+currently executable comptime operations: local `cmd` construction and
+allocation remain allowed, while process execution, output/input, filesystem,
+environment, host-OS access, `dbg` and `exit` are rejected at their effect
+boundaries. The typechecker remains the owner of primitive HIR materialization,
+and TIR/backends consume resolved code.
 
 Current status:
 
@@ -95,11 +99,13 @@ K1.1 facade         DONE
 K1.2 multi-module   DONE
 K1.3 arithmetic     DONE
 K1.4 extern/bodyless DONE
+K1.5 effect policy   DONE
 K1 implementation   IN PROGRESS
 ```
 
-REPL/analysis integration and effect, termination and specialization hardening
-remain later K1/K2 work. Native signature integrity remains separate from the
+REPL/analysis integration, deterministic termination/fuel semantics and
+specialization hardening remain later K1/K2 work. Native signature integrity
+remains separate from the
 now-explicit HIR bodyless rejection. K then records
 determinism, reproducibility, parity tests, phase timings and initial
 compiler-latency benchmarks. Compile latency is already monitored during

@@ -18,7 +18,15 @@ fn integer_value<T>(
         .map_err(|error| error.to_string())
 }
 
-fn run_command(c: &crate::value::CommandValue) -> Result<Value, String> {
+fn run_command(
+    mode: crate::interpreter::EvalMode,
+    c: &crate::value::CommandValue,
+) -> Result<Value, String> {
+    crate::comptime::reject_effect_during_comptime(
+        mode,
+        crate::comptime::ComptimeEffect::Process,
+        "command execution",
+    )?;
     let mut cmd = std::process::Command::new(&c.program);
     cmd.args(&c.args);
     if let Some(cwd) = &c.cwd {
@@ -47,9 +55,15 @@ fn run_command(c: &crate::value::CommandValue) -> Result<Value, String> {
 }
 
 fn pipe_commands(
+    mode: crate::interpreter::EvalMode,
     left: &crate::value::CommandValue,
     right: &crate::value::CommandValue,
 ) -> Result<Value, String> {
+    crate::comptime::reject_effect_during_comptime(
+        mode,
+        crate::comptime::ComptimeEffect::Process,
+        "command execution",
+    )?;
     let left_output = std::process::Command::new(&left.program)
         .args(&left.args)
         .output()
@@ -581,7 +595,7 @@ impl Interpreter {
                     if let Value::Bool(false) = left {
                         return Ok(ControlFlow::Value(Value::Bool(false)));
                     } else if let Value::Command(ref cmd_left) = left {
-                        let res_v = run_command(cmd_left)?;
+                        let res_v = run_command(self.mode, cmd_left)?;
                         let success = match res_v {
                             Value::Result(ref r) => match r.as_ref() {
                                 crate::value::ValueResult::Ok(Value::CommandResult(cr)) => {
@@ -600,7 +614,7 @@ impl Interpreter {
                             cf => return Ok(cf),
                         };
                         if let Value::Command(cmd_right) = right {
-                            return run_command(&cmd_right).map(ControlFlow::Value);
+                            return run_command(self.mode, &cmd_right).map(ControlFlow::Value);
                         } else {
                             return Err(
                                 "&& right operand must be Command if left is Command".into()
@@ -616,7 +630,7 @@ impl Interpreter {
                     if let Value::Bool(true) = left {
                         return Ok(ControlFlow::Value(Value::Bool(true)));
                     } else if let Value::Command(ref cmd_left) = left {
-                        let res_v = run_command(cmd_left)?;
+                        let res_v = run_command(self.mode, cmd_left)?;
                         let success = match res_v {
                             Value::Result(ref r) => match r.as_ref() {
                                 crate::value::ValueResult::Ok(Value::CommandResult(cr)) => {
@@ -635,7 +649,7 @@ impl Interpreter {
                             cf => return Ok(cf),
                         };
                         if let Value::Command(cmd_right) = right {
-                            return run_command(&cmd_right).map(ControlFlow::Value);
+                            return run_command(self.mode, &cmd_right).map(ControlFlow::Value);
                         } else {
                             return Err(
                                 "|| right operand must be Command if left is Command".into()
@@ -653,7 +667,8 @@ impl Interpreter {
                         cf => return Ok(cf),
                     };
                     if let (Value::Command(cmd_left), Value::Command(cmd_right)) = (left, right) {
-                        return pipe_commands(&cmd_left, &cmd_right).map(ControlFlow::Value);
+                        return pipe_commands(self.mode, &cmd_left, &cmd_right)
+                            .map(ControlFlow::Value);
                     } else {
                         return Err("| operator expects Commands".into());
                     }
@@ -872,12 +887,11 @@ impl Interpreter {
                     }
                     if let HirExpression::Name(_, ref obj_name) = *member.object {
                         if obj_name == "fs" {
-                            if self.mode == crate::interpreter::EvalMode::Comptime {
-                                return Err(format!(
-                                    "operation 'fs.{}' is not allowed during comptime evaluation",
-                                    member.field
-                                ));
-                            }
+                            crate::comptime::reject_effect_during_comptime(
+                                self.mode,
+                                crate::comptime::ComptimeEffect::Filesystem,
+                                format!("fs.{}", member.field),
+                            )?;
                             let mut args = Vec::new();
                             let mut named_args = HashMap::new();
                             for arg in &call.args {
@@ -901,12 +915,11 @@ impl Interpreter {
                             return self.eval_fs_builtin(&member.field, &args, &named_args);
                         }
                         if obj_name == "env" {
-                            if self.mode == crate::interpreter::EvalMode::Comptime {
-                                return Err(format!(
-                                    "operation 'env.{}' is not allowed during comptime evaluation",
-                                    member.field
-                                ));
-                            }
+                            crate::comptime::reject_effect_during_comptime(
+                                self.mode,
+                                crate::comptime::ComptimeEffect::Environment,
+                                format!("env.{}", member.field),
+                            )?;
                             let mut args = Vec::new();
                             let mut named_args = HashMap::new();
                             for arg in &call.args {
@@ -930,12 +943,11 @@ impl Interpreter {
                             return self.eval_env_builtin(&member.field, &args, &named_args);
                         }
                         if obj_name == "os" {
-                            if self.mode == crate::interpreter::EvalMode::Comptime {
-                                return Err(format!(
-                                    "operation 'os.{}' is not allowed during comptime evaluation",
-                                    member.field
-                                ));
-                            }
+                            crate::comptime::reject_effect_during_comptime(
+                                self.mode,
+                                crate::comptime::ComptimeEffect::HostOs,
+                                format!("os.{}", member.field),
+                            )?;
                             let mut args = Vec::new();
                             let mut named_args = HashMap::new();
                             for arg in &call.args {
@@ -1164,13 +1176,7 @@ impl Interpreter {
                                     member.field
                                 ));
                             }
-                            if self.mode == crate::interpreter::EvalMode::Comptime {
-                                return Err(
-                                    "command execution is not allowed during comptime evaluation"
-                                        .into(),
-                                );
-                            }
-                            return run_command(&cmd).map(ControlFlow::Value);
+                            return run_command(self.mode, &cmd).map(ControlFlow::Value);
                         }
                         Value::Regex(re) => {
                             let mut args = Vec::new();
@@ -1286,9 +1292,11 @@ impl Interpreter {
                             return Err("compile_error requires a String argument".into());
                         }
                         "exit" => {
-                            if self.mode == crate::interpreter::EvalMode::Comptime {
-                                return Err("exit is not allowed during comptime evaluation".into());
-                            }
+                            crate::comptime::reject_effect_during_comptime(
+                                self.mode,
+                                crate::comptime::ComptimeEffect::Exit,
+                                "exit",
+                            )?;
                             let val = positional_values
                                 .get(0)
                                 .or_else(|| named_values.get("code"))
@@ -1300,12 +1308,11 @@ impl Interpreter {
                             }
                         }
                         "print" => {
-                            if self.mode == crate::interpreter::EvalMode::Comptime {
-                                return Err(
-                                    "operation 'print' is not allowed during comptime evaluation"
-                                        .into(),
-                                );
-                            }
+                            crate::comptime::reject_effect_during_comptime(
+                                self.mode,
+                                crate::comptime::ComptimeEffect::Output,
+                                "print",
+                            )?;
                             let mut s = String::new();
                             let mut newline = true;
                             for val in positional_values.iter() {
@@ -1345,9 +1352,11 @@ impl Interpreter {
                             return Ok(ControlFlow::Value(Value::String(s)));
                         }
                         "read_line" => {
-                            if self.mode == crate::interpreter::EvalMode::Comptime {
-                                return Err("operation 'read_line' is not allowed during comptime evaluation".into());
-                            }
+                            crate::comptime::reject_effect_during_comptime(
+                                self.mode,
+                                crate::comptime::ComptimeEffect::Input,
+                                "read_line",
+                            )?;
                             let mut trim_newline = true;
                             if let Some(Value::Bool(b)) = named_values.get("trim_newline") {
                                 trim_newline = *b;
@@ -1377,9 +1386,6 @@ impl Interpreter {
                             };
                         }
                         "cmd" => {
-                            if self.mode == crate::interpreter::EvalMode::Comptime {
-                                return Err("command construction is not allowed during comptime evaluation".into());
-                            }
                             let program = match positional_values
                                 .get(0)
                                 .or_else(|| named_values.get("program"))
@@ -1466,6 +1472,11 @@ impl Interpreter {
                             }
                         }
                         "dbg" => {
+                            crate::comptime::reject_effect_during_comptime(
+                                self.mode,
+                                crate::comptime::ComptimeEffect::Output,
+                                "dbg",
+                            )?;
                             let val = positional_values
                                 .get(0)
                                 .or_else(|| named_values.get("value"))

@@ -449,6 +449,10 @@ to authorize through `@unsafe`:
   **Subsequent status:** K1.4 resolves this dispatch gap by rejecting functions
   without executable HIR bodies. It does not add native execution to comptime;
   native/extern signature integrity remains the separate debt above.
+  **K1.5 status:** the remaining executable HIR effect policy is enforced at
+  interpreter operation boundaries. `cmd` construction is local and allowed;
+  process execution and other host-observable operations are rejected. This
+  does not alter the TIR analyzer or add HIR capability analysis.
 - **Internal JIT API audit.** Raw code/context pointers, ABI conversions and
   lifetime/aliasing assumptions in public Rust wrappers require runtime/embedding
   review. A null check is not a proof of pointer validity. These are not source

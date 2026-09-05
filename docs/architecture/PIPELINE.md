@@ -147,6 +147,15 @@ specialization hardening remain later K1/K2 work. K1.5 applies one policy at
 the interpreter's effect boundary: deterministic local work, allocation and
 `cmd` construction remain allowed, while process execution, output/input,
 filesystem, environment, host-OS access, `dbg` and `exit` are rejected.
+K1.6 adds a deterministic evaluator-progress budget and a separate
+compiler-defined call-depth guard. Expression and statement entries, one
+entry per Tempra call frame, and each `for` body that receives an item consume
+one fuel tick; an exhausted iterator does not create a phantom tick. The
+default maximum is 128 active frames, nested comptime shares the active
+session, and builtins have constant semantic cost in v0.1. These limits bound
+evaluator progress only: there is no wall-clock, per-byte, CPU or memory quota.
+The current HIR has no `while` surface. The cache `semantics-1` fingerprint is
+unchanged, but stale artifacts must be re-audited before K1 closes.
 
 ## Planned backends
 

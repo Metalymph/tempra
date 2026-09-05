@@ -10,24 +10,38 @@ impl Interpreter {
         stmt: &HirStatement,
         env: &mut RuntimeEnv,
     ) -> Result<ControlFlow, String> {
+        self.eval_statement_internal(stmt, env)
+            .map_err(|error| error.to_string())
+    }
+
+    pub(crate) fn eval_statement_internal(
+        &mut self,
+        stmt: &HirStatement,
+        env: &mut RuntimeEnv,
+    ) -> Result<ControlFlow, crate::interpreter::InterpreterEvalError> {
+        self.tick_comptime()?;
         match stmt {
-            HirStatement::Let(let_stmt) => match self.eval_expression(&let_stmt.value, env)? {
-                ControlFlow::Value(val) => {
-                    env.insert(let_stmt.name.clone(), val);
-                    Ok(ControlFlow::Value(Value::Unit))
+            HirStatement::Let(let_stmt) => {
+                match self.eval_expression_internal(&let_stmt.value, env)? {
+                    ControlFlow::Value(val) => {
+                        env.insert(let_stmt.name.clone(), val);
+                        Ok(ControlFlow::Value(Value::Unit))
+                    }
+                    cf => Ok(cf),
                 }
-                cf => Ok(cf),
-            },
-            HirStatement::Var(var_stmt) => match self.eval_expression(&var_stmt.value, env)? {
-                ControlFlow::Value(val) => {
-                    env.insert_var(var_stmt.name.clone(), val);
-                    Ok(ControlFlow::Value(Value::Unit))
+            }
+            HirStatement::Var(var_stmt) => {
+                match self.eval_expression_internal(&var_stmt.value, env)? {
+                    ControlFlow::Value(val) => {
+                        env.insert_var(var_stmt.name.clone(), val);
+                        Ok(ControlFlow::Value(Value::Unit))
+                    }
+                    cf => Ok(cf),
                 }
-                cf => Ok(cf),
-            },
+            }
             HirStatement::Return(ret) => {
                 let val = if let Some(expr) = ret {
-                    match self.eval_expression(expr, env)? {
+                    match self.eval_expression_internal(expr, env)? {
                         ControlFlow::Value(val) => val,
                         cf => return Ok(cf),
                     }
@@ -38,9 +52,9 @@ impl Interpreter {
             }
             HirStatement::Break(_) => Ok(ControlFlow::Break),
             HirStatement::Continue(_) => Ok(ControlFlow::Continue),
-            HirStatement::Expr(expr) => self.eval_expression(expr, env),
+            HirStatement::Expr(expr) => self.eval_expression_internal(expr, env),
             HirStatement::For(for_stmt) => {
-                let iterable = match self.eval_expression(&for_stmt.iterable, env)? {
+                let iterable = match self.eval_expression_internal(&for_stmt.iterable, env)? {
                     ControlFlow::Value(v) => v,
                     cf => return Ok(cf),
                 };
@@ -72,7 +86,7 @@ impl Interpreter {
                         let method_name = format!("{}.iter", s.name);
                         if let Some((identity, function)) = self.resolve_user_function(&method_name)
                         {
-                            let iter_val = match self.call_resolved_function(
+                            let iter_val = match self.call_resolved_function_internal(
                                 &identity,
                                 &function,
                                 None,
@@ -86,31 +100,35 @@ impl Interpreter {
                             return Err(format!(
                                 "type '{}' does not implement Iterable (no 'iter' method)",
                                 s.name
-                            ));
+                            )
+                            .into());
                         }
                     }
                     other => {
                         return Err(format!(
                             "value of type '{}' is not iterable",
                             other.type_name()
-                        ));
+                        )
+                        .into());
                     }
                 }
 
                 let mut last_val = Value::Unit;
                 if let Some(chars) = char_values {
                     for item in chars {
+                        self.tick_comptime()?;
                         env.push_scope();
                         env.insert(for_stmt.binding.clone(), item);
 
                         if let Some(filter_expr) = &for_stmt.filter {
-                            let filter_res = match self.eval_expression(filter_expr, env)? {
-                                ControlFlow::Value(v) => v,
-                                cf => {
-                                    env.pop_scope();
-                                    return Ok(cf);
-                                }
-                            };
+                            let filter_res =
+                                match self.eval_expression_internal(filter_expr, env)? {
+                                    ControlFlow::Value(v) => v,
+                                    cf => {
+                                        env.pop_scope();
+                                        return Ok(cf);
+                                    }
+                                };
                             if let Value::Bool(b) = filter_res {
                                 if !b {
                                     env.pop_scope();
@@ -124,7 +142,7 @@ impl Interpreter {
 
                         let mut loop_flow = ControlFlow::Value(Value::Unit);
                         for body_stmt in &for_stmt.body.statements {
-                            let flow = self.eval_statement(body_stmt, env)?;
+                            let flow = self.eval_statement_internal(body_stmt, env)?;
                             match flow {
                                 ControlFlow::Value(v) => loop_flow = ControlFlow::Value(v),
                                 ControlFlow::Return(v) => {
@@ -198,12 +216,13 @@ impl Interpreter {
                                         .first()
                                         .map(|p| p.name.clone())
                                         .unwrap_or_else(|| "self".to_string());
-                                    let (cf, post_env) = self.call_resolved_function_with_env(
-                                        &identity,
-                                        &function,
-                                        None,
-                                        vec![iter_val.clone()],
-                                    )?;
+                                    let (cf, post_env) = self
+                                        .call_resolved_function_with_env_internal(
+                                            &identity,
+                                            &function,
+                                            None,
+                                            vec![iter_val.clone()],
+                                        )?;
                                     if let Some(updated_self) = post_env.get(&self_param_name) {
                                         iter_val = updated_self.clone();
                                     }
@@ -215,31 +234,35 @@ impl Interpreter {
                                     return Err(format!(
                                         "iterator type '{}' has no 'next' method",
                                         s.name
-                                    ));
+                                    )
+                                    .into());
                                 }
                             }
                             other => {
                                 return Err(format!(
                                     "value of type '{}' is not an iterator",
                                     other.type_name()
-                                ));
+                                )
+                                .into());
                             }
                         };
 
                         match next_result {
                             Value::Option(crate::value::OptionValue::None) => break,
                             Value::Option(crate::value::OptionValue::Some(item)) => {
+                                self.tick_comptime()?;
                                 env.push_scope();
                                 env.insert(for_stmt.binding.clone(), *item);
 
                                 if let Some(filter_expr) = &for_stmt.filter {
-                                    let filter_res = match self.eval_expression(filter_expr, env)? {
-                                        ControlFlow::Value(v) => v,
-                                        cf => {
-                                            env.pop_scope();
-                                            return Ok(cf);
-                                        }
-                                    };
+                                    let filter_res =
+                                        match self.eval_expression_internal(filter_expr, env)? {
+                                            ControlFlow::Value(v) => v,
+                                            cf => {
+                                                env.pop_scope();
+                                                return Ok(cf);
+                                            }
+                                        };
                                     if let Value::Bool(b) = filter_res {
                                         if !b {
                                             env.pop_scope();
@@ -253,7 +276,7 @@ impl Interpreter {
 
                                 let mut loop_flow = ControlFlow::Value(Value::Unit);
                                 for body_stmt in &for_stmt.body.statements {
-                                    let flow = self.eval_statement(body_stmt, env)?;
+                                    let flow = self.eval_statement_internal(body_stmt, env)?;
                                     match flow {
                                         ControlFlow::Value(v) => loop_flow = ControlFlow::Value(v),
                                         ControlFlow::Return(v) => {

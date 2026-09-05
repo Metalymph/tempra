@@ -16,6 +16,45 @@ pub enum EvalMode {
     Comptime,
 }
 
+/// Typed errors produced by the interpreter kernel before legacy string
+/// adapters convert them for existing runtime callers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum InterpreterEvalError {
+    Message(String),
+    FuelExhausted,
+    CallDepthExceeded,
+}
+
+impl From<String> for InterpreterEvalError {
+    fn from(message: String) -> Self {
+        Self::Message(message)
+    }
+}
+
+impl From<&str> for InterpreterEvalError {
+    fn from(message: &str) -> Self {
+        Self::Message(message.to_string())
+    }
+}
+
+impl From<InterpreterEvalError> for String {
+    fn from(error: InterpreterEvalError) -> Self {
+        error.to_string()
+    }
+}
+
+impl fmt::Display for InterpreterEvalError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Message(message) => formatter.write_str(message),
+            Self::FuelExhausted => formatter.write_str(crate::comptime::FUEL_EXHAUSTED_MESSAGE),
+            Self::CallDepthExceeded => {
+                formatter.write_str(crate::comptime::CALL_DEPTH_EXCEEDED_MESSAGE)
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum CallDispatchError {
     MissingExecutableBody { function: String },
@@ -65,6 +104,8 @@ pub struct Interpreter {
     pub args: Vec<String>,
     pub mode: EvalMode,
     pub fuel: Option<u64>,
+    pub(crate) comptime_call_depth: u32,
+    pub(crate) max_comptime_call_depth: Option<u32>,
     module_lookup: Option<ModuleLookupContext>,
 }
 
@@ -92,6 +133,8 @@ impl Interpreter {
             args: Vec::new(),
             mode: EvalMode::Runtime,
             fuel: None,
+            comptime_call_depth: 0,
+            max_comptime_call_depth: None,
             module_lookup: None,
         }
     }
@@ -156,6 +199,8 @@ impl Interpreter {
             args: Vec::new(),
             mode: EvalMode::Runtime,
             fuel: None,
+            comptime_call_depth: 0,
+            max_comptime_call_depth: None,
             module_lookup: Some(module_lookup),
         }
     }
@@ -222,6 +267,17 @@ impl Interpreter {
         type_args: Option<Vec<Value>>,
         args: Vec<Value>,
     ) -> Result<ControlFlow, String> {
+        self.call_resolved_function_internal(identity, function, type_args, args)
+            .map_err(|error| error.to_string())
+    }
+
+    pub(crate) fn call_resolved_function_internal(
+        &mut self,
+        identity: &str,
+        function: &HirFunction,
+        type_args: Option<Vec<Value>>,
+        args: Vec<Value>,
+    ) -> Result<ControlFlow, InterpreterEvalError> {
         let previous_module = self
             .module_lookup
             .as_ref()
@@ -231,20 +287,20 @@ impl Interpreter {
                 context.current_module = Some(owner.clone());
             }
         }
-        let result = self.call_function_with_identity(identity, function, type_args, args);
+        let result = self.call_function_with_identity_internal(identity, function, type_args, args);
         if let Some(context) = &mut self.module_lookup {
             context.current_module = previous_module;
         }
         result
     }
 
-    pub(crate) fn call_resolved_function_with_env(
+    pub(crate) fn call_resolved_function_with_env_internal(
         &mut self,
         identity: &str,
         function: &HirFunction,
         type_args: Option<Vec<Value>>,
         args: Vec<Value>,
-    ) -> Result<(ControlFlow, RuntimeEnv), String> {
+    ) -> Result<(ControlFlow, RuntimeEnv), InterpreterEvalError> {
         let previous_module = self
             .module_lookup
             .as_ref()
@@ -254,7 +310,8 @@ impl Interpreter {
                 context.current_module = Some(owner.clone());
             }
         }
-        let result = self.call_function_with_env_identity(identity, function, type_args, args);
+        let result =
+            self.call_function_with_env_identity_internal(identity, function, type_args, args);
         if let Some(context) = &mut self.module_lookup {
             context.current_module = previous_module;
         }
@@ -337,7 +394,18 @@ impl Interpreter {
         type_args: Option<Vec<Value>>,
         args: Vec<Value>,
     ) -> Result<ControlFlow, String> {
-        self.call_function_with_env_identity(identity, func, type_args, args)
+        self.call_function_with_identity_internal(identity, func, type_args, args)
+            .map_err(|error| error.to_string())
+    }
+
+    pub(crate) fn call_function_with_identity_internal(
+        &mut self,
+        identity: &str,
+        func: &HirFunction,
+        type_args: Option<Vec<Value>>,
+        args: Vec<Value>,
+    ) -> Result<ControlFlow, InterpreterEvalError> {
+        self.call_function_with_env_identity_internal(identity, func, type_args, args)
             .map(|(cf, _)| cf)
     }
 
@@ -347,27 +415,32 @@ impl Interpreter {
         type_args: Option<Vec<Value>>,
         args: Vec<Value>,
     ) -> Result<(ControlFlow, RuntimeEnv), String> {
-        self.call_function_with_env_identity(&func.name, func, type_args, args)
+        self.call_function_with_env_identity_internal(&func.name, func, type_args, args)
+            .map_err(|error| error.to_string())
     }
 
-    fn call_function_with_env_identity(
+    pub(crate) fn call_function_with_env_identity_internal(
         &mut self,
         identity: &str,
         func: &HirFunction,
         type_args: Option<Vec<Value>>,
         args: Vec<Value>,
-    ) -> Result<(ControlFlow, RuntimeEnv), String> {
+    ) -> Result<(ControlFlow, RuntimeEnv), InterpreterEvalError> {
         let body = func.body.as_ref().ok_or_else(|| {
             CallDispatchError::MissingExecutableBody {
                 function: identity.to_string(),
             }
             .to_string()
         })?;
+
+        let entered_frame = self.enter_comptime_call()?;
         let mut env = RuntimeEnv::new();
 
         // Bind parameters
         if func.parameters.len() != args.len() {
-            return Err(format!("Arg count mismatch for {}", func.name));
+            let error = Err(format!("Arg count mismatch for {}", func.name).into());
+            self.leave_comptime_call(entered_frame);
+            return error;
         }
         for (param, arg) in func.parameters.iter().zip(args.into_iter()) {
             env.insert(param.name.clone(), arg);
@@ -382,16 +455,29 @@ impl Interpreter {
 
         let mut result_val = Value::Unit;
         for stmt in &body.statements {
-            let flow = self.eval_statement(stmt, &mut env)?;
+            let flow = match self.eval_statement_internal(stmt, &mut env) {
+                Ok(flow) => flow,
+                Err(error) => {
+                    self.leave_comptime_call(entered_frame);
+                    return Err(error);
+                }
+            };
             match flow {
                 ControlFlow::Value(v) => result_val = v,
                 ControlFlow::Return(v) => {
                     result_val = v;
                     break;
                 }
-                ControlFlow::Exit(code) => return Ok((ControlFlow::Exit(code), env)),
-                ControlFlow::Crash(msg) => return Ok((ControlFlow::Crash(msg), env)),
+                ControlFlow::Exit(code) => {
+                    self.leave_comptime_call(entered_frame);
+                    return Ok((ControlFlow::Exit(code), env));
+                }
+                ControlFlow::Crash(msg) => {
+                    self.leave_comptime_call(entered_frame);
+                    return Ok((ControlFlow::Crash(msg), env));
+                }
                 ControlFlow::Break | ControlFlow::Continue => {
+                    self.leave_comptime_call(entered_frame);
                     return Err("Break/Continue outside of loop".into());
                 }
             }
@@ -399,14 +485,18 @@ impl Interpreter {
 
         if func.is_fallible {
             // Implicit Ok(()) for fallible functions returning Unit
-            Ok((
+            let result = Ok((
                 ControlFlow::Value(Value::Result(Box::new(crate::value::ValueResult::Ok(
                     Value::Unit,
                 )))),
                 env,
-            ))
+            ));
+            self.leave_comptime_call(entered_frame);
+            result
         } else {
-            Ok((ControlFlow::Value(result_val), env))
+            let result = Ok((ControlFlow::Value(result_val), env));
+            self.leave_comptime_call(entered_frame);
+            result
         }
     }
 
@@ -415,6 +505,16 @@ impl Interpreter {
         closure: &std::rc::Rc<crate::value::ClosureValue>,
         args: Vec<Value>,
     ) -> Result<ControlFlow, String> {
+        self.call_closure_internal(closure, args)
+            .map_err(|error| error.to_string())
+    }
+
+    pub(crate) fn call_closure_internal(
+        &mut self,
+        closure: &std::rc::Rc<crate::value::ClosureValue>,
+        args: Vec<Value>,
+    ) -> Result<ControlFlow, InterpreterEvalError> {
+        let entered_frame = self.enter_comptime_call()?;
         let mut env = RuntimeEnv::new();
 
         // Bind captures
@@ -424,7 +524,8 @@ impl Interpreter {
 
         // Bind parameters
         if closure.params.len() != args.len() {
-            return Err("Arg count mismatch for closure".to_string());
+            self.leave_comptime_call(entered_frame);
+            return Err("Arg count mismatch for closure".into());
         }
         for (param, arg) in closure.params.iter().zip(args.into_iter()) {
             env.insert(param.name.clone(), arg);
@@ -432,22 +533,70 @@ impl Interpreter {
 
         let mut result_val = Value::Unit;
         for stmt in &closure.body.statements {
-            let flow = self.eval_statement(stmt, &mut env)?;
+            let flow = match self.eval_statement_internal(stmt, &mut env) {
+                Ok(flow) => flow,
+                Err(error) => {
+                    self.leave_comptime_call(entered_frame);
+                    return Err(error);
+                }
+            };
             match flow {
                 ControlFlow::Value(v) => result_val = v,
                 ControlFlow::Return(v) => {
                     result_val = v;
                     break;
                 }
-                ControlFlow::Exit(code) => return Ok(ControlFlow::Exit(code)),
-                ControlFlow::Crash(msg) => return Ok(ControlFlow::Crash(msg)),
+                ControlFlow::Exit(code) => {
+                    self.leave_comptime_call(entered_frame);
+                    return Ok(ControlFlow::Exit(code));
+                }
+                ControlFlow::Crash(msg) => {
+                    self.leave_comptime_call(entered_frame);
+                    return Ok(ControlFlow::Crash(msg));
+                }
                 ControlFlow::Break | ControlFlow::Continue => {
+                    self.leave_comptime_call(entered_frame);
                     return Err("Break/Continue outside of loop".into());
                 }
             }
         }
 
+        self.leave_comptime_call(entered_frame);
         Ok(ControlFlow::Value(result_val))
+    }
+
+    fn enter_comptime_call(&mut self) -> Result<bool, InterpreterEvalError> {
+        if self.mode != EvalMode::Comptime {
+            return Ok(false);
+        }
+        self.tick_comptime()?;
+        if let Some(max_depth) = self.max_comptime_call_depth {
+            if self.comptime_call_depth >= max_depth {
+                return Err(InterpreterEvalError::CallDepthExceeded);
+            }
+        }
+        self.comptime_call_depth += 1;
+        Ok(true)
+    }
+
+    fn leave_comptime_call(&mut self, entered: bool) {
+        if entered {
+            debug_assert!(self.comptime_call_depth > 0);
+            self.comptime_call_depth -= 1;
+        }
+    }
+
+    pub(crate) fn tick_comptime(&mut self) -> Result<(), InterpreterEvalError> {
+        if self.mode != EvalMode::Comptime {
+            return Ok(());
+        }
+        if let Some(fuel) = &mut self.fuel {
+            if *fuel == 0 {
+                return Err(InterpreterEvalError::FuelExhausted);
+            }
+            *fuel -= 1;
+        }
+        Ok(())
     }
 
     pub fn resolve_hir_type(&self, hir_type: &HirType) -> tempra_hir::types::Type {

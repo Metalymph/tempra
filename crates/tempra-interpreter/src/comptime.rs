@@ -2,16 +2,19 @@
 
 use crate::control_flow::ControlFlow;
 use crate::env::RuntimeEnv;
-use crate::interpreter::{EvalMode, Interpreter};
+use crate::interpreter::{EvalMode, Interpreter, InterpreterEvalError};
 use crate::value::Value;
 use std::error::Error;
 use std::fmt;
 use tempra_hir::HirExpression;
 
-/// The default expression-step budget for one comptime evaluation session.
+/// The default evaluator-progress budget for one comptime evaluation session.
 pub const DEFAULT_COMPTIME_FUEL: u64 = 1_000_000;
+/// Compiler-defined v0.1 maximum number of active Tempra call frames.
+pub const DEFAULT_COMPTIME_CALL_DEPTH: u32 = 128;
 
-pub(crate) const FUEL_EXHAUSTED_MESSAGE: &str = "comptime evaluation exceeded step limit";
+pub(crate) const FUEL_EXHAUSTED_MESSAGE: &str = "comptime evaluation fuel exhausted";
+pub(crate) const CALL_DEPTH_EXCEEDED_MESSAGE: &str = "comptime call depth exceeded";
 
 /// Effect categories for host-observable operations currently implemented by
 /// the HIR interpreter. This is deliberately narrower than the capability
@@ -76,17 +79,32 @@ pub(crate) fn reject_effect_during_comptime(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ComptimeEvalConfig {
     fuel: u64,
+    max_call_depth: u32,
 }
 
 impl ComptimeEvalConfig {
-    /// Creates a comptime configuration with the given expression-step budget.
+    /// Creates a comptime configuration with the given evaluator-progress budget.
     pub const fn with_fuel(fuel: u64) -> Self {
-        Self { fuel }
+        Self {
+            fuel,
+            max_call_depth: DEFAULT_COMPTIME_CALL_DEPTH,
+        }
     }
 
-    /// Returns the configured expression-step budget.
+    /// Returns the configured evaluator-progress budget.
     pub const fn fuel(&self) -> u64 {
         self.fuel
+    }
+
+    /// Overrides the maximum number of active Tempra call frames.
+    pub const fn with_max_call_depth(mut self, max_call_depth: u32) -> Self {
+        self.max_call_depth = max_call_depth;
+        self
+    }
+
+    /// Returns the configured maximum number of active Tempra call frames.
+    pub const fn max_call_depth(&self) -> u32 {
+        self.max_call_depth
     }
 }
 
@@ -99,8 +117,10 @@ impl Default for ComptimeEvalConfig {
 /// A normalized failure at the canonical comptime evaluation boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ComptimeEvalError {
-    /// The configured comptime expression-step budget was exhausted.
+    /// The configured comptime evaluator-progress budget was exhausted.
     FuelExhausted,
+    /// The configured maximum number of active Tempra call frames was reached.
+    CallDepthExceeded,
     /// The HIR interpreter rejected an operation while evaluating the expression.
     Evaluation(String),
     /// Evaluation completed with control flow that cannot be a comptime value.
@@ -111,6 +131,7 @@ impl fmt::Display for ComptimeEvalError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::FuelExhausted => formatter.write_str(FUEL_EXHAUSTED_MESSAGE),
+            Self::CallDepthExceeded => formatter.write_str(CALL_DEPTH_EXCEEDED_MESSAGE),
             Self::Evaluation(message) => formatter.write_str(message),
             Self::UnexpectedControlFlow(flow) => write!(
                 formatter,
@@ -122,13 +143,28 @@ impl fmt::Display for ComptimeEvalError {
 
 impl Error for ComptimeEvalError {}
 
+impl From<ComptimeEvalError> for InterpreterEvalError {
+    fn from(error: ComptimeEvalError) -> Self {
+        match error {
+            ComptimeEvalError::FuelExhausted => Self::FuelExhausted,
+            ComptimeEvalError::CallDepthExceeded => Self::CallDepthExceeded,
+            ComptimeEvalError::Evaluation(message) => Self::Message(message),
+            ComptimeEvalError::UnexpectedControlFlow(flow) => Self::Message(format!(
+                "comptime evaluation produced non-value control flow: {flow}"
+            )),
+        }
+    }
+}
+
 impl Interpreter {
     /// Evaluates one typed HIR expression in a scoped comptime session.
     ///
-    /// The interpreter's previous execution mode and fuel are restored after
-    /// success or any ordinary evaluation failure. Host panics are not caught;
-    /// the shared arithmetic kernel instead returns deterministic errors for
-    /// supported integer overflow and invalid division.
+    /// The interpreter's previous mode, fuel and call-depth state are restored
+    /// after success or any ordinary evaluation failure. Host panics are not
+    /// caught; the shared arithmetic kernel instead returns deterministic
+    /// errors for supported integer overflow and invalid division. The
+    /// compiler-defined default call-depth limit is revisionable and bounds
+    /// active Tempra frames rather than the host Rust stack.
     ///
     /// This method is the outer session boundary. Nested `comptime` expressions
     /// are evaluated by the interpreter kernel inside the active session, so
@@ -141,22 +177,31 @@ impl Interpreter {
     ) -> Result<Value, ComptimeEvalError> {
         let previous_mode = self.mode;
         let previous_fuel = self.fuel;
+        let previous_call_depth = self.comptime_call_depth;
+        let previous_max_call_depth = self.max_comptime_call_depth;
 
         self.mode = EvalMode::Comptime;
         self.fuel = Some(config.fuel());
-        let result = self.eval_expression(expression, environment);
+        self.comptime_call_depth = 0;
+        self.max_comptime_call_depth = Some(config.max_call_depth());
+        let result = self.eval_expression_internal(expression, environment);
         self.mode = previous_mode;
         self.fuel = previous_fuel;
+        self.comptime_call_depth = previous_call_depth;
+        self.max_comptime_call_depth = previous_max_call_depth;
 
         match result {
             Ok(ControlFlow::Value(value)) => Ok(value),
             Ok(flow) => Err(ComptimeEvalError::UnexpectedControlFlow(format!(
                 "{flow:?}"
             ))),
-            Err(message) if message == FUEL_EXHAUSTED_MESSAGE => {
-                Err(ComptimeEvalError::FuelExhausted)
+            Err(InterpreterEvalError::FuelExhausted) => Err(ComptimeEvalError::FuelExhausted),
+            Err(InterpreterEvalError::CallDepthExceeded) => {
+                Err(ComptimeEvalError::CallDepthExceeded)
             }
-            Err(message) => Err(ComptimeEvalError::Evaluation(message)),
+            Err(InterpreterEvalError::Message(message)) => {
+                Err(ComptimeEvalError::Evaluation(message))
+            }
         }
     }
 }
@@ -233,6 +278,10 @@ mod tests {
     #[test]
     fn installs_configured_fuel_and_reports_exhaustion() {
         let mut interpreter = interpreter();
+        interpreter.mode = EvalMode::Runtime;
+        interpreter.fuel = Some(29);
+        interpreter.comptime_call_depth = 7;
+        interpreter.max_comptime_call_depth = Some(11);
         let mut environment = RuntimeEnv::new();
 
         let error = interpreter
@@ -244,6 +293,23 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(error, ComptimeEvalError::FuelExhausted);
+        assert_eq!(interpreter.mode, EvalMode::Runtime);
+        assert_eq!(interpreter.fuel, Some(29));
+        assert_eq!(interpreter.comptime_call_depth, 7);
+        assert_eq!(interpreter.max_comptime_call_depth, Some(11));
+    }
+
+    #[test]
+    fn a_zero_fuel_tick_does_not_underflow() {
+        let mut interpreter = interpreter();
+        interpreter.mode = EvalMode::Comptime;
+        interpreter.fuel = Some(0);
+
+        assert_eq!(
+            interpreter.tick_comptime(),
+            Err(InterpreterEvalError::FuelExhausted)
+        );
+        assert_eq!(interpreter.fuel, Some(0));
     }
 
     #[test]
@@ -251,6 +317,8 @@ mod tests {
         let mut interpreter = interpreter();
         interpreter.mode = EvalMode::Runtime;
         interpreter.fuel = Some(17);
+        interpreter.comptime_call_depth = 4;
+        interpreter.max_comptime_call_depth = Some(8);
         let mut environment = RuntimeEnv::new();
 
         let value = interpreter
@@ -260,6 +328,8 @@ mod tests {
         assert_eq!(value, Value::Int64(1));
         assert_eq!(interpreter.mode, EvalMode::Runtime);
         assert_eq!(interpreter.fuel, Some(17));
+        assert_eq!(interpreter.comptime_call_depth, 4);
+        assert_eq!(interpreter.max_comptime_call_depth, Some(8));
     }
 
     #[test]

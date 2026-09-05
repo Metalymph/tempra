@@ -89,7 +89,10 @@ currently executable comptime operations: local `cmd` construction and
 allocation remain allowed, while process execution, output/input, filesystem,
 environment, host-OS access, `dbg` and `exit` are rejected at their effect
 boundaries. The typechecker remains the owner of primitive HIR materialization,
-and TIR/backends consume resolved code.
+and TIR/backends consume resolved code. K1.6 adds deterministic
+evaluator-progress fuel ticks and a compiler-defined v0.1 call-depth limit of
+128 active Tempra frames. Nested comptime shares the active session without
+resetting its budget.
 
 Current status:
 
@@ -100,11 +103,15 @@ K1.2 multi-module   DONE
 K1.3 arithmetic     DONE
 K1.4 extern/bodyless DONE
 K1.5 effect policy   DONE
+K1.6 termination     DONE
 K1 implementation   IN PROGRESS
 ```
 
-REPL/analysis integration, deterministic termination/fuel semantics and
-specialization hardening remain later K1/K2 work. Native signature integrity
+REPL/analysis integration and specialization hardening remain later K1/K2
+work. K1.6 does not change the
+`tempra-{CARGO_PKG_VERSION}-semantics-1` fingerprint; stale artifacts must be
+re-audited before K1 closes so they cannot bypass the comptime authority.
+Native signature integrity
 remains separate from the
 now-explicit HIR bodyless rejection. K then records
 determinism, reproducibility, parity tests, phase timings and initial

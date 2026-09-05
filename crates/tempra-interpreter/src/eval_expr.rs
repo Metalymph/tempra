@@ -11,17 +11,17 @@ use tempra_hir::*;
 fn integer_value<T>(
     result: Result<T, IntegerArithmeticError>,
     into_value: impl FnOnce(T) -> Value,
-) -> Result<ControlFlow, String> {
+) -> Result<ControlFlow, crate::interpreter::InterpreterEvalError> {
     result
         .map(into_value)
         .map(ControlFlow::Value)
-        .map_err(|error| error.to_string())
+        .map_err(|error| crate::interpreter::InterpreterEvalError::Message(error.to_string()))
 }
 
 fn run_command(
     mode: crate::interpreter::EvalMode,
     c: &crate::value::CommandValue,
-) -> Result<Value, String> {
+) -> Result<Value, crate::interpreter::InterpreterEvalError> {
     crate::comptime::reject_effect_during_comptime(
         mode,
         crate::comptime::ComptimeEffect::Process,
@@ -58,7 +58,7 @@ fn pipe_commands(
     mode: crate::interpreter::EvalMode,
     left: &crate::value::CommandValue,
     right: &crate::value::CommandValue,
-) -> Result<Value, String> {
+) -> Result<Value, crate::interpreter::InterpreterEvalError> {
     crate::comptime::reject_effect_during_comptime(
         mode,
         crate::comptime::ComptimeEffect::Process,
@@ -236,14 +236,16 @@ impl Interpreter {
         expr: &HirExpression,
         env: &mut RuntimeEnv,
     ) -> Result<ControlFlow, String> {
-        if self.mode == crate::interpreter::EvalMode::Comptime {
-            if let Some(fuel) = &mut self.fuel {
-                if *fuel == 0 {
-                    return Err(crate::comptime::FUEL_EXHAUSTED_MESSAGE.to_string());
-                }
-                *fuel -= 1;
-            }
-        }
+        self.eval_expression_internal(expr, env)
+            .map_err(|error| error.to_string())
+    }
+
+    pub(crate) fn eval_expression_internal(
+        &mut self,
+        expr: &HirExpression,
+        env: &mut RuntimeEnv,
+    ) -> Result<ControlFlow, crate::interpreter::InterpreterEvalError> {
+        self.tick_comptime()?;
         match expr {
             HirExpression::Integer(_, s) => {
                 let v = s.parse::<i64>().map_err(|_| "Invalid Int64".to_string())?;
@@ -267,7 +269,7 @@ impl Interpreter {
             HirExpression::EnumConstructor(cons) => {
                 let mut payloads = Vec::new();
                 for arg in &cons.payloads {
-                    match self.eval_expression(arg, env)? {
+                    match self.eval_expression_internal(arg, env)? {
                         ControlFlow::Value(v) => payloads.push(v),
                         cf => return Ok(cf),
                     }
@@ -307,12 +309,12 @@ impl Interpreter {
                     if ty != tempra_hir::types::Type::Unknown {
                         Ok(ControlFlow::Value(Value::Type(ty)))
                     } else {
-                        Err(format!("Variable {} not found", name))
+                        Err(format!("Variable {} not found", name).into())
                     }
                 }
             }
             HirExpression::Unary(unary) => {
-                let val = match self.eval_expression(&unary.expr, env)? {
+                let val = match self.eval_expression_internal(&unary.expr, env)? {
                     ControlFlow::Value(v) => v,
                     cf => return Ok(cf),
                 };
@@ -335,7 +337,7 @@ impl Interpreter {
                 // Phase 7: Special handling for Assignment to avoid evaluating LHS as an expression
                 // (which would incorrectly trigger 'get' hooks instead of 'set' hooks)
                 if binary.op == HirBinaryOp::Assign {
-                    let right = match self.eval_expression(&binary.right, env)? {
+                    let right = match self.eval_expression_internal(&binary.right, env)? {
                         ControlFlow::Value(v) => v,
                         cf => return Ok(cf),
                     };
@@ -373,7 +375,7 @@ impl Interpreter {
                             let obj = env
                                 .get(&receiver_name)
                                 .ok_or_else(|| format!("Variable '{}' not found", receiver_name))?;
-                            let idx_val = match self.eval_expression(&idx.index, env)? {
+                            let idx_val = match self.eval_expression_internal(&idx.index, env)? {
                                 ControlFlow::Value(v) => v,
                                 cf => return Ok(cf),
                             };
@@ -432,7 +434,8 @@ impl Interpreter {
                                     return Err(format!(
                                         "Cannot assign to index of type {}",
                                         obj.type_name()
-                                    ));
+                                    )
+                                    .into());
                                 }
                             }
                         }
@@ -443,11 +446,11 @@ impl Interpreter {
                             let obj = env
                                 .get(&receiver_name)
                                 .ok_or_else(|| format!("Variable '{}' not found", receiver_name))?;
-                            let start_val = match self.eval_expression(&slc.start, env)? {
+                            let start_val = match self.eval_expression_internal(&slc.start, env)? {
                                 ControlFlow::Value(v) => v,
                                 cf => return Ok(cf),
                             };
-                            let end_val = match self.eval_expression(&slc.end, env)? {
+                            let end_val = match self.eval_expression_internal(&slc.end, env)? {
                                 ControlFlow::Value(v) => v,
                                 cf => return Ok(cf),
                             };
@@ -463,7 +466,8 @@ impl Interpreter {
                                             return Err(format!(
                                                 "Slice start > end: {} > {}",
                                                 start, end
-                                            ));
+                                            )
+                                            .into());
                                         }
                                         let slice_len = end - start;
 
@@ -514,7 +518,8 @@ impl Interpreter {
                                             return Err(format!(
                                                 "Slice start > end: {} > {}",
                                                 start, end
-                                            ));
+                                            )
+                                            .into());
                                         }
                                         let sub_slice_len = end - start;
                                         if end > slice.len() {
@@ -574,7 +579,8 @@ impl Interpreter {
                                     return Err(format!(
                                         "Cannot assign to slice of type {}",
                                         obj.type_name()
-                                    ));
+                                    )
+                                    .into());
                                 }
                             }
                         }
@@ -588,7 +594,7 @@ impl Interpreter {
 
                 // Special handling for short-circuiting logical operators and pipe
                 if binary.op == HirBinaryOp::And {
-                    let left = match self.eval_expression(&binary.left, env)? {
+                    let left = match self.eval_expression_internal(&binary.left, env)? {
                         ControlFlow::Value(v) => v,
                         cf => return Ok(cf),
                     };
@@ -609,7 +615,7 @@ impl Interpreter {
                         if !success {
                             return Ok(ControlFlow::Value(res_v));
                         }
-                        let right = match self.eval_expression(&binary.right, env)? {
+                        let right = match self.eval_expression_internal(&binary.right, env)? {
                             ControlFlow::Value(v) => v,
                             cf => return Ok(cf),
                         };
@@ -623,7 +629,7 @@ impl Interpreter {
                     }
                     v_left = Some(left);
                 } else if binary.op == HirBinaryOp::Or {
-                    let left = match self.eval_expression(&binary.left, env)? {
+                    let left = match self.eval_expression_internal(&binary.left, env)? {
                         ControlFlow::Value(v) => v,
                         cf => return Ok(cf),
                     };
@@ -644,7 +650,7 @@ impl Interpreter {
                         if success {
                             return Ok(ControlFlow::Value(res_v));
                         }
-                        let right = match self.eval_expression(&binary.right, env)? {
+                        let right = match self.eval_expression_internal(&binary.right, env)? {
                             ControlFlow::Value(v) => v,
                             cf => return Ok(cf),
                         };
@@ -658,11 +664,11 @@ impl Interpreter {
                     }
                     v_left = Some(left);
                 } else if binary.op == HirBinaryOp::Pipe {
-                    let left = match self.eval_expression(&binary.left, env)? {
+                    let left = match self.eval_expression_internal(&binary.left, env)? {
                         ControlFlow::Value(v) => v,
                         cf => return Ok(cf),
                     };
-                    let right = match self.eval_expression(&binary.right, env)? {
+                    let right = match self.eval_expression_internal(&binary.right, env)? {
                         ControlFlow::Value(v) => v,
                         cf => return Ok(cf),
                     };
@@ -677,13 +683,13 @@ impl Interpreter {
                 let left = if let Some(v) = v_left {
                     v
                 } else {
-                    match self.eval_expression(&binary.left, env)? {
+                    match self.eval_expression_internal(&binary.left, env)? {
                         ControlFlow::Value(v) => v,
                         cf => return Ok(cf),
                     }
                 };
 
-                let right = match self.eval_expression(&binary.right, env)? {
+                let right = match self.eval_expression_internal(&binary.right, env)? {
                     ControlFlow::Value(v) => v,
                     cf => return Ok(cf),
                 };
@@ -806,7 +812,7 @@ impl Interpreter {
                 }
             }
             HirExpression::IsType(is_expr) => {
-                let value = match self.eval_expression(&is_expr.value, env)? {
+                let value = match self.eval_expression_internal(&is_expr.value, env)? {
                     ControlFlow::Value(v) => v,
                     cf => return Ok(cf),
                 };
@@ -816,7 +822,7 @@ impl Interpreter {
                 ))))
             }
             HirExpression::IsPattern(is_expr) => {
-                let value = match self.eval_expression(&is_expr.value, env)? {
+                let value = match self.eval_expression_internal(&is_expr.value, env)? {
                     ControlFlow::Value(v) => v,
                     cf => return Ok(cf),
                 };
@@ -825,7 +831,7 @@ impl Interpreter {
                 Ok(ControlFlow::Value(Value::Bool(is_match)))
             }
             HirExpression::AsOptional(expr) => {
-                let value = match self.eval_expression(&expr.expr, env)? {
+                let value = match self.eval_expression_internal(&expr.expr, env)? {
                     ControlFlow::Value(v) => v,
                     cf => return Ok(cf),
                 };
@@ -838,7 +844,7 @@ impl Interpreter {
                 }
             }
             HirExpression::AsForced(expr) => {
-                let value = match self.eval_expression(&expr.expr, env)? {
+                let value = match self.eval_expression_internal(&expr.expr, env)? {
                     ControlFlow::Value(v) => v,
                     cf => return Ok(cf),
                 };
@@ -862,13 +868,13 @@ impl Interpreter {
                         for argument in &call.args {
                             match argument {
                                 HirCallArgument::Positional(expression) => {
-                                    match self.eval_expression(expression, env)? {
+                                    match self.eval_expression_internal(expression, env)? {
                                         ControlFlow::Value(value) => positional_values.push(value),
                                         flow => return Ok(flow),
                                     }
                                 }
                                 HirCallArgument::Named(named) => {
-                                    match self.eval_expression(&named.value, env)? {
+                                    match self.eval_expression_internal(&named.value, env)? {
                                         ControlFlow::Value(value) => {
                                             named_values.insert(named.name.clone(), value);
                                         }
@@ -897,13 +903,13 @@ impl Interpreter {
                             for arg in &call.args {
                                 match arg {
                                     HirCallArgument::Positional(arg_expr) => {
-                                        match self.eval_expression(arg_expr, env)? {
+                                        match self.eval_expression_internal(arg_expr, env)? {
                                             ControlFlow::Value(v) => args.push(v),
                                             cf => return Ok(cf),
                                         }
                                     }
                                     HirCallArgument::Named(n) => {
-                                        match self.eval_expression(&n.value, env)? {
+                                        match self.eval_expression_internal(&n.value, env)? {
                                             ControlFlow::Value(v) => {
                                                 named_args.insert(n.name.clone(), v);
                                             }
@@ -925,13 +931,13 @@ impl Interpreter {
                             for arg in &call.args {
                                 match arg {
                                     HirCallArgument::Positional(arg_expr) => {
-                                        match self.eval_expression(arg_expr, env)? {
+                                        match self.eval_expression_internal(arg_expr, env)? {
                                             ControlFlow::Value(v) => args.push(v),
                                             cf => return Ok(cf),
                                         }
                                     }
                                     HirCallArgument::Named(n) => {
-                                        match self.eval_expression(&n.value, env)? {
+                                        match self.eval_expression_internal(&n.value, env)? {
                                             ControlFlow::Value(v) => {
                                                 named_args.insert(n.name.clone(), v);
                                             }
@@ -953,13 +959,13 @@ impl Interpreter {
                             for arg in &call.args {
                                 match arg {
                                     HirCallArgument::Positional(arg_expr) => {
-                                        match self.eval_expression(arg_expr, env)? {
+                                        match self.eval_expression_internal(arg_expr, env)? {
                                             ControlFlow::Value(v) => args.push(v),
                                             cf => return Ok(cf),
                                         }
                                     }
                                     HirCallArgument::Named(n) => {
-                                        match self.eval_expression(&n.value, env)? {
+                                        match self.eval_expression_internal(&n.value, env)? {
                                             ControlFlow::Value(v) => {
                                                 named_args.insert(n.name.clone(), v);
                                             }
@@ -975,7 +981,7 @@ impl Interpreter {
                             for arg in &call.args {
                                 match arg {
                                     HirCallArgument::Positional(arg_expr) => {
-                                        match self.eval_expression(arg_expr, env)? {
+                                        match self.eval_expression_internal(arg_expr, env)? {
                                             ControlFlow::Value(v) => args.push(v),
                                             cf => return Ok(cf),
                                         }
@@ -992,7 +998,7 @@ impl Interpreter {
                             return Ok(ControlFlow::Value(Value::Regex(re)));
                         }
                     }
-                    let obj = match self.eval_expression(&member.object, env)? {
+                    let obj = match self.eval_expression_internal(&member.object, env)? {
                         ControlFlow::Value(v) => v,
                         cf => return Ok(cf),
                     };
@@ -1003,13 +1009,13 @@ impl Interpreter {
                             for arg in &call.args {
                                 match arg {
                                     HirCallArgument::Positional(arg_expr) => {
-                                        match self.eval_expression(arg_expr, env)? {
+                                        match self.eval_expression_internal(arg_expr, env)? {
                                             ControlFlow::Value(v) => args.push(v),
                                             cf => return Ok(cf),
                                         }
                                     }
                                     HirCallArgument::Named(n) => {
-                                        match self.eval_expression(&n.value, env)? {
+                                        match self.eval_expression_internal(&n.value, env)? {
                                             ControlFlow::Value(v) => {
                                                 named_args.insert(n.name.clone(), v);
                                             }
@@ -1076,7 +1082,9 @@ impl Interpreter {
                                     ))))
                                 };
                             }
-                            return Err(format!("Unknown method '{}' on Array", member.field));
+                            return Err(
+                                format!("Unknown method '{}' on Array", member.field).into()
+                            );
                         }
                         Value::Slice(slice) => {
                             if member.field == "len" {
@@ -1126,7 +1134,9 @@ impl Interpreter {
                                     ))))
                                 };
                             }
-                            return Err(format!("Unknown method '{}' on Slice", member.field));
+                            return Err(
+                                format!("Unknown method '{}' on Slice", member.field).into()
+                            );
                         }
                         Value::ArrayIter(iter) => {
                             if member.field == "next" {
@@ -1147,7 +1157,9 @@ impl Interpreter {
                                     )));
                                 }
                             }
-                            return Err(format!("Unknown method '{}' on ArrayIter", member.field));
+                            return Err(
+                                format!("Unknown method '{}' on ArrayIter", member.field).into()
+                            );
                         }
                         Value::SliceIter(iter) => {
                             if member.field == "next" {
@@ -1167,14 +1179,17 @@ impl Interpreter {
                                     )));
                                 }
                             }
-                            return Err(format!("Unknown method '{}' on SliceIter", member.field));
+                            return Err(
+                                format!("Unknown method '{}' on SliceIter", member.field).into()
+                            );
                         }
                         Value::Command(cmd) => {
                             if member.field != "run" {
                                 return Err(format!(
                                     "Unknown method '{}' on Command",
                                     member.field
-                                ));
+                                )
+                                .into());
                             }
                             return run_command(self.mode, &cmd).map(ControlFlow::Value);
                         }
@@ -1183,7 +1198,7 @@ impl Interpreter {
                             for arg in &call.args {
                                 match arg {
                                     HirCallArgument::Positional(arg_expr) => {
-                                        match self.eval_expression(arg_expr, env)? {
+                                        match self.eval_expression_internal(arg_expr, env)? {
                                             ControlFlow::Value(v) => args.push(v),
                                             cf => return Ok(cf),
                                         }
@@ -1205,7 +1220,7 @@ impl Interpreter {
                                 for arg in &call.args {
                                     match arg {
                                         HirCallArgument::Positional(arg_expr) => {
-                                            match self.eval_expression(arg_expr, env)? {
+                                            match self.eval_expression_internal(arg_expr, env)? {
                                                 ControlFlow::Value(v) => args.push(v),
                                                 cf => return Ok(cf),
                                             }
@@ -1218,7 +1233,7 @@ impl Interpreter {
                                         }
                                     }
                                 }
-                                return self.call_closure(c, args);
+                                return self.call_closure_internal(c, args);
                             }
 
                             // Phase 6: Check for methods (e.g. TypeName.methodName)
@@ -1231,7 +1246,7 @@ impl Interpreter {
                                 for arg in &call.args {
                                     match arg {
                                         HirCallArgument::Positional(arg_expr) => {
-                                            match self.eval_expression(arg_expr, env)? {
+                                            match self.eval_expression_internal(arg_expr, env)? {
                                                 ControlFlow::Value(v) => args.push(v),
                                                 cf => return Ok(cf),
                                             }
@@ -1240,24 +1255,28 @@ impl Interpreter {
                                             return Err(format!(
                                                 "Named argument '{}' not supported for methods yet",
                                                 n.name
-                                            ));
+                                            )
+                                            .into());
                                         }
                                     }
                                 }
-                                return self
-                                    .call_resolved_function(&identity, &function, None, args);
+                                return self.call_resolved_function_internal(
+                                    &identity, &function, None, args,
+                                );
                             }
 
                             return Err(format!(
                                 "Field '{}' is not a closure and no method '{}' found",
                                 member.field, method_name
-                            ));
+                            )
+                            .into());
                         }
                         _ => Err(format!(
                             "Type {} has no method '{}'",
                             obj.type_name(),
                             member.field
-                        )),
+                        )
+                        .into()),
                     };
                 }
 
@@ -1265,16 +1284,20 @@ impl Interpreter {
                 let mut named_values = HashMap::new();
                 for arg in &call.args {
                     match arg {
-                        HirCallArgument::Positional(e) => match self.eval_expression(e, env)? {
-                            ControlFlow::Value(v) => positional_values.push(v),
-                            cf => return Ok(cf),
-                        },
-                        HirCallArgument::Named(n) => match self.eval_expression(&n.value, env)? {
-                            ControlFlow::Value(v) => {
-                                named_values.insert(n.name.clone(), v);
+                        HirCallArgument::Positional(e) => {
+                            match self.eval_expression_internal(e, env)? {
+                                ControlFlow::Value(v) => positional_values.push(v),
+                                cf => return Ok(cf),
                             }
-                            cf => return Ok(cf),
-                        },
+                        }
+                        HirCallArgument::Named(n) => {
+                            match self.eval_expression_internal(&n.value, env)? {
+                                ControlFlow::Value(v) => {
+                                    named_values.insert(n.name.clone(), v);
+                                }
+                                cf => return Ok(cf),
+                            }
+                        }
                     }
                 }
 
@@ -1287,7 +1310,7 @@ impl Interpreter {
                                 .or_else(|| named_values.get("message"))
                                 .ok_or("Missing argument 'message' for compile_error")?;
                             if let Value::String(message) = val {
-                                return Err(message.clone());
+                                return Err(message.clone().into());
                             }
                             return Err("compile_error requires a String argument".into());
                         }
@@ -1493,7 +1516,7 @@ impl Interpreter {
                     }
                     // Check env for local closure
                     if let Some(Value::Closure(c)) = env.get(name) {
-                        return self.call_closure(&c, positional_values);
+                        return self.call_closure_internal(&c, positional_values);
                     }
 
                     // User function
@@ -1509,21 +1532,18 @@ impl Interpreter {
                     );
                 } else {
                     // Try evaluating callee as a complex expression (e.g. (fn(x){x})(1))
-                    let callee_val = match self.eval_expression(&call.callee, env)? {
+                    let callee_val = match self.eval_expression_internal(&call.callee, env)? {
                         ControlFlow::Value(v) => v,
                         cf => return Ok(cf),
                     };
                     if let Value::Closure(c) = callee_val {
-                        return self.call_closure(&c, positional_values);
+                        return self.call_closure_internal(&c, positional_values);
                     }
-                    Err(format!(
-                        "Value of type {} is not callable",
-                        callee_val.type_name()
-                    ))
+                    Err(format!("Value of type {} is not callable", callee_val.type_name()).into())
                 }
             }
             HirExpression::Member(member) => {
-                let obj = match self.eval_expression(&member.object, env)? {
+                let obj = match self.eval_expression_internal(&member.object, env)? {
                     ControlFlow::Value(v) => v,
                     cf => return Ok(cf),
                 };
@@ -1533,13 +1553,15 @@ impl Interpreter {
                         .get(&member.field)
                         .cloned()
                         .map(ControlFlow::Value)
-                        .ok_or_else(|| format!("Field {} not found", member.field)),
+                        .ok_or_else(|| format!("Field {} not found", member.field).into()),
                     Value::CommandResult(r) => match member.field.as_str() {
                         "exit_code" => Ok(ControlFlow::Value(Value::Int64(r.exit_code as i64))),
                         "stdout" => Ok(ControlFlow::Value(Value::String(r.stdout.clone()))),
                         "stderr" => Ok(ControlFlow::Value(Value::String(r.stderr.clone()))),
                         "success" => Ok(ControlFlow::Value(Value::Bool(r.success))),
-                        _ => Err(format!("Field {} not found on CommandResult", member.field)),
+                        _ => {
+                            Err(format!("Field {} not found on CommandResult", member.field).into())
+                        }
                     },
                     Value::Command(c) => match member.field.as_str() {
                         "program" => Ok(ControlFlow::Value(Value::String(c.program.clone()))),
@@ -1548,33 +1570,33 @@ impl Interpreter {
                                 c.args.iter().map(|s| Value::String(s.clone())).collect(),
                             ),
                         )))),
-                        _ => Err(format!("Field {} not found on Command", member.field)),
+                        _ => Err(format!("Field {} not found on Command", member.field).into()),
                     },
                     _ => Err("Member access requires a struct, Command, or CommandResult".into()),
                 }
             }
             HirExpression::Index(index) => {
-                let obj = match self.eval_expression(&index.object, env)? {
+                let obj = match self.eval_expression_internal(&index.object, env)? {
                     ControlFlow::Value(v) => v,
                     cf => return Ok(cf),
                 };
-                let idx_val = match self.eval_expression(&index.index, env)? {
+                let idx_val = match self.eval_expression_internal(&index.index, env)? {
                     ControlFlow::Value(v) => v,
                     cf => return Ok(cf),
                 };
                 match (&obj, &idx_val) {
                     (Value::Array(arr), Value::Int64(i)) => {
                         let arr_ref = arr.borrow();
-                        arr_ref
+                        Ok(arr_ref
                             .get(*i as usize)
                             .cloned()
                             .ok_or_else(|| format!("Index out of bounds: {}", i))
-                            .map(ControlFlow::Value)
+                            .map(ControlFlow::Value)?)
                     }
-                    (Value::Slice(slice), Value::Int64(i)) => slice
+                    (Value::Slice(slice), Value::Int64(i)) => Ok(slice
                         .get(*i as usize)
                         .ok_or_else(|| format!("Index out of bounds: {}", i))
-                        .map(ControlFlow::Value),
+                        .map(ControlFlow::Value)?),
                     (Value::Array(_), _) | (Value::Slice(_), _) => {
                         Err("Index must be Int64".into())
                     }
@@ -1585,15 +1607,15 @@ impl Interpreter {
                 }
             }
             HirExpression::Slice(slice) => {
-                let obj = match self.eval_expression(&slice.object, env)? {
+                let obj = match self.eval_expression_internal(&slice.object, env)? {
                     ControlFlow::Value(v) => v,
                     cf => return Ok(cf),
                 };
-                let start_val = match self.eval_expression(&slice.start, env)? {
+                let start_val = match self.eval_expression_internal(&slice.start, env)? {
                     ControlFlow::Value(v) => v,
                     cf => return Ok(cf),
                 };
-                let end_val = match self.eval_expression(&slice.end, env)? {
+                let end_val = match self.eval_expression_internal(&slice.end, env)? {
                     ControlFlow::Value(v) => v,
                     cf => return Ok(cf),
                 };
@@ -1633,7 +1655,7 @@ impl Interpreter {
 
                 if let HirExpression::IsPattern(is_pat) = &*if_expr.condition {
                     is_pattern_match = true;
-                    let val = match self.eval_expression(&is_pat.value, env)? {
+                    let val = match self.eval_expression_internal(&is_pat.value, env)? {
                         ControlFlow::Value(v) => v,
                         cf => return Ok(cf),
                     };
@@ -1643,7 +1665,7 @@ impl Interpreter {
                         condition_res = Ok(ControlFlow::Value(Value::Bool(false)));
                     }
                 } else {
-                    condition_res = self.eval_expression(&if_expr.condition, env);
+                    condition_res = self.eval_expression_internal(&if_expr.condition, env);
                 }
 
                 let cond = match condition_res? {
@@ -1668,7 +1690,7 @@ impl Interpreter {
                         self.eval_block(&if_expr.then_block, env)
                     }
                 } else if let Some(else_branch) = &if_expr.else_branch {
-                    self.eval_expression(else_branch, env)
+                    self.eval_expression_internal(else_branch, env)
                 } else {
                     Ok(ControlFlow::Value(Value::Unit))
                 }
@@ -1677,7 +1699,7 @@ impl Interpreter {
             HirExpression::Tuple(_, exprs) => {
                 let mut vals = Vec::new();
                 for e in exprs {
-                    match self.eval_expression(e, env)? {
+                    match self.eval_expression_internal(e, env)? {
                         ControlFlow::Value(v) => vals.push(v),
                         cf => return Ok(cf),
                     }
@@ -1687,7 +1709,7 @@ impl Interpreter {
             HirExpression::Array(_, exprs) => {
                 let mut vals = Vec::new();
                 for e in exprs {
-                    match self.eval_expression(e, env)? {
+                    match self.eval_expression_internal(e, env)? {
                         ControlFlow::Value(v) => vals.push(v),
                         cf => return Ok(cf),
                     }
@@ -1699,7 +1721,7 @@ impl Interpreter {
             HirExpression::StructLiteral(s) => {
                 let mut fields = HashMap::new();
                 for (name, expr) in &s.fields {
-                    match self.eval_expression(expr, env)? {
+                    match self.eval_expression_internal(expr, env)? {
                         ControlFlow::Value(v) => {
                             fields.insert(name.clone(), v);
                         }
@@ -1714,7 +1736,7 @@ impl Interpreter {
                         if !fields.contains_key(&field.name) {
                             if let Some(default_expr) = &field.default_value {
                                 // Evaluate default expression in the CURRENT environment
-                                match self.eval_expression(default_expr, env)? {
+                                match self.eval_expression_internal(default_expr, env)? {
                                     ControlFlow::Value(v) => {
                                         fields.insert(field.name.clone(), v);
                                     }
@@ -1731,7 +1753,7 @@ impl Interpreter {
                 })))
             }
             HirExpression::For(for_expr) => {
-                let iterable = match self.eval_expression(&for_expr.iterable, env)? {
+                let iterable = match self.eval_expression_internal(&for_expr.iterable, env)? {
                     ControlFlow::Value(v) => v,
                     cf => return Ok(cf),
                 };
@@ -1763,7 +1785,7 @@ impl Interpreter {
                         let method_name = format!("{}.iter", s.name);
                         if let Some((identity, function)) = self.resolve_user_function(&method_name)
                         {
-                            let iter_val = match self.call_resolved_function(
+                            let iter_val = match self.call_resolved_function_internal(
                                 &identity,
                                 &function,
                                 None,
@@ -1777,7 +1799,8 @@ impl Interpreter {
                             return Err(format!(
                                 "type '{}' does not implement Iterable (no 'iter' method)",
                                 s.name
-                            ));
+                            )
+                            .into());
                         }
                         None
                     }
@@ -1785,7 +1808,8 @@ impl Interpreter {
                         return Err(format!(
                             "value of type '{}' is not iterable",
                             other.type_name()
-                        ));
+                        )
+                        .into());
                     }
                 };
 
@@ -1795,17 +1819,19 @@ impl Interpreter {
                 if let Some(char_vals) = char_values {
                     // String fast path: already have the values
                     for item in char_vals {
+                        self.tick_comptime()?;
                         env.push_scope();
                         env.insert(for_expr.binding.clone(), item);
 
                         if let Some(filter_expr) = &for_expr.filter {
-                            let filter_res = match self.eval_expression(filter_expr, env)? {
-                                ControlFlow::Value(v) => v,
-                                cf => {
-                                    env.pop_scope();
-                                    return Ok(cf);
-                                }
-                            };
+                            let filter_res =
+                                match self.eval_expression_internal(filter_expr, env)? {
+                                    ControlFlow::Value(v) => v,
+                                    cf => {
+                                        env.pop_scope();
+                                        return Ok(cf);
+                                    }
+                                };
                             if let Value::Bool(b) = filter_res {
                                 if !b {
                                     env.pop_scope();
@@ -1882,12 +1908,13 @@ impl Interpreter {
                                         .first()
                                         .map(|p| p.name.clone())
                                         .unwrap_or_else(|| "self".to_string());
-                                    let (cf, post_env) = self.call_resolved_function_with_env(
-                                        &identity,
-                                        &function,
-                                        None,
-                                        vec![iter_val.clone()],
-                                    )?;
+                                    let (cf, post_env) = self
+                                        .call_resolved_function_with_env_internal(
+                                            &identity,
+                                            &function,
+                                            None,
+                                            vec![iter_val.clone()],
+                                        )?;
                                     // Update iter_val to reflect mutated self
                                     if let Some(updated_self) = post_env.get(&self_param_name) {
                                         iter_val = updated_self.clone();
@@ -1900,31 +1927,35 @@ impl Interpreter {
                                     return Err(format!(
                                         "iterator type '{}' has no 'next' method",
                                         s.name
-                                    ));
+                                    )
+                                    .into());
                                 }
                             }
                             other => {
                                 return Err(format!(
                                     "value of type '{}' is not an iterator",
                                     other.type_name()
-                                ));
+                                )
+                                .into());
                             }
                         };
 
                         match next_result {
                             Value::Option(crate::value::OptionValue::None) => break,
                             Value::Option(crate::value::OptionValue::Some(item)) => {
+                                self.tick_comptime()?;
                                 env.push_scope();
                                 env.insert(for_expr.binding.clone(), *item);
 
                                 if let Some(filter_expr) = &for_expr.filter {
-                                    let filter_res = match self.eval_expression(filter_expr, env)? {
-                                        ControlFlow::Value(v) => v,
-                                        cf => {
-                                            env.pop_scope();
-                                            return Ok(cf);
-                                        }
-                                    };
+                                    let filter_res =
+                                        match self.eval_expression_internal(filter_expr, env)? {
+                                            ControlFlow::Value(v) => v,
+                                            cf => {
+                                                env.pop_scope();
+                                                return Ok(cf);
+                                            }
+                                        };
                                     if let Value::Bool(b) = filter_res {
                                         if !b {
                                             env.pop_scope();
@@ -1967,7 +1998,8 @@ impl Interpreter {
                                 return Err(format!(
                                     "next() returned unexpected value: {:?}",
                                     other
-                                ));
+                                )
+                                .into());
                             }
                         }
                     }
@@ -1979,7 +2011,7 @@ impl Interpreter {
             }
             // Minimal implementations for others to make it compile
             HirExpression::Try(e) => {
-                let val = match self.eval_expression(&e.expr, env)? {
+                let val = match self.eval_expression_internal(&e.expr, env)? {
                     ControlFlow::Value(v) => v,
                     cf => return Ok(cf),
                 };
@@ -1994,7 +2026,7 @@ impl Interpreter {
                 }
             }
             HirExpression::Unwrap(e) => {
-                let val = match self.eval_expression(&e.expr, env)? {
+                let val = match self.eval_expression_internal(&e.expr, env)? {
                     ControlFlow::Value(v) => v,
                     cf => return Ok(cf),
                 };
@@ -2009,7 +2041,7 @@ impl Interpreter {
                 }
             }
             HirExpression::Match(match_expr) => {
-                let value = match self.eval_expression(&match_expr.value, env)? {
+                let value = match self.eval_expression_internal(&match_expr.value, env)? {
                     ControlFlow::Value(v) => v,
                     cf => return Ok(cf),
                 };
@@ -2024,7 +2056,7 @@ impl Interpreter {
 
                         let mut guard_passed = true;
                         if let Some(guard) = &arm.guard {
-                            let guard_result = match self.eval_expression(guard, env)? {
+                            let guard_result = match self.eval_expression_internal(guard, env)? {
                                 ControlFlow::Value(Value::Bool(b)) => b,
                                 ControlFlow::Value(_) => {
                                     unreachable!("typechecker ensures guard is Bool")
@@ -2038,7 +2070,7 @@ impl Interpreter {
                         }
 
                         if guard_passed {
-                            let res = self.eval_expression(&arm.value, env);
+                            let res = self.eval_expression_internal(&arm.value, env);
                             env.pop_scope();
                             return res;
                         } else {
@@ -2092,7 +2124,7 @@ impl Interpreter {
             }
             HirExpression::Comptime(e) => {
                 if self.mode == crate::interpreter::EvalMode::Comptime {
-                    self.eval_expression(&e.expression, env)
+                    self.eval_expression_internal(&e.expression, env)
                 } else {
                     self.evaluate_comptime(
                         &e.expression,
@@ -2100,7 +2132,7 @@ impl Interpreter {
                         crate::comptime::ComptimeEvalConfig::default(),
                     )
                     .map(ControlFlow::Value)
-                    .map_err(|error| error.to_string())
+                    .map_err(crate::interpreter::InterpreterEvalError::from)
                 }
             }
         }
@@ -2310,11 +2342,11 @@ impl Interpreter {
         &mut self,
         block: &HirBlock,
         env: &mut RuntimeEnv,
-    ) -> Result<ControlFlow, String> {
+    ) -> Result<ControlFlow, crate::interpreter::InterpreterEvalError> {
         env.push_scope();
         let mut last_val = Value::Unit;
         for stmt in &block.statements {
-            let flow = self.eval_statement(stmt, env)?;
+            let flow = self.eval_statement_internal(stmt, env)?;
             match flow {
                 ControlFlow::Value(v) => last_val = v,
                 ControlFlow::Return(v) => {
@@ -2348,7 +2380,7 @@ impl Interpreter {
         name: &str,
         positional_args: &[Value],
         named_args: &HashMap<String, Value>,
-    ) -> Result<ControlFlow, String> {
+    ) -> Result<ControlFlow, crate::interpreter::InterpreterEvalError> {
         let get_arg = |idx: usize, arg_name: &str| -> Option<&Value> {
             positional_args
                 .get(idx)
@@ -2396,7 +2428,7 @@ impl Interpreter {
                         };
                     } else {
                         use std::io::Write;
-                        let res = (|| -> Result<(), String> {
+                        let res = (|| -> Result<(), crate::interpreter::InterpreterEvalError> {
                             let mut file = std::fs::OpenOptions::new()
                                 .create(true)
                                 .append(true)
@@ -2413,12 +2445,12 @@ impl Interpreter {
                                 crate::value::ValueResult::Ok(Value::Unit),
                             )))),
                             Err(msg) => Ok(ControlFlow::Value(Value::Result(Box::new(
-                                crate::value::ValueResult::Err(Value::Error(msg)),
+                                crate::value::ValueResult::Err(Value::Error(msg.to_string())),
                             )))),
                         };
                     }
                 } else {
-                    return Err(format!("'fs.{}' requires two String arguments", name));
+                    return Err(format!("'fs.{}' requires two String arguments", name).into());
                 }
             }
             "exists" => {
@@ -2486,7 +2518,7 @@ impl Interpreter {
                         _ => unreachable!(),
                     }
                 } else {
-                    return Err(format!("'fs.{}' requires a String for 'path'", name));
+                    return Err(format!("'fs.{}' requires a String for 'path'", name).into());
                 }
             }
             "rename" | "copy" => {
@@ -2512,10 +2544,10 @@ impl Interpreter {
                         )))),
                     }
                 } else {
-                    return Err(format!("'fs.{}' requires two String arguments", name));
+                    return Err(format!("'fs.{}' requires two String arguments", name).into());
                 }
             }
-            _ => Err(format!("Unknown filesystem operation 'fs.{}'", name)),
+            _ => Err(format!("Unknown filesystem operation 'fs.{}'", name).into()),
         }
     }
 
@@ -2524,7 +2556,7 @@ impl Interpreter {
         name: &str,
         positional_args: &[Value],
         named_args: &HashMap<String, Value>,
-    ) -> Result<ControlFlow, String> {
+    ) -> Result<ControlFlow, crate::interpreter::InterpreterEvalError> {
         let get_arg = |idx: usize, arg_name: &str| -> Option<&Value> {
             positional_args
                 .get(idx)
@@ -2556,7 +2588,7 @@ impl Interpreter {
                     return Err("'env.get' requires a String for 'name'".into());
                 }
             }
-            _ => Err(format!("Unknown environment operation 'env.{}'", name)),
+            _ => Err(format!("Unknown environment operation 'env.{}'", name).into()),
         }
     }
 
@@ -2565,7 +2597,7 @@ impl Interpreter {
         name: &str,
         args: &[Value],
         named_args: &HashMap<String, Value>,
-    ) -> Result<ControlFlow, String> {
+    ) -> Result<ControlFlow, crate::interpreter::InterpreterEvalError> {
         let get_arg = |idx: usize, arg_name: &str| -> Option<&Value> {
             args.get(idx).or_else(|| named_args.get(arg_name))
         };
@@ -2609,7 +2641,7 @@ impl Interpreter {
                     Err("os.chdir requires a String argument".into())
                 }
             }
-            _ => Err(format!("Unknown OS operation 'os.{}'", name)),
+            _ => Err(format!("Unknown OS operation 'os.{}'", name).into()),
         }
     }
 
@@ -2619,7 +2651,7 @@ impl Interpreter {
         name: &str,
         args: &[Value],
         _named_args: &HashMap<std::string::String, Value>,
-    ) -> Result<Value, String> {
+    ) -> Result<Value, crate::interpreter::InterpreterEvalError> {
         let get_arg = |idx: usize, arg_name: &str| -> Option<&Value> {
             args.get(idx).or_else(|| _named_args.get(arg_name))
         };
@@ -2694,18 +2726,22 @@ impl Interpreter {
                     Err("replace expects Strings".into())
                 }
             }
-            _ => Err(format!("Unknown String method '{}'", name)),
+            _ => Err(format!("Unknown String method '{}'", name).into()),
         }
     }
 
-    fn eval_regex_constructor(name: &str, args: &[Value]) -> Result<RegexValue, String> {
-        let require_regex = |v: &Value| -> Result<RegexValue, String> {
-            if let Value::Regex(re) = v {
-                Ok(re.clone())
-            } else {
-                Err("Expected Regex argument".into())
-            }
-        };
+    fn eval_regex_constructor(
+        name: &str,
+        args: &[Value],
+    ) -> Result<RegexValue, crate::interpreter::InterpreterEvalError> {
+        let require_regex =
+            |v: &Value| -> Result<RegexValue, crate::interpreter::InterpreterEvalError> {
+                if let Value::Regex(re) = v {
+                    Ok(re.clone())
+                } else {
+                    Err("Expected Regex argument".into())
+                }
+            };
 
         match name {
             "text" => match args {
@@ -2787,11 +2823,15 @@ impl Interpreter {
                     Err("'Regex.word' expects 0 arguments".into())
                 }
             }
-            _ => Err(format!("Unknown Regex constructor 'Regex.{}'", name)),
+            _ => Err(format!("Unknown Regex constructor 'Regex.{}'", name).into()),
         }
     }
 
-    fn eval_regex_method(re: &RegexValue, name: &str, args: &[Value]) -> Result<Value, String> {
+    fn eval_regex_method(
+        re: &RegexValue,
+        name: &str,
+        args: &[Value],
+    ) -> Result<Value, crate::interpreter::InterpreterEvalError> {
         match name {
             "is_match" => match args {
                 [Value::String(text)] => Ok(Value::Bool(re.is_match(text))),
@@ -2805,7 +2845,7 @@ impl Interpreter {
                 [_, _] => Err("'replace' expects (String, String)".into()),
                 _ => Err("'replace' expects exactly 2 arguments".into()),
             },
-            _ => Err(format!("Unknown Regex method '{}'", name)),
+            _ => Err(format!("Unknown Regex method '{}'", name).into()),
         }
     }
 
@@ -2839,7 +2879,7 @@ impl Interpreter {
         function: &HirFunction,
         positional_values: Vec<Value>,
         named_values: HashMap<String, Value>,
-    ) -> Result<ControlFlow, String> {
+    ) -> Result<ControlFlow, crate::interpreter::InterpreterEvalError> {
         let mut final_args = vec![None; function.parameters.len()];
         let num_positional_args = positional_values.len();
         let mut type_params_skipped = 0;
@@ -2865,7 +2905,7 @@ impl Interpreter {
                 final_args[param_idx] = Some(value);
                 param_idx += 1;
             } else {
-                return Err(format!("Too many arguments for {identity}"));
+                return Err(format!("Too many arguments for {identity}").into());
             }
         }
 
@@ -2876,13 +2916,13 @@ impl Interpreter {
                 .position(|parameter| parameter.name == name)
             {
                 if final_args[index].is_some() {
-                    return Err(format!("Duplicate argument for parameter {name}"));
+                    return Err(format!("Duplicate argument for parameter {name}").into());
                 }
                 final_args[index] = Some(value);
             } else {
-                return Err(format!(
-                    "Unknown named argument {name} for function {identity}"
-                ));
+                return Err(
+                    format!("Unknown named argument {name} for function {identity}").into(),
+                );
             }
         }
 
@@ -2898,7 +2938,9 @@ impl Interpreter {
                         });
 
                     if !satisfied_by_type_arg {
-                        return Err(format!("Missing argument for parameter {}", parameter.name));
+                        return Err(
+                            format!("Missing argument for parameter {}", parameter.name).into()
+                        );
                     }
                     // The concrete type value is installed by `call_function`.
                     args.push(Value::Unit);
@@ -2914,7 +2956,7 @@ impl Interpreter {
                 .collect()
         });
 
-        self.call_resolved_function(identity, function, type_args, args)
+        self.call_resolved_function_internal(identity, function, type_args, args)
     }
 
     /// Phase 7: Dispatch a read-only method call on a receiver value.
@@ -2925,7 +2967,7 @@ impl Interpreter {
         method_name: &str,
         args: Vec<Value>,
         _env: &mut RuntimeEnv,
-    ) -> Result<ControlFlow, String> {
+    ) -> Result<ControlFlow, crate::interpreter::InterpreterEvalError> {
         let type_name = match &receiver {
             Value::Struct(s) => s.name.clone(),
             Value::Enum(e) => e.enum_name.clone(),
@@ -2934,19 +2976,17 @@ impl Interpreter {
                     "type {} has no method '{}'",
                     receiver.type_name(),
                     method_name
-                ))
+                )
+                .into())
             }
         };
         let mangled = format!("{}.{}", type_name, method_name);
         if let Some((identity, function)) = self.resolve_user_function(&mangled) {
             let mut call_args = vec![receiver];
             call_args.extend(args);
-            self.call_resolved_function(&identity, &function, None, call_args)
+            self.call_resolved_function_internal(&identity, &function, None, call_args)
         } else {
-            Err(format!(
-                "no method '{}' found on type '{}'",
-                method_name, type_name
-            ))
+            Err(format!("no method '{}' found on type '{}'", method_name, type_name).into())
         }
     }
 
@@ -2959,7 +2999,7 @@ impl Interpreter {
         method_name: &str,
         args: Vec<Value>,
         env: &mut RuntimeEnv,
-    ) -> Result<ControlFlow, String> {
+    ) -> Result<ControlFlow, crate::interpreter::InterpreterEvalError> {
         let receiver = env
             .get(receiver_name)
             .ok_or_else(|| format!("Variable '{}' not found", receiver_name))?;
@@ -2971,25 +3011,23 @@ impl Interpreter {
                     "type {} has no method '{}'",
                     receiver.type_name(),
                     method_name
-                ))
+                )
+                .into())
             }
         };
         let mangled = format!("{}.{}", type_name, method_name);
         if let Some((identity, function)) = self.resolve_user_function(&mangled) {
             let mut call_args = vec![receiver];
             call_args.extend(args);
-            let (result, call_env) =
-                self.call_resolved_function_with_env(&identity, &function, None, call_args)?;
+            let (result, call_env) = self
+                .call_resolved_function_with_env_internal(&identity, &function, None, call_args)?;
             // Writeback: extract the mutated 'self' and update it in the caller's environment
             if let Some(mutated_self) = call_env.get("self") {
                 env.update(receiver_name, mutated_self);
             }
             Ok(result)
         } else {
-            Err(format!(
-                "no method '{}' found on type '{}'",
-                method_name, type_name
-            ))
+            Err(format!("no method '{}' found on type '{}'", method_name, type_name).into())
         }
     }
 

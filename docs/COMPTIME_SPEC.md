@@ -7,9 +7,10 @@ small, typed, deterministic and independent of the selected runtime backend.
 
 The K1 audit selected the existing HIR interpreter as Tempra's canonical
 comptime semantic kernel. K1.1 adds one documented evaluation facade: it owns
-entry into comptime mode, installs the shared one-million expression-step
+entry into comptime mode, installs the shared one-million evaluator-progress
 budget, normalizes the value/error/control-flow boundary, and restores the
-interpreter's previous mode and fuel after every ordinary return. The
+interpreter's previous mode, fuel, and call-depth state after every ordinary
+return. The
 typechecker remains responsible for converting accepted primitive values into
 HIR literals.
 
@@ -49,8 +50,36 @@ allowed, while executing that value is forbidden. `std.io.print/println` remain
 bodyless externs and are rejected by K1.4. The typechecker preflight validates
 runtime dependencies only and does not duplicate effect policy.
 
-K1 remains in progress. Deterministic fuel/recursion semantics and
-specialization correctness are separate later slices.
+K1.6 makes termination deterministic at the interpreter boundary. Comptime
+fuel is an evaluator-progress budget: each expression entry, statement entry,
+Tempra call frame and actually executed `for` body consumes one tick. A budget
+of `N` permits exactly `N` successful ticks; a tick at zero reports
+`FuelExhausted`. Call frames are bounded separately: the compiler-defined v0.1
+default is 128 active frames (frames 1–128 are allowed and frame 129 reports
+`CallDepthExceeded`). The limit is revisionable; there is no timeout or
+wall-clock, CPU, memory, or per-byte quota. Builtin, regex, string and
+collection helper invocations have constant semantic cost in this version.
+Nested `comptime`
+expressions share the active fuel and call-depth session without resetting it.
+Fuel exhaustion is checked before call depth and before the operation's own
+semantic error. `for` iteration ticks occur only after `next()` produces an
+item; the current HIR has no `while` surface. Blocks and branch selection are
+bounded by their enclosing expression/statement ticks.
+
+The v0.1 fuel accounting is intentionally explicit: expression and statement
+entries, Tempra call frames, and executed `for` bodies are deterministic ticks
+(A); block traversal and branch/match selection are bounded by those enclosing
+ticks (B); builtin, regex, string, and collection helpers have constant
+semantic cost per invocation (C); `while` is unsupported by the current HIR
+(D). There are no unresolved termination-accounting items for this slice (E =
+0). A tick measures evaluator progress, not proportional CPU, memory, or
+per-byte work.
+
+K1 implementation remains in progress. Specialization correctness and other
+termination-policy refinements are separate later work. The cache fingerprint
+`tempra-{CARGO_PKG_VERSION}-semantics-1` is unchanged by K1.6; stale-artifact
+reuse must be re-audited before K1 closes so cached bytecode cannot bypass the
+new comptime authority.
 
 ---
 
@@ -64,6 +93,7 @@ specialization correctness are separate later slices.
 - Rejection of filesystem, environment, OS, and process operations during `comptime` evaluation
 - `compile_error("message")` in `comptime` contexts
 - Evaluation fuel to prevent unbounded compile-time loops
+- Deterministic v0.1 fuel ticks and compiler-defined call-depth guard
 
 ### Syntax
 

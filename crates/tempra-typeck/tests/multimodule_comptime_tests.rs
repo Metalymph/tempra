@@ -88,3 +88,46 @@ fn arithmetic_failure_in_a_non_entry_module_does_not_corrupt_later_evaluation() 
     );
     assert_eq!(interpreter.fuel, None);
 }
+
+#[test]
+fn bodyless_extern_failure_keeps_qualified_identity_and_later_module_state() {
+    let extern_source = "pub extern fn missing() -> Unit";
+    let bad_source = "fn bad() { comptime dep.missing() }";
+    let good_source = "fn good() -> Int64 { return comptime 20 + 22 }";
+    let mut dependency = lower(extern_source);
+    let mut bad = lower(bad_source);
+    let mut good = lower(good_source);
+    let mut modules = [
+        ModuleToCheck {
+            name: "dependency".to_string(),
+            imports: HashMap::new(),
+            file: &mut dependency,
+        },
+        ModuleToCheck {
+            name: "bad".to_string(),
+            imports: HashMap::from([("dep".to_string(), "dependency".to_string())]),
+            file: &mut bad,
+        },
+        ModuleToCheck {
+            name: "good".to_string(),
+            imports: HashMap::new(),
+            file: &mut good,
+        },
+    ];
+
+    let context = check_modules_always_with_comptime(&mut modules, &HashMap::new(), false);
+    drop(modules);
+
+    assert!(context.errors.iter().any(|error| {
+        error
+            .message
+            .contains("function 'dependency.missing' has no executable HIR body")
+    }));
+    assert_eq!(returned_integer(&good, "good"), Some("42"));
+    let interpreter = context.interpreter.expect("canonical interpreter missing");
+    assert_eq!(
+        interpreter.mode,
+        tempra_interpreter::interpreter::EvalMode::Runtime
+    );
+    assert_eq!(interpreter.fuel, None);
+}

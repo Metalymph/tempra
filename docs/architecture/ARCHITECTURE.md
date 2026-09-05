@@ -74,10 +74,13 @@ HIR. Nested comptime syntax shares the active evaluation session.
 This establishes one entrypoint, not complete K1 semantics. K1.2 wires the same
 facade into ordinary multi-module and file-based typechecking through a
 module-aware lookup adapter while retaining separate HIR files. Analysis/LSP
-and REPL typechecking remain deferred, and the implementation intentionally
-preserves current arithmetic, extern, effect-policy, recursion and
-specialization behavior. TIR, VM, JIT, Wasm and future AOT remain
-consumers of already resolved semantics rather than comptime authorities.
+and REPL typechecking remain deferred. K1.3 makes supported shared-kernel integer
+arithmetic panic-free. K1.4 rejects functions without executable HIR bodies,
+including extern declarations reached during comptime, instead of synthesizing
+`Unit`; it does not route comptime through the VM native resolver. Effect policy,
+recursion and specialization behavior remain later hardening. TIR, VM, JIT,
+Wasm and future AOT remain consumers of already resolved semantics rather than
+comptime authorities.
 
 ## Capability analysis insertion point
 
@@ -185,10 +188,10 @@ ARC optimization is a separate later concern. Escape analysis, stack promotion, 
 E1–E6 complete the currently meaningful capability-contract and tooling core
 while retaining known coverage gaps. E6 projects existing facts through
 `tempra effects` and immutable driver types; it does not add analysis. K1's
-audit/spec, K1.1 facade and K1.2 multi-module authority are complete; remaining
-integration and semantic hardening remain in progress before evaluator parity,
-determinism and responsiveness
-measurements. Compile latency is monitored during development; deep
+audit/spec, K1.1 facade, K1.2 multi-module authority, K1.3 arithmetic hardening
+and K1.4 explicit bodyless rejection are complete; remaining integration and
+semantic hardening remain in progress before evaluator parity, determinism and
+responsiveness measurements. Compile latency is monitored during development; deep
 latency and incremental-build optimization belongs to P. The richer future TIR Graph still
 requires later ownership and actor facts.
 
@@ -197,7 +200,8 @@ The trigger is the first real source operation requiring authorization to preser
 memory/type invariants; none is intentionally exposed today. Future local audited
 islands must not automatically contaminate callers or waive deny/pure contracts.
 The [historical E5 audit](../E1_CAPABILITY_ANALYSIS.md) records native signature,
-comptime extern and internal JIT API debts separately from unsafe authorization.
+the now-resolved comptime bodyless-dispatch gap, and internal JIT API debts
+separately from unsafe authorization.
 
 ## Major crate responsibilities
 

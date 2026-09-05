@@ -32,8 +32,16 @@ division by zero, is unchanged.
 
 Remainder/modulo is not current source syntax. Right shift is parsed but rejected
 by the typechecker, so neither is part of the supported K1.3 arithmetic boundary.
-K1 remains in progress. Complete effect restrictions, extern rejection,
-recursion limits and specialization correctness are separate later slices.
+
+K1.4 rejects calls to functions without executable HIR bodies in the shared
+interpreter dispatch. This includes source `extern` declarations during
+comptime: the evaluator reports a controlled error instead of synthesizing
+`Unit`. Normal empty function bodies still evaluate to `Unit`, and VM-native
+extern dispatch remains a separate runtime path. K1.4 does not add native
+execution to comptime or validate native signatures.
+
+K1 remains in progress. Complete effect restrictions, recursion limits and
+specialization correctness are separate later slices.
 
 ---
 
@@ -268,10 +276,10 @@ All currently supported single-source and ordinary multi-module/file-check
 evaluation entrypoints now enter the HIR kernel through the K1.1 facade; K1.2
 supplies module-aware lookup without flattening HIR. This centralizes execution
 setup but does not yet harden the policy itself.
-The evaluator has no dispatch to the VM native registry. The historical E5 audit
-found that unsupported/bodyless extern calls can instead yield Unit and be
-incorrectly materialized. Explicit rejection is separate correctness debt, not
-support for comptime native execution; see the
+The evaluator has no dispatch to the VM native registry. K1.4 explicitly rejects
+unsupported/bodyless calls rather than yielding and materializing synthetic
+`Unit`. This rejection is not support for comptime native execution; native
+signature integrity remains a separate debt in the
 [audit record](E1_CAPABILITY_ANALYSIS.md). No `@unsafe` interaction is implemented.
 
 ---

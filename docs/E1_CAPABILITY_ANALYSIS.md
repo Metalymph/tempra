@@ -446,6 +446,9 @@ to authorize through `@unsafe`:
   execution needs explicit rejection, not unsafe authorization. See
   [HIR function evaluation](../crates/tempra-interpreter/src/interpreter.rs) and
   [comptime evaluation](../crates/tempra-typeck/src/check_expr.rs).
+  **Subsequent status:** K1.4 resolves this dispatch gap by rejecting functions
+  without executable HIR bodies. It does not add native execution to comptime;
+  native/extern signature integrity remains the separate debt above.
 - **Internal JIT API audit.** Raw code/context pointers, ABI conversions and
   lifetime/aliasing assumptions in public Rust wrappers require runtime/embedding
   review. A null check is not a proof of pointer validity. These are not source

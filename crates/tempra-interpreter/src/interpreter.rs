@@ -2,6 +2,7 @@ use crate::control_flow::ControlFlow;
 use crate::env::RuntimeEnv;
 use crate::value::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fmt;
 use tempra_hir::*;
 
 #[derive(Debug)]
@@ -13,6 +14,24 @@ pub enum RuntimeSignal {
 pub enum EvalMode {
     Runtime,
     Comptime,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CallDispatchError {
+    MissingExecutableBody { function: String },
+}
+
+impl fmt::Display for CallDispatchError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingExecutableBody { function } => {
+                write!(
+                    formatter,
+                    "function '{function}' has no executable HIR body"
+                )
+            }
+        }
+    }
 }
 
 /// One module-owned HIR input for the interpreter's module-aware lookup adapter.
@@ -212,7 +231,7 @@ impl Interpreter {
                 context.current_module = Some(owner.clone());
             }
         }
-        let result = self.call_function(function, type_args, args);
+        let result = self.call_function_with_identity(identity, function, type_args, args);
         if let Some(context) = &mut self.module_lookup {
             context.current_module = previous_module;
         }
@@ -235,7 +254,7 @@ impl Interpreter {
                 context.current_module = Some(owner.clone());
             }
         }
-        let result = self.call_function_with_env(function, type_args, args);
+        let result = self.call_function_with_env_identity(identity, function, type_args, args);
         if let Some(context) = &mut self.module_lookup {
             context.current_module = previous_module;
         }
@@ -308,7 +327,17 @@ impl Interpreter {
         type_args: Option<Vec<Value>>,
         args: Vec<Value>,
     ) -> Result<ControlFlow, String> {
-        self.call_function_with_env(func, type_args, args)
+        self.call_function_with_identity(&func.name, func, type_args, args)
+    }
+
+    fn call_function_with_identity(
+        &mut self,
+        identity: &str,
+        func: &HirFunction,
+        type_args: Option<Vec<Value>>,
+        args: Vec<Value>,
+    ) -> Result<ControlFlow, String> {
+        self.call_function_with_env_identity(identity, func, type_args, args)
             .map(|(cf, _)| cf)
     }
 
@@ -318,6 +347,22 @@ impl Interpreter {
         type_args: Option<Vec<Value>>,
         args: Vec<Value>,
     ) -> Result<(ControlFlow, RuntimeEnv), String> {
+        self.call_function_with_env_identity(&func.name, func, type_args, args)
+    }
+
+    fn call_function_with_env_identity(
+        &mut self,
+        identity: &str,
+        func: &HirFunction,
+        type_args: Option<Vec<Value>>,
+        args: Vec<Value>,
+    ) -> Result<(ControlFlow, RuntimeEnv), String> {
+        let body = func.body.as_ref().ok_or_else(|| {
+            CallDispatchError::MissingExecutableBody {
+                function: identity.to_string(),
+            }
+            .to_string()
+        })?;
         let mut env = RuntimeEnv::new();
 
         // Bind parameters
@@ -336,10 +381,6 @@ impl Interpreter {
         }
 
         let mut result_val = Value::Unit;
-        let body = match &func.body {
-            Some(b) => b,
-            None => return Ok((ControlFlow::Value(Value::Unit), env)),
-        };
         for stmt in &body.statements {
             let flow = self.eval_statement(stmt, &mut env)?;
             match flow {

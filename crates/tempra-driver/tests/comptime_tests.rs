@@ -49,6 +49,32 @@ fn comptime_arithmetic_failure_is_controlled_and_does_not_poison_later_compilati
 }
 
 #[test]
+fn comptime_bodyless_extern_fails_before_tir_and_does_not_poison_later_compilation() {
+    let invalid = r#"
+    pub extern fn missing() -> Unit
+    fn main() {
+        comptime missing()
+    }
+    "#;
+    let error = emit_tir_source(invalid).expect_err("bodyless comptime call must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("function 'missing' has no executable HIR body"),
+        "unexpected error: {error}"
+    );
+
+    let valid = r#"
+    fn main() -> Int64 {
+        return comptime 1 + 2
+    }
+    "#;
+    let tir = emit_tir_source(valid).expect("later compilation must remain usable");
+    assert!(tir.contains("const 3i64"), "unexpected TIR:\n{tir}");
+    assert!(!tir.contains("comptime"), "unexpected TIR:\n{tir}");
+}
+
+#[test]
 fn file_check_uses_canonical_comptime_authority() {
     let directory = tempfile::tempdir().unwrap();
     let helper = directory.path().join("helper.tmpr");

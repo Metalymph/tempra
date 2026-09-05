@@ -139,7 +139,10 @@ K1.2 now uses the same canonical facade for ordinary multi-module and file-based
 typechecking. The interpreter receives separate module-owned HIR files and a
 qualified lookup context; no synthetic aggregate HIR file is created.
 `tempra-analysis`, LSP and REPL typechecking remain on their existing
-non-comptime-aware paths. Arithmetic, extern/effect policy, recursion and
+non-comptime-aware paths. K1.3 routes supported integer arithmetic through a
+panic-free shared kernel. K1.4 makes shared HIR call dispatch reject missing
+executable bodies, including comptime calls to extern declarations, without
+adding VM-native dispatch to the HIR evaluator. Effect policy, recursion and
 specialization hardening remain later K1/K2 work.
 
 ## Planned backends

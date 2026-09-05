@@ -69,7 +69,7 @@ Phase E is subdivided as follows:
 
 E1 is TIR-only. HIR-only operations are coverage gaps for later integration, not justification for a second analyzer.
 
-The implemented E1–E6 design and boundaries are recorded in [E1 Capability Analysis](E1_CAPABILITY_ANALYSIS.md). The historical E5 audit found no intentional source-level primitive requiring unsafe authorization. It recorded narrow correctness debts in native signature integrity, comptime extern handling, and internal JIT pointer/ABI/lifetime assumptions, not new semantic phases or demonstrated exploits. `check` remains frontend/typechecking-only, not capability certification.
+The implemented E1–E6 design and boundaries are recorded in [E1 Capability Analysis](E1_CAPABILITY_ANALYSIS.md). The historical E5 audit found no intentional source-level primitive requiring unsafe authorization. It recorded narrow correctness debts in native signature integrity, comptime extern handling, and internal JIT pointer/ABI/lifetime assumptions, not new semantic phases or demonstrated exploits; K1.4 has since resolved the bodyless-dispatch portion of the comptime debt. `check` remains frontend/typechecking-only, not capability certification.
 
 ### K — Comptime Consistency & Compiler Responsiveness
 
@@ -82,8 +82,10 @@ restoration. K1.2 extends the same authority to ordinary multi-module and
 file-based typechecking through a module-aware lookup adapter over separate HIR
 files. K1.3 makes supported integer arithmetic in the shared HIR kernel
 panic-free and profile-independent without changing float semantics. The
-typechecker remains the owner of primitive HIR materialization, and TIR/backends
-consume resolved code.
+K1.4 shared call dispatch rejects functions without executable HIR bodies rather
+than producing synthetic `Unit`; comptime still does not execute VM-native
+externs. The typechecker remains the owner of primitive HIR materialization, and
+TIR/backends consume resolved code.
 
 Current status:
 
@@ -92,11 +94,13 @@ K1 audit/spec       DONE
 K1.1 facade         DONE
 K1.2 multi-module   DONE
 K1.3 arithmetic     DONE
+K1.4 extern/bodyless DONE
 K1 implementation   IN PROGRESS
 ```
 
-REPL/analysis integration and effect, extern, termination and specialization
-hardening remain later K1/K2 work. K then records
+REPL/analysis integration and effect, termination and specialization hardening
+remain later K1/K2 work. Native signature integrity remains separate from the
+now-explicit HIR bodyless rejection. K then records
 determinism, reproducibility, parity tests, phase timings and initial
 compiler-latency benchmarks. Compile latency is already monitored during
 development; K makes that monitoring reproducible and actionable. No deep

@@ -20,6 +20,28 @@ pub struct ModuleGraph {
     pub order: Vec<String>, // Topological order (dependencies first)
 }
 
+/// A module import could not be mapped to a source path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ImportResolutionError {
+    /// A standard-library import was requested without a resolved stdlib root.
+    StandardLibraryUnavailable { import: String },
+}
+
+impl std::fmt::Display for ImportResolutionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::StandardLibraryUnavailable { import } => {
+                write!(
+                    f,
+                    "standard library could not be located for import '{import}'"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for ImportResolutionError {}
+
 impl Default for ModuleGraph {
     fn default() -> Self {
         Self {
@@ -35,7 +57,8 @@ pub fn resolve_import_path(
     importer_path: &Path,
     segments: &[String],
     kind: ImportPathKind,
-) -> PathBuf {
+    stdlib_root: Option<&Path>,
+) -> Result<PathBuf, ImportResolutionError> {
     match kind {
         ImportPathKind::Relative => {
             let parent = importer_path.parent().unwrap_or(root_dir);
@@ -47,7 +70,7 @@ pub fn resolve_import_path(
                     resolved.push(seg);
                 }
             }
-            resolved
+            Ok(resolved)
         }
         ImportPathKind::Package => {
             let mut resolved = root_dir.to_path_buf();
@@ -58,49 +81,22 @@ pub fn resolve_import_path(
                     resolved.push(seg);
                 }
             }
-            resolved
+            Ok(resolved)
         }
         ImportPathKind::StandardLibrary => {
-            let mut base_dir = root_dir.to_path_buf();
-            let mut found_std = false;
-            let mut current = root_dir.to_path_buf();
-            loop {
-                if current.join("std").is_dir() {
-                    base_dir = current;
-                    found_std = true;
-                    break;
-                }
-                if !current.pop() {
-                    break;
-                }
-            }
-            if !found_std {
-                if let Ok(cwd) = std::env::current_dir() {
-                    let mut current = cwd.clone();
-                    loop {
-                        if current.join("std").is_dir() {
-                            base_dir = current;
-                            break;
-                        }
-                        if !current.pop() {
-                            base_dir = cwd;
-                            break;
-                        }
-                    }
-                } else {
-                    base_dir = root_dir.to_path_buf();
-                }
-            }
-
-            let mut resolved = base_dir;
-            for (i, seg) in segments.iter().enumerate() {
+            let mut resolved = stdlib_root
+                .ok_or_else(|| ImportResolutionError::StandardLibraryUnavailable {
+                    import: segments.join("."),
+                })?
+                .to_path_buf();
+            for (i, seg) in segments.iter().enumerate().skip(1) {
                 if i == segments.len() - 1 {
                     resolved.push(format!("{}.tmpr", seg));
                 } else {
                     resolved.push(seg);
                 }
             }
-            resolved
+            Ok(resolved)
         }
     }
 }
@@ -141,6 +137,7 @@ impl DocumentLoader for DiskDocumentLoader {
 pub fn load_module_graph(
     entry_path: &Path,
     loader: &dyn DocumentLoader,
+    stdlib_root: Option<&Path>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<ModuleGraph, ()> {
     let canonical_entry = entry_path
@@ -166,6 +163,7 @@ pub fn load_module_graph(
         entry_name,
         canonical_entry,
         &root_dir,
+        stdlib_root,
         loader,
         &mut visiting,
         &mut visiting_set,
@@ -180,6 +178,7 @@ fn load_module_recursive(
     name: String,
     path: PathBuf,
     root_dir: &Path,
+    stdlib_root: Option<&Path>,
     loader: &dyn DocumentLoader,
     visiting: &mut Vec<(String, Span)>,
     visiting_set: &mut HashSet<String>,
@@ -247,7 +246,18 @@ fn load_module_recursive(
                 imp.path.join(".")
             };
 
-            let resolved_path = resolve_import_path(root_dir, &path, &imp.path, imp.kind);
+            let resolved_path =
+                match resolve_import_path(root_dir, &path, &imp.path, imp.kind, stdlib_root) {
+                    Ok(path) => path,
+                    Err(error) => {
+                        diagnostics.push(
+                            Diagnostic::error(imp.span, error.to_string())
+                                .with_file_path(path.to_string_lossy().to_string()),
+                        );
+                        load_errors = true;
+                        continue;
+                    }
+                };
             let dep_name = match imp.kind {
                 ImportPathKind::Relative => get_module_name(root_dir, &resolved_path),
                 _ => imp.path.join("."),
@@ -277,6 +287,7 @@ fn load_module_recursive(
                 dep_name.clone(),
                 resolved_path,
                 root_dir,
+                stdlib_root,
                 loader,
                 visiting,
                 visiting_set,
@@ -310,4 +321,65 @@ fn load_module_recursive(
     graph.order.push(name);
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn segments(parts: &[&str]) -> Vec<String> {
+        parts.iter().map(|part| (*part).to_string()).collect()
+    }
+
+    #[test]
+    fn standard_library_import_uses_only_the_supplied_root() {
+        let root = Path::new("/toolchain/std");
+        let resolved = resolve_import_path(
+            Path::new("/project"),
+            Path::new("/project/main.tmpr"),
+            &segments(&["std", "path"]),
+            ImportPathKind::StandardLibrary,
+            Some(root),
+        )
+        .unwrap();
+
+        assert_eq!(resolved, Path::new("/toolchain/std/path.tmpr"));
+    }
+
+    #[test]
+    fn missing_standard_library_root_is_a_typed_error() {
+        let error = resolve_import_path(
+            Path::new("/project"),
+            Path::new("/project/main.tmpr"),
+            &segments(&["std", "path"]),
+            ImportPathKind::StandardLibrary,
+            None,
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error,
+            ImportResolutionError::StandardLibraryUnavailable {
+                import: "std.path".to_string(),
+            }
+        );
+        assert_eq!(
+            error.to_string(),
+            "standard library could not be located for import 'std.path'"
+        );
+    }
+
+    #[test]
+    fn local_import_resolution_is_unchanged() {
+        let resolved = resolve_import_path(
+            Path::new("/project"),
+            Path::new("/project/app/main.tmpr"),
+            &segments(&["helper"]),
+            ImportPathKind::Relative,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(resolved, Path::new("/project/app/helper.tmpr"));
+    }
 }

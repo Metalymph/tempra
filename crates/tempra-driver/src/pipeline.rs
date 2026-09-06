@@ -4,6 +4,7 @@ use crate::compilation::{
 };
 use crate::contracts::{ContractBindings, ContractSource};
 use crate::error::DriverError;
+use crate::CompilationConfig;
 use std::fs;
 use std::path::Path;
 use tempra_hir::lower_file;
@@ -366,18 +367,36 @@ pub fn run_file_with_experimental_vm_jit(
 /// Compiles a file and its module graph fresh, retaining TIR and capability facts.
 /// This path does not read or write a bytecode cache.
 pub fn compile_file_to_bytecode_with_analysis(path: &Path) -> Result<VmCompilation, DriverError> {
-    let analyzed = analyze_file_to_tir(path)?;
+    compile_file_to_bytecode_with_analysis_with_config(path, &CompilationConfig::default())
+}
+
+/// Compiles a file and its module graph fresh using explicit compilation inputs.
+///
+/// This path retains TIR and capability facts and does not use the bytecode cache.
+pub fn compile_file_to_bytecode_with_analysis_with_config(
+    path: &Path,
+    config: &CompilationConfig,
+) -> Result<VmCompilation, DriverError> {
+    let analyzed = analyze_file_to_tir(path, config)?;
     enforce_analyzed_tir(&analyzed)?;
     lower_analyzed_tir(analyzed)
 }
 
-fn analyze_file_to_tir(path: &Path) -> Result<AnalyzedTir, DriverError> {
+fn analyze_file_to_tir(
+    path: &Path,
+    config: &CompilationConfig,
+) -> Result<AnalyzedTir, DriverError> {
     use crate::module_graph::{load_module_graph, DiskDocumentLoader};
     use std::collections::HashMap;
     use tempra_typeck::{check_modules_always_with_comptime, ModuleToCheck};
 
     let mut diagnostics = Vec::new();
-    let mut graph = match load_module_graph(path, &DiskDocumentLoader, &mut diagnostics) {
+    let mut graph = match load_module_graph(
+        path,
+        &DiskDocumentLoader,
+        config.stdlib_root(),
+        &mut diagnostics,
+    ) {
         Ok(g) => g,
         Err(_) => {
             let err_msgs: Vec<String> = diagnostics.iter().map(|d| format!("{:?}", d)).collect();
@@ -481,7 +500,15 @@ fn analyze_file_to_tir(path: &Path) -> Result<AnalyzedTir, DriverError> {
 pub fn inspect_effects_file(
     path: &Path,
 ) -> Result<crate::EffectInspection, crate::EffectQueryError> {
-    let analyzed = analyze_file_to_tir(path).map_err(crate::EffectQueryError::Compiler)?;
+    inspect_effects_file_with_config(path, &CompilationConfig::default())
+}
+
+/// Inspects capability facts using explicit file/module compilation inputs.
+pub fn inspect_effects_file_with_config(
+    path: &Path,
+    config: &CompilationConfig,
+) -> Result<crate::EffectInspection, crate::EffectQueryError> {
+    let analyzed = analyze_file_to_tir(path, config).map_err(crate::EffectQueryError::Compiler)?;
     if let Err(error) = enforce_analyzed_tir(&analyzed) {
         return match error {
             DriverError::CapabilityContractViolations(violations) => {
@@ -527,11 +554,21 @@ pub fn check_source(source: &str) -> Result<(), DriverError> {
 }
 
 pub fn check_file(path: &Path) -> Result<(), DriverError> {
+    check_file_with_config(path, &CompilationConfig::default())
+}
+
+/// Type-checks a file and its module graph using explicit compilation inputs.
+pub fn check_file_with_config(path: &Path, config: &CompilationConfig) -> Result<(), DriverError> {
     use crate::module_graph::{load_module_graph, DiskDocumentLoader};
     use tempra_typeck::{check_modules, ModuleToCheck};
 
     let mut diagnostics = Vec::new();
-    let mut graph = match load_module_graph(path, &DiskDocumentLoader, &mut diagnostics) {
+    let mut graph = match load_module_graph(
+        path,
+        &DiskDocumentLoader,
+        config.stdlib_root(),
+        &mut diagnostics,
+    ) {
         Ok(g) => g,
         Err(_) => {
             let err_msgs: Vec<String> = diagnostics.iter().map(|d| format!("{:?}", d)).collect();
@@ -809,12 +846,25 @@ pub fn diagnose_source_with_facts(source: &str) -> AnalysisFactsResult {
 }
 
 pub fn diagnose_file(path: &Path) -> Vec<tempra_diagnostics::Diagnostic> {
+    diagnose_file_with_config(path, &CompilationConfig::default())
+}
+
+/// Diagnoses a file and its module graph using explicit compilation inputs.
+pub fn diagnose_file_with_config(
+    path: &Path,
+    config: &CompilationConfig,
+) -> Vec<tempra_diagnostics::Diagnostic> {
     use crate::module_graph::{load_module_graph, DiskDocumentLoader};
     use std::collections::HashMap;
     use tempra_typeck::{check_modules_always_with_comptime, ModuleToCheck};
 
     let mut diagnostics = Vec::new();
-    let mut graph = match load_module_graph(path, &DiskDocumentLoader, &mut diagnostics) {
+    let mut graph = match load_module_graph(
+        path,
+        &DiskDocumentLoader,
+        config.stdlib_root(),
+        &mut diagnostics,
+    ) {
         Ok(g) => g,
         Err(_) => return diagnostics, // load_module_graph already populated diagnostics
     };

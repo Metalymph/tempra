@@ -5,6 +5,13 @@ The Tempra standard library (`std`) provides a foundational set of cross-platfor
 > [!NOTE]
 > **Status:** MVP / Stable-enough. The current API surface is minimal to stabilize the module graph and native execution boundaries. It is not complete and will be expanded in future phases.
 
+The compiler treats the repository/toolchain `std/` directory as the standard
+library root. File/module compilation receives this root explicitly; its default
+configuration discovers it from the current compiler executable's ancestor
+layout, not from the process working directory. Embedders may supply another root
+through the Rust driver API. No installed-system layout or user-facing CLI flag is
+specified yet.
+
 ## Core Modules
 
 ### `std.fs`

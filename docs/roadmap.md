@@ -107,6 +107,10 @@ K1.5 effect policy   DONE
 K1.6 termination     DONE
 K1.7 cache revision  DONE
 K1 implementation   DONE
+K2.1 determinism audit DONE
+K2.2 specialization ordering DONE
+K2.3 stdlib discovery input DONE
+K2 implementation   IN PROGRESS
 ```
 
 K1.7 raises the cache trust fingerprint from `semantics-1` to `semantics-2`, so
@@ -118,9 +122,14 @@ vector position. It raises current cache trust to `semantics-3` because revision
 artifacts may contain the former specialization miscompilation. Bytecode format
 and semantic revision remain independent.
 Native signature integrity remains separate from the now-explicit HIR bodyless
-rejection. K2 remains in progress: explicit stdlib discovery, diagnostic ordering
-and the global cross-process reproducibility gate follow K2.2. VM/JIT/Wasm runtime
-parity continues in K3; phase timings, latency baseline
+rejection. K2.3 removes cwd from implicit standard-library discovery in the
+compiler-authoritative file/module paths: an explicit resolved `std/` root wins,
+otherwise the default is discovered only from the compiler executable's ancestor
+layout. A relative root supplied explicitly is resolved once at the API boundary;
+cwd never selects std implicitly. Together with K2.2 this establishes Level 1
+(deterministic semantic result/errors) for the audited compiler paths. K2 remains
+in progress: diagnostic ordering and the global cross-process reproducibility gate
+follow K2.3. VM/JIT/Wasm runtime parity continues in K3; phase timings, latency baseline
 and regression budgets continue in K4–K6. Analysis/LSP/REPL comptime integration
 remains tooling work, while full comptime specialization is separate compiler
 feature/debt. Compile latency remains monitored throughout development; no deep

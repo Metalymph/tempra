@@ -34,11 +34,12 @@ This index points to current source-of-truth files. A crate's presence in the wo
 - `crates/tempra-cli/src/app.rs`: CLI definitions and command dispatch.
 - `crates/tempra-cli/src/commands/`: implemented runtime, frontend tooling, TIR emission and fresh effect-inspection commands.
 - `crates/tempra-driver/src/pipeline.rs`: default HIR interpreter and experimental VM orchestration.
+- `crates/tempra-driver/src/config.rs`: explicit file/module compilation inputs and executable-relative standard-library discovery.
 - `crates/tempra-driver/src/compilation.rs`: private verify/analyze/enforce/bytecode boundary and public immutable `VmCompilation` product for fresh compilation.
 - `crates/tempra-driver/src/contracts.rs`: canonical conversion (including the sole pure expansion), distinct deny/pure provenance and compilation-local contract binding.
 - `crates/tempra-driver/src/enforcement.rs`: contract/summary intersection, structured violations with E1 witnesses, and typed invariant failures.
 - `crates/tempra-driver/src/effect_tooling.rs`: immutable E6 diagnostic/inspection projection keyed by TIR IDs.
-- `crates/tempra-driver/src/module_graph.rs`: filesystem module loading, ordering, and cycle detection.
+- `crates/tempra-driver/src/module_graph.rs`: filesystem module loading, import resolution from supplied roots, ordering, and cycle detection.
 - `crates/tempra-driver/src/build.rs`, `install.rs`: incomplete build and install scaffolds.
 - `crates/tempra-interpreter/src/comptime.rs`: canonical K1.1 comptime session facade, configuration and typed boundary errors.
 - `crates/tempra-interpreter/src/arithmetic.rs`: panic-free checked `Int64` operations and controlled integer-division failures shared by runtime and comptime evaluation.

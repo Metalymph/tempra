@@ -62,6 +62,15 @@ raw TIR interpretation verifies then interprets. Neither needs analyzer coverage
 HIR execution, REPL and test execution reject annotated input through one shared
 HIR presence scan before execution/state commit. See [pipeline boundaries](PIPELINE.md).
 
+File/module compilation receives a resolved standard-library root through
+`CompilationConfig`. The root denotes the `std/` directory itself; the module
+resolver only maps `import std.path` to `<root>/path.tmpr` and does not perform
+environment discovery. The default configuration discovers the nearest `std/`
+ancestor of the current compiler executable, never the process cwd. Embedders and
+tests may provide an explicit root; a relative explicit path is made absolute once
+at that API boundary. Analysis/LSP retain their existing adapter boundary and do
+not make `CompilationConfig` a new frontend authority.
+
 ### Incomplete planned paths
 
 The `tempra-mir`, `tempra-ir`, `tempra-opt`, native AOT, Wasm backend, linker, and build crates contain varying levels of scaffold or prototype code. They are not a single production pipeline today. Historical design documents that describe them as complete do not override this status.
@@ -208,9 +217,10 @@ while retaining known coverage gaps. E6 projects existing facts through
 `tempra effects` and immutable driver types; it does not add analysis. K1's
 audit/spec and K1.1–K1.7 implementation are complete, including the semantic
 cache revision that prevents older artifacts from bypassing current comptime
-guarantees. K2.1's audit and K2.2's specialization ordering/function-ID integrity
-are complete; determinism continues with stdlib discovery, diagnostic ordering
-and a global reproducibility gate. Runtime parity follows in K3, and responsiveness
+guarantees. K2.1's audit, K2.2's specialization ordering/function-ID integrity and
+K2.3's explicit standard-library discovery input are complete; determinism
+continues with diagnostic ordering and a global reproducibility gate. Runtime
+parity follows in K3, and responsiveness
 measurements in K4–K6. Compile latency is monitored during development; deep
 latency and incremental-build optimization belongs to P. The richer future TIR Graph still
 requires later ownership and actor facts.

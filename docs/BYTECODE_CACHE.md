@@ -76,6 +76,11 @@ if fresh enforcement fails it remains an incompatible miss, never a usable new e
 This policy assumes a local compiler-owned cache; headers are not authenticated
 against deliberate modification and the existing source hash is non-cryptographic.
 
+K2.3 changes standard-library discovery only for file/module compilation, which
+continues to compile fresh and has no cache artifact. The cached source API does
+not build a module graph or support a valid standard-library import path, so this
+change does not alter trusted cached semantics and does not increment revision `3`.
+
 Historically, E4 (`@pure`) did not increment revision `1`: it used the same E3
 contract enforcement, and pre-E4 compilers rejected that attribute syntax.
 Adding, removing or changing pure changes source bytes and cache identity.

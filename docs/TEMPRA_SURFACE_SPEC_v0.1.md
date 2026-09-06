@@ -885,6 +885,13 @@ Rules:
 - `std...` for standard library modules
 - a leading `.` for relative imports
 - dot-separated package module paths
+
+The compiler resolves `std...` from a standard-library root selected at the
+toolchain/API boundary. Compiler-authoritative file/module paths never search the
+current working directory implicitly. The default root is discovered relative to
+the compiler executable; embedding APIs may supply the `std/` directory directly.
+An explicitly relative supplied path is interpreted relative to the caller's cwd
+once, which is explicit path interpretation rather than hidden discovery.
 ---
 
 ## 24. Subscript Hooks

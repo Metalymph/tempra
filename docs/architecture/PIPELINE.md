@@ -170,6 +170,16 @@ and emits functions in ascending identity order. Filtering specialization
 requests by owning module preserves the registry's deterministic order; no
 unordered regrouping participates in emission.
 
+The file/module entrypoints resolve standard-library location before module graph
+construction. `CompilationConfig` carries either an explicit absolute `std/` root
+or the default found relative to the current executable. The module resolver has
+no cwd fallback: it consumes that root unchanged, and a standard-library import
+without one produces a controlled diagnostic. Explicit relative roots are resolved
+once by the configuration API, so cwd may interpret a user-supplied relative path
+but never discovers std implicitly. This input does not participate in the
+single-source bytecode cache because that cache path does not construct a module
+graph; semantic revision remains `3`.
+
 ## Planned backends
 
 MIR, general Tempra IR, native AOT, and dedicated Wasm output remain incomplete. The intended long-term direction is that verified TIR and stable per-function semantic facts feed backend-independent later analyses before target-specific lowering.

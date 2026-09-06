@@ -103,8 +103,9 @@ immutably, including declaration/attribute spans and source/module identity.
 Templates only acquire concrete bindings when their specializations are emitted.
 E3.2 compares denied sets with transitive requirements and retains the unchanged
 E1 witness per violation. Errors are ordered by function ID then capability.
-Cache hits remain analysis/contract-free but require the shared
-`tempra-{CARGO_PKG_VERSION}-semantics-1` fingerprint. Older artifacts miss;
+Cache hits remain analysis/contract-free. E3.2 originally introduced the
+`tempra-{CARGO_PKG_VERSION}-semantics-1` fingerprint; K1.7 raised it to revision
+2 and K2.2 raises current trust to revision 3. Older artifacts miss;
 fresh failures never populate or replace cache entries. The semantic revision
 versions reuse guarantees, not bytecode format. See [cache policy](../BYTECODE_CACHE.md).
 
@@ -155,10 +156,19 @@ default safety limit is 8 active frames, nested comptime shares the active
 session, and builtins have constant semantic cost in v0.1. The compiler-defined
 call-depth limit is revisionable as the evaluator evolves. These limits bound
 evaluator progress only: there is no wall-clock, per-byte, CPU or memory quota.
-The current HIR has no `while` surface. K1.7 requires the `semantics-2` cache
-fingerprint so revision-1 artifacts cannot bypass fresh K1 evaluation. Bytecode
-format version and semantic revision remain independent; compatible hits still
+The current HIR has no `while` surface. K1.7 introduced `semantics-2` so
+revision-1 artifacts cannot bypass fresh K1 evaluation. K2.2 processes
+specializations in deterministic first-request order and requires `semantics-3`
+so revision-2 artifacts cannot preserve the former TIR-ID/bytecode-position
+miscompilation. Bytecode format version and semantic revision remain independent;
+compatible hits still
 produce verified bytecode only, without reconstructing TIR or compiler facts.
+
+`TirFunctionId` is a compilation-local identity rather than an index into the
+physical function vector. Bytecode lowering uses an explicit mapping for calls
+and emits functions in ascending identity order. Filtering specialization
+requests by owning module preserves the registry's deterministic order; no
+unordered regrouping participates in emission.
 
 ## Planned backends
 

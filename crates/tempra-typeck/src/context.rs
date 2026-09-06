@@ -27,6 +27,53 @@ pub struct SpecializationKey {
     pub comptime_args: Vec<ComptimeValue>,
 }
 
+/// Deduplicated specialization requests in deterministic first-request order.
+///
+/// The hash set is used only for membership. Iteration always follows the
+/// order in which unique requests were first observed during semantic
+/// traversal.
+#[derive(Debug, Clone, Default)]
+pub struct SpecializationRegistry {
+    ordered: Vec<SpecializationKey>,
+    seen: HashSet<SpecializationKey>,
+}
+
+impl SpecializationRegistry {
+    /// Records a specialization request without changing the order of an
+    /// existing request.
+    pub fn insert(&mut self, key: SpecializationKey) -> bool {
+        if !self.seen.insert(key.clone()) {
+            return false;
+        }
+        self.ordered.push(key);
+        true
+    }
+
+    /// Iterates over unique requests in deterministic first-request order.
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = &SpecializationKey> {
+        self.ordered.iter()
+    }
+
+    /// Returns the number of unique specialization requests.
+    pub fn len(&self) -> usize {
+        self.ordered.len()
+    }
+
+    /// Returns whether no specialization has been requested.
+    pub fn is_empty(&self) -> bool {
+        self.ordered.is_empty()
+    }
+}
+
+impl<'a> IntoIterator for &'a SpecializationRegistry {
+    type Item = &'a SpecializationKey;
+    type IntoIter = std::slice::Iter<'a, SpecializationKey>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.ordered.iter()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct FunctionParam {
     pub name: String,
@@ -109,7 +156,7 @@ pub struct TypeContext {
     pub is_comptime: bool,
     pub interpreter: Option<tempra_interpreter::interpreter::Interpreter>,
     /// Bookkeeping for specializations requested during typechecking.
-    pub specialization_log: HashSet<SpecializationKey>,
+    pub specialization_log: SpecializationRegistry,
     /// Collected typecheck facts.
     pub facts: crate::facts::TypecheckFacts,
     /// Helper declaration span maps.
@@ -144,7 +191,7 @@ impl TypeContext {
             next_generic_param_id: 0,
             is_comptime: false,
             interpreter: None,
-            specialization_log: HashSet::new(),
+            specialization_log: SpecializationRegistry::default(),
             facts: crate::facts::TypecheckFacts::default(),
             struct_field_spans: HashMap::new(),
             enum_variant_spans: HashMap::new(),
@@ -1007,6 +1054,37 @@ impl TypeContext {
             )),
             _ => ty.clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod specialization_registry_tests {
+    use super::{SpecializationKey, SpecializationRegistry};
+    use crate::types::Type;
+
+    fn key(name: &str, ty: Type) -> SpecializationKey {
+        SpecializationKey {
+            function_name: name.to_string(),
+            type_args: vec![ty],
+            comptime_args: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn preserves_first_request_order_while_deduplicating() {
+        let a = key("a", Type::Int64);
+        let b = key("b", Type::String);
+        let c = key("c", Type::Bool);
+        let mut registry = SpecializationRegistry::default();
+
+        assert!(registry.insert(a.clone()));
+        assert!(registry.insert(b.clone()));
+        assert!(!registry.insert(a.clone()));
+        assert!(registry.insert(c.clone()));
+
+        assert_eq!(registry.iter().collect::<Vec<_>>(), vec![&a, &b, &c]);
+        assert_eq!(registry.len(), 3);
+        assert!(!registry.is_empty());
     }
 }
 

@@ -995,10 +995,12 @@ E4 retains `semantics-1`: pre-E4 parsing rejected pure, attribute edits change
 source identity, and existing enforcement remains authoritative. No contract
 metadata is serialized into cache.
 
-K1.7 subsequently raises the current compiler fingerprint to `semantics-2` so
+K1.7 subsequently raises the compiler fingerprint to `semantics-2` so
 artifacts predating the canonical comptime guarantees cannot bypass fresh
 evaluation. This is independent of bytecode format version and adds no contract
-or capability metadata to cache artifacts.
+or capability metadata to cache artifacts. K2.2 raises current trust to
+`semantics-3` after repairing specialization function-identity mapping; the
+bytecode format remains unchanged.
 
 E1–E6 complete the currently meaningful semantic and tooling surface, not all
 TIR coverage. K1 has completed its canonical backend-independent comptime

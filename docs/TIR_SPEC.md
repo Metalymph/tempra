@@ -83,7 +83,7 @@ TIR evolution follows the project-wide dependency order rather than assigning co
 
 1. **E — Capability/effect semantic core (E1–E4 done):** stable summaries and provenance.
 2. **E6 — Structured diagnostics and inspect tooling (done):** projections over existing facts.
-3. **K — Comptime consistency and compiler responsiveness:** K1's canonical evaluator and semantic-cache trust boundary are complete; determinism, runtime parity, phase timings and latency gates continue in K2–K6.
+3. **K — Comptime consistency and compiler responsiveness:** K1's canonical evaluator and semantic-cache trust boundary are complete. K2.1's determinism audit and K2.2's canonical specialization/function-ID work are complete; remaining determinism, runtime parity, phase timings and latency gates continue in K2–K6.
 4. **R — Result / value-use hardening:** future obligations against silent Result discard, not a capability/effect.
 5. **M — Acyclic ownership:** formalize legal strong-reference graphs and complete ARC-cycle prevention before concurrent transfer.
 6. **C — Pluggable actor concurrency:** add task, actor, channel, and selection operations only after the preceding foundations define their boundaries.
@@ -96,9 +96,13 @@ facts and is not a complete TIR Graph. U — Unsafe Boundary is standalone
 DEFERRED / CONDITIONAL work, activated only by a real source operation requiring
 memory/type-safety authorization. No current TIR capability origin emits Unsafe.
 
-K1.7 changes only cache trust to `semantics-2`. The bytecode format remains an
-independent structural version, and neither TIR nor capability facts are rebuilt
-on a compatible bytecode-only cache hit.
+K1.7 historically changes cache trust to `semantics-2`. K2.2 changes current
+trust to `semantics-3` so artifacts that may contain the former specialization
+ID/index miscompilation are not reused. The bytecode format remains an independent
+structural version, and neither TIR nor capability facts are rebuilt on a
+compatible bytecode-only cache hit. `TirFunctionId` is a compilation-local
+identity, not a physical position in `TirModule.functions`; bytecode lowering
+emits functions by ascending ID and resolves calls through an explicit mapping.
 
 This section does not define future TIR opcodes. Their exact representation belongs to the corresponding phase specifications.
 

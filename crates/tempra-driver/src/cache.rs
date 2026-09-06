@@ -7,7 +7,7 @@ use tempra_bytecode::BytecodeCacheArtifact;
 
 // Versions guarantees required for artifact reuse, independently of bytecode format.
 // Increment when previously compiled artifacts no longer certify current semantics.
-const SEMANTIC_REVISION: u32 = 2;
+const SEMANTIC_REVISION: u32 = 3;
 
 pub(crate) fn compiler_fingerprint() -> String {
     format!(

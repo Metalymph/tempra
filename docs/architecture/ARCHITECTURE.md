@@ -50,7 +50,11 @@ Source
 
 TIR support covers a smaller language subset than the HIR interpreter. Generic templates are not emitted directly; requested concrete specializations are lowered where supported.
 
-This is the fresh source/multi-module VM path. Bytecode cache hits verify and
+This is the fresh source/multi-module VM path. K2.2 processes unique
+specialization requests in deterministic first-request order. Bytecode lowering
+emits functions by ascending `TirFunctionId` and resolves calls through an
+explicit `TirFunctionId`-to-`FunctionId` map; TIR identity is never inferred from
+physical vector position. Bytecode cache hits verify and
 execute cached bytecode without analysis or reconstructed TIR, but require an
 enforcement-aware semantic fingerprint and matching source identity. TIR emission
 verifies then formats. Source TIR interpretation rejects contracts before lowering;
@@ -90,9 +94,11 @@ explicit ticks, while builtins remain constant-cost in v0.1. A call-depth guard
 allows 8 active frames by default and rejects the 9th; nested comptime shares
 the active session. This is a conservative compiler-defined v0.1 safety limit,
 revisionable as the evaluator evolves, not
-a timeout, wall-clock limit, or resource quota. K1.7 completes the trust boundary
-by requiring `semantics-2`; revision-1 artifacts miss and must pass through fresh
-K1 evaluation. This semantic revision is independent of bytecode format version.
+a timeout, wall-clock limit, or resource quota. K1.7 completes the K1 trust
+boundary by requiring `semantics-2`; revision-1 artifacts miss and must pass
+through fresh K1 evaluation. K2.2 raises current trust to `semantics-3` so older
+artifacts cannot retain the specialization ID/index miscompilation. These semantic
+revisions are independent of bytecode format version.
 
 ## Capability analysis insertion point
 
@@ -202,7 +208,9 @@ while retaining known coverage gaps. E6 projects existing facts through
 `tempra effects` and immutable driver types; it does not add analysis. K1's
 audit/spec and K1.1–K1.7 implementation are complete, including the semantic
 cache revision that prevents older artifacts from bypassing current comptime
-guarantees. Determinism continues in K2, runtime parity in K3, and responsiveness
+guarantees. K2.1's audit and K2.2's specialization ordering/function-ID integrity
+are complete; determinism continues with stdlib discovery, diagnostic ordering
+and a global reproducibility gate. Runtime parity follows in K3, and responsiveness
 measurements in K4–K6. Compile latency is monitored during development; deep
 latency and incremental-build optimization belongs to P. The richer future TIR Graph still
 requires later ownership and actor facts.

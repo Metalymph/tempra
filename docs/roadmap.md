@@ -110,11 +110,17 @@ K1 implementation   DONE
 ```
 
 K1.7 raises the cache trust fingerprint from `semantics-1` to `semantics-2`, so
-artifacts predating K1.3–K1.6 cannot bypass current comptime semantics. Bytecode
-format and semantic revision are independent even though both currently equal 2.
+artifacts predating K1.3–K1.6 cannot bypass current comptime semantics. K2.1's
+determinism audit is complete. K2.2 gives specialization requests deterministic
+first-request order, emits bytecode functions in ascending `TirFunctionId`, and
+uses an explicit TIR-to-bytecode function map instead of treating identity as a
+vector position. It raises current cache trust to `semantics-3` because revision-2
+artifacts may contain the former specialization miscompilation. Bytecode format
+and semantic revision remain independent.
 Native signature integrity remains separate from the now-explicit HIR bodyless
-rejection. Specialization ordering and host/order reproducibility continue in
-K2; VM/JIT/Wasm runtime parity continues in K3; phase timings, latency baseline
+rejection. K2 remains in progress: explicit stdlib discovery, diagnostic ordering
+and the global cross-process reproducibility gate follow K2.2. VM/JIT/Wasm runtime
+parity continues in K3; phase timings, latency baseline
 and regression budgets continue in K4–K6. Analysis/LSP/REPL comptime integration
 remains tooling work, while full comptime specialization is separate compiler
 feature/debt. Compile latency remains monitored throughout development; no deep

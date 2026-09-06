@@ -1182,7 +1182,7 @@ mod enforcement_cache_tests {
     use super::*;
 
     #[test]
-    fn pure_uses_semantics_two_and_source_identity_without_cache_metadata() {
+    fn pure_uses_semantics_three_and_source_identity_without_cache_metadata() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("pure.tbc");
         let pure = "@pure fn main() -> Int64 { return 10 / 2 }";
@@ -1199,7 +1199,7 @@ mod enforcement_cache_tests {
         let header = crate::cache::read_cache_artifact(&path).unwrap().header;
         assert_eq!(
             header.compiler_fingerprint,
-            format!("tempra-{}-semantics-2", env!("CARGO_PKG_VERSION"))
+            format!("tempra-{}-semantics-3", env!("CARGO_PKG_VERSION"))
         );
         assert_eq!(header.source_hash, pure_hash);
         let bytes = fs::read(&path).unwrap();
@@ -1256,6 +1256,19 @@ mod enforcement_cache_tests {
 
     const VALID: &str = "@deny(io) fn main() -> Int64 { return 10 / 2 }";
     const VIOLATING: &str = "@deny(panic) fn main() -> Int64 { return 10 / 2 }";
+    const K2_SPECIALIZATION_SOURCE: &str = r#"
+fn choose(type T, first: T, second: T) -> T { return first }
+fn choose_second(type T, first: T, second: T) -> T { return second }
+fn choose_again(type T, first: T, second: T) -> T { return first }
+fn main() -> Int64 {
+    let values: Array(Int) = [41, 0]
+    let chosen = values.reduce(choose)
+    let ignored_second = values.reduce(choose_second)
+    let ignored_again = values.reduce(choose_again)
+    if chosen is Some(value) { return value }
+    return 99
+}
+"#;
 
     const K1_STALE_SOURCES: [(&str, &str, &str); 4] = [
         (
@@ -1287,6 +1300,20 @@ mod enforcement_cache_tests {
         tempra_bytecode::BytecodeCacheArtifact {
             header: tempra_bytecode::BytecodeCacheHeader {
                 compiler_fingerprint: format!("tempra-{}-semantics-1", env!("CARGO_PKG_VERSION")),
+                source_hash: crate::cache::compute_source_hash(source),
+                ..Default::default()
+            },
+            module,
+        }
+    }
+
+    fn semantics_two_artifact(
+        source: &str,
+        module: tempra_bytecode::BytecodeModule,
+    ) -> tempra_bytecode::BytecodeCacheArtifact {
+        tempra_bytecode::BytecodeCacheArtifact {
+            header: tempra_bytecode::BytecodeCacheHeader {
+                compiler_fingerprint: format!("tempra-{}-semantics-2", env!("CARGO_PKG_VERSION")),
                 source_hash: crate::cache::compute_source_hash(source),
                 ..Default::default()
             },
@@ -1430,6 +1457,63 @@ mod enforcement_cache_tests {
     }
 
     #[test]
+    fn semantics_two_cannot_reuse_a_pre_k2_specialization_result() {
+        let dir = tempfile::tempdir().unwrap();
+        let seed_path = dir.path().join("stale-seed.tbc");
+        let stale =
+            compile_to_bytecode_with_analysis("fn main() -> Int64 { return 0 }", &seed_path)
+                .unwrap()
+                .into_bytecode();
+        assert_eq!(
+            tempra_vm::run_function(&stale, "main", vec![]).unwrap(),
+            VmValue::Int64(0)
+        );
+
+        let path = dir.path().join("specialization.tbc");
+        crate::cache::write_cache_artifact(
+            &path,
+            &semantics_two_artifact(K2_SPECIALIZATION_SOURCE, stale),
+        )
+        .unwrap();
+        let source_hash = crate::cache::compute_source_hash(K2_SPECIALIZATION_SOURCE);
+        let stale_bytes = fs::read(&path).unwrap();
+        let stale_artifact = crate::cache::read_cache_artifact(&path).unwrap();
+        assert_eq!(stale_artifact.header.source_hash, source_hash);
+        assert_eq!(
+            stale_artifact.header.compiler_fingerprint,
+            format!("tempra-{}-semantics-2", env!("CARGO_PKG_VERSION"))
+        );
+        assert_eq!(
+            tempra_vm::run_function(&stale_artifact.module, "main", vec![]).unwrap(),
+            VmValue::Int64(0)
+        );
+        assert!(crate::cache::read_compatible_module(&path, &source_hash).is_none());
+
+        let corrected = load_or_compile_cached_module(K2_SPECIALIZATION_SOURCE, &path).unwrap();
+        assert_eq!(
+            tempra_vm::run_function(&corrected, "main", vec![]).unwrap(),
+            VmValue::Int64(41)
+        );
+        let current_artifact = crate::cache::read_cache_artifact(&path).unwrap();
+        assert_eq!(
+            current_artifact.header.compiler_fingerprint,
+            format!("tempra-{}-semantics-3", env!("CARGO_PKG_VERSION"))
+        );
+        let current_bytes = fs::read(&path).unwrap();
+        assert_ne!(current_bytes, stale_bytes);
+        let modified = fs::metadata(&path).unwrap().modified().unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let hit = load_or_compile_cached_module(K2_SPECIALIZATION_SOURCE, &path).unwrap();
+        assert_eq!(
+            tempra_vm::run_function(&hit, "main", vec![]).unwrap(),
+            VmValue::Int64(41)
+        );
+        assert_eq!(fs::read(&path).unwrap(), current_bytes);
+        assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), modified);
+    }
+
+    #[test]
     fn valid_semantics_hit_is_verified_bytecode_only_and_contract_edits_miss() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("cache.tbc");
@@ -1437,7 +1521,7 @@ mod enforcement_cache_tests {
         let artifact = crate::cache::read_cache_artifact(&path).unwrap();
         assert_eq!(
             artifact.header.compiler_fingerprint,
-            format!("tempra-{}-semantics-2", env!("CARGO_PKG_VERSION"))
+            format!("tempra-{}-semantics-3", env!("CARGO_PKG_VERSION"))
         );
         let before = fs::read(&path).unwrap();
         let modified = fs::metadata(&path).unwrap().modified().unwrap();

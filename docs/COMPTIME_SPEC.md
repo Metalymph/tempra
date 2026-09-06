@@ -77,11 +77,14 @@ semantic cost per invocation (C); `while` is unsupported by the current HIR
 0). A tick measures evaluator progress, not proportional CPU, memory, or
 per-byte work.
 
-K1.7 raises the cache fingerprint to
-`tempra-{CARGO_PKG_VERSION}-semantics-2`. Artifacts stamped with revision 1 remain
+K1.7 historically raises the cache fingerprint to
+`tempra-{CARGO_PKG_VERSION}-semantics-2`. K2.2 raises current trust to
+`tempra-{CARGO_PKG_VERSION}-semantics-3` after making specialization request order
+deterministic and separating TIR function identity from bytecode storage position.
+Artifacts stamped with revisions 1 or 2 remain
 readable where structurally valid but are never trusted as hits: fresh compilation
-must reapply K1.3–K1.6 semantics. This changes neither bytecode format nor cache
-schema, and successful revision-2 hits remain verified-bytecode-only.
+must reapply current semantics. This changes neither bytecode format nor cache
+schema, and successful revision-3 hits remain verified-bytecode-only.
 
 ```text
 K1 audit/spec        DONE
@@ -95,7 +98,9 @@ K1.7 cache revision  DONE
 K1 implementation   DONE
 ```
 
-Specialization ordering and host/order reproducibility continue in K2; runtime
+K2.1's audit and K2.2's deterministic first-request specialization order are
+complete. Explicit stdlib discovery, diagnostic ordering and the global
+reproducibility gate continue in K2; runtime
 VM/JIT/Wasm parity continues in K3; timings, latency baselines and budgets continue
 in K4–K6. Analysis/LSP/REPL integration remains a tooling follow-up, and full
 comptime specialization remains separate compiler feature/debt.

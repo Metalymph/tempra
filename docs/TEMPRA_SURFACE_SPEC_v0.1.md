@@ -1006,8 +1006,10 @@ K1.7 subsequently raises the compiler fingerprint to `semantics-2` so
 artifacts predating the canonical comptime guarantees cannot bypass fresh
 evaluation. This is independent of bytecode format version and adds no contract
 or capability metadata to cache artifacts. K2.2 raises current trust to
-`semantics-3` after repairing specialization function-identity mapping; the
-bytecode format remains unchanged.
+`semantics-3` after repairing specialization function-identity mapping. K2.4
+raises current trust to `semantics-4` after making interface selection and
+diagnostic iteration follow canonical source/module order; the bytecode format
+remains unchanged.
 
 E1–E6 complete the currently meaningful semantic and tooling surface, not all
 TIR coverage. K1 has completed its canonical backend-independent comptime

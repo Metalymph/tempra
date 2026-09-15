@@ -382,4 +382,28 @@ mod tests {
 
         assert_eq!(resolved, Path::new("/project/app/helper.tmpr"));
     }
+
+    #[test]
+    fn module_graph_order_preserves_source_import_order_before_the_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("main.tmpr"),
+            "import alpha\nimport beta\nfn main() {}\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("alpha.tmpr"), "interface Alpha {}\n").unwrap();
+        std::fs::write(dir.path().join("beta.tmpr"), "interface Beta {}\n").unwrap();
+
+        let mut diagnostics = Vec::new();
+        let graph = load_module_graph(
+            &dir.path().join("main.tmpr"),
+            &DiskDocumentLoader,
+            None,
+            &mut diagnostics,
+        )
+        .unwrap();
+
+        assert!(diagnostics.is_empty());
+        assert_eq!(graph.order, vec!["alpha", "beta", "main"]);
+    }
 }

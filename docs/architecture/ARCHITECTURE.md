@@ -106,7 +106,9 @@ revisionable as the evaluator evolves, not
 a timeout, wall-clock limit, or resource quota. K1.7 completes the K1 trust
 boundary by requiring `semantics-2`; revision-1 artifacts miss and must pass
 through fresh K1 evaluation. K2.2 raises current trust to `semantics-3` so older
-artifacts cannot retain the specialization ID/index miscompilation. These semantic
+artifacts cannot retain the specialization ID/index miscompilation. K2.4 raises
+current trust to `semantics-4` after making interface selection and requirement/
+field diagnostics follow canonical source/module declaration order. These semantic
 revisions are independent of bytecode format version.
 
 ## Capability analysis insertion point
@@ -217,9 +219,10 @@ while retaining known coverage gaps. E6 projects existing facts through
 `tempra effects` and immutable driver types; it does not add analysis. K1's
 audit/spec and K1.1–K1.7 implementation are complete, including the semantic
 cache revision that prevents older artifacts from bypassing current comptime
-guarantees. K2.1's audit, K2.2's specialization ordering/function-ID integrity and
-K2.3's explicit standard-library discovery input are complete; determinism
-continues with diagnostic ordering and a global reproducibility gate. Runtime
+guarantees. K2.1's audit, K2.2's specialization ordering/function-ID integrity,
+K2.3's explicit standard-library discovery input and K2.4's deterministic
+interface/field iteration are complete; the global reproducibility gate remains.
+Runtime
 parity follows in K3, and responsiveness
 measurements in K4–K6. Compile latency is monitored during development; deep
 latency and incremental-build optimization belongs to P. The richer future TIR Graph still

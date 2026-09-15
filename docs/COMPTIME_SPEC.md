@@ -81,10 +81,12 @@ K1.7 historically raises the cache fingerprint to
 `tempra-{CARGO_PKG_VERSION}-semantics-2`. K2.2 raises current trust to
 `tempra-{CARGO_PKG_VERSION}-semantics-3` after making specialization request order
 deterministic and separating TIR function identity from bytecode storage position.
-Artifacts stamped with revisions 1 or 2 remain
+K2.4 raises current trust to `tempra-{CARGO_PKG_VERSION}-semantics-4` after making
+interface selection and requirement/field diagnostics follow canonical source and
+module declaration order. Artifacts stamped with revisions 1 through 3 remain
 readable where structurally valid but are never trusted as hits: fresh compilation
 must reapply current semantics. This changes neither bytecode format nor cache
-schema, and successful revision-3 hits remain verified-bytecode-only.
+schema, and successful revision-4 hits remain verified-bytecode-only.
 
 ```text
 K1 audit/spec        DONE
@@ -98,8 +100,9 @@ K1.7 cache revision  DONE
 K1 implementation   DONE
 ```
 
-K2.1's audit and K2.2's deterministic first-request specialization order are
-complete. Explicit stdlib discovery, diagnostic ordering and the global
+K2.1's audit, K2.2's deterministic first-request specialization order and K2.4's
+deterministic interface/field iteration are complete. Explicit stdlib discovery
+and the global
 reproducibility gate continue in K2; runtime
 VM/JIT/Wasm parity continues in K3; timings, latency baselines and budgets continue
 in K4–K6. Analysis/LSP/REPL integration remains a tooling follow-up, and full

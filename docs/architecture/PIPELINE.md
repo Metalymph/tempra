@@ -105,7 +105,8 @@ E3.2 compares denied sets with transitive requirements and retains the unchanged
 E1 witness per violation. Errors are ordered by function ID then capability.
 Cache hits remain analysis/contract-free. E3.2 originally introduced the
 `tempra-{CARGO_PKG_VERSION}-semantics-1` fingerprint; K1.7 raised it to revision
-2 and K2.2 raises current trust to revision 3. Older artifacts miss;
+2, K2.2 raises current trust to revision 3, and K2.4 raises it to revision 4.
+Older artifacts miss;
 fresh failures never populate or replace cache entries. The semantic revision
 versions reuse guarantees, not bytecode format. See [cache policy](../BYTECODE_CACHE.md).
 
@@ -160,7 +161,10 @@ The current HIR has no `while` surface. K1.7 introduced `semantics-2` so
 revision-1 artifacts cannot bypass fresh K1 evaluation. K2.2 processes
 specializations in deterministic first-request order and requires `semantics-3`
 so revision-2 artifacts cannot preserve the former TIR-ID/bytecode-position
-miscompilation. Bytecode format version and semantic revision remain independent;
+miscompilation. K2.4 makes interface candidate selection and requirement/field
+diagnostics follow canonical source/module declaration order and requires
+`semantics-4` so revision-3 artifacts cannot preserve unordered interface
+selection. Bytecode format version and semantic revision remain independent;
 compatible hits still
 produce verified bytecode only, without reconstructing TIR or compiler facts.
 

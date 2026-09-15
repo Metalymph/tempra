@@ -4031,12 +4031,16 @@ fn check_struct_literal(ctx: &mut TypeContext, s: &mut HirStructLiteral) -> Type
     if let Some(idx) = name.rfind('.') {
         let struct_module = &name[..idx];
         if ctx.current_module != struct_module {
-            for (f_name, f_info) in &info.fields {
-                if f_info.visibility == Visibility::Private {
+            for field_name in &info.field_order {
+                if info
+                    .fields
+                    .get(field_name)
+                    .is_some_and(|field| field.visibility == Visibility::Private)
+                {
                     ctx.error(
                         format!(
                             "cannot construct struct '{}' from outside its module because it contains private field '{}'",
-                            name, f_name
+                            name, field_name
                         ),
                         s.span,
                     );
@@ -4110,13 +4114,11 @@ fn check_struct_literal(ctx: &mut TypeContext, s: &mut HirStructLiteral) -> Type
     }
 
     // Check that all required fields are present (those without defaults)
-    let mut missing_fields: Vec<&String> = info
-        .fields
-        .iter()
-        .filter(|(name, info)| !info.has_default && !provided.contains(name.as_str()))
-        .map(|(name, _)| name)
-        .collect();
-    missing_fields.sort();
+    let missing_fields = info.field_order.iter().filter(|name| {
+        info.fields
+            .get(name.as_str())
+            .is_some_and(|field| !field.has_default && !provided.contains(name.as_str()))
+    });
 
     for field_name in missing_fields {
         ctx.error(
@@ -4520,7 +4522,7 @@ pub(crate) fn satisfies_interface(ctx: &mut TypeContext, ty: &Type, interface_na
 
     let mut mappings = HashMap::new();
     let mut satisfied = true;
-    for (method_name, req) in &interface.methods {
+    for (method_name, req) in interface.methods_in_declaration_order() {
         let provided_sig = ctx.lookup_direct_method_signature(ty, method_name);
         match provided_sig {
             Some(sig) => {
@@ -4672,7 +4674,7 @@ pub fn satisfies_interface_no_errors(ctx: &TypeContext, ty: &Type, interface_nam
     use crate::types::substitute_self;
     let mut mappings = HashMap::new();
     let mut satisfied = true;
-    for (method_name, req) in &interface.methods {
+    for (method_name, req) in interface.methods_in_declaration_order() {
         let provided_sig = ctx.lookup_direct_method_signature(ty, method_name);
         match provided_sig {
             Some(sig) => {
@@ -4862,5 +4864,82 @@ fn unify_associated(
                 Err("type mismatch".into())
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod declaration_order_tests {
+    use super::check_struct_literal;
+    use crate::context::{StructFieldInfo, StructInfo, TypeContext};
+    use crate::types::Type;
+    use std::collections::HashMap;
+    use tempra_ast::Visibility;
+    use tempra_hir::{HirExpression, HirStructLiteral, HirType};
+    use tempra_span::Span;
+
+    #[test]
+    fn private_struct_field_diagnostics_follow_declaration_order() {
+        let mut fields = HashMap::new();
+        for name in ["zebra", "alpha", "middle"] {
+            fields.insert(
+                name.to_string(),
+                StructFieldInfo {
+                    visibility: Visibility::Private,
+                    ty: Type::Int,
+                    is_mutable: false,
+                    has_default: false,
+                },
+            );
+        }
+        let mut context = TypeContext::new();
+        context.current_module = "main".to_string();
+        context.structs.insert(
+            "model.Secret".to_string(),
+            StructInfo {
+                visibility: Visibility::Public,
+                generic_params: Vec::new(),
+                fields,
+                field_order: vec![
+                    "zebra".to_string(),
+                    "alpha".to_string(),
+                    "middle".to_string(),
+                ],
+            },
+        );
+        let mut literal = HirStructLiteral {
+            span: Span::new(0, 1),
+            ty: HirType::Named(Span::new(0, 1), "model.Secret".to_string()),
+            fields: vec![
+                (
+                    "zebra".to_string(),
+                    HirExpression::Integer(Span::new(0, 1), "1".to_string()),
+                ),
+                (
+                    "alpha".to_string(),
+                    HirExpression::Integer(Span::new(0, 1), "2".to_string()),
+                ),
+                (
+                    "middle".to_string(),
+                    HirExpression::Integer(Span::new(0, 1), "3".to_string()),
+                ),
+            ],
+        };
+
+        assert_eq!(
+            check_struct_literal(&mut context, &mut literal),
+            Type::Struct("model.Secret".to_string(), Vec::new())
+        );
+        assert_eq!(
+            context
+                .errors
+                .iter()
+                .map(|error| error.message.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "cannot construct struct 'model.Secret' from outside its module because it contains private field 'zebra'",
+                "cannot construct struct 'model.Secret' from outside its module because it contains private field 'alpha'",
+                "cannot construct struct 'model.Secret' from outside its module because it contains private field 'middle'",
+            ]
+        );
     }
 }

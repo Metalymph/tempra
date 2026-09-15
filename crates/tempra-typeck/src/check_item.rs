@@ -230,12 +230,13 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
             }
             HirItem::Interface(i) => {
                 let qual_name = qualify(ctx, &i.name);
-                ctx.interfaces.insert(
+                ctx.register_interface(
                     qual_name.clone(),
                     InterfaceInfo {
                         name: qual_name,
                         visibility: i.visibility,
                         methods: HashMap::new(),
+                        method_order: Vec::new(),
                         associated_types: Vec::new(),
                     },
                 );
@@ -326,6 +327,9 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
                 for field in &s.fields {
                     let field_ty = ctx.resolve_hir_type(&field.ty);
                     ctx.verify_not_interface(&field_ty, field.span);
+                    if !fields.contains_key(&field.name) {
+                        field_order.push(field.name.clone());
+                    }
                     fields.insert(
                         field.name.clone(),
                         StructFieldInfo {
@@ -335,7 +339,6 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
                             has_default: field.default_value.is_some(),
                         },
                     );
-                    field_order.push(field.name.clone());
                 }
                 ctx.structs.insert(
                     qual_name,
@@ -414,7 +417,13 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
                     info.associated_types = associated_types.clone();
                 }
 
-                let mut methods = HashMap::new();
+                let mut interface = crate::context::InterfaceInfo {
+                    name: qual_name.clone(),
+                    visibility: i.visibility,
+                    methods: HashMap::new(),
+                    method_order: Vec::new(),
+                    associated_types,
+                };
                 for m in &i.methods {
                     let mut params = Vec::new();
                     let mut param_inout = Vec::new();
@@ -423,7 +432,7 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
                         param_inout.push(p.is_inout);
                     }
                     let return_type = ctx.resolve_hir_type(&m.return_type);
-                    methods.insert(
+                    interface.insert_method(
                         m.name.clone(),
                         crate::context::InterfaceMethodRequirementInfo {
                             name: m.name.clone(),
@@ -434,15 +443,7 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
                     );
                 }
 
-                ctx.interfaces.insert(
-                    qual_name.clone(),
-                    crate::context::InterfaceInfo {
-                        name: qual_name.clone(),
-                        visibility: i.visibility,
-                        methods,
-                        associated_types,
-                    },
-                );
+                ctx.register_interface(qual_name, interface);
                 ctx.current_interface = None;
             }
             HirItem::Extend(e) => {

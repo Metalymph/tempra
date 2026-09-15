@@ -383,8 +383,10 @@ verified bytecode-only. Effect inspection never reads or writes cache metadata
 and E6 itself left `semantics-1` unchanged. K1.7 later raises the compiler
 semantic revision to `semantics-2` so pre-K1 comptime artifacts are incompatible;
 K2.2 subsequently raises current trust to `semantics-3` to invalidate artifacts
-that may contain the former specialization ID/index miscompilation. No capability
-metadata is added and compatible hits remain bytecode-only.
+that may contain the former specialization ID/index miscompilation. K2.4 raises
+current trust to `semantics-4` because unordered interface selection can change
+accepted types and diagnostic order. No capability metadata is added and
+compatible hits remain bytecode-only.
 
 The current analysis/LSP path remains frontend/typechecking-only. E6 converts to
 the existing general `Diagnostic` model but does not make the LSP compile through

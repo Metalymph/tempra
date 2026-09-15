@@ -98,7 +98,9 @@ memory/type-safety authorization. No current TIR capability origin emits Unsafe.
 
 K1.7 historically changes cache trust to `semantics-2`. K2.2 changes current
 trust to `semantics-3` so artifacts that may contain the former specialization
-ID/index miscompilation are not reused. The bytecode format remains an independent
+ID/index miscompilation are not reused. K2.4 changes current trust to
+`semantics-4` so interface candidate selection and diagnostics are not reused
+from unordered iteration. The bytecode format remains an independent
 structural version, and neither TIR nor capability facts are rebuilt on a
 compatible bytecode-only cache hit. `TirFunctionId` is a compilation-local
 identity, not a physical position in `TirModule.functions`; bytecode lowering

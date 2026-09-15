@@ -34,10 +34,9 @@ fn normalize_recursive(
 
             if let Some(concrete_base) = env.generic_subst.get(base).cloned() {
                 let itf_candidates: Vec<String> = ctx
-                    .interfaces
-                    .iter()
-                    .filter(|(_, itf)| itf.associated_types.contains(assoc))
-                    .map(|(name, _)| name.clone())
+                    .interface_names_in_declaration_order()
+                    .filter(|name| ctx.interfaces[*name].associated_types.contains(assoc))
+                    .map(str::to_owned)
                     .collect();
 
                 for itf_name in itf_candidates {

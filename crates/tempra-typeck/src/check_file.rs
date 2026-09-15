@@ -269,3 +269,53 @@ pub fn check_file_with_context_always(file: &mut HirFile, source: Option<String>
 
     ctx
 }
+
+#[cfg(test)]
+mod declaration_order_tests {
+    use super::{check_modules_always, ModuleToCheck};
+    use std::collections::HashMap;
+
+    fn lower(source: &str) -> tempra_hir::HirFile {
+        let ast = tempra_parser::parse_source(source).unwrap();
+        tempra_hir::lower_file(source, &ast)
+    }
+
+    #[test]
+    fn module_input_order_flows_directly_into_interface_registration_order() {
+        let mut alpha = lower("interface Alpha { fn alpha(self) -> Int }");
+        let mut beta = lower("interface Beta { fn beta(self) -> Int }");
+        let mut entry = lower("interface Entry { fn entry(self) -> Int }");
+        let mut modules = [
+            ModuleToCheck {
+                name: "alpha".to_string(),
+                imports: HashMap::new(),
+                file: &mut alpha,
+            },
+            ModuleToCheck {
+                name: "beta".to_string(),
+                imports: HashMap::new(),
+                file: &mut beta,
+            },
+            ModuleToCheck {
+                name: "main".to_string(),
+                imports: HashMap::new(),
+                file: &mut entry,
+            },
+        ];
+
+        let context = check_modules_always(&mut modules, &HashMap::new(), false);
+        assert_eq!(
+            context
+                .interface_names_in_declaration_order()
+                .collect::<Vec<_>>(),
+            vec![
+                "Collection",
+                "Iterator",
+                "Iterable",
+                "alpha.Alpha",
+                "beta.Beta",
+                "main.Entry",
+            ]
+        );
+    }
+}

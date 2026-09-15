@@ -110,6 +110,7 @@ K1 implementation   DONE
 K2.1 determinism audit DONE
 K2.2 specialization ordering DONE
 K2.3 stdlib discovery input DONE
+K2.4 semantic/diagnostic iteration DONE
 K2 implementation   IN PROGRESS
 ```
 
@@ -127,9 +128,16 @@ compiler-authoritative file/module paths: an explicit resolved `std/` root wins,
 otherwise the default is discovered only from the compiler executable's ancestor
 layout. A relative root supplied explicitly is resolved once at the API boundary;
 cwd never selects std implicitly. Together with K2.2 this establishes Level 1
-(deterministic semantic result/errors) for the audited compiler paths. K2 remains
-in progress: diagnostic ordering and the global cross-process reproducibility gate
-follow K2.3. VM/JIT/Wasm runtime parity continues in K3; phase timings, latency baseline
+(deterministic semantic result/errors) for the audited compiler paths. K2.4 makes
+module/source declaration order authoritative wherever interface or field iteration
+affects semantics or diagnostics; hash containers remain lookup-only at those
+boundaries. It raises cache trust to `semantics-4` because revision-3 artifacts may
+encode the former unordered interface selection. Multiple valid interfaces for one
+associated type remain a separate type-system semantics debt: K2.4 preserves the
+existing first-match rule but makes it deterministic. This establishes Level 2 for
+the audited compiler-authoritative paths. K2 remains in progress: the global
+cross-process reproducibility gate follows K2.4. VM/JIT/Wasm runtime parity continues
+in K3; phase timings, latency baseline
 and regression budgets continue in K4–K6. Analysis/LSP/REPL comptime integration
 remains tooling work, while full comptime specialization is separate compiler
 feature/debt. Compile latency remains monitored throughout development; no deep

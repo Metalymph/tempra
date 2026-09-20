@@ -83,7 +83,7 @@ TIR evolution follows the project-wide dependency order rather than assigning co
 
 1. **E — Capability/effect semantic core (E1–E4 done):** stable summaries and provenance.
 2. **E6 — Structured diagnostics and inspect tooling (done):** projections over existing facts.
-3. **K — Comptime consistency and compiler responsiveness:** K1's canonical evaluator and semantic-cache trust boundary are complete. K2.1's determinism audit and K2.2's canonical specialization/function-ID work are complete; remaining determinism, runtime parity, phase timings and latency gates continue in K2–K6.
+3. **K — Comptime consistency and compiler responsiveness:** K1's canonical evaluator and semantic-cache trust boundary are complete. K2.1–K2.5 complete the audited deterministic ordering, explicit stdlib input and same-build cross-process reproducibility gate; runtime parity, phase timings and latency gates continue in K3–K6.
 4. **R — Result / value-use hardening:** future obligations against silent Result discard, not a capability/effect.
 5. **M — Acyclic ownership:** formalize legal strong-reference graphs and complete ARC-cycle prevention before concurrent transfer.
 6. **C — Pluggable actor concurrency:** add task, actor, channel, and selection operations only after the preceding foundations define their boundaries.
@@ -105,6 +105,9 @@ structural version, and neither TIR nor capability facts are rebuilt on a
 compatible bytecode-only cache hit. `TirFunctionId` is a compilation-local
 identity, not a physical position in `TirModule.functions`; bytecode lowering
 emits functions by ascending ID and resolves calls through an explicit mapping.
+K2.5 keeps revision 4 and proves exact cross-process artifact equality for the
+currently supported same-build, same-host/target bytecode surface; no Level 4
+cross-machine guarantee is implied.
 
 This section does not define future TIR opcodes. Their exact representation belongs to the corresponding phase specifications.
 

@@ -81,7 +81,7 @@ against deliberate modification and the existing source hash is non-cryptographi
 K2.3 changes standard-library discovery only for file/module compilation, which
 continues to compile fresh and has no cache artifact. The cached source API does
 not build a module graph or support a valid standard-library import path, so this
-change does not alter trusted cached semantics and does not increment revision `3`.
+change does not alter trusted cached semantics and does not increment revision `4`.
 
 Historically, E4 (`@pure`) did not increment revision `1`: it used the same E3
 contract enforcement, and pre-E4 compilers rejected that attribute syntax.
@@ -91,6 +91,34 @@ the same bytecode-only cache, while a failed contract cannot write a replacement
 K1.7 is the later, independent revision to `semantics-2`; K2.2 subsequently
 raises trust to `semantics-3`, and K2.4 raises it to `semantics-4`. These changes
 version compiler guarantees, not bytecode serialization.
+
+### Reproducibility contract (K2.5)
+
+For the currently supported bytecode compilation surface, Tempra requires exact
+artifact bytes for the same declared source bytes, module graph and order,
+compiler build/version, semantic revision, bytecode format, compilation options,
+resolved standard-library contents, backend mode, host and target. Hash seeds,
+process IDs, temporary directory names, file inode/mtime, test order and cwd after
+explicit paths have been resolved are incidental and must not affect the result.
+
+The permanent gate covers simple and multi-function source, multi-module input,
+specialization, comptime, capability contracts and explicit stdlib input. Interface
+selection and invalid interface diagnostics are checked at their current frontend
+boundary because associated-type programs are not yet part of the supported
+bytecode-lowering surface. It compares raw bytes, not only hashes, across
+independent compiler processes.
+
+Cold compilation, a valid `semantics-4` hit, a revision-3 miss and malformed-cache
+fallback converge on the same current artifact; a valid hit does not rewrite bytes
+or mtime. This establishes Level 3 only for the bounded same-build, same-host/
+target surface above. It does not claim absolute-path/machine independence (Level
+4), and it does not change the semantic revision because K2.5 adds proof rather
+than compiler semantics.
+
+`BytecodeFunction::is_extern` is still not persisted by the v0 serializer. Current
+cacheable source paths do not exercise executable extern round-trips, so no fresh/
+hit semantic divergence was demonstrated; this remains separate format-correctness
+debt rather than a K2 blocker.
 
 ## Future Plans
 

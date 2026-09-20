@@ -220,8 +220,10 @@ while retaining known coverage gaps. E6 projects existing facts through
 audit/spec and K1.1–K1.7 implementation are complete, including the semantic
 cache revision that prevents older artifacts from bypassing current comptime
 guarantees. K2.1's audit, K2.2's specialization ordering/function-ID integrity,
-K2.3's explicit standard-library discovery input and K2.4's deterministic
-interface/field iteration are complete; the global reproducibility gate remains.
+K2.3's explicit standard-library discovery input, K2.4's deterministic
+interface/field iteration and K2.5's cross-process byte-for-byte gate are complete.
+Level 3 applies to the supported same-build, same-host/target bytecode surface;
+cross-machine Level 4 reproducibility is not claimed.
 Runtime
 parity follows in K3, and responsiveness
 measurements in K4–K6. Compile latency is monitored during development; deep

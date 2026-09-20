@@ -342,3 +342,68 @@ fn test_decode_and_verify_fail() {
     let res = decode_and_verify_artifact(&bytes);
     assert!(matches!(res, Err(BytecodeSerializeError::VerifyError(_))));
 }
+
+#[test]
+fn serialization_is_byte_stable_for_reproducibility_sensitive_values() {
+    let mut module = BytecodeModule::new();
+    let negative = module.add_constant(BytecodeConstant::Int64(i64::MIN));
+    let unsigned = module.add_constant(BytecodeConstant::UInt64(u64::MAX));
+    let negative_zero = module.add_constant(BytecodeConstant::Float64(-0.0));
+    let nan_bits = 0x7ff8_0000_0000_0042;
+    let nan = module.add_constant(BytecodeConstant::Float64(f64::from_bits(nan_bits)));
+    let utf8 = module.add_constant(BytecodeConstant::String("Tempra λ 🔥".into()));
+    let fields = module.add_constant(BytecodeConstant::FieldList(vec![
+        "zebra".into(),
+        "alpha".into(),
+    ]));
+
+    let mut function = BytecodeFunction::new(
+        "module.stable".into(),
+        vec![BytecodeType::Int64, BytecodeType::Float64],
+        BytecodeType::Any,
+    );
+    function.locals = vec![BytecodeType::UInt64, BytecodeType::String];
+    function.max_stack = 4;
+    function.code = vec![
+        BytecodeInstr::ConstI64(negative),
+        BytecodeInstr::ConstU64(unsigned),
+        BytecodeInstr::ConstF64(negative_zero),
+        BytecodeInstr::ConstF64(nan),
+        BytecodeInstr::ConstString(utf8),
+        BytecodeInstr::MakeStruct(utf8, fields, 2),
+        BytecodeInstr::MakeEnum(utf8, utf8, 1),
+        BytecodeInstr::Tag,
+        BytecodeInstr::Call(FunctionId(17), 3),
+        BytecodeInstr::Return,
+    ];
+    module.add_function(function);
+
+    let first = encode_module(&module).unwrap();
+    let second = encode_module(&module).unwrap();
+    assert_eq!(first, second);
+
+    let decoded = decode_artifact(&first).unwrap().module;
+    assert_eq!(encode_module(&decoded).unwrap(), first);
+    assert_eq!(
+        match decoded.constants[2] {
+            BytecodeConstant::Float64(value) => value.to_bits(),
+            _ => unreachable!(),
+        },
+        (-0.0f64).to_bits()
+    );
+    assert_eq!(
+        match decoded.constants[3] {
+            BytecodeConstant::Float64(value) => value.to_bits(),
+            _ => unreachable!(),
+        },
+        nan_bits
+    );
+    assert_eq!(
+        decoded.constants[4],
+        BytecodeConstant::String("Tempra λ 🔥".into())
+    );
+    assert_eq!(
+        decoded.functions[0].code[8],
+        BytecodeInstr::Call(FunctionId(17), 3)
+    );
+}

@@ -1714,4 +1714,64 @@ fn main() -> Int64 { return select[Both](Both {}) }
             VmValue::Int64(6)
         );
     }
+
+    #[test]
+    fn cache_state_does_not_change_current_semantics_artifact_bytes() {
+        const SOURCE: &str =
+            "fn helper() -> Int64 { return 40 } fn main() -> Int64 { return helper() + 1 }";
+
+        let dir = tempfile::tempdir().unwrap();
+        let cold_path = dir.path().join("cold.tbc");
+        let cold = load_or_compile_cached_module(SOURCE, &cold_path).unwrap();
+        assert_eq!(
+            tempra_vm::run_function(&cold, "main", vec![]).unwrap(),
+            VmValue::Int64(41)
+        );
+        let canonical_bytes = fs::read(&cold_path).unwrap();
+        let canonical_artifact = crate::cache::read_cache_artifact(&cold_path).unwrap();
+        assert_eq!(
+            canonical_artifact.header.compiler_fingerprint,
+            format!("tempra-{}-semantics-4", env!("CARGO_PKG_VERSION"))
+        );
+
+        let modified = fs::metadata(&cold_path).unwrap().modified().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let warm = load_or_compile_cached_module(SOURCE, &cold_path).unwrap();
+        assert_eq!(
+            tempra_vm::run_function(&warm, "main", vec![]).unwrap(),
+            VmValue::Int64(41)
+        );
+        assert_eq!(fs::read(&cold_path).unwrap(), canonical_bytes);
+        assert_eq!(
+            fs::metadata(&cold_path).unwrap().modified().unwrap(),
+            modified
+        );
+
+        let stale_path = dir.path().join("stale.tbc");
+        crate::cache::write_cache_artifact(
+            &stale_path,
+            &semantics_three_artifact(SOURCE, canonical_artifact.module.clone()),
+        )
+        .unwrap();
+        assert!(crate::cache::read_compatible_module(
+            &stale_path,
+            &crate::cache::compute_source_hash(SOURCE)
+        )
+        .is_none());
+        let stale_rebuilt = load_or_compile_cached_module(SOURCE, &stale_path).unwrap();
+        assert_eq!(
+            tempra_vm::run_function(&stale_rebuilt, "main", vec![]).unwrap(),
+            VmValue::Int64(41)
+        );
+        assert_eq!(fs::read(&stale_path).unwrap(), canonical_bytes);
+
+        let malformed_path = dir.path().join("malformed.tbc");
+        fs::write(&malformed_path, b"not a Tempra bytecode artifact").unwrap();
+        let malformed_rebuilt = load_or_compile_cached_module(SOURCE, &malformed_path).unwrap();
+        assert_eq!(
+            tempra_vm::run_function(&malformed_rebuilt, "main", vec![]).unwrap(),
+            VmValue::Int64(41)
+        );
+        assert_eq!(fs::read(&malformed_path).unwrap(), canonical_bytes);
+    }
 }

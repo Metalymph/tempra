@@ -182,7 +182,17 @@ without one produces a controlled diagnostic. Explicit relative roots are resolv
 once by the configuration API, so cwd may interpret a user-supplied relative path
 but never discovers std implicitly. This input does not participate in the
 single-source bytecode cache because that cache path does not construct a module
-graph; semantic revision remains `3`.
+graph; semantic revision remains `4`.
+
+K2.5 verifies the supported bytecode path as a whole in independent compiler
+processes. With source/module order, build, host/target, options and resolved stdlib
+contents held constant, simple, multi-function, multi-module, specialization,
+comptime, capability-contract and stdlib fixtures produce identical raw artifacts
+and runtime results. Equivalent absolute roots, cwd changes after path resolution,
+inode/mtime differences and cache state do not change those artifacts. Interface
+selection and diagnostic ordering are checked at the frontend boundary where TIR/
+bytecode lowering does not yet support that surface. This bounded Level 3 guarantee
+does not imply Level 4 reproducibility across machines or targets.
 
 ## Planned backends
 
@@ -209,9 +219,8 @@ coverage gaps remain. `tempra effects` projects existing analysis, contracts,
 violations, witnesses and provenance without a second analyzer. A richer TIR
 Graph requires later ownership/actor facts. The K1 audit selected the HIR
 interpreter kernel as the backend-independent comptime authority, and K1.1 now
-provides its canonical evaluation facade. Remaining K1 work must connect the
-other frontend paths and harden semantics before parity, deterministic
-reproducibility and phase-timing/latency measures can close K. Deep compilation
+provides its canonical evaluation facade. K1 and K2 are complete. Runtime parity
+and phase-timing/latency measures continue in K3–K6 before K can close. Deep compilation
 optimization and incremental builds belong to P.
 
 U — Unsafe Boundary is standalone DEFERRED / CONDITIONAL work at the end of the roadmap,

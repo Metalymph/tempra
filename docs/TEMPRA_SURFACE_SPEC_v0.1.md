@@ -1011,9 +1011,19 @@ raises current trust to `semantics-4` after making interface selection and
 diagnostic iteration follow canonical source/module order; the bytecode format
 remains unchanged.
 
+K2.5 does not change compiler semantics or the fingerprint. It establishes a
+permanent cross-process gate requiring identical raw artifacts for the currently
+supported bytecode surface when source/module order, compiler build, semantic
+revision, format, options, resolved stdlib contents, host and target are the same.
+Comptime, specialization and capability-contract fixtures are included. Associated-
+type selection and its diagnostics are checked at the frontend boundary because
+that surface is not yet bytecode-lowerable. This is a bounded Level 3 guarantee,
+not Level 4 reproducibility across machines or targets.
+
 E1–E6 complete the currently meaningful semantic and tooling surface, not all
 TIR coverage. K1 has completed its canonical backend-independent comptime
-authority and cache trust boundary. K2–K6 continue determinism, runtime parity,
+authority and cache trust boundary. K2 completes audited deterministic ordering,
+explicit stdlib input and the bounded reproducibility gate. K3–K6 continue runtime parity,
 timings, latency baselines and regression budgets. The immediate roadmap
 continues K → R → M → C → V → O → P, with U conditional. R is future Result/value-use hardening:
 no silent discard, including an accidental `let _ = ...` escape hatch; handling

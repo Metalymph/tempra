@@ -100,10 +100,11 @@ K1.7 cache revision  DONE
 K1 implementation   DONE
 ```
 
-K2.1's audit, K2.2's deterministic first-request specialization order and K2.4's
-deterministic interface/field iteration are complete. Explicit stdlib discovery
-and the global
-reproducibility gate continue in K2; runtime
+K2.1's audit, K2.2's deterministic first-request specialization order, K2.3's
+explicit stdlib discovery and K2.4's deterministic interface/field iteration are
+complete. K2.5 proves cross-process byte-for-byte equality for comptime and the
+other currently supported bytecode fixtures under the bounded same-build,
+same-host/target reproducibility contract. K2 is complete; runtime
 VM/JIT/Wasm parity continues in K3; timings, latency baselines and budgets continue
 in K4–K6. Analysis/LSP/REPL integration remains a tooling follow-up, and full
 comptime specialization remains separate compiler feature/debt.

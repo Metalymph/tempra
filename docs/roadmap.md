@@ -111,7 +111,8 @@ K2.1 determinism audit DONE
 K2.2 specialization ordering DONE
 K2.3 stdlib discovery input DONE
 K2.4 semantic/diagnostic iteration DONE
-K2 implementation   IN PROGRESS
+K2.5 cross-process reproducibility gate DONE
+K2 implementation   DONE
 ```
 
 K1.7 raises the cache trust fingerprint from `semantics-1` to `semantics-2`, so
@@ -135,8 +136,11 @@ boundaries. It raises cache trust to `semantics-4` because revision-3 artifacts 
 encode the former unordered interface selection. Multiple valid interfaces for one
 associated type remain a separate type-system semantics debt: K2.4 preserves the
 existing first-match rule but makes it deterministic. This establishes Level 2 for
-the audited compiler-authoritative paths. K2 remains in progress: the global
-cross-process reproducibility gate follows K2.4. VM/JIT/Wasm runtime parity continues
+the audited compiler-authoritative paths. K2.5 proves identical runtime results,
+diagnostics and raw artifacts across fresh compiler processes, equivalent absolute
+roots and cwd changes after declared paths are resolved. This establishes Level 3
+for the supported same-build, same-host/target bytecode surface; it is not a
+cross-machine Level 4 claim. K2 is complete. VM/JIT/Wasm runtime parity continues
 in K3; phase timings, latency baseline
 and regression budgets continue in K4–K6. Analysis/LSP/REPL comptime integration
 remains tooling work, while full comptime specialization is separate compiler

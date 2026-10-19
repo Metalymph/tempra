@@ -116,8 +116,9 @@ now contribute `Panic` and revision-4 hits could bypass that enforcement. The
 shared `tempra-runtime` arithmetic contract is consumed by the HIR interpreter,
 TIR interpreter and VM. Eligible JIT functions implement equivalent checked
 Cranelift operations and propagate a C-compatible `{ value, status }` result
-through pure and heap-aware native calls; arithmetic failure is returned to the
-VM as a typed error and never reclassified as fallback.
+through pure and heap-aware native calls. A non-zero status from native code is
+returned to the VM as a typed runtime failure and is never reclassified as
+fallback or re-executed in the interpreter.
 
 ## Capability analysis insertion point
 

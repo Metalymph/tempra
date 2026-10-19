@@ -50,12 +50,12 @@ Helpers that can fail (e.g., due to bounds checks or type mismatches) follow a d
 
 ## 5. Error Handling
 
-- **Soft Errors**: Bounds checks, type mismatches, and null-checks in helpers return a non-zero status code. The JIT code can then decide whether to trap or branch to a fallback path.
+- **Soft Errors**: Bounds checks, type mismatches, and null-checks in helpers return a non-zero status code. Native execution returns that status to the VM as a runtime failure; it does not branch back into the interpreter.
 - **Hard Errors / Traps**: Cranelift traps are used only for:
     - Internal JIT compiler bugs.
     - Violations of impossible invariants.
     - Floating point exceptions (if applicable).
-- **Deoptimization**: While not implemented in v0.1, the `(Value, Status)` ABI prepares the JIT for future deoptimization triggers when a helper returns a "complex" status requiring VM intervention.
+- **Deoptimization**: While not implemented in v0.1, the `(Value, Status)` ABI prepares the JIT for future deoptimization triggers. Fallback is only safe before native side effects occur.
 
 ## 6. Security & Stability
 
@@ -101,13 +101,13 @@ To ensure memory safety and maintain the integrity of the VM garbage collector (
 2. **Context Ownership**: Objects created during JIT execution are owned by the active `JitRuntimeContext`. Their lifetime is guaranteed for the duration of the JIT session (until `JitRuntimeContext::clear()` is called).
 3. **Value Semantics (Handles)**: Allocation helpers return a `JitHelperResult`. On success, the `value` field contains a new `HeapHandle`. The JIT treats this handle as an opaque, immutable token.
 4. **Invalid Handle**: `HeapHandle(0)` is explicitly reserved as the invalid or null handle representation.
-5. **Allocation Failure**: If the runtime fails to allocate an object (e.g., Out Of Memory), the helper returns `JIT_STATUS_ERROR_ALLOCATION_FAILED`. The JIT must map this to `JitRuntimeError::AllocationFailed` and trap/fallback to the VM.
+5. **Allocation Failure**: If the runtime fails to allocate an object (e.g., Out Of Memory), the helper returns `JIT_STATUS_ERROR_ALLOCATION_FAILED`. The JIT must map this to `JitRuntimeError::AllocationFailed` and return it to the VM as a runtime failure.
 6. **No In-Place Mutation**: To preserve value semantics and simplify the boundary, operations like string concatenation or array appending return *new* handles rather than mutating existing ones.
 
 - **Phase 17.1**: Integrate heap-aware JIT into VM runtime. [COMPLETE]
     - **Context Management**: Scoped `JitRuntimeContext` lifetime to JIT execution invocation.
     - **Type Marshalling**: Bi-directional type conversion (from VM values to JIT handles on entry, and back to VM values on exit).
-    - **Fallback Execution**: Elegant fallback to the standard interpreter when JIT execution traps or returns error status.
+    - **Boundary Fallback**: Fall back to the standard interpreter only when a value cannot be marshalled before native execution starts.
 - **Phase 17.2**: Heap-aware JIT Performance & Lifetime Validation. [COMPLETE]
     - **Heap Telemetry**: Extended `JitRuntimeContext` tracking and VM profiling stats.
     - **Performance Benchmarks**: Documented significant speedups (up to **2x speedup** on warm JIT reuse).

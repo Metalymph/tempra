@@ -175,12 +175,16 @@ run_function_with_options(module, "main", args, options);
 
 Both interpreted and native `Int64` add/sub/mul/div use the shared checked
 runtime contract. Arithmetic failures are typed VM errors. Native code returns
-`{ value, status }` through pure and heap-aware call chains; a non-zero
-arithmetic status is propagated to the VM boundary and is not treated as a JIT
-fallback opportunity.
+`{ value, status }` through pure and heap-aware call chains; any non-zero
+status from already-running native code is propagated to the VM boundary as a
+runtime failure and is not treated as a JIT fallback opportunity.
 
 ### Fallback Policy
-The JIT maintains a strict fallback policy. If a function uses unsupported features (Strings, Structs, Heap access) or if compilation fails, the VM transparently continues execution via the interpreter. A checked arithmetic failure produced by already-running native code is a semantic runtime result and never triggers fallback.
+The JIT maintains a strict fallback policy. If a function uses unsupported
+features (Strings, Structs, Heap access), if compilation fails, or if a VM value
+cannot be marshalled across the native boundary, the VM transparently continues
+execution via the interpreter. Once native execution has started, any runtime
+failure is returned to the caller rather than re-executed in the interpreter.
 
 ### Observability and Guardrails
 The VM profile includes a `JIT Summary` detailing:

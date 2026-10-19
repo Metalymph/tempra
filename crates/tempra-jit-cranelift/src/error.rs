@@ -69,6 +69,7 @@ pub enum JitFailurePolicy {
     ReturnError,
     /// Issue a native trap/abort (reserved for internal bugs).
     Trap,
-    /// Roll back to VM execution (requires deoptimization support).
+    /// Roll back to VM execution before native code starts. Native runtime
+    /// failures must be returned to the caller, never retried in the VM.
     FallbackToVm,
 }

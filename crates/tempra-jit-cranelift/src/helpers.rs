@@ -259,13 +259,10 @@ impl JitRuntimeContext {
 
     pub fn alloc_or_get_string(&mut self, value: &str) -> HeapHandle {
         let key = JitHandleKey::String(value.to_string());
-        println!("alloc_or_get_string: {:?}", value);
         if let Some(&handle) = self.handle_cache.get(&key) {
-            println!("alloc_or_get_string: HIT!");
             self.cache_hits += 1;
             handle
         } else {
-            println!("alloc_or_get_string: MISS!");
             self.cache_misses += 1;
             let handle = self.alloc_string(value.to_string());
             self.handle_cache.insert(key, handle);

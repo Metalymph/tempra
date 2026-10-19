@@ -49,6 +49,17 @@ Any function using the following features is currently rejected by the JIT and w
 - Floating point or unsigned arithmetic.
 - Functions returning heap handles (`String`, `Any`).
 
+## Checked Int64 status ABI (K3.2)
+
+Eligible pure and heap-aware native functions return a C-compatible
+`{ value, status }` pair. Checked add/sub/mul detect overflow, and division
+checks both zero and `Int64::MIN / -1` before Cranelift `sdiv`. Native callers
+propagate a callee's non-zero status through the complete native call chain.
+At the VM boundary the status becomes the same typed arithmetic error used by
+the interpreter; execution does not continue with a placeholder result and does
+not fall back after a semantic arithmetic failure. UInt and floating-point
+arithmetic remain outside this K3.2 contract.
+
 ## Source-Level JIT Operation Status (v0.2)
 
 | Operation       | Source-level JIT | Behavior on rejection     |
@@ -105,6 +116,10 @@ The VM always maintains the stack-based interpreter as the primary runtime. If:
 3. The function signature is not compatible with the JIT ABI.
 
 Then the VM transparently falls back to interpreting the bytecode, ensuring correctness over performance.
+
+Checked `Int64` overflow or division-by-zero returned by successfully executing
+native code is not a rejection or compatibility failure and therefore does not
+fall back.
 
 ### JIT Cache
 Compiled functions are stored in an in-memory cache (`HashMap<FunctionId, JitFunctionI64>`) within the `Interpreter` instance.

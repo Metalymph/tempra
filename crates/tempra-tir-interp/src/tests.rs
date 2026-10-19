@@ -152,8 +152,56 @@ fn interpret_division_by_zero_error() {
     assert!(result.is_err());
     assert!(matches!(
         result.unwrap_err(),
-        TirInterpError::DivisionByZero
+        TirInterpError::Int64Arithmetic(tempra_runtime::Int64ArithmeticError::DivisionByZero)
     ));
+}
+
+#[test]
+fn interpret_int64_arithmetic_failures_are_checked() {
+    for (operation, left, right, expected) in [
+        (
+            "add",
+            i64::MAX,
+            1,
+            tempra_runtime::Int64ArithmeticError::Overflow,
+        ),
+        (
+            "sub",
+            i64::MIN,
+            1,
+            tempra_runtime::Int64ArithmeticError::Overflow,
+        ),
+        (
+            "mul",
+            i64::MAX,
+            2,
+            tempra_runtime::Int64ArithmeticError::Overflow,
+        ),
+        (
+            "div",
+            i64::MIN,
+            -1,
+            tempra_runtime::Int64ArithmeticError::Overflow,
+        ),
+    ] {
+        let module = build_simple_module("test", TirType::Int64, |fb| {
+            let left = fb.build_const(TirConst::Int64(left)).unwrap();
+            let right = fb.build_const(TirConst::Int64(right)).unwrap();
+            let result = match operation {
+                "add" => fb.build_add(left, right),
+                "sub" => fb.build_sub(left, right),
+                "mul" => fb.build_mul(left, right),
+                "div" => fb.build_div(left, right),
+                _ => unreachable!(),
+            }
+            .unwrap();
+            fb.build_ret(Some(result)).unwrap();
+        });
+        assert!(matches!(
+            interpret_function(&module, "test", vec![]),
+            Err(TirInterpError::Int64Arithmetic(error)) if error == expected
+        ));
+    }
 }
 
 #[test]

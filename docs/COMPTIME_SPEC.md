@@ -86,7 +86,12 @@ interface selection and requirement/field diagnostics follow canonical source an
 module declaration order. Artifacts stamped with revisions 1 through 3 remain
 readable where structurally valid but are never trusted as hits: fresh compilation
 must reapply current semantics. This changes neither bytecode format nor cache
-schema, and successful revision-4 hits remain verified-bytecode-only.
+schema, and successful compatible hits remain verified-bytecode-only.
+
+K3.2 raises current trust to `tempra-{CARGO_PKG_VERSION}-semantics-5`. This is a
+runtime and effect-analysis revision: checked `Int64` add/sub/mul/div now have one
+host-safe contract and conservative `Panic` facts. It does not change comptime's
+canonical HIR authority or the bytecode format.
 
 ```text
 K1 audit/spec        DONE

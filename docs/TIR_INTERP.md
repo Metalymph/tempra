@@ -68,6 +68,10 @@ TirRuntimeValue::Float64(f64)
 TirRuntimeValue::String(String)
 ```
 
+`Int64` arithmetic delegates to the shared checked runtime kernel: overflow and
+division by zero are controlled `TirInterpError::Int64Arithmetic` failures.
+Unsigned and floating-point behavior is unchanged by K3.2.
+
 ## Error Handling
 
 All errors are represented as `TirInterpError`. The interpreter never panics

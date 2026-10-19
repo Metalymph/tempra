@@ -202,6 +202,9 @@ impl Interpreter {
             Err(InterpreterEvalError::CallDepthExceeded) => {
                 Err(ComptimeEvalError::CallDepthExceeded)
             }
+            Err(InterpreterEvalError::Int64Arithmetic(error)) => {
+                Err(ComptimeEvalError::Evaluation(error.to_string()))
+            }
             Err(InterpreterEvalError::Message(message)) => {
                 Err(ComptimeEvalError::Evaluation(message))
             }

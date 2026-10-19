@@ -1,21 +1,20 @@
-use crate::arithmetic::{
-    add_i64, div_i64, div_u8, mul_i64, neg_i64, sub_i64, IntegerArithmeticError,
-};
+use crate::arithmetic::div_u8;
 use crate::control_flow::ControlFlow;
 use crate::env::RuntimeEnv;
 use crate::interpreter::Interpreter;
 use crate::value::{OptionValue, RegexValue, StructInstance, Value};
 use std::collections::HashMap;
 use tempra_hir::*;
+use tempra_runtime::{add_i64, div_i64, mul_i64, neg_i64, sub_i64, Int64ArithmeticError};
 
 fn integer_value<T>(
-    result: Result<T, IntegerArithmeticError>,
+    result: Result<T, Int64ArithmeticError>,
     into_value: impl FnOnce(T) -> Value,
 ) -> Result<ControlFlow, crate::interpreter::InterpreterEvalError> {
     result
         .map(into_value)
         .map(ControlFlow::Value)
-        .map_err(|error| crate::interpreter::InterpreterEvalError::Message(error.to_string()))
+        .map_err(crate::interpreter::InterpreterEvalError::Int64Arithmetic)
 }
 
 fn run_command(

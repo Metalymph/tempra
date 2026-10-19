@@ -160,6 +160,46 @@ fn discovers_every_initial_tir_capability_mapping() {
 }
 
 #[test]
+fn int64_add_sub_mul_are_panic_origins_without_widening_other_numeric_types() {
+    let instructions = vec![
+        TirInstr::Const(TirValueId(0), TirConst::Int64(1)),
+        TirInstr::Const(TirValueId(1), TirConst::Int64(2)),
+        TirInstr::Add(TirValueId(2), TirValueId(0), TirValueId(1)),
+        TirInstr::Sub(TirValueId(3), TirValueId(0), TirValueId(1)),
+        TirInstr::Mul(TirValueId(4), TirValueId(0), TirValueId(1)),
+        TirInstr::Const(TirValueId(5), TirConst::UInt64(1)),
+        TirInstr::Const(TirValueId(6), TirConst::UInt64(2)),
+        TirInstr::Add(TirValueId(7), TirValueId(5), TirValueId(6)),
+        TirInstr::Sub(TirValueId(8), TirValueId(5), TirValueId(6)),
+        TirInstr::Mul(TirValueId(9), TirValueId(5), TirValueId(6)),
+        TirInstr::Const(TirValueId(10), TirConst::Float64(1.0)),
+        TirInstr::Const(TirValueId(11), TirConst::Float64(2.0)),
+        TirInstr::Add(TirValueId(12), TirValueId(10), TirValueId(11)),
+        TirInstr::Sub(TirValueId(13), TirValueId(10), TirValueId(11)),
+        TirInstr::Mul(TirValueId(14), TirValueId(10), TirValueId(11)),
+    ];
+    let analysis = analyze(&module(vec![function(0, "typed_arithmetic", instructions)])).unwrap();
+
+    let origins: Vec<_> = analysis
+        .direct_origins()
+        .iter()
+        .map(|origin| (&origin.source, origin.location.instruction_index))
+        .collect();
+    assert_eq!(
+        origins,
+        vec![
+            (&DirectCapabilitySource::IntegerAddition, 2),
+            (&DirectCapabilitySource::IntegerSubtraction, 3),
+            (&DirectCapabilitySource::IntegerMultiplication, 4),
+        ]
+    );
+    assert_eq!(
+        analysis.summary(TirFunctionId(0)).unwrap().direct,
+        CapabilitySet::singleton(Capability::Panic)
+    );
+}
+
+#[test]
 fn classifies_all_known_externs_and_preserves_known_empty_sets() {
     let externs = [
         (100, "std.fs.exists", &[Capability::Io][..]),

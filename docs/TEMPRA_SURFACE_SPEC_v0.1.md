@@ -638,6 +638,15 @@ Rules:
 - no `Float`
 - no alias like `UInt = UInt64`
 
+Current runtime semantics for `Int64` addition, subtraction, multiplication and
+unary negation are checked. Results outside the signed 64-bit range fail with a
+controlled integer-overflow error. Division by zero fails with a distinct
+controlled error, while `Int64::MIN / -1` is overflow. These failures require
+the conservative `Panic` capability. Rust panics, native traps and accidental
+wrapping are not Tempra semantics. This rule does not define `UInt` or floating
+point overflow behavior. The future `@verified` design may prove a particular
+operation safe, but is not the authority for this current runtime contract.
+
 ---
 
 ## 16. Inout
@@ -1010,6 +1019,11 @@ or capability metadata to cache artifacts. K2.2 raises current trust to
 raises current trust to `semantics-4` after making interface selection and
 diagnostic iteration follow canonical source/module order; the bytecode format
 remains unchanged.
+
+K3.2 raises current trust to `semantics-5` after establishing checked,
+host-safe `Int64` arithmetic and its conservative `Panic` origins across the
+supported runtime paths. This semantic revision still does not change the
+bytecode format or serialize capability metadata.
 
 K2.5 does not change compiler semantics or the fingerprint. It establishes a
 permanent cross-process gate requiring identical raw artifacts for the currently

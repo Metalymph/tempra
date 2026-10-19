@@ -111,6 +111,14 @@ current trust to `semantics-4` after making interface selection and requirement/
 field diagnostics follow canonical source/module declaration order. These semantic
 revisions are independent of bytecode format version.
 
+K3.2 raises current trust to `semantics-5` because checked `Int64` add/sub/mul
+now contribute `Panic` and revision-4 hits could bypass that enforcement. The
+shared `tempra-runtime` arithmetic contract is consumed by the HIR interpreter,
+TIR interpreter and VM. Eligible JIT functions implement equivalent checked
+Cranelift operations and propagate a C-compatible `{ value, status }` result
+through pure and heap-aware native calls; arithmetic failure is returned to the
+VM as a typed error and never reclassified as fallback.
+
 ## Capability analysis insertion point
 
 Phase E uses verified TIR as its only semantic substrate:
@@ -197,7 +205,7 @@ Provenance must retain:
 
 Unknown extern declarations are harmless until called. A call to an extern without a known classification is an analysis error, including calls in non-entry TIR functions.
 
-`Alloc` classification follows semantic runtime allocation in the current representation. TIR string constants and construction instructions are not normative allocation sites without runtime confirmation. `Panic` is a conservative may-panic capability in E1; later verified analysis may prove individual operations safe.
+`Alloc` classification follows semantic runtime allocation in the current representation. TIR string constants and construction instructions are not normative allocation sites without runtime confirmation. `Panic` is a conservative may-fail capability in E1, including checked `Int64` arithmetic; it is not a runtime error hierarchy. Later verified analysis may prove individual operations safe.
 
 ## Memory architecture boundary
 
@@ -244,6 +252,7 @@ separately from unsafe authorization.
 - `tempra-hir`: normalized semantic representation and AST lowering.
 - `tempra-typeck`: type checking, specialization facts, narrowing, interfaces, and pattern analysis.
 - `tempra-driver`: module loading and orchestration of current execution and checking paths.
+- `tempra-runtime`: shared host-safe runtime contracts, including checked `Int64` arithmetic.
 - `tempra-interpreter`: default checked-HIR runtime.
 - `tempra-tir`, `tempra-tir-lower`, `tempra-tir-interp`: typed backend-facing IR, lowering, verification, and focused interpretation tests.
 - `tempra-bytecode`, `tempra-bytecode-lower`, `tempra-vm`: experimental bytecode path.

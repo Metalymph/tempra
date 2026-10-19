@@ -1,9 +1,13 @@
-//! Runtime value representation shared across interpreter and backends.
+//! Runtime semantics shared across Tempra interpreters and backends.
 //!
 //! [`Value`] is the dynamically-typed container used by the interpreter to
 //! store computation results at runtime. Backend-compiled code does not use
 //! this type directly — it maps Tempra types to native representations — but
 //! the definition lives here so that the stdlib and interpreter can share it.
+
+pub mod arithmetic;
+
+pub use arithmetic::{add_i64, div_i64, mul_i64, neg_i64, sub_i64, Int64ArithmeticError};
 
 /// A dynamically-typed Tempra value.
 #[derive(Debug, Clone, PartialEq)]

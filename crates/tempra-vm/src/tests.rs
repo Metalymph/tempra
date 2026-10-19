@@ -170,7 +170,120 @@ fn vm_division_by_zero_error() {
     module.add_function(func);
 
     let result = run_function(&module, "test", vec![]);
-    assert_eq!(result, Err(VmError::DivisionByZero));
+    assert_eq!(
+        result,
+        Err(VmError::Int64Arithmetic(
+            tempra_runtime::Int64ArithmeticError::DivisionByZero
+        ))
+    );
+}
+
+#[test]
+fn vm_int64_arithmetic_failures_are_checked() {
+    for (instruction, left, right, expected) in [
+        (
+            BytecodeInstr::AddI64,
+            i64::MAX,
+            1,
+            tempra_runtime::Int64ArithmeticError::Overflow,
+        ),
+        (
+            BytecodeInstr::SubI64,
+            i64::MIN,
+            1,
+            tempra_runtime::Int64ArithmeticError::Overflow,
+        ),
+        (
+            BytecodeInstr::SubI64,
+            0,
+            i64::MIN,
+            tempra_runtime::Int64ArithmeticError::Overflow,
+        ),
+        (
+            BytecodeInstr::MulI64,
+            i64::MAX,
+            2,
+            tempra_runtime::Int64ArithmeticError::Overflow,
+        ),
+        (
+            BytecodeInstr::DivI64,
+            i64::MIN,
+            -1,
+            tempra_runtime::Int64ArithmeticError::Overflow,
+        ),
+        (
+            BytecodeInstr::DivI64,
+            1,
+            0,
+            tempra_runtime::Int64ArithmeticError::DivisionByZero,
+        ),
+    ] {
+        let mut module = BytecodeModule::new();
+        let left = module.add_constant(BytecodeConstant::Int64(left));
+        let right = module.add_constant(BytecodeConstant::Int64(right));
+        let mut function = BytecodeFunction::new("test".into(), vec![], BytecodeType::Int64);
+        function.code.extend([
+            BytecodeInstr::ConstI64(left),
+            BytecodeInstr::ConstI64(right),
+            instruction,
+            BytecodeInstr::Return,
+        ]);
+        function.max_stack = 2;
+        module.add_function(function);
+
+        assert_eq!(
+            run_function(&module, "test", vec![]),
+            Err(VmError::Int64Arithmetic(expected))
+        );
+    }
+}
+
+#[test]
+fn vm_int64_add_superinstructions_are_checked() {
+    let mut module = BytecodeModule::new();
+    let one = module.add_constant(BytecodeConstant::Int64(1));
+
+    let mut local_local = BytecodeFunction::new(
+        "local_local".into(),
+        vec![BytecodeType::Int64, BytecodeType::Int64],
+        BytecodeType::Int64,
+    );
+    local_local.locals = vec![BytecodeType::Int64, BytecodeType::Int64];
+    local_local
+        .code
+        .push(BytecodeInstr::AddI64LL(LocalId(0), LocalId(1)));
+    local_local.code.push(BytecodeInstr::Return);
+    local_local.max_stack = 1;
+    module.add_function(local_local);
+
+    let mut local_constant = BytecodeFunction::new(
+        "local_constant".into(),
+        vec![BytecodeType::Int64],
+        BytecodeType::Int64,
+    );
+    local_constant.locals = vec![BytecodeType::Int64];
+    local_constant
+        .code
+        .push(BytecodeInstr::AddI64LC(LocalId(0), one));
+    local_constant.code.push(BytecodeInstr::Return);
+    local_constant.max_stack = 1;
+    module.add_function(local_constant);
+
+    let expected = Err(VmError::Int64Arithmetic(
+        tempra_runtime::Int64ArithmeticError::Overflow,
+    ));
+    assert_eq!(
+        run_function(
+            &module,
+            "local_local",
+            vec![VmValue::Int64(i64::MAX), VmValue::Int64(1)]
+        ),
+        expected
+    );
+    assert_eq!(
+        run_function(&module, "local_constant", vec![VmValue::Int64(i64::MAX)]),
+        expected
+    );
 }
 
 #[test]

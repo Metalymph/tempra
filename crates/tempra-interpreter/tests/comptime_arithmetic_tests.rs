@@ -49,26 +49,20 @@ fn normal_integer_arithmetic_still_succeeds() {
 
 #[test]
 fn signed_overflow_and_underflow_are_deterministic_errors() {
-    assert_evaluation_error("9223372036854775807 + 1", "integer addition overflow");
-    assert_evaluation_error(
-        "(-9223372036854775807 - 1) - 1",
-        "integer subtraction overflow",
-    );
-    assert_evaluation_error("9223372036854775807 * 2", "integer multiplication overflow");
+    assert_evaluation_error("9223372036854775807 + 1", "integer overflow");
+    assert_evaluation_error("(-9223372036854775807 - 1) - 1", "integer overflow");
+    assert_evaluation_error("9223372036854775807 * 2", "integer overflow");
 }
 
 #[test]
 fn signed_division_failures_are_distinguished() {
     assert_evaluation_error("1 / 0", "integer division by zero");
-    assert_evaluation_error(
-        "(-9223372036854775807 - 1) / -1",
-        "integer division overflow",
-    );
+    assert_evaluation_error("(-9223372036854775807 - 1) / -1", "integer overflow");
 }
 
 #[test]
 fn negating_minimum_integer_is_a_deterministic_error() {
-    assert_evaluation_error("-(-9223372036854775807 - 1)", "integer negation overflow");
+    assert_evaluation_error("-(-9223372036854775807 - 1)", "integer overflow");
 }
 
 #[test]
@@ -135,7 +129,7 @@ fn shared_runtime_kernel_returns_the_same_controlled_error() {
 
     match tempra_interpreter::run(&hir) {
         Err(RuntimeError::Message(message)) => {
-            assert_eq!(message, "integer addition overflow");
+            assert_eq!(message, "integer overflow");
         }
         result => panic!("expected controlled runtime arithmetic error, found {result:?}"),
     }

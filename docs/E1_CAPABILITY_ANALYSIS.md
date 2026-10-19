@@ -67,6 +67,7 @@ The classifier matches TIR instructions and fully qualified extern names. It mus
 
 E1 classifies these operations conservatively as `Panic`:
 
+- `Add`, `Sub` and `Mul` when their operand type is `Int64`;
 - `Div`;
 - `Unwrap`;
 - `GetIndex`;
@@ -75,7 +76,7 @@ E1 classifies these operations conservatively as `Panic`:
 
 `Set` with an index is not emitted by the current bytecode lowerer and remains a TIR coverage gap rather than receiving invented runtime semantics.
 
-This is may-panic data, not a proof system. E1 does not attempt constant evaluation, bounds proofs, non-zero proofs, or control-flow refinement. Phase V may later discharge a particular failure obligation without changing E1's conservative baseline.
+This is may-fail data, not a proof system or runtime error hierarchy. E1 does not attempt constant evaluation, overflow proofs, bounds proofs, non-zero proofs, or control-flow refinement. Negation lowers through `Sub` and therefore receives the same `Int64` origin. Phase V may later discharge a particular failure obligation without changing E1's conservative baseline; it is not retroactive authority for the current runtime rule.
 
 ### Initial allocation mapping
 
@@ -387,6 +388,11 @@ that may contain the former specialization ID/index miscompilation. K2.4 raises
 current trust to `semantics-4` because unordered interface selection can change
 accepted types and diagnostic order. No capability metadata is added and
 compatible hits remain bytecode-only.
+
+K3.2 subsequently raises current trust to `semantics-5`. Revision-4 artifacts
+may predate the `Int64` add/sub/mul `Panic` origins and could otherwise bypass
+new `@deny(panic)` enforcement on a bytecode-only hit. The bytecode format and
+capability-metadata policy remain unchanged.
 
 The current analysis/LSP path remains frontend/typechecking-only. E6 converts to
 the existing general `Diagnostic` model but does not make the LSP compile through

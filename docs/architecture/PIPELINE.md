@@ -105,7 +105,8 @@ E3.2 compares denied sets with transitive requirements and retains the unchanged
 E1 witness per violation. Errors are ordered by function ID then capability.
 Cache hits remain analysis/contract-free. E3.2 originally introduced the
 `tempra-{CARGO_PKG_VERSION}-semantics-1` fingerprint; K1.7 raised it to revision
-2, K2.2 raises current trust to revision 3, and K2.4 raises it to revision 4.
+2, K2.2 raised current trust to revision 3, K2.4 raised it to revision 4, and
+K3.2 raises it to revision 5.
 Older artifacts miss;
 fresh failures never populate or replace cache entries. The semantic revision
 versions reuse guarantees, not bytecode format. See [cache policy](../BYTECODE_CACHE.md).
@@ -167,6 +168,13 @@ diagnostics follow canonical source/module declaration order and requires
 selection. Bytecode format version and semantic revision remain independent;
 compatible hits still
 produce verified bytecode only, without reconstructing TIR or compiler facts.
+
+K3.2 requires `semantics-5`: verified TIR capability analysis classifies checked
+`Int64` add/sub/mul/div as conservative `Panic`, and the supported HIR, TIR, VM
+and native JIT execution paths share one controlled overflow/division boundary.
+The JIT propagates arithmetic status through native callees rather than
+continuing with a placeholder or falling back. Bytecode opcodes and serialization
+format remain unchanged.
 
 `TirFunctionId` is a compilation-local identity rather than an index into the
 physical function vector. Bytecode lowering uses an explicit mapping for calls

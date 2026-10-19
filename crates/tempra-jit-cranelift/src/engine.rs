@@ -54,26 +54,33 @@ impl JitFunctionI64 {
             )));
         }
 
-        unsafe {
+        let result = unsafe {
             match self.arity {
                 0 => {
-                    let func: fn() -> i64 = std::mem::transmute(self.ptr);
-                    Ok(func())
+                    let func: extern "C" fn() -> crate::abi::JitHelperResult =
+                        std::mem::transmute(self.ptr);
+                    func()
                 }
                 1 => {
-                    let func: fn(i64) -> i64 = std::mem::transmute(self.ptr);
-                    Ok(func(args[0]))
+                    let func: extern "C" fn(i64) -> crate::abi::JitHelperResult =
+                        std::mem::transmute(self.ptr);
+                    func(args[0])
                 }
                 2 => {
-                    let func: fn(i64, i64) -> i64 = std::mem::transmute(self.ptr);
-                    Ok(func(args[0], args[1]))
+                    let func: extern "C" fn(i64, i64) -> crate::abi::JitHelperResult =
+                        std::mem::transmute(self.ptr);
+                    func(args[0], args[1])
                 }
-                _ => Err(JitRuntimeError::Message(format!(
-                    "Arity {} not yet supported by JIT caller",
-                    self.arity
-                ))),
+                _ => {
+                    return Err(JitRuntimeError::Message(format!(
+                        "Arity {} not yet supported by JIT caller",
+                        self.arity
+                    )))
+                }
             }
-        }
+        };
+
+        result.to_i64_result()
     }
 }
 

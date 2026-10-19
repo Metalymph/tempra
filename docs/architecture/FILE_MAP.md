@@ -42,7 +42,7 @@ This index points to current source-of-truth files. A crate's presence in the wo
 - `crates/tempra-driver/src/module_graph.rs`: filesystem module loading, import resolution from supplied roots, ordering, and cycle detection.
 - `crates/tempra-driver/src/build.rs`, `install.rs`: incomplete build and install scaffolds.
 - `crates/tempra-interpreter/src/comptime.rs`: canonical K1.1 comptime session facade, configuration and typed boundary errors.
-- `crates/tempra-interpreter/src/arithmetic.rs`: panic-free checked `Int64` operations and controlled integer-division failures shared by runtime and comptime evaluation.
+- `crates/tempra-interpreter/src/arithmetic.rs`: interpreter-only checked `UInt8` division adapter.
 - `crates/tempra-interpreter/src/`: default HIR evaluator and runtime value representation.
 
 ## TIR and experimental VM
@@ -81,7 +81,8 @@ This index points to current source-of-truth files. A crate's presence in the wo
 - `crates/tempra-mir/`: MIR scaffold; lowering is not implemented.
 - `crates/tempra-ir/`: small generic IR scaffold, separate from the active TIR path.
 - `crates/tempra-opt/`: optimization scaffold; ARC and escape work are not implemented language guarantees.
-- `crates/tempra-runtime/`: shared runtime scaffold.
+- `crates/tempra-runtime/src/arithmetic.rs`: public shared checked `Int64` contract and typed arithmetic failures used across runtime backends.
+- `crates/tempra-runtime/`: shared runtime contracts and support.
 - `crates/tempra-backend-cranelift/`: native AOT scaffold, distinct from the experimental JIT.
 - `crates/tempra-backend-wasm/`: dedicated Wasm backend scaffold.
 - `crates/tempra-wasm-host/`, `crates/tempra-component-host/`: Wasm hosting scaffolds, not compiler backends.

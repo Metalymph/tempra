@@ -113,6 +113,9 @@ K2.3 stdlib discovery input DONE
 K2.4 semantic/diagnostic iteration DONE
 K2.5 cross-process reproducibility gate DONE
 K2 implementation   DONE
+K3.1 runtime parity audit DONE
+K3.2 Int64 parity    DONE
+K3 implementation   IN PROGRESS
 ```
 
 K1.7 raises the cache trust fingerprint from `semantics-1` to `semantics-2`, so
@@ -146,6 +149,16 @@ and regression budgets continue in K4–K6. Analysis/LSP/REPL comptime integrati
 remains tooling work, while full comptime specialization is separate compiler
 feature/debt. Compile latency remains monitored throughout development; no deep
 optimization is implied by K1.
+
+K3.1 audited the executable runtime surfaces without selecting arithmetic rules
+by taste or by borrowing future `@verified` semantics. K3.2 establishes the
+first shared runtime contract: `Int64` add/sub/mul/neg are checked, division
+distinguishes zero from signed overflow, and HIR, TIR, VM and actually-native JIT
+execution return controlled failures rather than Rust panics, traps or accidental
+wrapping. Native pure and heap-aware call chains propagate `{ value, status }`
+without falling back after a semantic failure. E1 treats checked `Int64`
+add/sub/mul/div as conservative `Panic` origins. Cache trust is `semantics-5`;
+the bytecode format is unchanged. K3 remains in progress.
 
 ### R — Result / Value-Use Hardening
 

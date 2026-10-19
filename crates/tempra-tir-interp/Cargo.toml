@@ -5,4 +5,5 @@ edition.workspace = true
 
 [dependencies]
 tempra-tir.workspace = true
+tempra-runtime.workspace = true
 thiserror = "1"

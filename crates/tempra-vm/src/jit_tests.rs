@@ -245,6 +245,229 @@ fn test_jit_disabled_has_zero_stats() {
     assert_eq!(stats.jit_runtime_calls, 0);
 }
 
+#[cfg(feature = "jit-cranelift")]
+fn eager_jit_options() -> VmOptions {
+    VmOptions {
+        profiling: true,
+        jit_enabled: true,
+        hot_call_threshold: 1,
+        hot_backedge_threshold: 0,
+        jit_min_instruction_count: 0,
+        ..Default::default()
+    }
+}
+
+#[test]
+#[cfg(feature = "jit-cranelift")]
+fn jit_int64_failures_are_native_and_never_fall_back() {
+    for (instruction, safe, failing, expected) in [
+        (
+            BytecodeInstr::AddI64,
+            (20, 22),
+            (i64::MAX, 1),
+            tempra_runtime::Int64ArithmeticError::Overflow,
+        ),
+        (
+            BytecodeInstr::SubI64,
+            (44, 2),
+            (i64::MIN, 1),
+            tempra_runtime::Int64ArithmeticError::Overflow,
+        ),
+        (
+            BytecodeInstr::SubI64,
+            (0, -42),
+            (0, i64::MIN),
+            tempra_runtime::Int64ArithmeticError::Overflow,
+        ),
+        (
+            BytecodeInstr::MulI64,
+            (21, 2),
+            (i64::MAX, 2),
+            tempra_runtime::Int64ArithmeticError::Overflow,
+        ),
+        (
+            BytecodeInstr::DivI64,
+            (84, 2),
+            (i64::MIN, -1),
+            tempra_runtime::Int64ArithmeticError::Overflow,
+        ),
+        (
+            BytecodeInstr::DivI64,
+            (84, 2),
+            (1, 0),
+            tempra_runtime::Int64ArithmeticError::DivisionByZero,
+        ),
+    ] {
+        let mut module = BytecodeModule::new();
+        let mut function = BytecodeFunction::new(
+            "arithmetic".into(),
+            vec![BytecodeType::Int64, BytecodeType::Int64],
+            BytecodeType::Int64,
+        );
+        function.locals = vec![BytecodeType::Int64, BytecodeType::Int64];
+        function.code.extend([
+            BytecodeInstr::LoadLocal(LocalId(0)),
+            BytecodeInstr::LoadLocal(LocalId(1)),
+            instruction,
+            BytecodeInstr::Return,
+        ]);
+        function.max_stack = 2;
+        let function_id = module.add_function(function);
+        let mut interpreter = Interpreter::with_options(&module, eager_jit_options());
+
+        assert_eq!(
+            interpreter
+                .run_function_id(
+                    function_id,
+                    vec![VmValue::Int64(safe.0), VmValue::Int64(safe.1)]
+                )
+                .unwrap(),
+            VmValue::Int64(42)
+        );
+        assert!(interpreter.jit_cache.contains_key(&function_id));
+        assert_eq!(
+            interpreter.run_function_id(
+                function_id,
+                vec![VmValue::Int64(failing.0), VmValue::Int64(failing.1)]
+            ),
+            Err(crate::VmError::Int64Arithmetic(expected))
+        );
+
+        let stats = &interpreter.build_profile().function_stats[function_id.0 as usize];
+        assert_eq!(stats.jit_runtime_calls, 1);
+        assert_eq!(stats.jit_fallback_calls, 0);
+    }
+}
+
+#[test]
+#[cfg(feature = "jit-cranelift")]
+fn pure_jit_call_chain_propagates_arithmetic_status() {
+    let mut module = BytecodeModule::new();
+
+    let mut leaf = BytecodeFunction::new(
+        "leaf".into(),
+        vec![BytecodeType::Int64, BytecodeType::Int64],
+        BytecodeType::Int64,
+    );
+    leaf.locals = vec![BytecodeType::Int64, BytecodeType::Int64];
+    leaf.code.extend([
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::LoadLocal(LocalId(1)),
+        BytecodeInstr::AddI64,
+        BytecodeInstr::Return,
+    ]);
+    leaf.max_stack = 2;
+    let leaf_id = module.add_function(leaf);
+
+    let middle_id = add_forwarding_function(&mut module, "middle", leaf_id);
+    let top_id = add_forwarding_function(&mut module, "top", middle_id);
+    let mut interpreter = Interpreter::with_options(&module, eager_jit_options());
+
+    assert_eq!(
+        interpreter
+            .run_function_id(top_id, vec![VmValue::Int64(20), VmValue::Int64(22)])
+            .unwrap(),
+        VmValue::Int64(42)
+    );
+    assert!(interpreter.jit_cache.contains_key(&top_id));
+    assert!(interpreter.jit_cache.contains_key(&middle_id));
+    assert!(interpreter.jit_cache.contains_key(&leaf_id));
+    assert_eq!(
+        interpreter.run_function_id(top_id, vec![VmValue::Int64(i64::MAX), VmValue::Int64(1)]),
+        Err(crate::VmError::Int64Arithmetic(
+            tempra_runtime::Int64ArithmeticError::Overflow
+        ))
+    );
+    let stats = &interpreter.build_profile().function_stats[top_id.0 as usize];
+    assert_eq!(stats.jit_runtime_calls, 1);
+    assert_eq!(stats.jit_fallback_calls, 0);
+}
+
+#[cfg(feature = "jit-cranelift")]
+fn add_forwarding_function(
+    module: &mut BytecodeModule,
+    name: &str,
+    target: tempra_bytecode::function::FunctionId,
+) -> tempra_bytecode::function::FunctionId {
+    let mut function = BytecodeFunction::new(
+        name.into(),
+        vec![BytecodeType::Int64, BytecodeType::Int64],
+        BytecodeType::Int64,
+    );
+    function.locals = vec![BytecodeType::Int64, BytecodeType::Int64];
+    function.code.extend([
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::LoadLocal(LocalId(1)),
+        BytecodeInstr::Call(target, 2),
+        BytecodeInstr::Return,
+    ]);
+    function.max_stack = 2;
+    module.add_function(function)
+}
+
+#[test]
+#[cfg(feature = "jit-cranelift")]
+fn heap_aware_jit_call_chain_propagates_arithmetic_status() {
+    let mut module = BytecodeModule::new();
+    let one = module.add_constant(BytecodeConstant::Int64(1));
+
+    let mut leaf = BytecodeFunction::new(
+        "heap_leaf".into(),
+        vec![BytecodeType::String, BytecodeType::Int64],
+        BytecodeType::Int64,
+    );
+    leaf.locals = vec![BytecodeType::String, BytecodeType::Int64];
+    leaf.code.extend([
+        BytecodeInstr::LoadLocal(LocalId(1)),
+        BytecodeInstr::ConstI64(one),
+        BytecodeInstr::AddI64,
+        BytecodeInstr::Return,
+    ]);
+    leaf.max_stack = 2;
+    let leaf_id = module.add_function(leaf);
+
+    let mut top = BytecodeFunction::new(
+        "heap_top".into(),
+        vec![BytecodeType::String, BytecodeType::Int64],
+        BytecodeType::Int64,
+    );
+    top.locals = vec![BytecodeType::String, BytecodeType::Int64];
+    top.code.extend([
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::LoadLocal(LocalId(1)),
+        BytecodeInstr::Call(leaf_id, 2),
+        BytecodeInstr::Return,
+    ]);
+    top.max_stack = 2;
+    let top_id = module.add_function(top);
+    let mut interpreter = Interpreter::with_options(&module, eager_jit_options());
+
+    assert_eq!(
+        interpreter
+            .run_function_id(
+                top_id,
+                vec![VmValue::String("local".into()), VmValue::Int64(41)]
+            )
+            .unwrap(),
+        VmValue::Int64(42)
+    );
+    assert!(interpreter.jit_cache_heap.contains_key(&top_id));
+    assert!(interpreter.jit_cache_heap.contains_key(&leaf_id));
+    assert_eq!(
+        interpreter.run_function_id(
+            top_id,
+            vec![VmValue::String("local".into()), VmValue::Int64(i64::MAX)]
+        ),
+        Err(crate::VmError::Int64Arithmetic(
+            tempra_runtime::Int64ArithmeticError::Overflow
+        ))
+    );
+    let stats = &interpreter.build_profile().function_stats[top_id.0 as usize];
+    assert_eq!(stats.jit_runtime_calls, 1);
+    assert_eq!(stats.jit_fallback_calls, 0);
+    assert_eq!(stats.jit_heap_fallbacks, 0);
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // Phase 17.1: Heap-aware JIT VM integration tests
 // ═══════════════════════════════════════════════════════════════════════════════

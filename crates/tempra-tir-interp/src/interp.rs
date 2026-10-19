@@ -147,25 +147,43 @@ impl<'a> Frame<'a> {
                 self.slots.insert(*slot_id, val);
             }
             TirInstr::Add(res, a, b) => {
-                let result =
-                    self.arith_op(*a, *b, "add", |l, r| l + r, |l, r| l + r, |l, r| l + r)?;
+                let result = self.arith_op(
+                    *a,
+                    *b,
+                    "add",
+                    tempra_runtime::add_i64,
+                    |l, r| l + r,
+                    |l, r| l + r,
+                )?;
                 self.values.insert(*res, result);
             }
             TirInstr::Sub(res, a, b) => {
-                let result =
-                    self.arith_op(*a, *b, "sub", |l, r| l - r, |l, r| l - r, |l, r| l - r)?;
+                let result = self.arith_op(
+                    *a,
+                    *b,
+                    "sub",
+                    tempra_runtime::sub_i64,
+                    |l, r| l - r,
+                    |l, r| l - r,
+                )?;
                 self.values.insert(*res, result);
             }
             TirInstr::Mul(res, a, b) => {
-                let result =
-                    self.arith_op(*a, *b, "mul", |l, r| l * r, |l, r| l * r, |l, r| l * r)?;
+                let result = self.arith_op(
+                    *a,
+                    *b,
+                    "mul",
+                    tempra_runtime::mul_i64,
+                    |l, r| l * r,
+                    |l, r| l * r,
+                )?;
                 self.values.insert(*res, result);
             }
             TirInstr::Div(res, a, b) => {
                 // Check for division by zero
                 let b_val = self.get_value(*b)?;
                 match &b_val {
-                    TirRuntimeValue::Int64(0) | TirRuntimeValue::UInt64(0) => {
+                    TirRuntimeValue::UInt64(0) => {
                         return Err(TirInterpError::DivisionByZero);
                     }
                     TirRuntimeValue::Float64(f) if *f == 0.0 => {
@@ -173,8 +191,14 @@ impl<'a> Frame<'a> {
                     }
                     _ => {}
                 }
-                let result =
-                    self.arith_op(*a, *b, "div", |l, r| l / r, |l, r| l / r, |l, r| l / r)?;
+                let result = self.arith_op(
+                    *a,
+                    *b,
+                    "div",
+                    tempra_runtime::div_i64,
+                    |l, r| l / r,
+                    |l, r| l / r,
+                )?;
                 self.values.insert(*res, result);
             }
             TirInstr::Eq(res, a, b) => {
@@ -285,7 +309,7 @@ impl<'a> Frame<'a> {
         a: TirValueId,
         b: TirValueId,
         name: &str,
-        i64_op: impl Fn(i64, i64) -> i64,
+        i64_op: impl Fn(i64, i64) -> Result<i64, tempra_runtime::Int64ArithmeticError>,
         u64_op: impl Fn(u64, u64) -> u64,
         f64_op: impl Fn(f64, f64) -> f64,
     ) -> Result<TirRuntimeValue, TirInterpError> {
@@ -293,7 +317,7 @@ impl<'a> Frame<'a> {
         let rhs = self.get_value(b)?;
         match (&lhs, &rhs) {
             (TirRuntimeValue::Int64(l), TirRuntimeValue::Int64(r)) => {
-                Ok(TirRuntimeValue::Int64(i64_op(*l, *r)))
+                Ok(TirRuntimeValue::Int64(i64_op(*l, *r)?))
             }
             (TirRuntimeValue::UInt64(l), TirRuntimeValue::UInt64(r)) => {
                 Ok(TirRuntimeValue::UInt64(u64_op(*l, *r)))

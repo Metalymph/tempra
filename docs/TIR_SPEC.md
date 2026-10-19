@@ -109,6 +109,12 @@ K2.5 keeps revision 4 and proves exact cross-process artifact equality for the
 currently supported same-build, same-host/target bytecode surface; no Level 4
 cross-machine guarantee is implied.
 
+K3.2 raises cache trust to `semantics-5` without changing TIR or bytecode
+formats. For `Int64`, `add`, `sub` and `mul` are checked, `div` distinguishes
+zero from signed overflow, and lowered negation inherits checked `sub` behavior.
+All supported runtime consumers use the shared contract; host panics, native
+traps and profile-dependent wrapping are not semantic outcomes.
+
 This section does not define future TIR opcodes. Their exact representation belongs to the corresponding phase specifications.
 
 ## Capability-analysis contract
@@ -119,6 +125,6 @@ edges, origins and witnesses. It adds no source mapping: TIR does not retain a
 reliable one. A future lowering side table maps locations to module identity and
 existing source spans.
 
-Direct `Alloc` classification is based on semantic runtime allocation in the current representation; `const` and `make` are not normative allocation sites by syntax alone. Direct `Panic` classification is conservative may-panic information. Later verified analysis may prove individual divisions or bounds accesses safe without changing E1's collection policy.
+Direct `Alloc` classification is based on semantic runtime allocation in the current representation; `const` and `make` are not normative allocation sites by syntax alone. Direct `Panic` classification is conservative may-fail information. Checked `Int64` add, sub, mul and div contribute `Panic`; later verified analysis may prove individual arithmetic, divisions or bounds accesses safe without changing E1's collection policy.
 
 An extern requires a known capability classification only when a TIR call targets it. Unused extern declarations do not invalidate a module.

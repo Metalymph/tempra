@@ -259,6 +259,10 @@ pub struct LowerContext<'a> {
     pub module_builder: &'a mut ModuleBuilder,
     pub self_ty: Option<Type>,
     pub generic_subs: HashMap<String, Type>,
+    /// Module prefix used to qualify top-level function lookups in the
+    /// module-graph compilation path. `None` means the single-file path,
+    /// where type checking registers unqualified function names.
+    pub module_prefix: Option<String>,
     /// (SlotId, Type, is_mutable)
     pub locals: HashMap<String, (TirSlotId, TirType, bool)>,
     pub local_hir_types: HashMap<String, Type>,
@@ -278,9 +282,34 @@ impl<'a> LowerContext<'a> {
             module_builder,
             self_ty,
             generic_subs,
+            module_prefix: None,
             locals: HashMap::new(),
             local_hir_types: HashMap::new(),
         }
+    }
+
+    /// Resolves a top-level function name using the module currently being
+    /// lowered. The module-graph path registers functions as `module.function`,
+    /// while single-file compilation registers them unqualified.
+    fn lookup_function(
+        &self,
+        name: &str,
+    ) -> Option<(String, tempra_typeck::context::FunctionSignature)> {
+        if let Some(prefix) = self
+            .module_prefix
+            .as_deref()
+            .filter(|prefix| !prefix.is_empty())
+        {
+            let qualified = format!("{}.{}", prefix, name);
+            if let Some(sig) = self.type_ctx.functions.get(&qualified) {
+                return Some((qualified, sig.clone()));
+            }
+        }
+
+        self.type_ctx
+            .functions
+            .get(name)
+            .map(|sig| (name.to_string(), sig.clone()))
     }
 
     fn collect_locals_from_statement(&mut self, stmt: &HirStatement) -> Result<(), TirLowerError> {
@@ -579,7 +608,7 @@ impl<'a> LowerContext<'a> {
                         }
                         "Ok" | "Err" => Ok(Type::Unknown),
                         _ => {
-                            if let Some(sig) = self.type_ctx.functions.get(name.as_str()) {
+                            if let Some((_, sig)) = self.lookup_function(name) {
                                 Ok(sig.return_type.clone())
                             } else {
                                 Err(TirLowerError::UnsupportedExpr(
@@ -1055,17 +1084,7 @@ impl<'a> LowerContext<'a> {
         &self,
         name: &str,
     ) -> Option<(String, tempra_typeck::context::FunctionSignature)> {
-        if !self.type_ctx.current_module.is_empty() {
-            let qualified = format!("{}.{}", self.type_ctx.current_module, name);
-            if let Some(sig) = self.type_ctx.functions.get(&qualified) {
-                return Some((qualified, sig.clone()));
-            }
-        }
-
-        self.type_ctx
-            .functions
-            .get(name)
-            .map(|sig| (name.to_string(), sig.clone()))
+        self.lookup_function(name)
     }
 
     fn resolve_collection_callback(
@@ -2657,7 +2676,7 @@ impl<'a> LowerContext<'a> {
                             .map_err(|e| e.into());
                     }
 
-                    if let Some(sig) = self.type_ctx.functions.get(name) {
+                    if let Some((resolved_name, sig)) = self.lookup_function(name) {
                         if sig.params.len() != c.args.len() {
                             return Err(TirLowerError::UnsupportedExpr(
                                 format!(
@@ -2679,7 +2698,7 @@ impl<'a> LowerContext<'a> {
                             arg_values.push(self.lower_expression(arg_expr)?);
                         }
 
-                        let func_id = self.module_builder.declare_function(name);
+                        let func_id = self.module_builder.declare_function(&resolved_name);
                         return self
                             .builder
                             .build_call(func_id, arg_values)
@@ -3594,6 +3613,7 @@ fn lower_function_inner(
         self_ty.clone(),
         generic_subs.clone(),
     );
+    ctx.module_prefix = module_prefix.map(str::to_string);
 
     // Create entry block
     let entry_block = ctx.builder.new_block();

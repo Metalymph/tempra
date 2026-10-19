@@ -8,12 +8,14 @@
 mod analysis;
 mod capability;
 mod externs;
+mod operations;
 
 pub use analysis::{
     analyze, CallEdge, CapabilityAnalysis, CapabilityAnalysisError, CapabilityWitness,
     DirectCapabilityOrigin, DirectCapabilitySource, FunctionCapabilitySummary, TirLocation,
 };
 pub use capability::{Capability, CapabilitySet};
+pub use operations::{EffectOperation, EffectParameter};
 
 #[cfg(test)]
 mod tests;

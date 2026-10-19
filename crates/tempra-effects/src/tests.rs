@@ -1,4 +1,7 @@
-use crate::{analyze, Capability, CapabilityAnalysisError, CapabilitySet, DirectCapabilitySource};
+use crate::{
+    analyze, Capability, CapabilityAnalysisError, CapabilitySet, DirectCapabilitySource,
+    EffectOperation, EffectParameter,
+};
 use std::collections::HashMap;
 use tempra_tir::ir::{
     TirBlock, TirBlockId, TirConst, TirFunction, TirFunctionId, TirInstr, TirKey, TirModule,
@@ -619,5 +622,234 @@ fn analysis_is_identical_across_repeated_runs() {
     let first = analyze(&input).unwrap();
     for _ in 0..32 {
         assert_eq!(analyze(&input).unwrap(), first);
+    }
+}
+
+#[test]
+fn effect_operations_have_stable_exhaustive_order() {
+    let expected = [
+        EffectOperation::FsRead,
+        EffectOperation::FsWrite,
+        EffectOperation::FsRemove,
+        EffectOperation::NetConnect,
+        EffectOperation::NetListen,
+        EffectOperation::IoRead,
+        EffectOperation::IoWrite,
+        EffectOperation::ProcessExec,
+        EffectOperation::ProcessExit,
+        EffectOperation::SpawnTask,
+        EffectOperation::SpawnActor,
+    ];
+
+    // Comparing against the complete literal list keeps the closed taxonomy
+    // honest: a new variant fails this test until it is explicitly registered.
+    assert_eq!(EffectOperation::ALL, expected);
+}
+
+#[test]
+fn effect_operation_names_are_unique_and_canonical() {
+    let expected = [
+        (EffectOperation::FsRead, "fs.read"),
+        (EffectOperation::FsWrite, "fs.write"),
+        (EffectOperation::FsRemove, "fs.remove"),
+        (EffectOperation::NetConnect, "net.connect"),
+        (EffectOperation::NetListen, "net.listen"),
+        (EffectOperation::IoRead, "io.read"),
+        (EffectOperation::IoWrite, "io.write"),
+        (EffectOperation::ProcessExec, "process.exec"),
+        (EffectOperation::ProcessExit, "process.exit"),
+        (EffectOperation::SpawnTask, "spawn.task"),
+        (EffectOperation::SpawnActor, "spawn.actor"),
+    ];
+
+    for (operation, name) in expected {
+        assert_eq!(operation.canonical_name(), name);
+    }
+
+    let mut names: Vec<_> = EffectOperation::ALL
+        .iter()
+        .map(|operation| operation.canonical_name())
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    assert_eq!(names.len(), EffectOperation::ALL.len());
+}
+
+#[test]
+fn effect_operations_map_to_exactly_one_existing_parent_capability() {
+    let expected = [
+        (EffectOperation::FsRead, Capability::Io),
+        (EffectOperation::FsWrite, Capability::Io),
+        (EffectOperation::FsRemove, Capability::Io),
+        (EffectOperation::NetConnect, Capability::Io),
+        (EffectOperation::NetListen, Capability::Io),
+        (EffectOperation::IoRead, Capability::Io),
+        (EffectOperation::IoWrite, Capability::Io),
+        (EffectOperation::ProcessExec, Capability::Process),
+        (EffectOperation::ProcessExit, Capability::Process),
+        (EffectOperation::SpawnTask, Capability::Spawn),
+        (EffectOperation::SpawnActor, Capability::Spawn),
+    ];
+
+    for (operation, parent) in expected {
+        assert_eq!(operation.parent(), parent, "{}", operation.canonical_name());
+    }
+
+    for operation in EffectOperation::ALL {
+        assert!(
+            matches!(
+                operation.parent(),
+                Capability::Io | Capability::Process | Capability::Spawn
+            ),
+            "{} has a non-taxonomy parent",
+            operation.canonical_name()
+        );
+    }
+}
+
+#[test]
+fn effect_parameters_are_valid_only_where_declared() {
+    let expected: [(EffectOperation, &[EffectParameter]); 11] = [
+        (EffectOperation::FsRead, &[EffectParameter::Source]),
+        (EffectOperation::FsWrite, &[EffectParameter::Destination]),
+        (EffectOperation::FsRemove, &[EffectParameter::Destination]),
+        (
+            EffectOperation::NetConnect,
+            &[
+                EffectParameter::Host,
+                EffectParameter::Port,
+                EffectParameter::Protocol,
+            ],
+        ),
+        (
+            EffectOperation::NetListen,
+            &[
+                EffectParameter::Host,
+                EffectParameter::Port,
+                EffectParameter::Protocol,
+            ],
+        ),
+        (EffectOperation::IoRead, &[EffectParameter::Stream]),
+        (EffectOperation::IoWrite, &[EffectParameter::Stream]),
+        (EffectOperation::ProcessExec, &[EffectParameter::Executable]),
+        (EffectOperation::ProcessExit, &[]),
+        (EffectOperation::SpawnTask, &[EffectParameter::Scope]),
+        (EffectOperation::SpawnActor, &[EffectParameter::Scope]),
+    ];
+
+    for (operation, keys) in expected {
+        assert_eq!(
+            operation.valid_parameter_keys(),
+            keys,
+            "{}",
+            operation.canonical_name()
+        );
+        for parameter in EffectParameter::ALL {
+            assert_eq!(
+                operation.accepts_parameter(parameter),
+                keys.contains(&parameter),
+                "{} / {}",
+                operation.canonical_name(),
+                parameter.canonical_name()
+            );
+        }
+    }
+}
+
+#[test]
+fn effect_parameter_vocabulary_is_closed_and_stable() {
+    let expected = [
+        EffectParameter::Source,
+        EffectParameter::Destination,
+        EffectParameter::Host,
+        EffectParameter::Port,
+        EffectParameter::Protocol,
+        EffectParameter::Executable,
+        EffectParameter::Stream,
+        EffectParameter::Scope,
+    ];
+    assert_eq!(EffectParameter::ALL, expected);
+
+    let expected_names = [
+        (EffectParameter::Source, "source"),
+        (EffectParameter::Destination, "destination"),
+        (EffectParameter::Host, "host"),
+        (EffectParameter::Port, "port"),
+        (EffectParameter::Protocol, "protocol"),
+        (EffectParameter::Executable, "executable"),
+        (EffectParameter::Stream, "stream"),
+        (EffectParameter::Scope, "scope"),
+    ];
+    for (parameter, name) in expected_names {
+        assert_eq!(parameter.canonical_name(), name);
+    }
+
+    let mut names: Vec<_> = EffectParameter::ALL
+        .iter()
+        .map(|parameter| parameter.canonical_name())
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    assert_eq!(names.len(), EffectParameter::ALL.len());
+}
+
+#[test]
+fn specialized_registry_does_not_consume_capability_bits() {
+    assert_eq!(std::mem::size_of::<CapabilitySet>(), 1);
+    assert_eq!(std::mem::size_of::<Capability>(), 1);
+    assert_eq!(
+        [
+            Capability::Alloc,
+            Capability::Panic,
+            Capability::Io,
+            Capability::Process,
+            Capability::Spawn,
+            Capability::Nondeterminism,
+            Capability::Unsafe,
+        ]
+        .map(|capability| capability as u8),
+        [0, 1, 2, 3, 4, 5, 6]
+    );
+
+    let parents = EffectOperation::ALL
+        .iter()
+        .fold(CapabilitySet::empty(), |set, operation| {
+            set.union(CapabilitySet::singleton(operation.parent()))
+        });
+    assert_eq!(
+        parents.iter().collect::<Vec<_>>(),
+        vec![Capability::Io, Capability::Process, Capability::Spawn]
+    );
+}
+
+#[test]
+fn deferred_registry_metadata_does_not_imply_runtime_support() {
+    assert!(EffectOperation::ProcessExit
+        .valid_parameter_keys()
+        .is_empty());
+    assert_eq!(
+        EffectOperation::SpawnTask.valid_parameter_keys(),
+        &[EffectParameter::Scope]
+    );
+    assert_eq!(
+        EffectOperation::SpawnActor.valid_parameter_keys(),
+        &[EffectParameter::Scope]
+    );
+
+    // Registering the vocabulary does not classify externs or make these
+    // operations executable: the existing analysis still rejects both calls as
+    // unclassified, and no runtime availability is claimed.
+    for name in ["std.spawn.task", "std.process.exit"] {
+        let called = module(vec![
+            function(0, "main", vec![call(0, 1)]),
+            extern_function(1, name),
+        ]);
+        assert!(
+            matches!(
+                analyze(&called),
+                Err(CapabilityAnalysisError::UnclassifiedExtern { .. })
+            ),
+            "{name} must remain unclassified"
+        );
     }
 }

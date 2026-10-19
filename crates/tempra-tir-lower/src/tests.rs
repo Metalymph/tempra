@@ -268,6 +268,122 @@ fn if_both_branches_return_ok() {
     assert!(verify_module(&builder.module).is_ok());
 }
 
+fn int_return(value: &str) -> HirStatement {
+    HirStatement::Return(Some(HirExpression::Integer(
+        empty_span(),
+        value.to_string(),
+    )))
+}
+
+fn block(statements: Vec<HirStatement>) -> HirBlock {
+    HirBlock {
+        span: empty_span(),
+        statements,
+    }
+}
+
+fn if_expr(
+    condition: bool,
+    then_statements: Vec<HirStatement>,
+    else_statements: Option<Vec<HirStatement>>,
+) -> HirExpression {
+    HirExpression::If(HirIf {
+        span: empty_span(),
+        condition: Box::new(HirExpression::Bool(empty_span(), condition)),
+        then_block: block(then_statements),
+        else_branch: else_statements
+            .map(|statements| Box::new(HirExpression::Block(block(statements)))),
+        is_comptime: false,
+    })
+}
+
+fn lower_and_verify(func: &HirFunction) -> TirModule {
+    let ctx = create_test_ctx();
+    let mut builder = ModuleBuilder::new();
+    let tir_func = lower_function(func, &ctx, &mut builder, None, None).unwrap();
+    builder.add_function(tir_func);
+
+    assert!(verify_module(&builder.module).is_ok());
+    builder.module
+}
+
+#[test]
+fn nested_if_all_branches_return_ok() {
+    let nested_then = if_expr(false, vec![int_return("1")], Some(vec![int_return("2")]));
+    let nested_else = if_expr(true, vec![int_return("3")], Some(vec![int_return("4")]));
+    let outer = if_expr(
+        true,
+        vec![HirStatement::Expr(nested_then)],
+        Some(vec![HirStatement::Expr(nested_else)]),
+    );
+
+    let func = create_function(
+        "nested_if",
+        HirType::Named(empty_span(), "Int64".to_string()),
+        vec![HirStatement::Expr(outer)],
+    );
+
+    let module = lower_and_verify(&func);
+    let f = &module.functions[0];
+    assert!(
+        f.blocks
+            .iter()
+            .all(|block| !matches!(&block.terminator, Some(TirTerminator::Unreachable))),
+        "terminating branches must not leave reachable unreachable terminators: {}",
+        format_tir_module(&module)
+    );
+    assert_eq!(f.blocks.len(), 7, "dead join blocks should be pruned");
+}
+
+#[test]
+fn nested_if_partial_return_error() {
+    let nested_then = if_expr(false, vec![int_return("1")], Some(vec![int_return("2")]));
+    let outer = if_expr(
+        true,
+        vec![HirStatement::Expr(nested_then)],
+        Some(Vec::new()),
+    );
+
+    let func = create_function(
+        "nested_if_partial",
+        HirType::Named(empty_span(), "Int64".to_string()),
+        vec![HirStatement::Expr(outer)],
+    );
+
+    let ctx = create_test_ctx();
+    let mut builder = ModuleBuilder::new();
+    let err = lower_function(&func, &ctx, &mut builder, None, None).unwrap_err();
+    assert!(err.to_string().contains("missing return"));
+}
+
+#[test]
+fn unreachable_join_after_terminating_if_ok() {
+    let outer = if_expr(true, vec![int_return("1")], Some(vec![int_return("2")]));
+    let dead_let = HirStatement::Let(HirLet {
+        span: empty_span(),
+        name: "dead".to_string(),
+        ty: None,
+        value: HirExpression::Integer(empty_span(), "3".to_string()),
+    });
+
+    let func = create_function(
+        "dead_join",
+        HirType::Named(empty_span(), "Int64".to_string()),
+        vec![HirStatement::Expr(outer), dead_let],
+    );
+
+    let module = lower_and_verify(&func);
+    let f = &module.functions[0];
+    assert_eq!(f.blocks.len(), 3, "unreachable join must be pruned");
+    assert!(
+        f.blocks
+            .iter()
+            .all(|block| !matches!(&block.terminator, Some(TirTerminator::Unreachable))),
+        "pruned CFG should not need unreachable terminators: {}",
+        format_tir_module(&module)
+    );
+}
+
 #[test]
 fn if_missing_return_error() {
     let cond = HirExpression::Bool(empty_span(), true);

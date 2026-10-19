@@ -1,6 +1,6 @@
 use crate::error::TirBuildError;
 use crate::ir::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub struct ModuleBuilder {
     pub module: TirModule,
@@ -188,6 +188,62 @@ impl FunctionBuilder {
             }
         }
         false
+    }
+
+    fn reachable_blocks_from_entry(&self) -> HashSet<TirBlockId> {
+        let mut visited = HashSet::new();
+        let Some(entry) = self.func.blocks.first().map(|block| block.id) else {
+            return visited;
+        };
+
+        let mut pending = vec![entry];
+        while let Some(block_id) = pending.pop() {
+            if !visited.insert(block_id) {
+                continue;
+            }
+
+            let Some(block) = self.func.blocks.iter().find(|block| block.id == block_id) else {
+                continue;
+            };
+            match &block.terminator {
+                Some(TirTerminator::Br(next)) => pending.push(*next),
+                Some(TirTerminator::CondBr(_, then_block, else_block)) => {
+                    pending.push(*then_block);
+                    pending.push(*else_block);
+                }
+                Some(TirTerminator::Ret(_)) | Some(TirTerminator::Unreachable) | None => {}
+            }
+        }
+
+        visited
+    }
+
+    /// Returns whether `target` can be reached from the function's entry block.
+    ///
+    /// A block can have predecessors and still be unreachable, because the
+    /// blocks containing those predecessors may themselves be unreachable.
+    pub fn is_block_reachable_from_entry(&self, target: TirBlockId) -> bool {
+        self.reachable_blocks_from_entry().contains(&target)
+    }
+
+    /// Removes blocks that cannot be reached from the function's entry block.
+    ///
+    /// Lowering may create empty continuation blocks after a fully terminating
+    /// `if` so that unreachable source statements can still be lowered. If no
+    /// enclosing construct links such a block into the CFG, it is dead. Pruning
+    /// it keeps the IR well formed without introducing artificial returns or
+    /// unreachable terminators on paths that can never execute.
+    pub fn prune_unreachable_blocks(&mut self) {
+        let reachable = self.reachable_blocks_from_entry();
+        self.func
+            .blocks
+            .retain(|block| reachable.contains(&block.id));
+        if self
+            .current_block
+            .is_some_and(|block_id| !reachable.contains(&block_id))
+        {
+            self.current_block = None;
+        }
     }
 
     pub fn build(self) -> TirFunction {

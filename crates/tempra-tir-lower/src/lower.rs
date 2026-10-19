@@ -693,6 +693,17 @@ impl<'a> LowerContext<'a> {
         }
     }
 
+    /// Whether control can continue past the block currently being lowered.
+    ///
+    /// A block that is not terminated may still be unreachable: the existing
+    /// lowering strategy creates an empty join block after an `if` whose
+    /// branches all terminate, so that unreachable statements can still be
+    /// lowered. Such a join must not be mistaken for a live fallthrough by an
+    /// enclosing `if`.
+    fn block_falls_through(&self, block_id: TirBlockId) -> bool {
+        !self.builder.is_terminated() && self.builder.is_block_reachable_from_entry(block_id)
+    }
+
     pub fn lower_statement(&mut self, stmt: &HirStatement) -> Result<(), TirLowerError> {
         match stmt {
             HirStatement::Expr(expr) => {
@@ -2265,7 +2276,7 @@ impl<'a> LowerContext<'a> {
                     self.lower_statement(stmt)?;
                 }
                 t_block = self.builder.get_current_block().unwrap();
-                let t_terminated = self.builder.is_terminated();
+                let t_falls_through = self.block_falls_through(t_block);
 
                 // Else block
                 self.builder.set_current_block(f_block);
@@ -2284,23 +2295,24 @@ impl<'a> LowerContext<'a> {
                     }
                 }
                 f_block = self.builder.get_current_block().unwrap();
-                let f_terminated = self.builder.is_terminated();
+                let f_falls_through = self.block_falls_through(f_block);
 
-                if t_terminated && f_terminated {
-                    // Both branches terminate. We still create a join block so that
-                    // subsequent instructions (which are unreachable) can be appended
-                    // without causing a "block already terminated" error.
+                if !t_falls_through && !f_falls_through {
+                    // Neither branch can reach the join. We still create a block so
+                    // that subsequent instructions (which are unreachable) can be
+                    // appended without causing a "block already terminated" error.
+                    // The block has no incoming edges and is therefore unreachable.
                     let end_block = self.builder.new_block();
                     self.builder.set_current_block(end_block);
                     Ok(TirValueId(0))
                 } else {
                     let end_block = self.builder.new_block();
 
-                    if !t_terminated {
+                    if t_falls_through {
                         self.builder.set_current_block(t_block);
                         self.builder.build_br(end_block)?;
                     }
-                    if !f_terminated {
+                    if f_falls_through {
                         self.builder.set_current_block(f_block);
                         self.builder.build_br(end_block)?;
                     }
@@ -2952,7 +2964,7 @@ impl<'a> LowerContext<'a> {
             self.lower_statement(stmt)?;
         }
         t_block = self.builder.get_current_block().unwrap();
-        let t_terminated = self.builder.is_terminated();
+        let t_falls_through = self.block_falls_through(t_block);
 
         // Restore locals after then block (bindings should not leak)
         self.locals = old_locals;
@@ -2972,23 +2984,24 @@ impl<'a> LowerContext<'a> {
             }
         }
         f_block = self.builder.get_current_block().unwrap();
-        let f_terminated = self.builder.is_terminated();
+        let f_falls_through = self.block_falls_through(f_block);
 
-        if t_terminated && f_terminated {
-            // Both branches terminate. We still create a join block so that
-            // subsequent instructions (which are unreachable) can be appended
-            // without causing a "block already terminated" error.
+        if !t_falls_through && !f_falls_through {
+            // Neither branch can reach the join. We still create a block so
+            // that subsequent instructions (which are unreachable) can be
+            // appended without causing a "block already terminated" error.
+            // The block has no incoming edges and is therefore unreachable.
             let end_block = self.builder.new_block();
             self.builder.set_current_block(end_block);
             Ok(TirValueId(0))
         } else {
             let end_block = self.builder.new_block();
 
-            if !t_terminated {
+            if t_falls_through {
                 self.builder.set_current_block(t_block);
                 self.builder.build_br(end_block)?;
             }
-            if !f_terminated {
+            if f_falls_through {
                 self.builder.set_current_block(f_block);
                 self.builder.build_br(end_block)?;
             }
@@ -3643,19 +3656,23 @@ fn lower_function_inner(
         if ctx.builder.func.return_type == TirType::Unit {
             ctx.builder.build_ret(None)?;
         } else {
-            // If the current block is not the entry block and has no predecessors,
-            // it's an unreachable block created by a fully terminating branch (e.g. if with both returns).
-            // We must still terminate it for the verifier, so we use unreachable.
+            // A block can have predecessors and still be unreachable when those
+            // predecessors are themselves unreachable (e.g. a join nested inside
+            // an `if` whose branches all return). Only a block reachable from the
+            // entry can represent a genuinely missing return path.
             let current_block_id = ctx.builder.get_current_block().unwrap();
-            if current_block_id.0 == 0 || ctx.builder.has_predecessors(current_block_id) {
+            if ctx.builder.is_block_reachable_from_entry(current_block_id) {
                 let body_span = func.body.as_ref().map_or(func.span, |b| b.span);
                 return Err(TirLowerError::MissingReturn(body_span));
-            } else {
-                // Unreachable join block, terminate it
-                ctx.builder.build_unreachable()?;
             }
+            // Otherwise the continuation is dead. Leave it unterminated; it is
+            // pruned below.
         }
     }
+
+    // Abandoned continuation blocks cannot affect execution, and the verifier
+    // must not see them as missing returns. Remove them from the final CFG.
+    ctx.builder.prune_unreachable_blocks();
 
     Ok(ctx.builder.build())
 }

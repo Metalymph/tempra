@@ -638,6 +638,15 @@ Rules:
 - no `Float`
 - no alias like `UInt = UInt64`
 
+Current runtime semantics for `Int64` addition, subtraction, multiplication and
+unary negation are checked. Results outside the signed 64-bit range fail with a
+controlled integer-overflow error. Division by zero fails with a distinct
+controlled error, while `Int64::MIN / -1` is overflow. These failures require
+the conservative `Panic` capability. Rust panics, native traps and accidental
+wrapping are not Tempra semantics. This rule does not define `UInt` or floating
+point overflow behavior. The future `@verified` design may prove a particular
+operation safe, but is not the authority for this current runtime contract.
+
 ---
 
 ## 16. Inout
@@ -885,6 +894,13 @@ Rules:
 - `std...` for standard library modules
 - a leading `.` for relative imports
 - dot-separated package module paths
+
+The compiler resolves `std...` from a standard-library root selected at the
+toolchain/API boundary. Compiler-authoritative file/module paths never search the
+current working directory implicitly. The default root is discovered relative to
+the compiler executable; embedding APIs may supply the `std/` directory directly.
+An explicitly relative supplied path is interpreted relative to the caller's cwd
+once, which is explicit path interpretation rather than hidden discovery.
 ---
 
 ## 24. Subscript Hooks
@@ -995,9 +1011,34 @@ E4 retains `semantics-1`: pre-E4 parsing rejected pure, attribute edits change
 source identity, and existing enforcement remains authoritative. No contract
 metadata is serialized into cache.
 
+K1.7 subsequently raises the compiler fingerprint to `semantics-2` so
+artifacts predating the canonical comptime guarantees cannot bypass fresh
+evaluation. This is independent of bytecode format version and adds no contract
+or capability metadata to cache artifacts. K2.2 raises current trust to
+`semantics-3` after repairing specialization function-identity mapping. K2.4
+raises current trust to `semantics-4` after making interface selection and
+diagnostic iteration follow canonical source/module order; the bytecode format
+remains unchanged.
+
+K3.2 raises current trust to `semantics-5` after establishing checked,
+host-safe `Int64` arithmetic and its conservative `Panic` origins across the
+supported runtime paths. This semantic revision still does not change the
+bytecode format or serialize capability metadata.
+
+K2.5 does not change compiler semantics or the fingerprint. It establishes a
+permanent cross-process gate requiring identical raw artifacts for the currently
+supported bytecode surface when source/module order, compiler build, semantic
+revision, format, options, resolved stdlib contents, host and target are the same.
+Comptime, specialization and capability-contract fixtures are included. Associated-
+type selection and its diagnostics are checked at the frontend boundary because
+that surface is not yet bytecode-lowerable. This is a bounded Level 3 guarantee,
+not Level 4 reproducibility across machines or targets.
+
 E1–E6 complete the currently meaningful semantic and tooling surface, not all
-TIR coverage. K1 audits one backend-independent comptime authority and parity
-across VM/JIT/Wasm/future AOT without fixing the authority layer in advance. The immediate roadmap
+TIR coverage. K1 has completed its canonical backend-independent comptime
+authority and cache trust boundary. K2 completes audited deterministic ordering,
+explicit stdlib input and the bounded reproducibility gate. K3–K6 continue runtime parity,
+timings, latency baselines and regression budgets. The immediate roadmap
 continues K → R → M → C → V → O → P, with U conditional. R is future Result/value-use hardening:
 no silent discard, including an accidental `let _ = ...` escape hatch; handling
 through `?`, `match`, return/propagation or meaningful use. Neither wildcard-binding

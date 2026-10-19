@@ -70,6 +70,12 @@ pub enum EffectDirectOriginKind {
     MakeStruct,
     /// A conservative may-panic division.
     Division,
+    /// A potentially overflowing checked `Int64` addition.
+    IntegerAddition,
+    /// A potentially overflowing checked `Int64` subtraction or negation.
+    IntegerSubtraction,
+    /// A potentially overflowing checked `Int64` multiplication.
+    IntegerMultiplication,
     /// A conservative may-panic unwrap.
     Unwrap,
     /// A constant-index access.
@@ -294,6 +300,13 @@ fn project_witness(
         DirectCapabilitySource::Make => (EffectDirectOriginKind::Make, None),
         DirectCapabilitySource::MakeStruct => (EffectDirectOriginKind::MakeStruct, None),
         DirectCapabilitySource::Division => (EffectDirectOriginKind::Division, None),
+        DirectCapabilitySource::IntegerAddition => (EffectDirectOriginKind::IntegerAddition, None),
+        DirectCapabilitySource::IntegerSubtraction => {
+            (EffectDirectOriginKind::IntegerSubtraction, None)
+        }
+        DirectCapabilitySource::IntegerMultiplication => {
+            (EffectDirectOriginKind::IntegerMultiplication, None)
+        }
         DirectCapabilitySource::Unwrap => (EffectDirectOriginKind::Unwrap, None),
         DirectCapabilitySource::ConstantIndexGet => {
             (EffectDirectOriginKind::ConstantIndexGet, None)

@@ -1,3 +1,4 @@
+use tempra_tir::ir::TirFunctionId;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -16,6 +17,17 @@ pub enum BytecodeLowerError {
 
     #[error("unknown function: {0}")]
     UnknownFunction(String),
+
+    /// Two physical TIR functions claim the same compilation-local identity.
+    #[error("duplicate TIR function id: {function:?}")]
+    DuplicateTirFunctionId { function: TirFunctionId },
+
+    /// A TIR call target has no function in the bytecode module mapping.
+    #[error("function {caller:?} calls unmapped TIR function {target:?}")]
+    MissingFunctionMapping {
+        caller: TirFunctionId,
+        target: TirFunctionId,
+    },
 
     #[error("unknown value: {0}")]
     UnknownValue(String),

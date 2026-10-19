@@ -13,6 +13,7 @@ source
   → HIR
   → reject capability contracts (execution only)
   → type checking
+      → canonical comptime facade where evaluation is required
   → HIR interpreter
 ```
 
@@ -25,7 +26,8 @@ source
   → lexer / parser
   → AST
   → HIR
-  → type checking and comptime pruning
+  → type checking
+      → canonical comptime facade and HIR pruning/materialization
   → TIR lowering
   → TIR verification
   → capability analysis (once; fresh compilation only)
@@ -101,8 +103,11 @@ immutably, including declaration/attribute spans and source/module identity.
 Templates only acquire concrete bindings when their specializations are emitted.
 E3.2 compares denied sets with transitive requirements and retains the unchanged
 E1 witness per violation. Errors are ordered by function ID then capability.
-Cache hits remain analysis/contract-free but require the shared
-`tempra-{CARGO_PKG_VERSION}-semantics-1` fingerprint. Older artifacts miss;
+Cache hits remain analysis/contract-free. E3.2 originally introduced the
+`tempra-{CARGO_PKG_VERSION}-semantics-1` fingerprint; K1.7 raised it to revision
+2, K2.2 raised current trust to revision 3, K2.4 raised it to revision 4, and
+K3.2 raises it to revision 5.
+Older artifacts miss;
 fresh failures never populate or replace cache entries. The semantic revision
 versions reuse guarantees, not bytecode format. See [cache policy](../BYTECODE_CACHE.md).
 
@@ -119,7 +124,83 @@ Only operations present in TIR are analyzed. HIR-only builtins remain explicit c
 
 ## Comptime interaction
 
-The typechecker removes unselected `if comptime` branches and `comptime match` arms from HIR. TIR therefore contains only the selected semantic branch where specialization is available. Capability analysis may rely on that semantic pruning, but it must not assume later dead-code elimination, inlining, escape analysis, or allocation elimination.
+The K1 audit selected the existing HIR interpreter as the canonical comptime
+semantic kernel. K1.1 places a single facade in `tempra-interpreter` around that
+kernel. The facade alone starts a comptime session, installs the current fuel
+policy, normalizes its boundary result, and restores prior interpreter state.
+`tempra-typeck` consumes this API and retains ownership of value-to-HIR-literal
+materialization. A nested `HirExpression::Comptime` continues within the active
+session and shares its remaining budget.
+
+The typechecker removes unselected `if comptime` branches and `comptime match`
+arms from HIR. TIR therefore contains only the selected semantic branch where
+specialization is available. Capability analysis may rely on that semantic
+pruning, but it must not assume later dead-code elimination, inlining, escape
+analysis, or allocation elimination.
+
+K1.2 now uses the same canonical facade for ordinary multi-module and file-based
+typechecking. The interpreter receives separate module-owned HIR files and a
+qualified lookup context; no synthetic aggregate HIR file is created.
+`tempra-analysis`, LSP and REPL typechecking remain on their existing
+non-comptime-aware paths. K1.3 routes supported integer arithmetic through a
+panic-free shared kernel. K1.4 makes shared HIR call dispatch reject missing
+executable bodies, including comptime calls to extern declarations, without
+adding VM-native dispatch to the HIR evaluator. Further recursion and
+specialization hardening remain later K1/K2 work. K1.5 applies one policy at
+the interpreter's effect boundary: deterministic local work, allocation and
+`cmd` construction remain allowed, while process execution, output/input,
+filesystem, environment, host-OS access, `dbg` and `exit` are rejected.
+K1.6 adds a deterministic evaluator-progress budget and a separate
+compiler-defined call-depth guard. Expression and statement entries, one
+entry per Tempra call frame, and each `for` body that receives an item consume
+one fuel tick; an exhausted iterator does not create a phantom tick. The
+default safety limit is 8 active frames, nested comptime shares the active
+session, and builtins have constant semantic cost in v0.1. The compiler-defined
+call-depth limit is revisionable as the evaluator evolves. These limits bound
+evaluator progress only: there is no wall-clock, per-byte, CPU or memory quota.
+The current HIR has no `while` surface. K1.7 introduced `semantics-2` so
+revision-1 artifacts cannot bypass fresh K1 evaluation. K2.2 processes
+specializations in deterministic first-request order and requires `semantics-3`
+so revision-2 artifacts cannot preserve the former TIR-ID/bytecode-position
+miscompilation. K2.4 makes interface candidate selection and requirement/field
+diagnostics follow canonical source/module declaration order and requires
+`semantics-4` so revision-3 artifacts cannot preserve unordered interface
+selection. Bytecode format version and semantic revision remain independent;
+compatible hits still
+produce verified bytecode only, without reconstructing TIR or compiler facts.
+
+K3.2 requires `semantics-5`: verified TIR capability analysis classifies checked
+`Int64` add/sub/mul/div as conservative `Panic`, and the supported HIR, TIR, VM
+and native JIT execution paths share one controlled overflow/division boundary.
+The JIT propagates arithmetic status through native callees rather than
+continuing with a placeholder or falling back. Bytecode opcodes and serialization
+format remain unchanged.
+
+`TirFunctionId` is a compilation-local identity rather than an index into the
+physical function vector. Bytecode lowering uses an explicit mapping for calls
+and emits functions in ascending identity order. Filtering specialization
+requests by owning module preserves the registry's deterministic order; no
+unordered regrouping participates in emission.
+
+The file/module entrypoints resolve standard-library location before module graph
+construction. `CompilationConfig` carries either an explicit absolute `std/` root
+or the default found relative to the current executable. The module resolver has
+no cwd fallback: it consumes that root unchanged, and a standard-library import
+without one produces a controlled diagnostic. Explicit relative roots are resolved
+once by the configuration API, so cwd may interpret a user-supplied relative path
+but never discovers std implicitly. This input does not participate in the
+single-source bytecode cache because that cache path does not construct a module
+graph; semantic revision remains `4`.
+
+K2.5 verifies the supported bytecode path as a whole in independent compiler
+processes. With source/module order, build, host/target, options and resolved stdlib
+contents held constant, simple, multi-function, multi-module, specialization,
+comptime, capability-contract and stdlib fixtures produce identical raw artifacts
+and runtime results. Equivalent absolute roots, cwd changes after path resolution,
+inode/mtime differences and cache state do not change those artifacts. Interface
+selection and diagnostic ordering are checked at the frontend boundary where TIR/
+bytecode lowering does not yet support that surface. This bounded Level 3 guarantee
+does not imply Level 4 reproducibility across machines or targets.
 
 ## Planned backends
 
@@ -144,12 +225,11 @@ future value-use obligation, not a capability or an implemented pass.
 E1–E6 complete the currently meaningful semantic and tooling surface; TIR
 coverage gaps remain. `tempra effects` projects existing analysis, contracts,
 violations, witnesses and provenance without a second analyzer. A richer TIR
-Graph requires later ownership/actor facts. K1 comptime authority/evaluator
-parity, deterministic reproducibility and initial phase-timing/latency measures
-are the next compiler milestone. It must keep one backend-independent semantic
-result or error across VM, JIT, Wasm and future AOT; choosing the authority layer
-is an audit outcome, not a decision made here. Deep compilation optimization and
-incremental builds belong to P.
+Graph requires later ownership/actor facts. The K1 audit selected the HIR
+interpreter kernel as the backend-independent comptime authority, and K1.1 now
+provides its canonical evaluation facade. K1 and K2 are complete. Runtime parity
+and phase-timing/latency measures continue in K3–K6 before K can close. Deep compilation
+optimization and incremental builds belong to P.
 
 U — Unsafe Boundary is standalone DEFERRED / CONDITIONAL work at the end of the roadmap,
 in the roadmap and triggered only by a real source operation requiring explicit

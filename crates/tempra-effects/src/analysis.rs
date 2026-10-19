@@ -4,7 +4,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::error::Error;
 use std::fmt;
 use tempra_tir::ir::{
-    TirBlockId, TirConst, TirFunction, TirFunctionId, TirInstr, TirKey, TirModule,
+    TirBlockId, TirConst, TirFunction, TirFunctionId, TirInstr, TirKey, TirModule, TirSlotId,
+    TirType, TirValueId,
 };
 
 /// A stable structural position within a TIR function body.
@@ -40,6 +41,12 @@ pub enum DirectCapabilitySource {
     MakeStruct,
     /// A potentially failing division.
     Division,
+    /// A potentially overflowing `Int64` addition.
+    IntegerAddition,
+    /// A potentially overflowing `Int64` subtraction or lowered negation.
+    IntegerSubtraction,
+    /// A potentially overflowing `Int64` multiplication.
+    IntegerMultiplication,
     /// A potentially failing enum payload unwrap.
     Unwrap,
     /// A constant-index `Get` operation.
@@ -351,6 +358,9 @@ pub fn analyze(module: &TirModule) -> Result<CapabilityAnalysis, CapabilityAnaly
         .filter(|function| !function.is_extern && !function.blocks.is_empty())
     {
         let state_index = state_indices[&function.id];
+        let mut value_types: HashMap<TirValueId, TirType> =
+            function.params.iter().cloned().collect();
+        let mut slot_types: HashMap<TirSlotId, TirType> = HashMap::new();
         let mut blocks: Vec<_> = function.blocks.iter().collect();
         blocks.sort_by_key(|block| block.id.0);
 
@@ -362,7 +372,9 @@ pub fn analyze(module: &TirModule) -> Result<CapabilityAnalysis, CapabilityAnaly
                     instruction_index,
                 };
 
-                if let Some((capabilities, source)) = classify_instruction(instruction) {
+                if let Some((capabilities, source)) =
+                    classify_instruction(instruction, &value_types)
+                {
                     record_origin(
                         &mut states[state_index],
                         &mut direct_origins,
@@ -371,6 +383,13 @@ pub fn analyze(module: &TirModule) -> Result<CapabilityAnalysis, CapabilityAnaly
                         source,
                     );
                 }
+
+                record_instruction_type(
+                    instruction,
+                    &function_by_id,
+                    &mut value_types,
+                    &mut slot_types,
+                );
 
                 let TirInstr::Call(_, target_id, _) = instruction else {
                     continue;
@@ -496,7 +515,10 @@ fn record_origin(
     }
 }
 
-fn classify_instruction(instruction: &TirInstr) -> Option<(CapabilitySet, DirectCapabilitySource)> {
+fn classify_instruction(
+    instruction: &TirInstr,
+    value_types: &HashMap<TirValueId, TirType>,
+) -> Option<(CapabilitySet, DirectCapabilitySource)> {
     let (capability, source) = match instruction {
         TirInstr::Const(_, TirConst::String(_)) => {
             (Capability::Alloc, DirectCapabilitySource::StringConstant)
@@ -509,6 +531,17 @@ fn classify_instruction(instruction: &TirInstr) -> Option<(CapabilitySet, Direct
         }
         TirInstr::Get(_, _, TirKey::Field(_)) | TirInstr::Set(_, _, _, _) => return None,
         TirInstr::Unwrap(_, _, _, _) => (Capability::Panic, DirectCapabilitySource::Unwrap),
+        TirInstr::Add(_, operand, _) if value_types.get(operand) == Some(&TirType::Int64) => {
+            (Capability::Panic, DirectCapabilitySource::IntegerAddition)
+        }
+        TirInstr::Sub(_, operand, _) if value_types.get(operand) == Some(&TirType::Int64) => (
+            Capability::Panic,
+            DirectCapabilitySource::IntegerSubtraction,
+        ),
+        TirInstr::Mul(_, operand, _) if value_types.get(operand) == Some(&TirType::Int64) => (
+            Capability::Panic,
+            DirectCapabilitySource::IntegerMultiplication,
+        ),
         TirInstr::Div(_, _, _) => (Capability::Panic, DirectCapabilitySource::Division),
         TirInstr::GetIndex(_, _, _) => (Capability::Panic, DirectCapabilitySource::DynamicIndexGet),
         TirInstr::Slice(_, _, _, _) => (Capability::Panic, DirectCapabilitySource::Slice),
@@ -533,6 +566,65 @@ fn classify_instruction(instruction: &TirInstr) -> Option<(CapabilitySet, Direct
     };
 
     Some((CapabilitySet::singleton(capability), source))
+}
+
+fn record_instruction_type(
+    instruction: &TirInstr,
+    functions: &HashMap<TirFunctionId, &TirFunction>,
+    value_types: &mut HashMap<TirValueId, TirType>,
+    slot_types: &mut HashMap<TirSlotId, TirType>,
+) {
+    let result = match instruction {
+        TirInstr::Const(result, value) => Some((
+            *result,
+            match value {
+                TirConst::Unit => TirType::Unit,
+                TirConst::Bool(_) => TirType::Bool,
+                TirConst::Int64(_) => TirType::Int64,
+                TirConst::UInt64(_) => TirType::UInt64,
+                TirConst::Float64(_) => TirType::Float64,
+                TirConst::String(_) => TirType::String,
+            },
+        )),
+        TirInstr::Make(result, ty, _, _) => Some((*result, ty.clone())),
+        TirInstr::Tag(result, _) => Some((*result, TirType::String)),
+        TirInstr::Slot(slot, ty) => {
+            slot_types.insert(*slot, ty.clone());
+            None
+        }
+        TirInstr::Load(result, slot) => slot_types.get(slot).cloned().map(|ty| (*result, ty)),
+        TirInstr::Call(result, target, _) => functions
+            .get(target)
+            .map(|function| (*result, function.return_type.clone())),
+        TirInstr::Add(result, operand, _)
+        | TirInstr::Sub(result, operand, _)
+        | TirInstr::Mul(result, operand, _)
+        | TirInstr::Div(result, operand, _) => {
+            value_types.get(operand).cloned().map(|ty| (*result, ty))
+        }
+        TirInstr::Eq(result, _, _)
+        | TirInstr::Lt(result, _, _)
+        | TirInstr::Gt(result, _, _)
+        | TirInstr::And(result, _, _)
+        | TirInstr::Or(result, _, _)
+        | TirInstr::Not(result, _) => Some((*result, TirType::Bool)),
+        TirInstr::Len(result, _) | TirInstr::Size(result, _) => Some((*result, TirType::Int64)),
+        TirInstr::Bytes(result, _) => Some((*result, TirType::Slice(Box::new(TirType::UInt8)))),
+        TirInstr::ArrayPush(result, array, _) => {
+            value_types.get(array).cloned().map(|ty| (*result, ty))
+        }
+        TirInstr::MakeStruct(_, _, _)
+        | TirInstr::Get(_, _, _)
+        | TirInstr::Set(_, _, _, _)
+        | TirInstr::Unwrap(_, _, _, _)
+        | TirInstr::Store(_, _)
+        | TirInstr::GetIndex(_, _, _)
+        | TirInstr::Slice(_, _, _, _) => None,
+    };
+
+    if let Some((value, ty)) = result {
+        value_types.insert(value, ty);
+    }
 }
 
 fn call_edge_order(edge: &CallEdge) -> (usize, usize, usize, usize) {

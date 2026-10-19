@@ -8,6 +8,81 @@ use tempra_bytecode::constant::BytecodeConstant;
 use tempra_bytecode::function::FunctionId;
 use tempra_bytecode::opcode::BytecodeInstr;
 
+#[derive(Clone, Copy)]
+enum CheckedI64Op {
+    Add,
+    Sub,
+    Mul,
+}
+
+fn return_status_if(
+    builder: &mut FunctionBuilder<'_>,
+    condition: Value,
+    status: crate::abi::JitStatus,
+) {
+    let status = builder.ins().iconst(types::I64, status);
+    return_status_value_if(builder, condition, status);
+}
+
+fn return_status_value_if(builder: &mut FunctionBuilder<'_>, condition: Value, status: Value) {
+    let error_block = builder.create_block();
+    let success_block = builder.create_block();
+    builder
+        .ins()
+        .brif(condition, error_block, &[], success_block, &[]);
+
+    builder.switch_to_block(error_block);
+    builder.seal_block(error_block);
+    let zero = builder.ins().iconst(types::I64, 0);
+    builder.ins().return_(&[zero, status]);
+
+    builder.switch_to_block(success_block);
+    builder.seal_block(success_block);
+}
+
+fn emit_checked_i64_binary(
+    builder: &mut FunctionBuilder<'_>,
+    left: Value,
+    right: Value,
+    operation: CheckedI64Op,
+) -> Value {
+    let (value, overflowed) = match operation {
+        CheckedI64Op::Add => builder.ins().sadd_overflow(left, right),
+        CheckedI64Op::Sub => builder.ins().ssub_overflow(left, right),
+        CheckedI64Op::Mul => builder.ins().smul_overflow(left, right),
+    };
+    return_status_if(
+        builder,
+        overflowed,
+        crate::abi::JIT_STATUS_ERROR_INT64_OVERFLOW,
+    );
+    value
+}
+
+fn emit_checked_i64_div(builder: &mut FunctionBuilder<'_>, left: Value, right: Value) -> Value {
+    let divisor_is_zero = builder.ins().icmp_imm(IntCC::Equal, right, 0);
+    return_status_if(
+        builder,
+        divisor_is_zero,
+        crate::abi::JIT_STATUS_ERROR_INT64_DIVISION_BY_ZERO,
+    );
+
+    let minimum = builder.ins().iconst(types::I64, i64::MIN);
+    let negative_one = builder.ins().iconst(types::I64, -1);
+    let dividend_is_minimum = builder.ins().icmp(IntCC::Equal, left, minimum);
+    let divisor_is_negative_one = builder.ins().icmp(IntCC::Equal, right, negative_one);
+    let division_overflow = builder
+        .ins()
+        .band(dividend_is_minimum, divisor_is_negative_one);
+    return_status_if(
+        builder,
+        division_overflow,
+        crate::abi::JIT_STATUS_ERROR_INT64_OVERFLOW,
+    );
+
+    builder.ins().sdiv(left, right)
+}
+
 pub fn is_instr_supported(instr: &BytecodeInstr) -> bool {
     match instr {
         BytecodeInstr::ConstI64(_) => true,
@@ -83,6 +158,12 @@ pub fn compile_function_i64(
 
     engine.ctx.clear();
     engine.ctx.func.signature = engine.module.make_signature();
+    engine
+        .ctx
+        .func
+        .signature
+        .returns
+        .push(AbiParam::new(types::I64));
     engine
         .ctx
         .func
@@ -183,7 +264,12 @@ pub fn compile_function_i64(
                 let a = stack
                     .pop()
                     .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
-                stack.push(builder.ins().iadd(a, b));
+                stack.push(emit_checked_i64_binary(
+                    &mut builder,
+                    a,
+                    b,
+                    CheckedI64Op::Add,
+                ));
             }
             BytecodeInstr::SubI64 => {
                 let b = stack
@@ -192,7 +278,12 @@ pub fn compile_function_i64(
                 let a = stack
                     .pop()
                     .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
-                stack.push(builder.ins().isub(a, b));
+                stack.push(emit_checked_i64_binary(
+                    &mut builder,
+                    a,
+                    b,
+                    CheckedI64Op::Sub,
+                ));
             }
             BytecodeInstr::MulI64 => {
                 let b = stack
@@ -201,7 +292,12 @@ pub fn compile_function_i64(
                 let a = stack
                     .pop()
                     .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
-                stack.push(builder.ins().imul(a, b));
+                stack.push(emit_checked_i64_binary(
+                    &mut builder,
+                    a,
+                    b,
+                    CheckedI64Op::Mul,
+                ));
             }
             BytecodeInstr::DivI64 => {
                 let b = stack
@@ -210,8 +306,7 @@ pub fn compile_function_i64(
                 let a = stack
                     .pop()
                     .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
-                // TODO: Check for zero? VM handles it.
-                stack.push(builder.ins().sdiv(a, b));
+                stack.push(emit_checked_i64_div(&mut builder, a, b));
             }
             BytecodeInstr::Eq => {
                 let b = stack
@@ -297,13 +392,21 @@ pub fn compile_function_i64(
                 let val = stack
                     .pop()
                     .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
-                builder.ins().return_(&[val]);
+                let status_ok = builder
+                    .ins()
+                    .iconst(types::I64, crate::abi::JIT_STATUS_SUCCESS);
+                builder.ins().return_(&[val, status_ok]);
                 current_block_terminated = true;
             }
             BytecodeInstr::AddI64LL(a_id, b_id) => {
                 let a = builder.use_var(variables[a_id.0 as usize]);
                 let b = builder.use_var(variables[b_id.0 as usize]);
-                stack.push(builder.ins().iadd(a, b));
+                stack.push(emit_checked_i64_binary(
+                    &mut builder,
+                    a,
+                    b,
+                    CheckedI64Op::Add,
+                ));
             }
             BytecodeInstr::AddI64LC(a_id, c_id) => {
                 let a = builder.use_var(variables[a_id.0 as usize]);
@@ -312,7 +415,12 @@ pub fn compile_function_i64(
                     _ => return Err(JitCompileError::CraneliftError("Invalid constant".into())),
                 };
                 let b = builder.ins().iconst(types::I64, c_val);
-                stack.push(builder.ins().iadd(a, b));
+                stack.push(emit_checked_i64_binary(
+                    &mut builder,
+                    a,
+                    b,
+                    CheckedI64Op::Add,
+                ));
             }
             BytecodeInstr::Call(target_id, argc) => {
                 let mut args = Vec::new();
@@ -324,6 +432,7 @@ pub fn compile_function_i64(
                 args.reverse();
 
                 let mut sig = engine.module.make_signature();
+                sig.returns.push(AbiParam::new(types::I64));
                 sig.returns.push(AbiParam::new(types::I64));
                 for _ in 0..*argc {
                     sig.params.push(AbiParam::new(types::I64));
@@ -339,8 +448,12 @@ pub fn compile_function_i64(
                     .module
                     .declare_func_in_func(callee_id, &mut builder.func);
                 let call_inst = builder.ins().call(local_callee, &args);
-                let res = builder.inst_results(call_inst)[0];
-                stack.push(res);
+                let results = builder.inst_results(call_inst).to_vec();
+                let value = results[0];
+                let status = results[1];
+                let failed = builder.ins().icmp_imm(IntCC::NotEqual, status, 0);
+                return_status_value_if(&mut builder, failed, status);
+                stack.push(value);
             }
             _ => return Err(JitCompileError::UnsupportedInstr(*instr)),
         }
@@ -571,7 +684,12 @@ pub fn compile_function_heap_aware(
                 let a = stack
                     .pop()
                     .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
-                stack.push(builder.ins().iadd(a, b));
+                stack.push(emit_checked_i64_binary(
+                    &mut builder,
+                    a,
+                    b,
+                    CheckedI64Op::Add,
+                ));
             }
             BytecodeInstr::SubI64 => {
                 let b = stack
@@ -580,7 +698,12 @@ pub fn compile_function_heap_aware(
                 let a = stack
                     .pop()
                     .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
-                stack.push(builder.ins().isub(a, b));
+                stack.push(emit_checked_i64_binary(
+                    &mut builder,
+                    a,
+                    b,
+                    CheckedI64Op::Sub,
+                ));
             }
             BytecodeInstr::MulI64 => {
                 let b = stack
@@ -589,7 +712,12 @@ pub fn compile_function_heap_aware(
                 let a = stack
                     .pop()
                     .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
-                stack.push(builder.ins().imul(a, b));
+                stack.push(emit_checked_i64_binary(
+                    &mut builder,
+                    a,
+                    b,
+                    CheckedI64Op::Mul,
+                ));
             }
             BytecodeInstr::DivI64 => {
                 let b = stack
@@ -598,7 +726,7 @@ pub fn compile_function_heap_aware(
                 let a = stack
                     .pop()
                     .ok_or_else(|| JitCompileError::CraneliftError("Stack underflow".into()))?;
-                stack.push(builder.ins().sdiv(a, b));
+                stack.push(emit_checked_i64_div(&mut builder, a, b));
             }
             BytecodeInstr::Eq => {
                 let b = stack
@@ -723,7 +851,12 @@ pub fn compile_function_heap_aware(
             BytecodeInstr::AddI64LL(a_id, b_id) => {
                 let a = builder.use_var(variables[a_id.0 as usize]);
                 let b = builder.use_var(variables[b_id.0 as usize]);
-                stack.push(builder.ins().iadd(a, b));
+                stack.push(emit_checked_i64_binary(
+                    &mut builder,
+                    a,
+                    b,
+                    CheckedI64Op::Add,
+                ));
             }
             BytecodeInstr::AddI64LC(a_id, c_id) => {
                 let a = builder.use_var(variables[a_id.0 as usize]);
@@ -732,7 +865,12 @@ pub fn compile_function_heap_aware(
                     _ => return Err(JitCompileError::CraneliftError("Invalid constant".into())),
                 };
                 let b = builder.ins().iconst(types::I64, c_val);
-                stack.push(builder.ins().iadd(a, b));
+                stack.push(emit_checked_i64_binary(
+                    &mut builder,
+                    a,
+                    b,
+                    CheckedI64Op::Add,
+                ));
             }
             BytecodeInstr::Call(target_id, argc) => {
                 let mut args = Vec::new();

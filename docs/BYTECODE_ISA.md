@@ -112,6 +112,12 @@ The VM handles the following primitive types directly:
 | `MulI64` | - | `[i64, i64] -> [i64]` | Integer multiplication. |
 | `DivI64` | - | `[i64, i64] -> [i64]` | Integer division. |
 
+These opcodes use checked Tempra `Int64` semantics. Addition, subtraction and
+multiplication overflow fail with `Int64ArithmeticError::Overflow`; division by
+zero fails with `DivisionByZero`, and `Int64::MIN / -1` is overflow. The VM and
+native JIT must return the same controlled failure. The bytecode encoding is
+unchanged by this contract.
+
 ### Arithmetic (UInt64)
 | Opcode | Operands | Stack Effect | Description |
 |---|---|---|---|

@@ -18,7 +18,7 @@ The header ensures that the cached bytecode is compatible with the current runti
 
 - **Magic (4 bytes)**: Always `TMBC` (Tempra Bytecode Cache).
 - **Format Version (u32)**: Version of the binary format (currently 2).
-- **Compiler Fingerprint (String)**: `tempra-{CARGO_PKG_VERSION}-semantics-1`, identifying the compiler and semantic guarantees required for reuse.
+- **Compiler Fingerprint (String)**: `tempra-{CARGO_PKG_VERSION}-semantics-5`, identifying the compiler and semantic guarantees required for reuse.
 - **Source Hash (32 bytes)**: A non-cryptographic `DefaultHasher` result, repeated to fill 32 bytes. This is a source identity hint, not SHA-256, an integrity check or a security primitive.
 - **Language Version (String)**: Minimum Tempra language version required.
 - **Stdlib ABI Version (String)**: Identifier for the standard library ABI.
@@ -45,15 +45,31 @@ The cache format is integrated into the Tempra CLI via the `--experimental-vm` f
 - **Cache Hit**: A cache artifact is reused if it exists and its header precisely matches the current compiler version and source file hash.
 - **Cache Miss/Corruption**: Missing, incompatible or unverifiable artifacts cause fresh compilation. Replacement and execution occur only if compilation, contract enforcement and bytecode verification succeed. A failed compilation leaves any existing artifact unchanged.
 
-### Semantic validity (E3.2)
+### Semantic validity (E3.2, K1.7, K2.2, K2.4 and K3.2)
 
 `semantics-N` versions the guarantees required to trust compiler-produced cache
-artifacts; it is independent of bytecode serialization format. Revision `1`
-requires `@deny` enforcement before bytecode lowering and cache writing. Increase
-this revision when previously compiled artifacts no longer establish the required
-guarantees, even if their bytecode format remains readable.
+artifacts; it is independent of bytecode serialization format. The bytecode
+format version governs structural decoding, while the semantic revision governs
+the compiler guarantees that make decoded bytecode reusable. Their numeric values
+are unrelated; the bytecode format is currently 2 while the semantic revision is 5.
 
-Pre-E3.2 fingerprints (`tempra-{version}`) do not match and are ignored. Both
+Revision `1` was introduced by E3.2 and required `@deny` enforcement before
+bytecode lowering and cache writing. K1.7 raises the current revision to `2` so
+artifacts predating K1's panic-free arithmetic, explicit bodyless rejection,
+canonical effect policy and deterministic termination limits cannot bypass fresh
+comptime evaluation. K2.2 raises current trust to revision `3` because revision-2
+artifacts may contain a specialization whose TIR identity was interpreted as the
+wrong physical bytecode position. Increase this revision whenever older readable
+artifacts no longer establish the required compiler guarantees. K2.4 raises current
+trust to revision `4` because revision-3 compilation could select the first matching
+interface through unordered hash iteration, changing accepted types and diagnostics.
+K3.2 raises current trust to revision `5` because revision-4 artifacts can omit
+the new conservative `Panic` origins for checked `Int64` add/sub/mul and can
+therefore bypass `@deny(panic)` during a bytecode-only hit. It also establishes
+the shared host-safe arithmetic behavior across supported runtime backends.
+
+Pre-E3.2 fingerprints (`tempra-{version}`) and artifacts through `semantics-4` do
+not match the current fingerprint and are ignored. Both
 ordinary and profiled source VM execution use one shared validity path. A hit
 requires a matching source hash and semantic fingerprint and verified bytecode.
 There is no TIR reconstruction, analysis, or synthetic capability product on a hit.
@@ -66,11 +82,48 @@ if fresh enforcement fails it remains an incompatible miss, never a usable new e
 This policy assumes a local compiler-owned cache; headers are not authenticated
 against deliberate modification and the existing source hash is non-cryptographic.
 
-E4 (`@pure`) does not increment the semantic revision: it uses the same E3
+K2.3 changes standard-library discovery only for file/module compilation, which
+continues to compile fresh and has no cache artifact. The cached source API does
+not build a module graph or support a valid standard-library import path, so this
+change does not alter trusted cached semantics and did not increment revision `4`.
+
+Historically, E4 (`@pure`) did not increment revision `1`: it used the same E3
 contract enforcement, and pre-E4 compilers rejected that attribute syntax.
 Adding, removing or changing pure changes source bytes and cache identity.
 Pure metadata is not serialized; successful pure compilation can populate/hit
 the same bytecode-only cache, while a failed contract cannot write a replacement.
+K1.7 is the later, independent revision to `semantics-2`; K2.2 subsequently
+raises trust to `semantics-3`, K2.4 raises it to `semantics-4`, and K3.2 raises
+it to `semantics-5`. These changes version compiler guarantees, not bytecode
+serialization.
+
+### Reproducibility contract (K2.5)
+
+For the currently supported bytecode compilation surface, Tempra requires exact
+artifact bytes for the same declared source bytes, module graph and order,
+compiler build/version, semantic revision, bytecode format, compilation options,
+resolved standard-library contents, backend mode, host and target. Hash seeds,
+process IDs, temporary directory names, file inode/mtime, test order and cwd after
+explicit paths have been resolved are incidental and must not affect the result.
+
+The permanent gate covers simple and multi-function source, multi-module input,
+specialization, comptime, capability contracts and explicit stdlib input. Interface
+selection and invalid interface diagnostics are checked at their current frontend
+boundary because associated-type programs are not yet part of the supported
+bytecode-lowering surface. It compares raw bytes, not only hashes, across
+independent compiler processes.
+
+Cold compilation, a valid current hit, an obsolete-revision miss and malformed-cache
+fallback converge on the same current artifact; a valid hit does not rewrite bytes
+or mtime. This establishes Level 3 only for the bounded same-build, same-host/
+target surface above. It does not claim absolute-path/machine independence (Level
+4), and it does not change the semantic revision because K2.5 adds proof rather
+than compiler semantics.
+
+`BytecodeFunction::is_extern` is still not persisted by the v0 serializer. Current
+cacheable source paths do not exercise executable extern round-trips, so no fresh/
+hit semantic divergence was demonstrated; this remains separate format-correctness
+debt rather than a K2 blocker.
 
 ## Future Plans
 

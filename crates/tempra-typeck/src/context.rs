@@ -27,6 +27,53 @@ pub struct SpecializationKey {
     pub comptime_args: Vec<ComptimeValue>,
 }
 
+/// Deduplicated specialization requests in deterministic first-request order.
+///
+/// The hash set is used only for membership. Iteration always follows the
+/// order in which unique requests were first observed during semantic
+/// traversal.
+#[derive(Debug, Clone, Default)]
+pub struct SpecializationRegistry {
+    ordered: Vec<SpecializationKey>,
+    seen: HashSet<SpecializationKey>,
+}
+
+impl SpecializationRegistry {
+    /// Records a specialization request without changing the order of an
+    /// existing request.
+    pub fn insert(&mut self, key: SpecializationKey) -> bool {
+        if !self.seen.insert(key.clone()) {
+            return false;
+        }
+        self.ordered.push(key);
+        true
+    }
+
+    /// Iterates over unique requests in deterministic first-request order.
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = &SpecializationKey> {
+        self.ordered.iter()
+    }
+
+    /// Returns the number of unique specialization requests.
+    pub fn len(&self) -> usize {
+        self.ordered.len()
+    }
+
+    /// Returns whether no specialization has been requested.
+    pub fn is_empty(&self) -> bool {
+        self.ordered.is_empty()
+    }
+}
+
+impl<'a> IntoIterator for &'a SpecializationRegistry {
+    type Item = &'a SpecializationKey;
+    type IntoIter = std::slice::Iter<'a, SpecializationKey>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.ordered.iter()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct FunctionParam {
     pub name: String,
@@ -75,7 +122,25 @@ pub struct InterfaceInfo {
     pub name: String,
     pub visibility: Visibility,
     pub methods: HashMap<String, InterfaceMethodRequirementInfo>,
+    pub(crate) method_order: Vec<String>,
     pub associated_types: Vec<String>,
+}
+
+impl InterfaceInfo {
+    pub(crate) fn insert_method(&mut self, name: String, method: InterfaceMethodRequirementInfo) {
+        if !self.methods.contains_key(&name) {
+            self.method_order.push(name.clone());
+        }
+        self.methods.insert(name, method);
+    }
+
+    pub(crate) fn methods_in_declaration_order(
+        &self,
+    ) -> impl Iterator<Item = (&str, &InterfaceMethodRequirementInfo)> {
+        self.method_order
+            .iter()
+            .filter_map(|name| self.methods.get(name).map(|method| (name.as_str(), method)))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -94,6 +159,7 @@ pub struct TypeContext {
     pub structs: HashMap<String, StructInfo>,
     pub enums: HashMap<String, EnumInfo>,
     pub interfaces: HashMap<String, InterfaceInfo>,
+    interface_order: Vec<String>,
     pub variant_to_enums: HashMap<String, Vec<String>>,
     /// Methods defined in 'extend' blocks, keyed by the target type.
     pub extends: HashMap<Type, Vec<String>>,
@@ -109,7 +175,7 @@ pub struct TypeContext {
     pub is_comptime: bool,
     pub interpreter: Option<tempra_interpreter::interpreter::Interpreter>,
     /// Bookkeeping for specializations requested during typechecking.
-    pub specialization_log: HashSet<SpecializationKey>,
+    pub specialization_log: SpecializationRegistry,
     /// Collected typecheck facts.
     pub facts: crate::facts::TypecheckFacts,
     /// Helper declaration span maps.
@@ -132,6 +198,7 @@ impl TypeContext {
             structs: HashMap::new(),
             enums: HashMap::new(),
             interfaces: HashMap::new(),
+            interface_order: Vec::new(),
             variant_to_enums: HashMap::new(),
             extends: HashMap::new(),
             scopes: ScopeStack::new(),
@@ -144,7 +211,7 @@ impl TypeContext {
             next_generic_param_id: 0,
             is_comptime: false,
             interpreter: None,
-            specialization_log: HashSet::new(),
+            specialization_log: SpecializationRegistry::default(),
             facts: crate::facts::TypecheckFacts::default(),
             struct_field_spans: HashMap::new(),
             enum_variant_spans: HashMap::new(),
@@ -200,9 +267,10 @@ impl TypeContext {
             name: "Collection".to_string(),
             visibility: Visibility::Public,
             methods: HashMap::new(),
+            method_order: Vec::new(),
             associated_types: vec!["Item".to_string()],
         };
-        collection.methods.insert(
+        collection.insert_method(
             "len".to_string(),
             InterfaceMethodRequirementInfo {
                 name: "len".to_string(),
@@ -211,7 +279,7 @@ impl TypeContext {
                 return_type: Type::Int,
             },
         );
-        collection.methods.insert(
+        collection.insert_method(
             "is_empty".to_string(),
             InterfaceMethodRequirementInfo {
                 name: "is_empty".to_string(),
@@ -220,15 +288,16 @@ impl TypeContext {
                 return_type: Type::Bool,
             },
         );
-        self.interfaces.insert("Collection".to_string(), collection);
+        self.register_interface("Collection".to_string(), collection);
 
         let mut iterator = InterfaceInfo {
             name: "Iterator".to_string(),
             visibility: Visibility::Public,
             methods: HashMap::new(),
+            method_order: Vec::new(),
             associated_types: vec!["Item".to_string()],
         };
-        iterator.methods.insert(
+        iterator.insert_method(
             "next".to_string(),
             InterfaceMethodRequirementInfo {
                 name: "next".to_string(),
@@ -240,16 +309,17 @@ impl TypeContext {
                 ))),
             },
         );
-        self.interfaces.insert("Iterator".to_string(), iterator);
+        self.register_interface("Iterator".to_string(), iterator);
 
         // Iterable: types that can produce an Iterator via iter()
         let mut iterable = InterfaceInfo {
             name: "Iterable".to_string(),
             visibility: Visibility::Public,
             methods: HashMap::new(),
+            method_order: Vec::new(),
             associated_types: vec!["Item".to_string(), "Iter".to_string()],
         };
-        iterable.methods.insert(
+        iterable.insert_method(
             "iter".to_string(),
             InterfaceMethodRequirementInfo {
                 name: "iter".to_string(),
@@ -258,7 +328,18 @@ impl TypeContext {
                 return_type: Type::Associated("Iterable".to_string(), "Iter".to_string()),
             },
         );
-        self.interfaces.insert("Iterable".to_string(), iterable);
+        self.register_interface("Iterable".to_string(), iterable);
+    }
+
+    pub(crate) fn register_interface(&mut self, name: String, interface: InterfaceInfo) {
+        if !self.interfaces.contains_key(&name) {
+            self.interface_order.push(name.clone());
+        }
+        self.interfaces.insert(name, interface);
+    }
+
+    pub(crate) fn interface_names_in_declaration_order(&self) -> impl Iterator<Item = &str> {
+        self.interface_order.iter().map(String::as_str)
     }
 
     pub fn error(&mut self, message: impl Into<String>, span: Span) {
@@ -618,7 +699,10 @@ impl TypeContext {
         }
 
         // 3. Check if concrete type satisfies an interface with this method (Projection)
-        let itf_names: Vec<String> = self.interfaces.keys().cloned().collect();
+        let itf_names: Vec<String> = self
+            .interface_names_in_declaration_order()
+            .map(str::to_owned)
+            .collect();
         for itf_name in itf_names {
             let (has_method, visibility) = {
                 let itf = &self.interfaces[&itf_name];
@@ -784,7 +868,7 @@ impl TypeContext {
 
         let interface = self.interfaces.get(interface_name)?.clone();
         let mut mappings = HashMap::new();
-        for (method_name, req) in &interface.methods {
+        for (method_name, req) in interface.methods_in_declaration_order() {
             let full_name = format!("{}.{}", ty.get_name(), method_name);
             if let Some(sig) = self.functions.get(&full_name) {
                 let req_params: Vec<Type> =
@@ -1007,6 +1091,96 @@ impl TypeContext {
             )),
             _ => ty.clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod specialization_registry_tests {
+    use super::{SpecializationKey, SpecializationRegistry};
+    use crate::types::Type;
+
+    fn key(name: &str, ty: Type) -> SpecializationKey {
+        SpecializationKey {
+            function_name: name.to_string(),
+            type_args: vec![ty],
+            comptime_args: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn preserves_first_request_order_while_deduplicating() {
+        let a = key("a", Type::Int64);
+        let b = key("b", Type::String);
+        let c = key("c", Type::Bool);
+        let mut registry = SpecializationRegistry::default();
+
+        assert!(registry.insert(a.clone()));
+        assert!(registry.insert(b.clone()));
+        assert!(!registry.insert(a.clone()));
+        assert!(registry.insert(c.clone()));
+
+        assert_eq!(registry.iter().collect::<Vec<_>>(), vec![&a, &b, &c]);
+        assert_eq!(registry.len(), 3);
+        assert!(!registry.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod declaration_order_tests {
+    use super::{InterfaceInfo, InterfaceMethodRequirementInfo, TypeContext};
+    use crate::types::Type;
+    use std::collections::HashMap;
+    use tempra_ast::Visibility;
+
+    fn requirement(name: &str, return_type: Type) -> InterfaceMethodRequirementInfo {
+        InterfaceMethodRequirementInfo {
+            name: name.to_string(),
+            params: vec![Type::SelfType],
+            param_inout: vec![false],
+            return_type,
+        }
+    }
+
+    fn interface(name: &str) -> InterfaceInfo {
+        InterfaceInfo {
+            name: name.to_string(),
+            visibility: Visibility::Public,
+            methods: HashMap::new(),
+            method_order: Vec::new(),
+            associated_types: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn interface_methods_keep_first_declaration_order_and_latest_lookup_value() {
+        let mut interface = interface("Example");
+        interface.insert_method("first".to_string(), requirement("first", Type::Int));
+        interface.insert_method("second".to_string(), requirement("second", Type::Bool));
+        interface.insert_method("first".to_string(), requirement("first", Type::String));
+
+        assert_eq!(
+            interface
+                .methods_in_declaration_order()
+                .map(|(name, _)| name)
+                .collect::<Vec<_>>(),
+            vec!["first", "second"]
+        );
+        assert_eq!(interface.methods["first"].return_type, Type::String);
+    }
+
+    #[test]
+    fn interface_registry_keeps_builtin_then_first_registration_order() {
+        let mut context = TypeContext::new();
+        context.register_interface("Second".to_string(), interface("Second"));
+        context.register_interface("First".to_string(), interface("First"));
+        context.register_interface("Second".to_string(), interface("Second"));
+
+        assert_eq!(
+            context
+                .interface_names_in_declaration_order()
+                .collect::<Vec<_>>(),
+            vec!["Collection", "Iterator", "Iterable", "Second", "First"]
+        );
     }
 }
 

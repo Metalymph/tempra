@@ -1,4 +1,4 @@
-use tempra_driver::pipeline::test_source;
+use tempra_driver::pipeline::{check_file, emit_tir_source, test_source};
 
 #[test]
 fn test_comptime_arithmetic() {
@@ -9,6 +9,222 @@ fn test_comptime_arithmetic() {
     }
     "#;
     assert!(test_source(source).is_ok());
+}
+
+#[test]
+fn test_comptime_arithmetic_is_resolved_before_tir() {
+    let source = r#"
+    fn main() -> Int64 {
+        return comptime 1 + 2
+    }
+    "#;
+
+    let tir = emit_tir_source(source).unwrap();
+
+    assert!(tir.contains("const 3i64"), "unexpected TIR:\n{tir}");
+    assert!(!tir.contains("comptime"), "unexpected TIR:\n{tir}");
+}
+
+#[test]
+fn comptime_arithmetic_failure_is_controlled_and_does_not_poison_later_compilation() {
+    let invalid = r#"
+    fn main() -> Int64 {
+        return comptime 1 / 0
+    }
+    "#;
+    let error = emit_tir_source(invalid).expect_err("division by zero must fail");
+    assert!(
+        error.to_string().contains("integer division by zero"),
+        "unexpected error: {error}"
+    );
+
+    let valid = r#"
+    fn main() -> Int64 {
+        return comptime 40 + 2
+    }
+    "#;
+    let tir = emit_tir_source(valid).expect("later compilation must remain usable");
+    assert!(tir.contains("const 42i64"), "unexpected TIR:\n{tir}");
+    assert!(!tir.contains("comptime"), "unexpected TIR:\n{tir}");
+}
+
+#[test]
+fn comptime_bodyless_extern_fails_before_tir_and_does_not_poison_later_compilation() {
+    let invalid = r#"
+    pub extern fn missing() -> Unit
+    fn main() {
+        comptime missing()
+    }
+    "#;
+    let error = emit_tir_source(invalid).expect_err("bodyless comptime call must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("function 'missing' has no executable HIR body"),
+        "unexpected error: {error}"
+    );
+
+    let valid = r#"
+    fn main() -> Int64 {
+        return comptime 1 + 2
+    }
+    "#;
+    let tir = emit_tir_source(valid).expect("later compilation must remain usable");
+    assert!(tir.contains("const 3i64"), "unexpected TIR:\n{tir}");
+    assert!(!tir.contains("comptime"), "unexpected TIR:\n{tir}");
+}
+
+#[test]
+fn comptime_effect_policy_is_enforced_transitively_by_the_interpreter() {
+    let source = r#"
+    fn inner() { dbg("hidden") }
+    fn outer() { inner() }
+    fn main() { comptime outer() }
+    "#;
+
+    let error = emit_tir_source(source).expect_err("transitive dbg must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("operation 'dbg' is not allowed during comptime evaluation"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn comptime_recursion_stops_before_tir_and_does_not_poison_later_compilation() {
+    let recursive = r#"
+    fn recurse() -> Int64 { return recurse() }
+    fn main() -> Int64 { return comptime recurse() }
+    "#;
+    let result = std::panic::catch_unwind(|| emit_tir_source(recursive));
+    let error = result
+        .expect("default comptime call depth must prevent a host unwind")
+        .expect_err("recursive comptime evaluation must fail before TIR");
+    assert!(
+        error.to_string().contains("comptime call depth exceeded"),
+        "unexpected error: {error}"
+    );
+
+    let valid = r#"
+    fn main() -> Int64 { return comptime 1 + 2 }
+    "#;
+    let tir = emit_tir_source(valid).expect("later compilation must remain usable");
+    assert!(tir.contains("const 3i64"), "unexpected TIR:\n{tir}");
+    assert!(!tir.contains("comptime"), "unexpected TIR:\n{tir}");
+}
+
+#[test]
+fn file_check_uses_canonical_comptime_authority() {
+    let directory = tempfile::tempdir().unwrap();
+    let helper = directory.path().join("helper.tmpr");
+    let main = directory.path().join("main.tmpr");
+    std::fs::write(
+        helper,
+        r#"
+fn local_value() -> Int64 { return 40 }
+pub fn value() -> Int64 { return local_value() }
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        &main,
+        r#"
+import helper
+fn main() -> Int64 { return comptime helper.value() + 2 }
+"#,
+    )
+    .unwrap();
+
+    let result = check_file(&main);
+
+    assert!(result.is_ok(), "unexpected file-check result: {result:?}");
+}
+
+#[test]
+fn multi_module_vm_resolves_comptime_before_tir() {
+    let directory = tempfile::tempdir().unwrap();
+    let helper = directory.path().join("helper.tmpr");
+    let main = directory.path().join("main.tmpr");
+    std::fs::write(helper, "pub fn value() -> Int64 { return 40 }").unwrap();
+    std::fs::write(
+        &main,
+        r#"
+import helper
+fn main() -> Int64 { return comptime helper.value() + 2 }
+"#,
+    )
+    .unwrap();
+
+    let compilation = tempra_driver::compile_file_to_bytecode_with_analysis(&main).unwrap();
+    let tir = tempra_tir::pretty::format_tir_module(compilation.tir());
+
+    assert!(tir.contains("fn main.main"), "unexpected TIR:\n{tir}");
+    assert!(tir.contains("const 42i64"), "unexpected TIR:\n{tir}");
+    assert!(!tir.contains("comptime"), "unexpected TIR:\n{tir}");
+}
+
+#[test]
+fn duplicate_module_function_names_keep_their_qualified_identity() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tmpr");
+    std::fs::write(
+        directory.path().join("a.tmpr"),
+        "pub fn helper() -> Int64 { return 4 }",
+    )
+    .unwrap();
+    std::fs::write(
+        directory.path().join("b.tmpr"),
+        "pub fn helper() -> Int64 { return 2 }",
+    )
+    .unwrap();
+    std::fs::write(
+        &main,
+        r#"
+import a
+import b
+fn main() -> Int64 { return comptime a.helper() * 10 + b.helper() }
+"#,
+    )
+    .unwrap();
+
+    let compilation = tempra_driver::compile_file_to_bytecode_with_analysis(&main).unwrap();
+    let tir = tempra_tir::pretty::format_tir_module(compilation.tir());
+
+    assert!(tir.contains("const 42i64"), "unexpected TIR:\n{tir}");
+}
+
+#[test]
+fn non_entry_module_comptime_is_materialized_independently() {
+    let directory = tempfile::tempdir().unwrap();
+    let dependency = directory.path().join("dependency.tmpr");
+    let main = directory.path().join("main.tmpr");
+    std::fs::write(
+        dependency,
+        "pub fn value() -> Int64 { return comptime 20 + 1 }",
+    )
+    .unwrap();
+    std::fs::write(
+        &main,
+        r#"
+import dependency
+fn main() -> Int64 { return dependency.value() + 21 }
+"#,
+    )
+    .unwrap();
+
+    let compilation = tempra_driver::compile_file_to_bytecode_with_analysis(&main).unwrap();
+    let tir = tempra_tir::pretty::format_tir_module(compilation.tir());
+
+    let dependency_tir = tir
+        .split("fn dependency.value")
+        .nth(1)
+        .expect("dependency function missing from TIR");
+    assert!(
+        dependency_tir.contains("const 21i64"),
+        "unexpected TIR:\n{tir}"
+    );
+    assert!(!tir.contains("comptime"), "unexpected TIR:\n{tir}");
 }
 
 #[test]

@@ -7,9 +7,12 @@ use tempra_tir::ir::*;
 
 pub fn lower_tir_module(module: &TirModule) -> Result<BytecodeModule, BytecodeLowerError> {
     let mut bc_module = BytecodeModule::new();
+    let mut ordered_functions: Vec<_> = module.functions.iter().collect();
+    ordered_functions.sort_by_key(|function| function.id.0);
+    let mut function_ids = HashMap::with_capacity(ordered_functions.len());
 
-    // First pass: declare all functions to populate the function table
-    for tir_func in &module.functions {
+    // First pass: assign bytecode identities in canonical TIR identity order.
+    for tir_func in &ordered_functions {
         let params = tir_func
             .params
             .iter()
@@ -18,14 +21,30 @@ pub fn lower_tir_module(module: &TirModule) -> Result<BytecodeModule, BytecodeLo
         let ret = map_type(&tir_func.return_type)?;
         let mut bc_func = BytecodeFunction::new(tir_func.name.clone(), params, ret);
         bc_func.is_extern = tir_func.is_extern;
-        bc_module.add_function(bc_func);
+        let bytecode_id = bc_module.add_function(bc_func);
+        if function_ids.insert(tir_func.id, bytecode_id).is_some() {
+            return Err(BytecodeLowerError::DuplicateTirFunctionId {
+                function: tir_func.id,
+            });
+        }
     }
 
     // Second pass: lower function bodies
-    for i in 0..module.functions.len() {
-        let tir_func = &module.functions[i];
-        let bc_func = lower_function(tir_func, &mut bc_module)?;
-        bc_module.functions[i] = bc_func;
+    for tir_func in ordered_functions {
+        let bytecode_id = function_ids.get(&tir_func.id).copied().ok_or(
+            BytecodeLowerError::MissingFunctionMapping {
+                caller: tir_func.id,
+                target: tir_func.id,
+            },
+        )?;
+        let bc_func = lower_function(tir_func, &mut bc_module, &function_ids)?;
+        let target = bc_module.functions.get_mut(bytecode_id.0 as usize).ok_or(
+            BytecodeLowerError::MissingFunctionMapping {
+                caller: tir_func.id,
+                target: tir_func.id,
+            },
+        )?;
+        *target = bc_func;
     }
 
     Ok(bc_module)
@@ -34,6 +53,7 @@ pub fn lower_tir_module(module: &TirModule) -> Result<BytecodeModule, BytecodeLo
 fn lower_function(
     tir_func: &TirFunction,
     bc_module: &mut BytecodeModule,
+    function_ids: &HashMap<TirFunctionId, FunctionId>,
 ) -> Result<BytecodeFunction, BytecodeLowerError> {
     let params = tir_func
         .params
@@ -57,6 +77,7 @@ fn lower_function(
         current_stack: 0,
         max_stack: 0,
         first_temp_local: 0,
+        function_ids,
     };
 
     lowerer.lower()?;
@@ -81,6 +102,7 @@ struct FunctionLowerer<'a> {
     current_stack: u32,
     max_stack: u32,
     first_temp_local: u32,
+    function_ids: &'a HashMap<TirFunctionId, FunctionId>,
 }
 
 impl<'a> FunctionLowerer<'a> {
@@ -284,11 +306,24 @@ impl<'a> FunctionLowerer<'a> {
                     self.load_val(*arg)?;
                 }
 
-                let bytecode_func_id = FunctionId(func_id.0 as u32);
+                let bytecode_func_id = self.function_ids.get(func_id).copied().ok_or(
+                    BytecodeLowerError::MissingFunctionMapping {
+                        caller: self.tir_func.id,
+                        target: *func_id,
+                    },
+                )?;
 
                 self.emit(BytecodeInstr::Call(bytecode_func_id, args.len() as u16));
 
-                let target_ret = self.bc_module.functions[bytecode_func_id.0 as usize].ret;
+                let target_ret = self
+                    .bc_module
+                    .functions
+                    .get(bytecode_func_id.0 as usize)
+                    .ok_or(BytecodeLowerError::MissingFunctionMapping {
+                        caller: self.tir_func.id,
+                        target: *func_id,
+                    })?
+                    .ret;
 
                 if target_ret != BytecodeType::Unit {
                     self.store_res(*res)?;
@@ -520,13 +555,18 @@ impl<'a> FunctionLowerer<'a> {
             | TirInstr::Or(_, _, _)
             | TirInstr::Not(_, _) => Ok(BytecodeType::Bool),
             TirInstr::Call(_, func_id, _) => {
-                let target = self
-                    .bc_module
-                    .functions
-                    .get(func_id.0 as usize)
-                    .ok_or_else(|| {
-                        BytecodeLowerError::UnknownFunction(format!("@{}", func_id.0))
-                    })?;
+                let bytecode_id = self.function_ids.get(func_id).copied().ok_or(
+                    BytecodeLowerError::MissingFunctionMapping {
+                        caller: self.tir_func.id,
+                        target: *func_id,
+                    },
+                )?;
+                let target = self.bc_module.functions.get(bytecode_id.0 as usize).ok_or(
+                    BytecodeLowerError::MissingFunctionMapping {
+                        caller: self.tir_func.id,
+                        target: *func_id,
+                    },
+                )?;
                 Ok(target.ret)
             }
             TirInstr::Make(_, _, _, _) => Ok(BytecodeType::Any),

@@ -1818,7 +1818,15 @@ impl AnalysisSession {
         };
 
         let graph_result = if let Some(ref path) = file_path {
-            tempra_driver::module_graph::load_module_graph(path, &loader, &mut diagnostics)
+            let stdlib_root = std::env::current_exe()
+                .ok()
+                .and_then(|executable| tempra_driver::discover_stdlib_from_executable(&executable));
+            tempra_driver::module_graph::load_module_graph(
+                path,
+                &loader,
+                stdlib_root.as_deref(),
+                &mut diagnostics,
+            )
         } else {
             Err(())
         };

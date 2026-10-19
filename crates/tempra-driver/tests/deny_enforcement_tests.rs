@@ -61,6 +61,43 @@ fn direct_alloc_and_conservative_panic_are_enforced() {
 }
 
 #[test]
+fn checked_int64_arithmetic_is_enforced_as_direct_and_transitive_panic() {
+    for (operator, source) in [
+        (
+            DirectCapabilitySource::IntegerAddition,
+            "@deny(panic) fn main() -> Int64 { return 1 + 2 }",
+        ),
+        (
+            DirectCapabilitySource::IntegerSubtraction,
+            "@deny(panic) fn main() -> Int64 { return 1 - 2 }",
+        ),
+        (
+            DirectCapabilitySource::IntegerMultiplication,
+            "@deny(panic) fn main() -> Int64 { return 1 * 2 }",
+        ),
+    ] {
+        let errors = violations(source);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].capability, Capability::Panic);
+        assert_eq!(errors[0].witness.origin.source, operator);
+        assert!(errors[0].witness.calls.is_empty());
+    }
+
+    let errors = violations(
+        "@deny(panic) fn outer() -> Int64 { return inner() }\n\
+         fn inner() -> Int64 { return 1 + 2 }\n\
+         fn main() -> Int64 { return 0 }",
+    );
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].capability, Capability::Panic);
+    assert_eq!(errors[0].witness.calls.len(), 1);
+    assert_eq!(
+        errors[0].witness.origin.source,
+        DirectCapabilitySource::IntegerAddition
+    );
+}
+
+#[test]
 fn transitive_non_entry_violations_are_aggregated_with_exact_e1_witnesses() {
     let source = r#"
 @deny(panic, alloc, alloc)

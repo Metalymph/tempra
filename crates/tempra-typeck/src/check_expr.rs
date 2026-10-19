@@ -14,22 +14,9 @@ impl TypeContext {
     ) -> Result<tempra_interpreter::value::Value, String> {
         if let Some(interpreter) = &mut self.interpreter {
             let mut env = tempra_interpreter::env::RuntimeEnv::new();
-            let old_mode = interpreter.mode;
-            let old_fuel = interpreter.fuel;
-            interpreter.mode = tempra_interpreter::interpreter::EvalMode::Comptime;
-            interpreter.fuel = Some(1000000); // 1M steps
-            let res = match interpreter.eval_expression(expr, &mut env) {
-                Ok(tempra_interpreter::control_flow::ControlFlow::Value(v)) => Ok(v),
-                Ok(cf) => Err(format!(
-                    "comptime evaluation produced non-value control flow: {:?}",
-                    cf
-                )),
-                Err(e) => Err(e),
-            };
-
-            interpreter.mode = old_mode;
-            interpreter.fuel = old_fuel;
-            res
+            interpreter
+                .evaluate_comptime(expr, &mut env, Default::default())
+                .map_err(|error| error.to_string())
         } else {
             Err("interpreter not available for comptime evaluation".into())
         }
@@ -4044,12 +4031,16 @@ fn check_struct_literal(ctx: &mut TypeContext, s: &mut HirStructLiteral) -> Type
     if let Some(idx) = name.rfind('.') {
         let struct_module = &name[..idx];
         if ctx.current_module != struct_module {
-            for (f_name, f_info) in &info.fields {
-                if f_info.visibility == Visibility::Private {
+            for field_name in &info.field_order {
+                if info
+                    .fields
+                    .get(field_name)
+                    .is_some_and(|field| field.visibility == Visibility::Private)
+                {
                     ctx.error(
                         format!(
                             "cannot construct struct '{}' from outside its module because it contains private field '{}'",
-                            name, f_name
+                            name, field_name
                         ),
                         s.span,
                     );
@@ -4123,13 +4114,11 @@ fn check_struct_literal(ctx: &mut TypeContext, s: &mut HirStructLiteral) -> Type
     }
 
     // Check that all required fields are present (those without defaults)
-    let mut missing_fields: Vec<&String> = info
-        .fields
-        .iter()
-        .filter(|(name, info)| !info.has_default && !provided.contains(name.as_str()))
-        .map(|(name, _)| name)
-        .collect();
-    missing_fields.sort();
+    let missing_fields = info.field_order.iter().filter(|name| {
+        info.fields
+            .get(name.as_str())
+            .is_some_and(|field| !field.has_default && !provided.contains(name.as_str()))
+    });
 
     for field_name in missing_fields {
         ctx.error(
@@ -4319,62 +4308,32 @@ fn check_comptime_expr(
         return Type::Error;
     }
 
-    if let Some(interpreter) = &mut ctx.interpreter {
-        let mut env = tempra_interpreter::env::RuntimeEnv::new();
-        let old_mode = interpreter.mode;
-        let old_fuel = interpreter.fuel;
-        interpreter.mode = tempra_interpreter::interpreter::EvalMode::Comptime;
-        interpreter.fuel = Some(1000000); // 1M steps
-
-        match interpreter.eval_expression(&comptime_node.expression, &mut env) {
-            Ok(tempra_interpreter::control_flow::ControlFlow::Value(v)) => {
-                interpreter.mode = old_mode;
-                interpreter.fuel = old_fuel;
-                if let Some(lit) = materialize_primitive(&v, comptime_node.span) {
-                    *expr = lit;
-                    return ty;
-                } else {
-                    ctx.error(
-                        format!(
-                            "value of type {} cannot be materialized from comptime in v1",
-                            v.type_name()
-                        ),
-                        comptime_node.span,
-                    );
-                    return Type::Error;
-                }
-            }
-            Ok(cf) => {
-                interpreter.mode = old_mode;
-                interpreter.fuel = old_fuel;
+    match ctx.eval_comptime_expr(&comptime_node.expression) {
+        Ok(value) => {
+            if let Some(literal) = materialize_primitive(&value, comptime_node.span) {
+                *expr = literal;
+                ty
+            } else {
                 ctx.error(
                     format!(
-                        "comptime evaluation resulted in unexpected control flow: {:?}",
-                        cf
+                        "value of type {} cannot be materialized from comptime in v1",
+                        value.type_name()
                     ),
                     comptime_node.span,
                 );
-                return Type::Error;
-            }
-            Err(e) => {
-                interpreter.mode = old_mode;
-                interpreter.fuel = old_fuel;
-                if depends_on_generic_param(&comptime_node.expression, ctx) {
-                    return ty;
-                }
-                ctx.error(
-                    format!("comptime evaluation error: {}", e),
-                    comptime_node.span,
-                );
-                return Type::Error;
+                Type::Error
             }
         }
-    } else {
-        ctx.error(
-            "interpreter not available for comptime evaluation",
-            comptime_node.span,
-        );
-        return Type::Error;
+        Err(error) => {
+            if depends_on_generic_param(&comptime_node.expression, ctx) {
+                return ty;
+            }
+            ctx.error(
+                format!("comptime evaluation error: {error}"),
+                comptime_node.span,
+            );
+            Type::Error
+        }
     }
 }
 
@@ -4397,6 +4356,9 @@ fn semantic_check_comptime_expr(
     expr: &HirExpression,
     ctx: &TypeContext,
 ) -> Result<(), (String, Span)> {
+    // This preflight validates runtime dependencies only. Effect policy is
+    // enforced by the HIR interpreter at the operation boundary so helper
+    // calls and module-qualified paths cannot bypass it.
     match expr {
         HirExpression::Name(span, name) => {
             if let Some(info) = ctx.scopes.lookup(name) {
@@ -4422,30 +4384,6 @@ fn semantic_check_comptime_expr(
             semantic_check_comptime_expr(&b.right, ctx)
         }
         HirExpression::Call(c) => {
-            if let HirExpression::Member(member) = &*c.callee {
-                if let HirExpression::Name(_, namespace) = &*member.object {
-                    if matches!(namespace.as_str(), "fs" | "os" | "env") {
-                        return Err((
-                            format!(
-                                "operation '{}.{}' is not allowed during comptime evaluation",
-                                namespace, member.field
-                            ),
-                            member.span,
-                        ));
-                    }
-                }
-            }
-            if let HirExpression::Name(span, name) = &*c.callee {
-                if matches!(name.as_str(), "print" | "read_line" | "cmd" | "exit") {
-                    return Err((
-                        format!(
-                            "operation '{}' is not allowed during comptime evaluation",
-                            name
-                        ),
-                        *span,
-                    ));
-                }
-            }
             semantic_check_comptime_expr(&c.callee, ctx)?;
             for arg in &c.args {
                 match arg {
@@ -4584,7 +4522,7 @@ pub(crate) fn satisfies_interface(ctx: &mut TypeContext, ty: &Type, interface_na
 
     let mut mappings = HashMap::new();
     let mut satisfied = true;
-    for (method_name, req) in &interface.methods {
+    for (method_name, req) in interface.methods_in_declaration_order() {
         let provided_sig = ctx.lookup_direct_method_signature(ty, method_name);
         match provided_sig {
             Some(sig) => {
@@ -4736,7 +4674,7 @@ pub fn satisfies_interface_no_errors(ctx: &TypeContext, ty: &Type, interface_nam
     use crate::types::substitute_self;
     let mut mappings = HashMap::new();
     let mut satisfied = true;
-    for (method_name, req) in &interface.methods {
+    for (method_name, req) in interface.methods_in_declaration_order() {
         let provided_sig = ctx.lookup_direct_method_signature(ty, method_name);
         match provided_sig {
             Some(sig) => {
@@ -4926,5 +4864,82 @@ fn unify_associated(
                 Err("type mismatch".into())
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod declaration_order_tests {
+    use super::check_struct_literal;
+    use crate::context::{StructFieldInfo, StructInfo, TypeContext};
+    use crate::types::Type;
+    use std::collections::HashMap;
+    use tempra_ast::Visibility;
+    use tempra_hir::{HirExpression, HirStructLiteral, HirType};
+    use tempra_span::Span;
+
+    #[test]
+    fn private_struct_field_diagnostics_follow_declaration_order() {
+        let mut fields = HashMap::new();
+        for name in ["zebra", "alpha", "middle"] {
+            fields.insert(
+                name.to_string(),
+                StructFieldInfo {
+                    visibility: Visibility::Private,
+                    ty: Type::Int,
+                    is_mutable: false,
+                    has_default: false,
+                },
+            );
+        }
+        let mut context = TypeContext::new();
+        context.current_module = "main".to_string();
+        context.structs.insert(
+            "model.Secret".to_string(),
+            StructInfo {
+                visibility: Visibility::Public,
+                generic_params: Vec::new(),
+                fields,
+                field_order: vec![
+                    "zebra".to_string(),
+                    "alpha".to_string(),
+                    "middle".to_string(),
+                ],
+            },
+        );
+        let mut literal = HirStructLiteral {
+            span: Span::new(0, 1),
+            ty: HirType::Named(Span::new(0, 1), "model.Secret".to_string()),
+            fields: vec![
+                (
+                    "zebra".to_string(),
+                    HirExpression::Integer(Span::new(0, 1), "1".to_string()),
+                ),
+                (
+                    "alpha".to_string(),
+                    HirExpression::Integer(Span::new(0, 1), "2".to_string()),
+                ),
+                (
+                    "middle".to_string(),
+                    HirExpression::Integer(Span::new(0, 1), "3".to_string()),
+                ),
+            ],
+        };
+
+        assert_eq!(
+            check_struct_literal(&mut context, &mut literal),
+            Type::Struct("model.Secret".to_string(), Vec::new())
+        );
+        assert_eq!(
+            context
+                .errors
+                .iter()
+                .map(|error| error.message.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "cannot construct struct 'model.Secret' from outside its module because it contains private field 'zebra'",
+                "cannot construct struct 'model.Secret' from outside its module because it contains private field 'alpha'",
+                "cannot construct struct 'model.Secret' from outside its module because it contains private field 'middle'",
+            ]
+        );
     }
 }

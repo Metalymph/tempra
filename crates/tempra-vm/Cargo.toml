@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 tempra-bytecode = { path = "../tempra-bytecode" }
+tempra-runtime.workspace = true
 tempra-jit-cranelift = { path = "../tempra-jit-cranelift", optional = true }
 
 [features]

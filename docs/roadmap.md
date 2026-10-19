@@ -69,17 +69,96 @@ Phase E is subdivided as follows:
 
 E1 is TIR-only. HIR-only operations are coverage gaps for later integration, not justification for a second analyzer.
 
-The implemented E1–E6 design and boundaries are recorded in [E1 Capability Analysis](E1_CAPABILITY_ANALYSIS.md). The historical E5 audit found no intentional source-level primitive requiring unsafe authorization. It recorded narrow correctness debts in native signature integrity, comptime extern handling, and internal JIT pointer/ABI/lifetime assumptions, not new semantic phases or demonstrated exploits. `check` remains frontend/typechecking-only, not capability certification.
+The implemented E1–E6 design and boundaries are recorded in [E1 Capability Analysis](E1_CAPABILITY_ANALYSIS.md). The historical E5 audit found no intentional source-level primitive requiring unsafe authorization. It recorded narrow correctness debts in native signature integrity, comptime extern handling, and internal JIT pointer/ABI/lifetime assumptions, not new semantic phases or demonstrated exploits; K1.4 has since resolved the bodyless-dispatch portion of the comptime debt. `check` remains frontend/typechecking-only, not capability certification.
 
 ### K — Comptime Consistency & Compiler Responsiveness
 
 K is the next active compiler milestone. It must establish one canonical,
 backend-independent comptime semantics: VM, JIT, Wasm and future AOT must observe
-the same comptime result or error. K1 audits the real authority/evaluator layers
-before choosing a concrete one, then records determinism, reproducibility, future
-parity tests, phase timings and initial compiler-latency benchmarks. Compile
-latency is already monitored during development; K makes that monitoring
-reproducible and actionable. No deep optimization is implied or implemented yet.
+the same comptime result or error. The K1 audit/spec selected the existing HIR
+interpreter as the semantic kernel. K1.1 adds one canonical facade that owns
+comptime mode/fuel setup, value/error/control-flow normalization and state
+restoration. K1.2 extends the same authority to ordinary multi-module and
+file-based typechecking through a module-aware lookup adapter over separate HIR
+files. K1.3 makes supported integer arithmetic in the shared HIR kernel
+panic-free and profile-independent without changing float semantics. The
+K1.4 shared call dispatch rejects functions without executable HIR bodies rather
+than producing synthetic `Unit`; comptime still does not execute VM-native
+externs. K1.5 makes the HIR interpreter the sole effect-policy authority for
+currently executable comptime operations: local `cmd` construction and
+allocation remain allowed, while process execution, output/input, filesystem,
+environment, host-OS access, `dbg` and `exit` are rejected at their effect
+boundaries. The typechecker remains the owner of primitive HIR materialization,
+and TIR/backends consume resolved code. K1.6 adds deterministic
+evaluator-progress fuel ticks and a conservative compiler-defined v0.1
+call-depth safety limit of 8 active Tempra frames. The limit is revisionable as
+the evaluator evolves; nested comptime shares the active session without
+resetting its budget.
+
+Current status:
+
+```text
+K1 audit/spec       DONE
+K1.1 facade         DONE
+K1.2 multi-module   DONE
+K1.3 arithmetic     DONE
+K1.4 extern/bodyless DONE
+K1.5 effect policy   DONE
+K1.6 termination     DONE
+K1.7 cache revision  DONE
+K1 implementation   DONE
+K2.1 determinism audit DONE
+K2.2 specialization ordering DONE
+K2.3 stdlib discovery input DONE
+K2.4 semantic/diagnostic iteration DONE
+K2.5 cross-process reproducibility gate DONE
+K2 implementation   DONE
+K3.1 runtime parity audit DONE
+K3.2 Int64 parity    DONE
+K3 implementation   IN PROGRESS
+```
+
+K1.7 raises the cache trust fingerprint from `semantics-1` to `semantics-2`, so
+artifacts predating K1.3–K1.6 cannot bypass current comptime semantics. K2.1's
+determinism audit is complete. K2.2 gives specialization requests deterministic
+first-request order, emits bytecode functions in ascending `TirFunctionId`, and
+uses an explicit TIR-to-bytecode function map instead of treating identity as a
+vector position. It raises current cache trust to `semantics-3` because revision-2
+artifacts may contain the former specialization miscompilation. Bytecode format
+and semantic revision remain independent.
+Native signature integrity remains separate from the now-explicit HIR bodyless
+rejection. K2.3 removes cwd from implicit standard-library discovery in the
+compiler-authoritative file/module paths: an explicit resolved `std/` root wins,
+otherwise the default is discovered only from the compiler executable's ancestor
+layout. A relative root supplied explicitly is resolved once at the API boundary;
+cwd never selects std implicitly. Together with K2.2 this establishes Level 1
+(deterministic semantic result/errors) for the audited compiler paths. K2.4 makes
+module/source declaration order authoritative wherever interface or field iteration
+affects semantics or diagnostics; hash containers remain lookup-only at those
+boundaries. It raises cache trust to `semantics-4` because revision-3 artifacts may
+encode the former unordered interface selection. Multiple valid interfaces for one
+associated type remain a separate type-system semantics debt: K2.4 preserves the
+existing first-match rule but makes it deterministic. This establishes Level 2 for
+the audited compiler-authoritative paths. K2.5 proves identical runtime results,
+diagnostics and raw artifacts across fresh compiler processes, equivalent absolute
+roots and cwd changes after declared paths are resolved. This establishes Level 3
+for the supported same-build, same-host/target bytecode surface; it is not a
+cross-machine Level 4 claim. K2 is complete. VM/JIT/Wasm runtime parity continues
+in K3; phase timings, latency baseline
+and regression budgets continue in K4–K6. Analysis/LSP/REPL comptime integration
+remains tooling work, while full comptime specialization is separate compiler
+feature/debt. Compile latency remains monitored throughout development; no deep
+optimization is implied by K1.
+
+K3.1 audited the executable runtime surfaces without selecting arithmetic rules
+by taste or by borrowing future `@verified` semantics. K3.2 establishes the
+first shared runtime contract: `Int64` add/sub/mul/neg are checked, division
+distinguishes zero from signed overflow, and HIR, TIR, VM and actually-native JIT
+execution return controlled failures rather than Rust panics, traps or accidental
+wrapping. Native pure and heap-aware call chains propagate `{ value, status }`
+without falling back after a semantic failure. E1 treats checked `Int64`
+add/sub/mul/div as conservative `Panic` origins. Cache trust is `semantics-5`;
+the bytecode format is unchanged. K3 remains in progress.
 
 ### R — Result / Value-Use Hardening
 

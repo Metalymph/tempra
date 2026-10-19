@@ -83,7 +83,7 @@ TIR evolution follows the project-wide dependency order rather than assigning co
 
 1. **E — Capability/effect semantic core (E1–E4 done):** stable summaries and provenance.
 2. **E6 — Structured diagnostics and inspect tooling (done):** projections over existing facts.
-3. **K — Comptime consistency and compiler responsiveness:** audit one canonical backend-independent semantics, backend parity, determinism and initial phase timings before semantic changes.
+3. **K — Comptime consistency and compiler responsiveness:** K1's canonical evaluator and semantic-cache trust boundary are complete. K2.1–K2.5 complete the audited deterministic ordering, explicit stdlib input and same-build cross-process reproducibility gate; runtime parity, phase timings and latency gates continue in K3–K6.
 4. **R — Result / value-use hardening:** future obligations against silent Result discard, not a capability/effect.
 5. **M — Acyclic ownership:** formalize legal strong-reference graphs and complete ARC-cycle prevention before concurrent transfer.
 6. **C — Pluggable actor concurrency:** add task, actor, channel, and selection operations only after the preceding foundations define their boundaries.
@@ -96,6 +96,25 @@ facts and is not a complete TIR Graph. U — Unsafe Boundary is standalone
 DEFERRED / CONDITIONAL work, activated only by a real source operation requiring
 memory/type-safety authorization. No current TIR capability origin emits Unsafe.
 
+K1.7 historically changes cache trust to `semantics-2`. K2.2 changes current
+trust to `semantics-3` so artifacts that may contain the former specialization
+ID/index miscompilation are not reused. K2.4 changes current trust to
+`semantics-4` so interface candidate selection and diagnostics are not reused
+from unordered iteration. The bytecode format remains an independent
+structural version, and neither TIR nor capability facts are rebuilt on a
+compatible bytecode-only cache hit. `TirFunctionId` is a compilation-local
+identity, not a physical position in `TirModule.functions`; bytecode lowering
+emits functions by ascending ID and resolves calls through an explicit mapping.
+K2.5 keeps revision 4 and proves exact cross-process artifact equality for the
+currently supported same-build, same-host/target bytecode surface; no Level 4
+cross-machine guarantee is implied.
+
+K3.2 raises cache trust to `semantics-5` without changing TIR or bytecode
+formats. For `Int64`, `add`, `sub` and `mul` are checked, `div` distinguishes
+zero from signed overflow, and lowered negation inherits checked `sub` behavior.
+All supported runtime consumers use the shared contract; host panics, native
+traps and profile-dependent wrapping are not semantic outcomes.
+
 This section does not define future TIR opcodes. Their exact representation belongs to the corresponding phase specifications.
 
 ## Capability-analysis contract
@@ -106,6 +125,6 @@ edges, origins and witnesses. It adds no source mapping: TIR does not retain a
 reliable one. A future lowering side table maps locations to module identity and
 existing source spans.
 
-Direct `Alloc` classification is based on semantic runtime allocation in the current representation; `const` and `make` are not normative allocation sites by syntax alone. Direct `Panic` classification is conservative may-panic information. Later verified analysis may prove individual divisions or bounds accesses safe without changing E1's collection policy.
+Direct `Alloc` classification is based on semantic runtime allocation in the current representation; `const` and `make` are not normative allocation sites by syntax alone. Direct `Panic` classification is conservative may-fail information. Checked `Int64` add, sub, mul and div contribute `Panic`; later verified analysis may prove individual arithmetic, divisions or bounds accesses safe without changing E1's collection policy.
 
 An extern requires a known capability classification only when a TIR call targets it. Unused extern declarations do not invalidate a module.

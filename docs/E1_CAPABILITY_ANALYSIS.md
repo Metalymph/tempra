@@ -67,6 +67,7 @@ The classifier matches TIR instructions and fully qualified extern names. It mus
 
 E1 classifies these operations conservatively as `Panic`:
 
+- `Add`, `Sub` and `Mul` when their operand type is `Int64`;
 - `Div`;
 - `Unwrap`;
 - `GetIndex`;
@@ -75,7 +76,7 @@ E1 classifies these operations conservatively as `Panic`:
 
 `Set` with an index is not emitted by the current bytecode lowerer and remains a TIR coverage gap rather than receiving invented runtime semantics.
 
-This is may-panic data, not a proof system. E1 does not attempt constant evaluation, bounds proofs, non-zero proofs, or control-flow refinement. Phase V may later discharge a particular failure obligation without changing E1's conservative baseline.
+This is may-fail data, not a proof system or runtime error hierarchy. E1 does not attempt constant evaluation, overflow proofs, bounds proofs, non-zero proofs, or control-flow refinement. Negation lowers through `Sub` and therefore receives the same `Int64` origin. Phase V may later discharge a particular failure obligation without changing E1's conservative baseline; it is not retroactive authority for the current runtime rule.
 
 ### Initial allocation mapping
 
@@ -380,7 +381,18 @@ diagnostic rendering on stderr. Its current tooling schema exposes diagnostics,
 functions, direct and required sets, contracts, source identity and structured
 witnesses; it is not a promised permanent protocol. Ordinary cache hits remain
 verified bytecode-only. Effect inspection never reads or writes cache metadata
-and leaves `semantics-1` unchanged.
+and E6 itself left `semantics-1` unchanged. K1.7 later raises the compiler
+semantic revision to `semantics-2` so pre-K1 comptime artifacts are incompatible;
+K2.2 subsequently raises current trust to `semantics-3` to invalidate artifacts
+that may contain the former specialization ID/index miscompilation. K2.4 raises
+current trust to `semantics-4` because unordered interface selection can change
+accepted types and diagnostic order. No capability metadata is added and
+compatible hits remain bytecode-only.
+
+K3.2 subsequently raises current trust to `semantics-5`. Revision-4 artifacts
+may predate the `Int64` add/sub/mul `Panic` origins and could otherwise bypass
+new `@deny(panic)` enforcement on a bytecode-only hit. The bytecode format and
+capability-metadata policy remain unchanged.
 
 The current analysis/LSP path remains frontend/typechecking-only. E6 converts to
 the existing general `Diagnostic` model but does not make the LSP compile through
@@ -390,10 +402,10 @@ adding a second analyzer.
 ## Post-E6 state and next compiler milestone
 
 E1–E6 complete the currently meaningful light capability/effect and tooling
-surface, not all TIR coverage. K1 canonical backend-independent comptime
-semantics, authority/evaluator parity, determinism and initial responsiveness
-audit is next. E6 introduced no second analyzer and its JSON is a current tooling
-schema rather than a permanent protocol.
+surface, not all TIR coverage. K1 has since completed its canonical comptime
+authority and semantic-cache trust boundary. Determinism, runtime parity and
+responsiveness work continue in K2–K6. E6 introduced no second analyzer and its
+JSON is a current tooling schema rather than a permanent protocol.
 
 The richer TIR Graph is later tooling: calls, CFG, capabilities, allocations,
 ownership edges, escapes, actor boundaries, specializations and source provenance
@@ -446,6 +458,13 @@ to authorize through `@unsafe`:
   execution needs explicit rejection, not unsafe authorization. See
   [HIR function evaluation](../crates/tempra-interpreter/src/interpreter.rs) and
   [comptime evaluation](../crates/tempra-typeck/src/check_expr.rs).
+  **Subsequent status:** K1.4 resolves this dispatch gap by rejecting functions
+  without executable HIR bodies. It does not add native execution to comptime;
+  native/extern signature integrity remains the separate debt above.
+  **K1.5 status:** the remaining executable HIR effect policy is enforced at
+  interpreter operation boundaries. `cmd` construction is local and allowed;
+  process execution and other host-observable operations are rejected. This
+  does not alter the TIR analyzer or add HIR capability analysis.
 - **Internal JIT API audit.** Raw code/context pointers, ABI conversions and
   lifetime/aliasing assumptions in public Rust wrappers require runtime/embedding
   review. A null check is not a proof of pointer validity. These are not source

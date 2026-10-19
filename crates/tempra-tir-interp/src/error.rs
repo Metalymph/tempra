@@ -28,6 +28,9 @@ pub enum TirInterpError {
     #[error("division by zero")]
     DivisionByZero,
 
+    #[error(transparent)]
+    Int64Arithmetic(#[from] tempra_runtime::Int64ArithmeticError),
+
     #[error("unsupported instruction: {0}")]
     UnsupportedInstr(String),
 

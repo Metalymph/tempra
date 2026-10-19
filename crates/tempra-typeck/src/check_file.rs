@@ -5,11 +5,32 @@ use crate::context::TypeContext;
 use crate::error::TypeError;
 use std::collections::HashMap;
 use tempra_hir::HirFile;
+use tempra_interpreter::interpreter::{Interpreter, InterpreterModule};
 
 pub struct ModuleToCheck<'a> {
     pub name: String,
     pub imports: HashMap<String, String>,
     pub file: &'a mut HirFile,
+}
+
+fn install_module_interpreter(ctx: &mut TypeContext, modules: &mut [ModuleToCheck<'_>]) {
+    ctx.interpreter = Some(Interpreter::new_for_modules(modules.iter_mut().map(
+        |module| InterpreterModule {
+            name: &module.name,
+            imports: &module.imports,
+            file: &*module.file,
+        },
+    )));
+}
+
+fn select_module(ctx: &mut TypeContext, module: &ModuleToCheck<'_>) {
+    ctx.current_module = module.name.clone();
+    ctx.imports = module.imports.clone();
+    let selected = ctx
+        .interpreter
+        .as_mut()
+        .is_some_and(|interpreter| interpreter.select_module(&module.name));
+    assert!(selected, "comptime interpreter is missing module identity");
 }
 
 pub fn check_modules(
@@ -19,18 +40,17 @@ pub fn check_modules(
     let mut ctx = TypeContext::new();
     ctx.is_single_file_fallback = is_single_file_fallback;
     ctx.modules = modules.iter().map(|m| m.name.clone()).collect();
+    install_module_interpreter(&mut ctx, modules);
 
     // Pass 1: register all items in all modules
     for m in modules.iter_mut() {
-        ctx.current_module = m.name.clone();
-        ctx.imports = m.imports.clone();
+        select_module(&mut ctx, m);
         register_items(&mut ctx, &m.file.items);
     }
 
     // Pass 2: check item bodies in all modules
     for m in modules.iter_mut() {
-        ctx.current_module = m.name.clone();
-        ctx.imports = m.imports.clone();
+        select_module(&mut ctx, m);
         for item in &mut m.file.items {
             check_item(&mut ctx, item);
         }
@@ -38,8 +58,7 @@ pub fn check_modules(
 
     // Pass 3: check top-level statements in all modules
     for m in modules.iter_mut() {
-        ctx.current_module = m.name.clone();
-        ctx.imports = m.imports.clone();
+        select_module(&mut ctx, m);
         if !m.file.top_level_statements.is_empty() {
             ctx.current_is_fallible = true;
             ctx.current_return_type = None;
@@ -64,14 +83,46 @@ pub fn check_modules_always(
     source_texts: &HashMap<String, String>,
     is_single_file_fallback: bool,
 ) -> TypeContext {
+    check_modules_always_impl(modules, source_texts, is_single_file_fallback, false)
+}
+
+/// Type-checks modules while retaining errors and enabling canonical comptime evaluation.
+///
+/// This is the fact-producing counterpart used by ordinary file/compiler paths.
+/// Incremental analysis and REPL consumers intentionally continue to use their
+/// existing authority boundaries.
+pub fn check_modules_always_with_comptime(
+    modules: &mut [ModuleToCheck],
+    source_texts: &HashMap<String, String>,
+    is_single_file_fallback: bool,
+) -> TypeContext {
+    check_modules_always_impl(modules, source_texts, is_single_file_fallback, true)
+}
+
+fn check_modules_always_impl(
+    modules: &mut [ModuleToCheck],
+    source_texts: &HashMap<String, String>,
+    is_single_file_fallback: bool,
+    comptime_enabled: bool,
+) -> TypeContext {
     let mut ctx = TypeContext::new();
     ctx.is_single_file_fallback = is_single_file_fallback;
     ctx.modules = modules.iter().map(|m| m.name.clone()).collect();
+    if comptime_enabled {
+        install_module_interpreter(&mut ctx, modules);
+    }
 
     // Pass 1: register all items
     for m in modules.iter_mut() {
         ctx.current_module = m.name.clone();
         ctx.imports = m.imports.clone();
+        if comptime_enabled {
+            let selected = ctx
+                .interpreter
+                .as_mut()
+                .is_some_and(|interpreter| interpreter.select_module(&m.name));
+            assert!(selected, "comptime interpreter is missing module identity");
+        }
         register_items(&mut ctx, &m.file.items);
     }
 
@@ -79,6 +130,13 @@ pub fn check_modules_always(
     for m in modules.iter_mut() {
         ctx.current_module = m.name.clone();
         ctx.imports = m.imports.clone();
+        if comptime_enabled {
+            let selected = ctx
+                .interpreter
+                .as_mut()
+                .is_some_and(|interpreter| interpreter.select_module(&m.name));
+            assert!(selected, "comptime interpreter is missing module identity");
+        }
         ctx.facts = crate::facts::TypecheckFacts::default();
         if let Some(source) = source_texts.get(&m.name) {
             ctx.source_text = Some(source.clone());
@@ -210,4 +268,54 @@ pub fn check_file_with_context_always(file: &mut HirFile, source: Option<String>
     }
 
     ctx
+}
+
+#[cfg(test)]
+mod declaration_order_tests {
+    use super::{check_modules_always, ModuleToCheck};
+    use std::collections::HashMap;
+
+    fn lower(source: &str) -> tempra_hir::HirFile {
+        let ast = tempra_parser::parse_source(source).unwrap();
+        tempra_hir::lower_file(source, &ast)
+    }
+
+    #[test]
+    fn module_input_order_flows_directly_into_interface_registration_order() {
+        let mut alpha = lower("interface Alpha { fn alpha(self) -> Int }");
+        let mut beta = lower("interface Beta { fn beta(self) -> Int }");
+        let mut entry = lower("interface Entry { fn entry(self) -> Int }");
+        let mut modules = [
+            ModuleToCheck {
+                name: "alpha".to_string(),
+                imports: HashMap::new(),
+                file: &mut alpha,
+            },
+            ModuleToCheck {
+                name: "beta".to_string(),
+                imports: HashMap::new(),
+                file: &mut beta,
+            },
+            ModuleToCheck {
+                name: "main".to_string(),
+                imports: HashMap::new(),
+                file: &mut entry,
+            },
+        ];
+
+        let context = check_modules_always(&mut modules, &HashMap::new(), false);
+        assert_eq!(
+            context
+                .interface_names_in_declaration_order()
+                .collect::<Vec<_>>(),
+            vec![
+                "Collection",
+                "Iterator",
+                "Iterable",
+                "alpha.Alpha",
+                "beta.Beta",
+                "main.Entry",
+            ]
+        );
+    }
 }

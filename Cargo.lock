@@ -1222,6 +1222,7 @@ dependencies = [
  "cranelift-native",
  "target-lexicon",
  "tempra-bytecode",
+ "tempra-runtime",
  "thiserror",
 ]
 
@@ -1356,6 +1357,7 @@ dependencies = [
 name = "tempra-tir-interp"
 version = "0.1.0"
 dependencies = [
+ "tempra-runtime",
  "tempra-tir",
  "thiserror",
 ]
@@ -1394,6 +1396,7 @@ dependencies = [
  "tempra-hir",
  "tempra-jit-cranelift",
  "tempra-parser",
+ "tempra-runtime",
  "tempra-tir",
  "tempra-tir-lower",
  "tempra-typeck",

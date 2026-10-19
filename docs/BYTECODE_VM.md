@@ -173,8 +173,14 @@ run_function_with_options(module, "main", args, options);
 3. **Compilation**: When a threshold is met, if the function is a candidate (e.g., pure `Int64` arithmetic/loops), it is compiled to native code.
 4. **Execution**: Subsequent calls to the function use the native entry point.
 
+Both interpreted and native `Int64` add/sub/mul/div use the shared checked
+runtime contract. Arithmetic failures are typed VM errors. Native code returns
+`{ value, status }` through pure and heap-aware call chains; a non-zero
+arithmetic status is propagated to the VM boundary and is not treated as a JIT
+fallback opportunity.
+
 ### Fallback Policy
-The JIT maintains a strict fallback policy. If a function uses unsupported features (Strings, Structs, Heap access) or if compilation fails, the VM transparently continues execution via the interpreter.
+The JIT maintains a strict fallback policy. If a function uses unsupported features (Strings, Structs, Heap access) or if compilation fails, the VM transparently continues execution via the interpreter. A checked arithmetic failure produced by already-running native code is a semantic runtime result and never triggers fallback.
 
 ### Observability and Guardrails
 The VM profile includes a `JIT Summary` detailing:

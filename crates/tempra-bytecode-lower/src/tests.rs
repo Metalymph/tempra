@@ -306,3 +306,102 @@ fn test_peephole_fuses_superinstructions() {
     assert!(disasm.contains("AddI64LL"));
     assert!(disasm.contains("AddI64LC"));
 }
+
+fn returning_i64_function(id: usize, name: &str, value: i64) -> TirFunction {
+    TirFunction {
+        id: TirFunctionId(id),
+        name: name.to_string(),
+        params: vec![],
+        return_type: TirType::Int64,
+        blocks: vec![TirBlock {
+            id: TirBlockId(0),
+            instrs: vec![TirInstr::Const(TirValueId(0), TirConst::Int64(value))],
+            terminator: Some(TirTerminator::Ret(Some(TirValueId(0)))),
+        }],
+        next_value_id: 1,
+        next_block_id: 1,
+        next_slot_id: 0,
+        debug_slots: Default::default(),
+        is_extern: false,
+    }
+}
+
+fn calling_function(id: usize, name: &str, target: usize) -> TirFunction {
+    TirFunction {
+        id: TirFunctionId(id),
+        name: name.to_string(),
+        params: vec![],
+        return_type: TirType::Int64,
+        blocks: vec![TirBlock {
+            id: TirBlockId(0),
+            instrs: vec![TirInstr::Call(TirValueId(0), TirFunctionId(target), vec![])],
+            terminator: Some(TirTerminator::Ret(Some(TirValueId(0)))),
+        }],
+        next_value_id: 1,
+        next_block_id: 1,
+        next_slot_id: 0,
+        debug_slots: Default::default(),
+        is_extern: false,
+    }
+}
+
+#[test]
+fn call_mapping_is_independent_of_physical_tir_order() {
+    let module = TirModule {
+        functions: vec![
+            calling_function(0, "main", 1),
+            returning_i64_function(2, "wrong", 0),
+            returning_i64_function(1, "target", 41),
+        ],
+    };
+
+    let bytecode = lower_tir_module(&module).unwrap();
+    verify_module(&bytecode).unwrap();
+
+    assert_eq!(
+        bytecode
+            .functions
+            .iter()
+            .map(|function| function.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["main", "target", "wrong"]
+    );
+    assert!(bytecode.functions[0].code.iter().any(|instruction| {
+        matches!(
+            instruction,
+            tempra_bytecode::BytecodeInstr::Call(tempra_bytecode::function::FunctionId(1), 0)
+        )
+    }));
+}
+
+#[test]
+fn duplicate_tir_function_id_is_rejected() {
+    let module = TirModule {
+        functions: vec![
+            returning_i64_function(1, "first", 1),
+            returning_i64_function(1, "second", 2),
+        ],
+    };
+
+    assert!(matches!(
+        lower_tir_module(&module),
+        Err(crate::error::BytecodeLowerError::DuplicateTirFunctionId {
+            function: TirFunctionId(1)
+        })
+    ));
+}
+
+#[test]
+fn missing_tir_function_mapping_is_rejected() {
+    let module = TirModule {
+        functions: vec![calling_function(3, "caller", 99)],
+    };
+
+    assert!(matches!(
+        lower_tir_module(&module),
+        Err(crate::error::BytecodeLowerError::MissingFunctionMapping {
+            caller: TirFunctionId(3),
+            target: TirFunctionId(99)
+        })
+    ));
+}

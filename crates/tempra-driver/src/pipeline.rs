@@ -4,6 +4,7 @@ use crate::compilation::{
 };
 use crate::contracts::{ContractBindings, ContractSource};
 use crate::error::DriverError;
+use crate::CompilationConfig;
 use std::fs;
 use std::path::Path;
 use tempra_hir::lower_file;
@@ -366,18 +367,36 @@ pub fn run_file_with_experimental_vm_jit(
 /// Compiles a file and its module graph fresh, retaining TIR and capability facts.
 /// This path does not read or write a bytecode cache.
 pub fn compile_file_to_bytecode_with_analysis(path: &Path) -> Result<VmCompilation, DriverError> {
-    let analyzed = analyze_file_to_tir(path)?;
+    compile_file_to_bytecode_with_analysis_with_config(path, &CompilationConfig::default())
+}
+
+/// Compiles a file and its module graph fresh using explicit compilation inputs.
+///
+/// This path retains TIR and capability facts and does not use the bytecode cache.
+pub fn compile_file_to_bytecode_with_analysis_with_config(
+    path: &Path,
+    config: &CompilationConfig,
+) -> Result<VmCompilation, DriverError> {
+    let analyzed = analyze_file_to_tir(path, config)?;
     enforce_analyzed_tir(&analyzed)?;
     lower_analyzed_tir(analyzed)
 }
 
-fn analyze_file_to_tir(path: &Path) -> Result<AnalyzedTir, DriverError> {
+fn analyze_file_to_tir(
+    path: &Path,
+    config: &CompilationConfig,
+) -> Result<AnalyzedTir, DriverError> {
     use crate::module_graph::{load_module_graph, DiskDocumentLoader};
     use std::collections::HashMap;
-    use tempra_typeck::{check_modules_always, ModuleToCheck};
+    use tempra_typeck::{check_modules_always_with_comptime, ModuleToCheck};
 
     let mut diagnostics = Vec::new();
-    let mut graph = match load_module_graph(path, &DiskDocumentLoader, &mut diagnostics) {
+    let mut graph = match load_module_graph(
+        path,
+        &DiskDocumentLoader,
+        config.stdlib_root(),
+        &mut diagnostics,
+    ) {
         Ok(g) => g,
         Err(_) => {
             let err_msgs: Vec<String> = diagnostics.iter().map(|d| format!("{:?}", d)).collect();
@@ -409,7 +428,7 @@ fn analyze_file_to_tir(path: &Path) -> Result<AnalyzedTir, DriverError> {
     }
 
     let source_texts = HashMap::new();
-    let type_ctx = check_modules_always(&mut modules_to_check, &source_texts, false);
+    let type_ctx = check_modules_always_with_comptime(&mut modules_to_check, &source_texts, false);
     if !type_ctx.errors.is_empty() {
         let err_msgs: Vec<String> = type_ctx.errors.iter().map(|e| format!("{:?}", e)).collect();
         return Err(DriverError::TypeError(err_msgs.join("\n")));
@@ -481,7 +500,15 @@ fn analyze_file_to_tir(path: &Path) -> Result<AnalyzedTir, DriverError> {
 pub fn inspect_effects_file(
     path: &Path,
 ) -> Result<crate::EffectInspection, crate::EffectQueryError> {
-    let analyzed = analyze_file_to_tir(path).map_err(crate::EffectQueryError::Compiler)?;
+    inspect_effects_file_with_config(path, &CompilationConfig::default())
+}
+
+/// Inspects capability facts using explicit file/module compilation inputs.
+pub fn inspect_effects_file_with_config(
+    path: &Path,
+    config: &CompilationConfig,
+) -> Result<crate::EffectInspection, crate::EffectQueryError> {
+    let analyzed = analyze_file_to_tir(path, config).map_err(crate::EffectQueryError::Compiler)?;
     if let Err(error) = enforce_analyzed_tir(&analyzed) {
         return match error {
             DriverError::CapabilityContractViolations(violations) => {
@@ -527,11 +554,21 @@ pub fn check_source(source: &str) -> Result<(), DriverError> {
 }
 
 pub fn check_file(path: &Path) -> Result<(), DriverError> {
+    check_file_with_config(path, &CompilationConfig::default())
+}
+
+/// Type-checks a file and its module graph using explicit compilation inputs.
+pub fn check_file_with_config(path: &Path, config: &CompilationConfig) -> Result<(), DriverError> {
     use crate::module_graph::{load_module_graph, DiskDocumentLoader};
     use tempra_typeck::{check_modules, ModuleToCheck};
 
     let mut diagnostics = Vec::new();
-    let mut graph = match load_module_graph(path, &DiskDocumentLoader, &mut diagnostics) {
+    let mut graph = match load_module_graph(
+        path,
+        &DiskDocumentLoader,
+        config.stdlib_root(),
+        &mut diagnostics,
+    ) {
         Ok(g) => g,
         Err(_) => {
             let err_msgs: Vec<String> = diagnostics.iter().map(|d| format!("{:?}", d)).collect();
@@ -809,12 +846,25 @@ pub fn diagnose_source_with_facts(source: &str) -> AnalysisFactsResult {
 }
 
 pub fn diagnose_file(path: &Path) -> Vec<tempra_diagnostics::Diagnostic> {
+    diagnose_file_with_config(path, &CompilationConfig::default())
+}
+
+/// Diagnoses a file and its module graph using explicit compilation inputs.
+pub fn diagnose_file_with_config(
+    path: &Path,
+    config: &CompilationConfig,
+) -> Vec<tempra_diagnostics::Diagnostic> {
     use crate::module_graph::{load_module_graph, DiskDocumentLoader};
     use std::collections::HashMap;
-    use tempra_typeck::{check_modules_always, ModuleToCheck};
+    use tempra_typeck::{check_modules_always_with_comptime, ModuleToCheck};
 
     let mut diagnostics = Vec::new();
-    let mut graph = match load_module_graph(path, &DiskDocumentLoader, &mut diagnostics) {
+    let mut graph = match load_module_graph(
+        path,
+        &DiskDocumentLoader,
+        config.stdlib_root(),
+        &mut diagnostics,
+    ) {
         Ok(g) => g,
         Err(_) => return diagnostics, // load_module_graph already populated diagnostics
     };
@@ -839,7 +889,7 @@ pub fn diagnose_file(path: &Path) -> Vec<tempra_diagnostics::Diagnostic> {
         });
     }
 
-    let ctx = check_modules_always(&mut modules_to_check, &source_texts, false);
+    let ctx = check_modules_always_with_comptime(&mut modules_to_check, &source_texts, false);
     for err in ctx.errors {
         let mut d = tempra_diagnostics::Diagnostic::error(err.span, err.message);
         if let Some(ref m_name) = err.module_name {
@@ -1182,7 +1232,7 @@ mod enforcement_cache_tests {
     use super::*;
 
     #[test]
-    fn pure_uses_semantics_one_and_source_identity_without_cache_metadata() {
+    fn pure_uses_semantics_five_and_source_identity_without_cache_metadata() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("pure.tbc");
         let pure = "@pure fn main() -> Int64 { return 10 / 2 }";
@@ -1199,7 +1249,7 @@ mod enforcement_cache_tests {
         let header = crate::cache::read_cache_artifact(&path).unwrap().header;
         assert_eq!(
             header.compiler_fingerprint,
-            format!("tempra-{}-semantics-1", env!("CARGO_PKG_VERSION"))
+            format!("tempra-{}-semantics-5", env!("CARGO_PKG_VERSION"))
         );
         assert_eq!(header.source_hash, pure_hash);
         let bytes = fs::read(&path).unwrap();
@@ -1256,6 +1306,115 @@ mod enforcement_cache_tests {
 
     const VALID: &str = "@deny(io) fn main() -> Int64 { return 10 / 2 }";
     const VIOLATING: &str = "@deny(panic) fn main() -> Int64 { return 10 / 2 }";
+    const K2_SPECIALIZATION_SOURCE: &str = r#"
+fn choose(type T, first: T, second: T) -> T { return first }
+fn choose_second(type T, first: T, second: T) -> T { return second }
+fn choose_again(type T, first: T, second: T) -> T { return first }
+fn main() -> Int64 {
+    let values: Array(Int) = [41, 0]
+    let chosen = values.reduce(choose)
+    let ignored_second = values.reduce(choose_second)
+    let ignored_again = values.reduce(choose_again)
+    if chosen is Some(value) { return value }
+    return 99
+}
+"#;
+    const K2_INTERFACE_B_FIRST_SOURCE: &str = r#"
+interface B {
+    type Item
+    fn b(self) -> Item
+}
+interface A {
+    type Item
+    fn a(self) -> Item
+}
+struct Both {}
+extend Both {
+    fn a(self) -> Int { 41 }
+    fn b(self) -> String { "forty-one" }
+}
+fn select(type T: A, value: T) -> T.Item { value.a() }
+fn main() -> Int64 { return select[Both](Both {}) }
+"#;
+
+    const K1_STALE_SOURCES: [(&str, &str, &str); 4] = [
+        (
+            "arithmetic",
+            "fn main() -> Int64 { return comptime 9223372036854775807 + 1 }",
+            "integer overflow",
+        ),
+        (
+            "bodyless extern",
+            "pub extern fn missing() -> Unit\nfn main() { comptime missing() }",
+            "function 'missing' has no executable HIR body",
+        ),
+        (
+            "forbidden effect",
+            "fn hidden() { dbg(\"hidden\") }\nfn main() { comptime hidden() }",
+            "operation 'dbg' is not allowed during comptime evaluation",
+        ),
+        (
+            "termination",
+            "fn recurse() -> Int64 { return recurse() }\nfn main() -> Int64 { return comptime recurse() }",
+            "comptime call depth exceeded",
+        ),
+    ];
+
+    fn semantics_one_artifact(
+        source: &str,
+        module: tempra_bytecode::BytecodeModule,
+    ) -> tempra_bytecode::BytecodeCacheArtifact {
+        tempra_bytecode::BytecodeCacheArtifact {
+            header: tempra_bytecode::BytecodeCacheHeader {
+                compiler_fingerprint: format!("tempra-{}-semantics-1", env!("CARGO_PKG_VERSION")),
+                source_hash: crate::cache::compute_source_hash(source),
+                ..Default::default()
+            },
+            module,
+        }
+    }
+
+    fn semantics_two_artifact(
+        source: &str,
+        module: tempra_bytecode::BytecodeModule,
+    ) -> tempra_bytecode::BytecodeCacheArtifact {
+        tempra_bytecode::BytecodeCacheArtifact {
+            header: tempra_bytecode::BytecodeCacheHeader {
+                compiler_fingerprint: format!("tempra-{}-semantics-2", env!("CARGO_PKG_VERSION")),
+                source_hash: crate::cache::compute_source_hash(source),
+                ..Default::default()
+            },
+            module,
+        }
+    }
+
+    fn semantics_three_artifact(
+        source: &str,
+        module: tempra_bytecode::BytecodeModule,
+    ) -> tempra_bytecode::BytecodeCacheArtifact {
+        tempra_bytecode::BytecodeCacheArtifact {
+            header: tempra_bytecode::BytecodeCacheHeader {
+                compiler_fingerprint: format!("tempra-{}-semantics-3", env!("CARGO_PKG_VERSION")),
+                source_hash: crate::cache::compute_source_hash(source),
+                ..Default::default()
+            },
+            module,
+        }
+    }
+
+    fn semantics_four_artifact(
+        source: &str,
+        module: tempra_bytecode::BytecodeModule,
+    ) -> tempra_bytecode::BytecodeCacheArtifact {
+        tempra_bytecode::BytecodeCacheArtifact {
+            header: tempra_bytecode::BytecodeCacheHeader {
+                compiler_fingerprint: format!("tempra-{}-semantics-4", env!("CARGO_PKG_VERSION")),
+                source_hash: crate::cache::compute_source_hash(source),
+                ..Default::default()
+            },
+            module,
+        }
+    }
 
     fn legacy_artifact(source: &str) -> tempra_bytecode::BytecodeCacheArtifact {
         // Reproduce the real pre-E3.2 compiler: preserve @deny in HIR, but lower
@@ -1326,6 +1485,281 @@ mod enforcement_cache_tests {
     }
 
     #[test]
+    fn semantics_one_artifacts_cannot_bypass_k1_comptime_failures() {
+        let dir = tempfile::tempdir().unwrap();
+        let seed_path = dir.path().join("seed.tbc");
+        let seed = compile_to_bytecode_with_analysis("fn main() -> Int64 { return 7 }", &seed_path)
+            .unwrap();
+        let stale_module = seed.bytecode().clone();
+        assert_eq!(
+            tempra_vm::run_function(&stale_module, "main", vec![]).unwrap(),
+            VmValue::Int64(7)
+        );
+
+        for (index, (family, source, expected_error)) in K1_STALE_SOURCES.iter().enumerate() {
+            let path = dir.path().join(format!("stale-{index}.tbc"));
+            let artifact = semantics_one_artifact(source, stale_module.clone());
+            crate::cache::write_cache_artifact(&path, &artifact).unwrap();
+            let before = fs::read(&path).unwrap();
+            let source_hash = crate::cache::compute_source_hash(source);
+            let decoded = crate::cache::read_cache_artifact(&path)
+                .expect("stale artifact must be structurally valid and verified");
+
+            assert_eq!(decoded.header.source_hash, source_hash);
+            assert_eq!(
+                decoded.header.compiler_fingerprint,
+                format!("tempra-{}-semantics-1", env!("CARGO_PKG_VERSION"))
+            );
+            assert_eq!(
+                tempra_vm::run_function(&decoded.module, "main", vec![]).unwrap(),
+                VmValue::Int64(7),
+                "stale {family} bytecode must otherwise be executable"
+            );
+
+            assert!(
+                crate::cache::read_compatible_module(&path, &source_hash).is_none(),
+                "semantics-1 {family} artifact must be incompatible"
+            );
+
+            let error = load_or_compile_cached_module(source, &path)
+                .expect_err("fresh K1 compilation must reject stale source semantics");
+            let message = error.to_string();
+            assert!(
+                matches!(error, DriverError::TypeError(_)),
+                "unexpected {family} error: {message}"
+            );
+            assert!(
+                message.contains(expected_error),
+                "fresh {family} compilation produced the wrong error: {message}"
+            );
+            assert_eq!(
+                fs::read(&path).unwrap(),
+                before,
+                "failed {family} compilation must not replace the stale artifact"
+            );
+            let unchanged = crate::cache::read_cache_artifact(&path).unwrap();
+            assert_eq!(unchanged.header.source_hash, source_hash);
+            assert_eq!(
+                unchanged.header.compiler_fingerprint,
+                format!("tempra-{}-semantics-1", env!("CARGO_PKG_VERSION")),
+                "failed {family} compilation must not promote the stale artifact"
+            );
+            assert!(
+                crate::cache::read_compatible_module(&path, &source_hash).is_none(),
+                "stale {family} artifact must remain an incompatible miss"
+            );
+        }
+    }
+
+    #[test]
+    fn semantics_two_cannot_reuse_a_pre_k2_specialization_result() {
+        let dir = tempfile::tempdir().unwrap();
+        let seed_path = dir.path().join("stale-seed.tbc");
+        let stale =
+            compile_to_bytecode_with_analysis("fn main() -> Int64 { return 0 }", &seed_path)
+                .unwrap()
+                .into_bytecode();
+        assert_eq!(
+            tempra_vm::run_function(&stale, "main", vec![]).unwrap(),
+            VmValue::Int64(0)
+        );
+
+        let path = dir.path().join("specialization.tbc");
+        crate::cache::write_cache_artifact(
+            &path,
+            &semantics_two_artifact(K2_SPECIALIZATION_SOURCE, stale),
+        )
+        .unwrap();
+        let source_hash = crate::cache::compute_source_hash(K2_SPECIALIZATION_SOURCE);
+        let stale_bytes = fs::read(&path).unwrap();
+        let stale_artifact = crate::cache::read_cache_artifact(&path).unwrap();
+        assert_eq!(stale_artifact.header.source_hash, source_hash);
+        assert_eq!(
+            stale_artifact.header.compiler_fingerprint,
+            format!("tempra-{}-semantics-2", env!("CARGO_PKG_VERSION"))
+        );
+        assert_eq!(
+            tempra_vm::run_function(&stale_artifact.module, "main", vec![]).unwrap(),
+            VmValue::Int64(0)
+        );
+        assert!(crate::cache::read_compatible_module(&path, &source_hash).is_none());
+
+        let corrected = load_or_compile_cached_module(K2_SPECIALIZATION_SOURCE, &path).unwrap();
+        assert_eq!(
+            tempra_vm::run_function(&corrected, "main", vec![]).unwrap(),
+            VmValue::Int64(41)
+        );
+        let current_artifact = crate::cache::read_cache_artifact(&path).unwrap();
+        assert_eq!(
+            current_artifact.header.compiler_fingerprint,
+            format!("tempra-{}-semantics-5", env!("CARGO_PKG_VERSION"))
+        );
+        let current_bytes = fs::read(&path).unwrap();
+        assert_ne!(current_bytes, stale_bytes);
+        let modified = fs::metadata(&path).unwrap().modified().unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let hit = load_or_compile_cached_module(K2_SPECIALIZATION_SOURCE, &path).unwrap();
+        assert_eq!(
+            tempra_vm::run_function(&hit, "main", vec![]).unwrap(),
+            VmValue::Int64(41)
+        );
+        assert_eq!(fs::read(&path).unwrap(), current_bytes);
+        assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), modified);
+    }
+
+    #[test]
+    fn semantics_three_cannot_bypass_canonical_interface_selection() {
+        let dir = tempfile::tempdir().unwrap();
+        let seed_path = dir.path().join("interface-seed.tbc");
+        let seed =
+            compile_to_bytecode_with_analysis("fn main() -> Int64 { return 41 }", &seed_path)
+                .unwrap()
+                .into_bytecode();
+        assert_eq!(
+            tempra_vm::run_function(&seed, "main", vec![]).unwrap(),
+            VmValue::Int64(41)
+        );
+
+        let stale_path = dir.path().join("interface-stale.tbc");
+        crate::cache::write_cache_artifact(
+            &stale_path,
+            &semantics_three_artifact(K2_INTERFACE_B_FIRST_SOURCE, seed),
+        )
+        .unwrap();
+        let source_hash = crate::cache::compute_source_hash(K2_INTERFACE_B_FIRST_SOURCE);
+        let stale_bytes = fs::read(&stale_path).unwrap();
+        let stale = crate::cache::read_cache_artifact(&stale_path).unwrap();
+        assert_eq!(stale.header.source_hash, source_hash);
+        assert_eq!(
+            stale.header.compiler_fingerprint,
+            format!("tempra-{}-semantics-3", env!("CARGO_PKG_VERSION"))
+        );
+        assert_eq!(
+            tempra_vm::run_function(&stale.module, "main", vec![]).unwrap(),
+            VmValue::Int64(41)
+        );
+        assert!(crate::cache::read_compatible_module(&stale_path, &source_hash).is_none());
+
+        let error = load_or_compile_cached_module(K2_INTERFACE_B_FIRST_SOURCE, &stale_path)
+            .expect_err("fresh typechecking must apply canonical interface order");
+        assert!(matches!(error, DriverError::TypeError(_)));
+        let message = error.to_string();
+        assert!(
+            message.contains("expected Int64, found String"),
+            "unexpected canonical type error: {message}"
+        );
+        assert_eq!(fs::read(&stale_path).unwrap(), stale_bytes);
+        assert!(crate::cache::read_compatible_module(&stale_path, &source_hash).is_none());
+
+        let current_source = "fn main() -> Int64 { return 41 }";
+        let current_path = dir.path().join("interface-current.tbc");
+        let current = load_or_compile_cached_module(current_source, &current_path).unwrap();
+        assert_eq!(
+            tempra_vm::run_function(&current, "main", vec![]).unwrap(),
+            VmValue::Int64(41)
+        );
+        let current_bytes = fs::read(&current_path).unwrap();
+        let modified = fs::metadata(&current_path).unwrap().modified().unwrap();
+        let current_artifact = crate::cache::read_cache_artifact(&current_path).unwrap();
+        assert_eq!(
+            current_artifact.header.compiler_fingerprint,
+            format!("tempra-{}-semantics-5", env!("CARGO_PKG_VERSION"))
+        );
+
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let hit = load_or_compile_cached_module(current_source, &current_path).unwrap();
+        assert_eq!(
+            tempra_vm::run_function(&hit, "main", vec![]).unwrap(),
+            VmValue::Int64(41)
+        );
+        assert_eq!(fs::read(&current_path).unwrap(), current_bytes);
+        assert_eq!(
+            fs::metadata(&current_path).unwrap().modified().unwrap(),
+            modified
+        );
+    }
+
+    #[test]
+    fn semantics_four_cannot_bypass_checked_int64_panic_enforcement() {
+        const DENIED: &str = "@deny(panic) fn main() -> Int64 { return 1 + 2 }";
+        const ALLOWED: &str = "fn main() -> Int64 { return 1 + 2 }";
+
+        let dir = tempfile::tempdir().unwrap();
+        let seed_path = dir.path().join("arithmetic-seed.tbc");
+        let stale_module =
+            compile_to_bytecode_with_analysis("fn main() -> Int64 { return 3 }", &seed_path)
+                .unwrap()
+                .into_bytecode();
+        assert_eq!(
+            tempra_vm::run_function(&stale_module, "main", vec![]).unwrap(),
+            VmValue::Int64(3)
+        );
+
+        let stale_path = dir.path().join("arithmetic-stale.tbc");
+        crate::cache::write_cache_artifact(
+            &stale_path,
+            &semantics_four_artifact(DENIED, stale_module),
+        )
+        .unwrap();
+        let source_hash = crate::cache::compute_source_hash(DENIED);
+        let stale_bytes = fs::read(&stale_path).unwrap();
+        let stale = crate::cache::read_cache_artifact(&stale_path).unwrap();
+        assert_eq!(stale.header.source_hash, source_hash);
+        assert_eq!(
+            stale.header.compiler_fingerprint,
+            format!("tempra-{}-semantics-4", env!("CARGO_PKG_VERSION"))
+        );
+        assert_eq!(
+            tempra_vm::run_function(&stale.module, "main", vec![]).unwrap(),
+            VmValue::Int64(3)
+        );
+        assert!(crate::cache::read_compatible_module(&stale_path, &source_hash).is_none());
+
+        let DriverError::CapabilityContractViolations(violations) =
+            load_or_compile_cached_module(DENIED, &stale_path).unwrap_err()
+        else {
+            panic!("fresh compilation must enforce the new Int64 panic origin")
+        };
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].capability, tempra_effects::Capability::Panic);
+        assert_eq!(
+            violations[0].witness.origin.source,
+            tempra_effects::DirectCapabilitySource::IntegerAddition
+        );
+        assert_eq!(fs::read(&stale_path).unwrap(), stale_bytes);
+        assert!(crate::cache::read_compatible_module(&stale_path, &source_hash).is_none());
+
+        let current_path = dir.path().join("arithmetic-current.tbc");
+        let current = load_or_compile_cached_module(ALLOWED, &current_path).unwrap();
+        assert_eq!(
+            tempra_vm::run_function(&current, "main", vec![]).unwrap(),
+            VmValue::Int64(3)
+        );
+        let current_bytes = fs::read(&current_path).unwrap();
+        let modified = fs::metadata(&current_path).unwrap().modified().unwrap();
+        assert_eq!(
+            crate::cache::read_cache_artifact(&current_path)
+                .unwrap()
+                .header
+                .compiler_fingerprint,
+            format!("tempra-{}-semantics-5", env!("CARGO_PKG_VERSION"))
+        );
+
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let hit = load_or_compile_cached_module(ALLOWED, &current_path).unwrap();
+        assert_eq!(
+            tempra_vm::run_function(&hit, "main", vec![]).unwrap(),
+            VmValue::Int64(3)
+        );
+        assert_eq!(fs::read(&current_path).unwrap(), current_bytes);
+        assert_eq!(
+            fs::metadata(&current_path).unwrap().modified().unwrap(),
+            modified
+        );
+    }
+
+    #[test]
     fn valid_semantics_hit_is_verified_bytecode_only_and_contract_edits_miss() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("cache.tbc");
@@ -1333,7 +1767,7 @@ mod enforcement_cache_tests {
         let artifact = crate::cache::read_cache_artifact(&path).unwrap();
         assert_eq!(
             artifact.header.compiler_fingerprint,
-            format!("tempra-{}-semantics-1", env!("CARGO_PKG_VERSION"))
+            format!("tempra-{}-semantics-5", env!("CARGO_PKG_VERSION"))
         );
         let before = fs::read(&path).unwrap();
         let modified = fs::metadata(&path).unwrap().modified().unwrap();
@@ -1345,6 +1779,7 @@ mod enforcement_cache_tests {
             tempra_bytecode::serialize::encode_module(&cached).unwrap(),
             tempra_bytecode::serialize::encode_module(fresh.bytecode()).unwrap()
         );
+        std::thread::sleep(std::time::Duration::from_millis(100));
         let hit = load_or_compile_cached_module(VALID, &path).unwrap();
         assert_eq!(
             tempra_vm::run_function(&hit, "main", vec![]).unwrap(),
@@ -1371,5 +1806,65 @@ mod enforcement_cache_tests {
             tempra_vm::run_function(&changed_module, "main", vec![]).unwrap(),
             VmValue::Int64(6)
         );
+    }
+
+    #[test]
+    fn cache_state_does_not_change_current_semantics_artifact_bytes() {
+        const SOURCE: &str =
+            "fn helper() -> Int64 { return 40 } fn main() -> Int64 { return helper() + 1 }";
+
+        let dir = tempfile::tempdir().unwrap();
+        let cold_path = dir.path().join("cold.tbc");
+        let cold = load_or_compile_cached_module(SOURCE, &cold_path).unwrap();
+        assert_eq!(
+            tempra_vm::run_function(&cold, "main", vec![]).unwrap(),
+            VmValue::Int64(41)
+        );
+        let canonical_bytes = fs::read(&cold_path).unwrap();
+        let canonical_artifact = crate::cache::read_cache_artifact(&cold_path).unwrap();
+        assert_eq!(
+            canonical_artifact.header.compiler_fingerprint,
+            format!("tempra-{}-semantics-5", env!("CARGO_PKG_VERSION"))
+        );
+
+        let modified = fs::metadata(&cold_path).unwrap().modified().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let warm = load_or_compile_cached_module(SOURCE, &cold_path).unwrap();
+        assert_eq!(
+            tempra_vm::run_function(&warm, "main", vec![]).unwrap(),
+            VmValue::Int64(41)
+        );
+        assert_eq!(fs::read(&cold_path).unwrap(), canonical_bytes);
+        assert_eq!(
+            fs::metadata(&cold_path).unwrap().modified().unwrap(),
+            modified
+        );
+
+        let stale_path = dir.path().join("stale.tbc");
+        crate::cache::write_cache_artifact(
+            &stale_path,
+            &semantics_three_artifact(SOURCE, canonical_artifact.module.clone()),
+        )
+        .unwrap();
+        assert!(crate::cache::read_compatible_module(
+            &stale_path,
+            &crate::cache::compute_source_hash(SOURCE)
+        )
+        .is_none());
+        let stale_rebuilt = load_or_compile_cached_module(SOURCE, &stale_path).unwrap();
+        assert_eq!(
+            tempra_vm::run_function(&stale_rebuilt, "main", vec![]).unwrap(),
+            VmValue::Int64(41)
+        );
+        assert_eq!(fs::read(&stale_path).unwrap(), canonical_bytes);
+
+        let malformed_path = dir.path().join("malformed.tbc");
+        fs::write(&malformed_path, b"not a Tempra bytecode artifact").unwrap();
+        let malformed_rebuilt = load_or_compile_cached_module(SOURCE, &malformed_path).unwrap();
+        assert_eq!(
+            tempra_vm::run_function(&malformed_rebuilt, "main", vec![]).unwrap(),
+            VmValue::Int64(41)
+        );
+        assert_eq!(fs::read(&malformed_path).unwrap(), canonical_bytes);
     }
 }

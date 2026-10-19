@@ -1,6 +1,118 @@
 # Tempra Comptime Specification
 
-`comptime` is an explicit compile-time evaluation form. The model is small, typed, and deterministic.
+`comptime` is an explicit compile-time evaluation form. The intended model is
+small, typed, deterministic and independent of the selected runtime backend.
+
+## K1 implementation status
+
+The K1 audit selected the existing HIR interpreter as Tempra's canonical
+comptime semantic kernel. K1.1 adds one documented evaluation facade: it owns
+entry into comptime mode, installs the shared one-million evaluator-progress
+budget, normalizes the value/error/control-flow boundary, and restores the
+interpreter's previous mode, fuel, and call-depth state after every ordinary
+return. The
+typechecker remains responsible for converting accepted primitive values into
+HIR literals.
+
+Nested `comptime` nodes reuse the active session and its remaining fuel instead
+of opening a second session. Resolved values and selected branches are committed
+to HIR before TIR lowering; TIR and its backends do not evaluate comptime.
+
+K1.2 extends the same authority to ordinary multi-module and file-based
+typechecking by giving the interpreter a module-aware lookup adapter. Module HIR
+files remain separate and imports retain their qualified identities. The
+analysis/LSP and REPL typechecking paths remain intentionally deferred.
+
+K1.3 makes the shared HIR integer-arithmetic kernel panic-free for supported
+operations. `Int64` addition, subtraction and multiplication report overflow;
+division reports zero and signed `MIN / -1` separately; unary negation reports
+overflow. `UInt8` division by zero is controlled. Existing `UInt8`
+addition/subtraction/multiplication wrapping behavior is unchanged by K1.3 and
+is not made a normative language rule here. Float arithmetic, including IEEE
+division by zero, is unchanged.
+
+Remainder/modulo is not current source syntax. Right shift is parsed but rejected
+by the typechecker, so neither is part of the supported K1.3 arithmetic boundary.
+
+K1.4 rejects calls to functions without executable HIR bodies in the shared
+interpreter dispatch. This includes source `extern` declarations during
+comptime: the evaluator reports a controlled error instead of synthesizing
+`Unit`. Normal empty function bodies still evaluate to `Unit`, and VM-native
+extern dispatch remains a separate runtime path. K1.4 does not add native
+execution to comptime or validate native signatures.
+
+K1.5 makes the HIR interpreter the sole policy authority for effects reached
+during comptime execution. Deterministic local computation and temporary
+allocation remain allowed. Output, input, filesystem, environment, host-OS,
+process execution and exit are rejected at their execution boundaries; `dbg`
+is included in output. `cmd(...)` only constructs a local command value and is
+allowed, while executing that value is forbidden. `std.io.print/println` remain
+bodyless externs and are rejected by K1.4. The typechecker preflight validates
+runtime dependencies only and does not duplicate effect policy.
+
+K1.6 makes termination deterministic at the interpreter boundary. Comptime
+fuel is an evaluator-progress budget: each expression entry, statement entry,
+Tempra call frame and actually executed `for` body consumes one tick. A budget
+of `N` permits exactly `N` successful ticks; a tick at zero reports
+`FuelExhausted`. Call frames are bounded separately: the compiler-defined v0.1
+default safety limit is 8 active frames (frames 1–8 are allowed and frame 9
+reports `CallDepthExceeded`). The compiler-defined v0.1 limit is revisionable
+as the evaluator evolves and is not a permanent language-level recursion
+guarantee; there is no timeout or
+wall-clock, CPU, memory, or per-byte quota. Builtin, regex, string and
+collection helper invocations have constant semantic cost in this version.
+Nested `comptime`
+expressions share the active fuel and call-depth session without resetting it.
+Fuel exhaustion is checked before call depth and before the operation's own
+semantic error. `for` iteration ticks occur only after `next()` produces an
+item; the current HIR has no `while` surface. Blocks and branch selection are
+bounded by their enclosing expression/statement ticks.
+
+The v0.1 fuel accounting is intentionally explicit: expression and statement
+entries, Tempra call frames, and executed `for` bodies are deterministic ticks
+(A); block traversal and branch/match selection are bounded by those enclosing
+ticks (B); builtin, regex, string, and collection helpers have constant
+semantic cost per invocation (C); `while` is unsupported by the current HIR
+(D). There are no unresolved termination-accounting items for this slice (E =
+0). A tick measures evaluator progress, not proportional CPU, memory, or
+per-byte work.
+
+K1.7 historically raises the cache fingerprint to
+`tempra-{CARGO_PKG_VERSION}-semantics-2`. K2.2 raises current trust to
+`tempra-{CARGO_PKG_VERSION}-semantics-3` after making specialization request order
+deterministic and separating TIR function identity from bytecode storage position.
+K2.4 raises current trust to `tempra-{CARGO_PKG_VERSION}-semantics-4` after making
+interface selection and requirement/field diagnostics follow canonical source and
+module declaration order. Artifacts stamped with revisions 1 through 3 remain
+readable where structurally valid but are never trusted as hits: fresh compilation
+must reapply current semantics. This changes neither bytecode format nor cache
+schema, and successful compatible hits remain verified-bytecode-only.
+
+K3.2 raises current trust to `tempra-{CARGO_PKG_VERSION}-semantics-5`. This is a
+runtime and effect-analysis revision: checked `Int64` add/sub/mul/div now have one
+host-safe contract and conservative `Panic` facts. It does not change comptime's
+canonical HIR authority or the bytecode format.
+
+```text
+K1 audit/spec        DONE
+K1.1 facade          DONE
+K1.2 multi-module    DONE
+K1.3 arithmetic      DONE
+K1.4 extern/bodyless DONE
+K1.5 effect policy   DONE
+K1.6 termination     DONE
+K1.7 cache revision  DONE
+K1 implementation   DONE
+```
+
+K2.1's audit, K2.2's deterministic first-request specialization order, K2.3's
+explicit stdlib discovery and K2.4's deterministic interface/field iteration are
+complete. K2.5 proves cross-process byte-for-byte equality for comptime and the
+other currently supported bytecode fixtures under the bounded same-build,
+same-host/target reproducibility contract. K2 is complete; runtime
+VM/JIT/Wasm parity continues in K3; timings, latency baselines and budgets continue
+in K4–K6. Analysis/LSP/REPL integration remains a tooling follow-up, and full
+comptime specialization remains separate compiler feature/debt.
 
 ---
 
@@ -9,11 +121,12 @@
 - `comptime expr`
 - `comptime { ... }`
 - Primitive materialization: `Int`, `Float`, `Bool`, `String`, `Unit`
-- Restricted evaluator mode (deterministic, no IO)
+- Canonical restricted-evaluator entrypoint with shared mode/fuel setup
 - Rejection of runtime locals and parameters inside `comptime` expressions
 - Rejection of filesystem, environment, OS, and process operations during `comptime` evaluation
 - `compile_error("message")` in `comptime` contexts
 - Evaluation fuel to prevent unbounded compile-time loops
+- Deterministic v0.1 fuel ticks and compiler-defined call-depth guard
 
 ### Syntax
 
@@ -230,11 +343,36 @@ A `comptime match` works like compile-time branch selection:
 Selected `if comptime` branches and `comptime match` arms are retained in HIR; unselected alternatives are pruned before TIR lowering. The existing TIR capability analysis therefore observes only the selected semantic branch when specialization has resolved it. This is semantic pruning, not a promise that later optimization, inlining, or dead-code elimination will remove capability requirements.
 
 Comptime is an execution phase, not an effect or an unsafe authorization. Its
-restrictions are implemented by the HIR evaluator and frontend checks, not by E1.
-The evaluator has no dispatch to the VM native registry. The historical E5 audit
-found that unsupported/bodyless extern calls can instead yield Unit and be
-incorrectly materialized. Explicit rejection is separate correctness debt, not
-support for comptime native execution; see the
+effect policy is enforced by the HIR interpreter at the operation boundary,
+not by E1 or a second HIR analyzer.
+All currently supported single-source and ordinary multi-module/file-check
+evaluation entrypoints now enter the HIR kernel through the K1.1 facade; K1.2
+supplies module-aware lookup without flattening HIR. This centralizes execution
+setup while leaving effect enforcement at the interpreter boundary.
+K1.5 centralizes the policy for currently executable host-observable operations;
+allocation and deterministic local transforms remain permitted. `cmd` is a
+local value constructor, whereas process execution is forbidden. Future
+capability categories without a current HIR origin remain outside this policy.
+
+The K1.5 audit classifies each current operation as **A** (allowed deterministic
+local), **B** (forbidden by the canonical policy), **C** (unavailable/bodyless
+and rejected by K1.4), **D** (unsupported source surface), or **E** (an
+unresolved policy defect). K1.5 is complete only when `E = 0`: `cmd` is A;
+process execution, output/input, filesystem, environment, host-OS access,
+`dbg` and `exit` are B; `std.io.print/println` are C; and spawn, random, time
+and unsafe have no current HIR origin and are D.
+
+| Operation | Class |
+| --- | --- |
+| Local arithmetic, strings, regex, collections, loops, allocation, `cmd` construction | A |
+| Output/input, filesystem, environment, host OS, process execution, `dbg`, `exit` | B |
+| `std.io.print`, `std.io.println` reached as bodyless externs | C |
+| Spawn, random, time and unsafe source operations (no current HIR origin) | D |
+| Unresolved K1.5 policy defects | E — must remain zero |
+The evaluator has no dispatch to the VM native registry. K1.4 explicitly rejects
+unsupported/bodyless calls rather than yielding and materializing synthetic
+`Unit`. This rejection is not support for comptime native execution; native
+signature integrity remains a separate debt in the
 [audit record](E1_CAPABILITY_ANALYSIS.md). No `@unsafe` interaction is implemented.
 
 ---

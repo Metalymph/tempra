@@ -15,7 +15,7 @@ use tempra_jit_cranelift::helpers::{JitHeapScalar, JitRuntimeContext};
 #[cfg(feature = "jit-cranelift")]
 use tempra_jit_cranelift::{
     compile_function_heap_aware, is_heap_requiring, JitEngine, JitFunctionI64,
-    JitFunctionI64HeapAware,
+    JitFunctionI64HeapAware, JitRuntimeError,
 };
 
 pub struct Frame {
@@ -153,6 +153,17 @@ impl<'a> Interpreter<'a> {
                             }
                             return Ok(VmValue::Int64(res));
                         }
+                        Err(JitRuntimeError::Int64Arithmetic(error)) => {
+                            let elapsed = start_native.elapsed().as_nanos() as u64;
+                            if let Some(ref mut prof) = self.profiling {
+                                let stats = &mut prof.stats[function_id.0 as usize];
+                                stats.jit_runtime_calls += 1;
+                                stats.jit_heap_runtime_calls += 1;
+                                stats.jit_heap_errors += 1;
+                                stats.jit_total_native_time_ns += elapsed;
+                            }
+                            return Err(VmError::Int64Arithmetic(error));
+                        }
                         Err(_) => {
                             returned_err = true;
                         }
@@ -181,13 +192,26 @@ impl<'a> Interpreter<'a> {
                 }
                 if compatible {
                     let start_native = std::time::Instant::now();
-                    if let Ok(res) = jit_fn.call_i64(&i64_args) {
-                        let elapsed = start_native.elapsed().as_nanos() as u64;
-                        if let Some(ref mut prof) = self.profiling {
-                            prof.stats[function_id.0 as usize].jit_runtime_calls += 1;
-                            prof.stats[function_id.0 as usize].jit_total_native_time_ns += elapsed;
+                    match jit_fn.call_i64(&i64_args) {
+                        Ok(res) => {
+                            let elapsed = start_native.elapsed().as_nanos() as u64;
+                            if let Some(ref mut prof) = self.profiling {
+                                prof.stats[function_id.0 as usize].jit_runtime_calls += 1;
+                                prof.stats[function_id.0 as usize].jit_total_native_time_ns +=
+                                    elapsed;
+                            }
+                            return Ok(VmValue::Int64(res));
                         }
-                        return Ok(VmValue::Int64(res));
+                        Err(JitRuntimeError::Int64Arithmetic(error)) => {
+                            let elapsed = start_native.elapsed().as_nanos() as u64;
+                            if let Some(ref mut prof) = self.profiling {
+                                prof.stats[function_id.0 as usize].jit_runtime_calls += 1;
+                                prof.stats[function_id.0 as usize].jit_total_native_time_ns +=
+                                    elapsed;
+                            }
+                            return Err(VmError::Int64Arithmetic(error));
+                        }
+                        Err(_) => {}
                     }
                 }
                 if let Some(ref mut prof) = self.profiling {
@@ -639,25 +663,22 @@ impl<'a> Interpreter<'a> {
                 BytecodeInstr::AddI64 => {
                     let b = self.pop_i64()?;
                     let a = self.pop_i64()?;
-                    self.push(VmValue::Int64(a + b))?;
+                    self.push(VmValue::Int64(tempra_runtime::add_i64(a, b)?))?;
                 }
                 BytecodeInstr::SubI64 => {
                     let b = self.pop_i64()?;
                     let a = self.pop_i64()?;
-                    self.push(VmValue::Int64(a - b))?;
+                    self.push(VmValue::Int64(tempra_runtime::sub_i64(a, b)?))?;
                 }
                 BytecodeInstr::MulI64 => {
                     let b = self.pop_i64()?;
                     let a = self.pop_i64()?;
-                    self.push(VmValue::Int64(a * b))?;
+                    self.push(VmValue::Int64(tempra_runtime::mul_i64(a, b)?))?;
                 }
                 BytecodeInstr::DivI64 => {
                     let b = self.pop_i64()?;
                     let a = self.pop_i64()?;
-                    if b == 0 {
-                        return Err(VmError::DivisionByZero);
-                    }
-                    self.push(VmValue::Int64(a / b))?;
+                    self.push(VmValue::Int64(tempra_runtime::div_i64(a, b)?))?;
                 }
 
                 BytecodeInstr::AddU64 => {
@@ -1276,7 +1297,7 @@ impl<'a> Interpreter<'a> {
                         .ok_or(VmError::LocalNotInitialized(b.0))?;
 
                     if let (VmValue::Int64(ia), VmValue::Int64(ib)) = (val_a, val_b) {
-                        let res = VmValue::Int64(ia + ib);
+                        let res = VmValue::Int64(tempra_runtime::add_i64(*ia, *ib)?);
                         self.push(res)?;
                     } else {
                         return Err(VmError::Message("Type mismatch in AddI64LL".into()));
@@ -1297,7 +1318,7 @@ impl<'a> Interpreter<'a> {
                     };
 
                     if let VmValue::Int64(ia) = val_a {
-                        let res = VmValue::Int64(ia + constant);
+                        let res = VmValue::Int64(tempra_runtime::add_i64(*ia, constant)?);
                         self.push(res)?;
                     } else {
                         return Err(VmError::Message("Type mismatch in AddI64LC".into()));

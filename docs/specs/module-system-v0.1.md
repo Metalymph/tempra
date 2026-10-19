@@ -16,6 +16,11 @@ import std/io
 import std/fs
 ```
 
+The current compiler resolves these imports from one toolchain-selected `std/`
+root. The module resolver receives that root as an explicit input and does not
+search the current working directory. The default compiler configuration locates
+the root relative to its executable; embedding callers may select it explicitly.
+
 ### Relative Imports
 Used for local file organization.
 ```tempra

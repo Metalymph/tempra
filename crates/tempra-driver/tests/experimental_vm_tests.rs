@@ -141,14 +141,10 @@ fn main() -> Int!String {
 }
 "#;
     let res = run_source_with_experimental_vm(source, &[]);
-    // If it works correctly, it should return Err("bad") which is still a Result value.
-    // In run_source_with_experimental_vm, we return Ok(()) if the VM returns Ok,
-    // and DriverError::VmError if it returns a VmError.
-    // However, the VM return value of main is not currently checked for success/failure in the same way the interpreter does.
-    // Wait, run_source_with_experimental_vm just checks if run_function returned Ok.
-    assert!(
-        res.is_ok(),
-        "Expected Err path to return successfully from VM with Err value, got {:?}",
-        res.err()
-    );
+    match res {
+        Err(tempra_driver::DriverError::RuntimeError(message)) => {
+            assert_eq!(message, "Uncaught error: bad");
+        }
+        other => panic!("Expected an uncaught Result::Err diagnostic, got {other:?}"),
+    }
 }

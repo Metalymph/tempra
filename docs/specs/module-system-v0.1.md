@@ -68,8 +68,21 @@ pub struct User {
 
 ## 5. Main Entrypoint
 - In **App Mode**, a `main` function is required.
-- `main` can optionally return an `Int` for exit codes or a `Result` for error reporting.
 - Command-line arguments are provided via `std/env`.
+- The v0.1 entry-point result contract is:
+  - `Unit` (or no declared return type): successful exit with code `0`.
+  - `Int`: process exit code. The portable range is `0..=255`. A value outside
+    that range is rejected with a diagnostic; it is never truncated or wrapped.
+  - `Result`: `Ok` means successful exit with code `0`, regardless of its
+    payload. `Err` reports `Uncaught error: <payload>` to stderr and exits
+    nonzero.
+  - Any other return type is rejected at the CLI entry point.
+- Explicit `exit(n)` keeps its existing runtime semantics and is not governed by
+  the `Int`-return portability policy. The experimental VM currently reports
+  `exit` as unsupported.
+- Script Mode is unchanged: top-level statements are not entry-point results.
+- Lower-level execution APIs continue to return raw HIR/VM values; entry-point
+  normalization applies only to the CLI-facing execution adapters.
 
 ## 6. Future Directions
 - **Wasm Component Imports:** Support for importing Wasm components via a specialized syntax, separate from native source imports, to leverage the Wasm Component Model.

@@ -10,10 +10,14 @@ use std::path::Path;
 use tempra_hir::lower_file;
 use tempra_hir::HirItem;
 use tempra_interpreter::run;
-use tempra_interpreter::value::Value;
+use tempra_interpreter::value::{Value, ValueResult};
 use tempra_parser::parse_source;
 use tempra_typeck::check_file as typeck_check_file;
 use tempra_vm::value::VmValue;
+
+/// Portable process exit codes supported by a `main` returning `Int`.
+const PORTABLE_EXIT_CODE_MIN: i64 = 0;
+const PORTABLE_EXIT_CODE_MAX: i64 = 255;
 
 fn is_generic_template(func: &tempra_hir::HirFunction) -> bool {
     !func.generic_parameters.is_empty()
@@ -23,15 +27,104 @@ fn is_generic_template(func: &tempra_hir::HirFunction) -> bool {
             .any(|p| p.kind == tempra_ast::ParameterKind::Type)
 }
 
+fn entry_exit_code(code: i64) -> Result<(), DriverError> {
+    if (PORTABLE_EXIT_CODE_MIN..=PORTABLE_EXIT_CODE_MAX).contains(&code) {
+        Err(DriverError::Exit(code as i32))
+    } else {
+        Err(DriverError::RuntimeError(format!(
+            "main returned exit code {code}; portable exit codes are {PORTABLE_EXIT_CODE_MIN}..={PORTABLE_EXIT_CODE_MAX}"
+        )))
+    }
+}
+
+fn hir_entry_value_type(value: &Value) -> &'static str {
+    match value {
+        Value::Unit => "Unit",
+        Value::Bool(_) => "Bool",
+        Value::Int64(_) => "Int64",
+        Value::UInt8(_) => "UInt8",
+        Value::Float64(_) => "Float64",
+        Value::String(_) => "String",
+        Value::Array(_) => "Array",
+        Value::Slice(_) => "Slice",
+        Value::Tuple(_) => "Tuple",
+        Value::Struct(_) => "Struct",
+        Value::Command(_) => "Command",
+        Value::CommandResult(_) => "CommandResult",
+        Value::Result(_) => "Result",
+        Value::Option(_) => "Option",
+        Value::Error(_) => "Error",
+        Value::Regex(_) => "Regex",
+        Value::Enum(_) => "Enum",
+        Value::Closure(_) => "Closure",
+        Value::Cell(_) => "Cell",
+        Value::Namespace(_) => "Namespace",
+        Value::Type(_) => "Type",
+        Value::ArrayIter(_) => "ArrayIter",
+        Value::SliceIter(_) => "SliceIter",
+    }
+}
+
+fn normalize_hir_entry_value(value: Value) -> Result<(), DriverError> {
+    match value {
+        Value::Unit => Ok(()),
+        Value::Int64(code) => entry_exit_code(code),
+        Value::Result(result) => match *result {
+            ValueResult::Ok(_) => Ok(()),
+            ValueResult::Err(error) => {
+                let message = match error {
+                    Value::String(message) => message,
+                    Value::Error(message) => message,
+                    other => other.to_string(),
+                };
+                Err(DriverError::RuntimeError(format!(
+                    "Uncaught error: {message}"
+                )))
+            }
+        },
+        other => Err(DriverError::RuntimeError(format!(
+            "main returned unsupported entry-point value of type {}; expected Unit, Int, or Result",
+            hir_entry_value_type(&other)
+        ))),
+    }
+}
+
+fn normalize_vm_entry_value(value: VmValue) -> Result<(), DriverError> {
+    match value {
+        VmValue::Unit => Ok(()),
+        VmValue::Int64(code) => entry_exit_code(code),
+        VmValue::Enum(enum_name, variant, payloads) if enum_name == "Result" => {
+            match variant.as_str() {
+                "Ok" => Ok(()),
+                "Err" => {
+                    let message = match payloads.first() {
+                        Some(VmValue::String(message)) => message.clone(),
+                        Some(payload) => payload.to_string(),
+                        None => "()".to_string(),
+                    };
+                    Err(DriverError::RuntimeError(format!(
+                        "Uncaught error: {message}"
+                    )))
+                }
+                _ => Err(DriverError::RuntimeError(format!(
+                    "main returned unsupported Result variant '{variant}'"
+                ))),
+            }
+        }
+        other => Err(DriverError::RuntimeError(format!(
+            "main returned unsupported entry-point value of type {}; expected Unit, Int, or Result",
+            other.type_name()
+        ))),
+    }
+}
+
 pub fn run_source(source: &str) -> Result<(), DriverError> {
     run_source_with_args(source, &[])
 }
 
 pub fn run_source_with_experimental_vm(source: &str, args: &[String]) -> Result<(), DriverError> {
-    match run_source_vm(source, args) {
-        Ok(_) => Ok(()),
-        Err(e) => Err(e),
-    }
+    let value = run_source_vm(source, args)?;
+    normalize_vm_entry_value(value)
 }
 
 pub fn run_source_vm(source: &str, args: &[String]) -> Result<VmValue, DriverError> {
@@ -292,13 +385,19 @@ pub fn compile_to_bytecode_with_analysis(
 }
 
 pub fn run_source_with_args(source: &str, args: &[String]) -> Result<(), DriverError> {
-    match run_source_hir(source, args) {
-        Ok(_) => Ok(()),
-        Err(e) => Err(e),
+    let (value, is_script) = run_source_hir_with_mode(source, args)?;
+    if is_script {
+        Ok(())
+    } else {
+        normalize_hir_entry_value(value)
     }
 }
 
 pub fn run_source_hir(source: &str, args: &[String]) -> Result<Value, DriverError> {
+    run_source_hir_with_mode(source, args).map(|(value, _)| value)
+}
+
+fn run_source_hir_with_mode(source: &str, args: &[String]) -> Result<(Value, bool), DriverError> {
     let ast = parse_source(source).map_err(|e| DriverError::ParseError(format!("{:?}", e)))?;
 
     let mut hir = lower_file(source, &ast);
@@ -308,6 +407,7 @@ pub fn run_source_hir(source: &str, args: &[String]) -> Result<Value, DriverErro
 
     typeck_check_file(&mut hir).map_err(|errs| DriverError::TypeError(format!("{:?}", errs)))?;
 
+    let is_script = !hir.top_level_statements.is_empty();
     let value = tempra_interpreter::run_with_args(&hir, args.to_vec()).map_err(|e| match e {
         tempra_interpreter::RuntimeError::Exit(code) => DriverError::Exit(code),
         tempra_interpreter::RuntimeError::Crash(msg) => {
@@ -316,7 +416,7 @@ pub fn run_source_hir(source: &str, args: &[String]) -> Result<Value, DriverErro
         tempra_interpreter::RuntimeError::Message(s) => DriverError::RuntimeError(s),
     })?;
 
-    Ok(value)
+    Ok((value, is_script))
 }
 
 pub fn run_file(path: &Path) -> Result<(), DriverError> {
@@ -324,7 +424,19 @@ pub fn run_file(path: &Path) -> Result<(), DriverError> {
 }
 
 pub fn run_file_with_experimental_vm(path: &Path, args: &[String]) -> Result<(), DriverError> {
-    run_file_with_experimental_vm_jit(path, args, false).map(|_| ())
+    run_file_with_experimental_vm_jit_entry(path, args, false)
+}
+
+/// Executes a file entry point through the experimental VM/JIT and applies
+/// entry-point result handling. The raw VM value remains available through
+/// [`run_file_with_experimental_vm_jit`].
+pub fn run_file_with_experimental_vm_jit_entry(
+    path: &Path,
+    args: &[String],
+    jit_enabled: bool,
+) -> Result<(), DriverError> {
+    let value = run_file_with_experimental_vm_jit(path, args, jit_enabled)?;
+    normalize_vm_entry_value(value)
 }
 
 pub fn run_file_with_experimental_vm_jit(
@@ -532,10 +644,8 @@ pub fn run_source_with_experimental_vm_jit(
 ) -> Result<(), DriverError> {
     let mut options = tempra_vm::profile::VmOptions::default();
     options.jit_enabled = jit_enabled;
-    match run_source_vm_with_options(source, args, options) {
-        Ok(_) => Ok(()),
-        Err(e) => Err(e),
-    }
+    let value = run_source_vm_with_options(source, args, options)?;
+    normalize_vm_entry_value(value)
 }
 
 pub fn run_file_with_args(path: &Path, args: &[String]) -> Result<(), DriverError> {

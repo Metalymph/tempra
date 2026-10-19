@@ -68,8 +68,8 @@ fn test_hir_unqualified_function_call_unchanged() {
     let main_path = dir.path().join("main.tmpr");
 
     let main_src = r#"
-pub fn main() -> Int64 {
-    return add(10, 20)
+pub fn main() {
+    let _sum = add(10, 20)
 }
 
 fn add(a: Int64, b: Int64) -> Int64 {

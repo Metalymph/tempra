@@ -37,7 +37,7 @@ Execution is organized into a call stack of **Frames**. Each frame represents an
 3. **Return Value**:
     - **Unit functions**: `Return` pops nothing. The caller stack remains unchanged.
     - **Non-Unit functions**: `Return` pops exactly one value from the callee's stack and pushes it onto the caller's stack.
-    - **Top-level**: The final return value of the entry function is returned to the VM host.
+    - **Top-level**: The final return value of the entry function is returned to the VM host. The CLI-facing entry adapter then applies the `main` result contract: `Unit` and `Result::Ok` succeed with code `0`, `Int` selects a portable `0..=255` exit code, and `Result::Err` produces an uncaught-error diagnostic.
 
 ## Safety & Verification
 

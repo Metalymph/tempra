@@ -20,7 +20,7 @@ pub fn run_command(
     }
 
     let result = if experimental_vm {
-        tempra_driver::run_file_with_experimental_vm_jit(&path, &args, experimental_jit).map(|_| ())
+        tempra_driver::run_file_with_experimental_vm_jit_entry(&path, &args, experimental_jit)
     } else {
         tempra_driver::run_file_with_args(&path, &args)
     };

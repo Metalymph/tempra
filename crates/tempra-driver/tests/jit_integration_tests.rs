@@ -525,12 +525,16 @@ fn test_jit_enabled_vm_executes() {
                     x = add(x, i)
                 }
             }
-            return x
+            return x - 550
         }
     "#;
     // Use the new driver function that threads jit_enabled
     let result = tempra_driver::run_source_with_experimental_vm_jit(source, &[], true);
-    assert!(result.is_ok(), "JIT-enabled run failed: {:?}", result.err());
+    assert!(
+        matches!(result, Ok(()) | Err(tempra_driver::DriverError::Exit(0))),
+        "JIT-enabled run failed: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -580,7 +584,12 @@ fn test_jit_enabled_unsupported_function_fallback() {
             return s.len()
         }
     "#;
-    // Should succeed — the string function falls back to the interpreter
+    // The string function falls back to the interpreter; main still completes and
+    // its Int result becomes a process exit signal.
     let result = tempra_driver::run_source_with_experimental_vm_jit(source, &[], true);
-    assert!(result.is_ok(), "JIT fallback failed: {:?}", result.err());
+    assert!(
+        matches!(result, Err(tempra_driver::DriverError::Exit(5))),
+        "JIT fallback failed: {:?}",
+        result.err()
+    );
 }

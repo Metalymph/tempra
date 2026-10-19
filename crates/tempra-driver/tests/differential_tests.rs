@@ -138,10 +138,81 @@ fn assert_differential(source: &str) {
     );
 }
 
+/// Checked Int64 failures surface through different error types in the HIR and
+/// VM pipelines (`DriverError::RuntimeError` versus
+/// `DriverError::VmError("Int64Arithmetic(...)")`). The differential gate
+/// therefore asserts that both pipelines fail in the same semantic category
+/// rather than demanding byte-identical diagnostics.
+fn assert_differential_int64_error(source: &str, hir_message: &str, vm_variant: &str) {
+    let hir_error = match run_source_hir(source, &[]) {
+        Ok(value) => panic!(
+            "HIR unexpectedly succeeded with {:?} for source:\n{}",
+            value, source
+        ),
+        Err(error) => format!("{:?}", error),
+    };
+    let vm_error = match run_source_vm(source, &[]) {
+        Ok(value) => panic!(
+            "VM unexpectedly succeeded with {:?} for source:\n{}",
+            value, source
+        ),
+        Err(error) => format!("{:?}", error),
+    };
+
+    assert!(
+        hir_error.contains(hir_message),
+        "HIR error {:?} did not contain {:?} for source:\n{}",
+        hir_error,
+        hir_message,
+        source
+    );
+    assert!(
+        vm_error.contains(vm_variant),
+        "VM error {:?} did not contain {:?} for source:\n{}",
+        vm_error,
+        vm_variant,
+        source
+    );
+}
+
 #[test]
 fn test_diff_arithmetic() {
     assert_differential("fn main() -> Int64 { return 1 + 2 * 3 }");
     assert_differential("fn main() -> Int64 { return (10 - 2) / 2 }");
+}
+
+#[test]
+fn test_diff_int64_arithmetic_errors() {
+    // Addition overflow.
+    assert_differential_int64_error(
+        "fn main() -> Int64 { return 9223372036854775807 + 1 }",
+        "integer overflow",
+        "Int64Arithmetic(Overflow)",
+    );
+    // Subtraction overflow.
+    assert_differential_int64_error(
+        "fn main() -> Int64 { return (0 - 9223372036854775807) - 2 }",
+        "integer overflow",
+        "Int64Arithmetic(Overflow)",
+    );
+    // Multiplication overflow.
+    assert_differential_int64_error(
+        "fn main() -> Int64 { return 9223372036854775807 * 2 }",
+        "integer overflow",
+        "Int64Arithmetic(Overflow)",
+    );
+    // Integer division by zero.
+    assert_differential_int64_error(
+        "fn main() -> Int64 { return 1 / 0 }",
+        "integer division by zero",
+        "Int64Arithmetic(DivisionByZero)",
+    );
+    // i64::MIN / -1 overflow.
+    assert_differential_int64_error(
+        "fn main() -> Int64 { return (0 - 9223372036854775807 - 1) / (0 - 1) }",
+        "integer overflow",
+        "Int64Arithmetic(Overflow)",
+    );
 }
 
 #[test]
@@ -170,6 +241,42 @@ fn test_diff_function_call() {
     let source = r#"
         fn add(a: Int64, b: Int64) -> Int64 { return a + b }
         fn main() -> Int64 { return add(10, 20) }
+    "#;
+    assert_differential(source);
+}
+
+#[test]
+fn test_diff_function_call_chain() {
+    let source = r#"
+        fn level3(a: Int64) -> Int64 { return a + 3 }
+        fn level2(a: Int64) -> Int64 { return level3(a) + 2 }
+        fn level1(a: Int64) -> Int64 { return level2(a) + 1 }
+        fn main() -> Int64 { return level1(1) + level1(2) }
+    "#;
+    assert_differential(source);
+}
+
+#[test]
+fn test_diff_nested_terminating_branches() {
+    let source = r#"
+        fn classify(n: Int64) -> Int64 {
+            if n < 0 {
+                return -1
+            } else {
+                if n == 0 {
+                    return 0
+                } else {
+                    if n > 100 {
+                        return 2
+                    } else {
+                        return 1
+                    }
+                }
+            }
+        }
+        fn main() -> Int64 {
+            return classify(-10) + classify(0) + classify(5) + classify(50) + classify(150)
+        }
     "#;
     assert_differential(source);
 }

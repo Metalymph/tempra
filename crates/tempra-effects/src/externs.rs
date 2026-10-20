@@ -101,6 +101,155 @@ fn parameter_rank(parameter: EffectParameter) -> usize {
         .expect("EffectParameter::ALL is exhaustive")
 }
 
+/// One compiler-known extern as observed by analysis.
+///
+/// This is read-only inspection metadata for tests and tooling. It is not a
+/// language declaration, does not grant access, and does not claim that the
+/// corresponding native implementation is sandboxed. The operation identity and
+/// resource bindings are compiler-owned.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KnownExtern {
+    /// Fully qualified extern name, for example `std.fs.read_text`.
+    pub name: &'static str,
+    /// Broad capabilities implied by calling the extern. An empty set is an
+    /// explicit capability-free classification, not missing information.
+    pub capabilities: CapabilitySet,
+    /// Explicit specialized operation, or `None` for a known extern without a
+    /// specialized classification. `None` never means "safe".
+    pub operation: Option<EffectOperation>,
+    /// Canonically ordered specialized resource bindings. Empty when there is
+    /// no specialized operation.
+    pub resources: Vec<KnownExternResource>,
+}
+
+/// One positional resource binding in [`KnownExtern`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KnownExternResource {
+    /// The resource parameter key.
+    pub parameter: EffectParameter,
+    /// The zero-based call argument carrying the resource, or `None` when the
+    /// value is not statically available.
+    pub argument_index: Option<usize>,
+}
+
+struct ExternDefinition {
+    name: &'static str,
+    capabilities: CapabilitySet,
+    operation: Option<EffectOperation>,
+    resources: &'static [ResourceBinding],
+}
+
+const ALLOC: CapabilitySet = CapabilitySet::singleton(Capability::Alloc);
+const IO: CapabilitySet = CapabilitySet::singleton(Capability::Io);
+const IO_ALLOC: CapabilitySet = IO.union(ALLOC);
+
+/// The single compiler-owned source of truth for known externs.
+///
+/// Every entry, including capability-free externs and externs without a
+/// specialized operation, is explicit. Consistency tests compare this table with
+/// the production native registry and the declared standard-library signatures.
+const EXTERN_DEFINITIONS: &[ExternDefinition] = &[
+    ExternDefinition {
+        name: "std.fs.exists",
+        capabilities: IO,
+        operation: None,
+        resources: &[],
+    },
+    ExternDefinition {
+        name: "std.fs.read_text",
+        capabilities: IO_ALLOC,
+        operation: Some(EffectOperation::FsRead),
+        resources: &[ResourceBinding::argument(EffectParameter::Source, 0)],
+    },
+    ExternDefinition {
+        name: "std.fs.write_text",
+        capabilities: IO_ALLOC,
+        operation: Some(EffectOperation::FsWrite),
+        resources: &[ResourceBinding::argument(EffectParameter::Destination, 0)],
+    },
+    ExternDefinition {
+        name: "std.io.print",
+        capabilities: IO,
+        operation: Some(EffectOperation::IoWrite),
+        resources: &[ResourceBinding::unknown(EffectParameter::Stream)],
+    },
+    ExternDefinition {
+        name: "std.io.println",
+        capabilities: IO,
+        operation: Some(EffectOperation::IoWrite),
+        resources: &[ResourceBinding::unknown(EffectParameter::Stream)],
+    },
+    ExternDefinition {
+        name: "std.path.join",
+        capabilities: ALLOC,
+        operation: None,
+        resources: &[],
+    },
+    ExternDefinition {
+        name: "std.path.basename",
+        capabilities: ALLOC,
+        operation: None,
+        resources: &[],
+    },
+    ExternDefinition {
+        name: "std.strings.trim",
+        capabilities: ALLOC,
+        operation: None,
+        resources: &[],
+    },
+    ExternDefinition {
+        name: "std.strings.replace",
+        capabilities: ALLOC,
+        operation: None,
+        resources: &[],
+    },
+    ExternDefinition {
+        name: "std.strings.contains",
+        capabilities: CapabilitySet::empty(),
+        operation: None,
+        resources: &[],
+    },
+    ExternDefinition {
+        name: "std.strings.starts_with",
+        capabilities: CapabilitySet::empty(),
+        operation: None,
+        resources: &[],
+    },
+    ExternDefinition {
+        name: "std.strings.ends_with",
+        capabilities: CapabilitySet::empty(),
+        operation: None,
+        resources: &[],
+    },
+];
+
+fn definition_for_extern(name: &str) -> Option<&'static ExternDefinition> {
+    EXTERN_DEFINITIONS
+        .iter()
+        .find(|definition| definition.name == name)
+}
+
+/// Iterates over every compiler-known extern in production declaration order.
+///
+/// This exposes the existing classifier metadata so the native boundary can be
+/// tested without maintaining a second copy of the table. Unknown externs are
+/// absent and remain fail-closed in analysis.
+pub fn known_externs() -> impl Iterator<Item = KnownExtern> {
+    EXTERN_DEFINITIONS.iter().map(|definition| KnownExtern {
+        name: definition.name,
+        capabilities: definition.capabilities,
+        operation: definition.operation,
+        resources: definition
+            .resources
+            .iter()
+            .map(|resource| KnownExternResource {
+                parameter: resource.parameter,
+                argument_index: resource.argument_index,
+            })
+            .collect(),
+    })
+}
+
 /// Builds one compiler-owned static binding, panicking on invalid metadata.
 ///
 /// A panic here reports an internal compiler-metadata defect. It is deliberately
@@ -134,21 +283,12 @@ pub(crate) fn static_binding(
 /// degrading into a recoverable source diagnostic. The table is independently
 /// checked by tests.
 pub(crate) fn operation_binding_for_extern(name: &str) -> Option<ExternOperationBinding> {
-    match name {
-        "std.fs.read_text" => Some(static_binding(
-            EffectOperation::FsRead,
-            [ResourceBinding::argument(EffectParameter::Source, 0)],
-        )),
-        "std.fs.write_text" => Some(static_binding(
-            EffectOperation::FsWrite,
-            [ResourceBinding::argument(EffectParameter::Destination, 0)],
-        )),
-        "std.io.print" | "std.io.println" => Some(static_binding(
-            EffectOperation::IoWrite,
-            [ResourceBinding::unknown(EffectParameter::Stream)],
-        )),
-        _ => None,
-    }
+    let definition = definition_for_extern(name)?;
+    let operation = definition.operation?;
+    Some(static_binding(
+        operation,
+        definition.resources.iter().copied(),
+    ))
 }
 
 /// Returns the specialized operation for a known extern, if one is explicitly
@@ -165,23 +305,9 @@ pub(crate) fn operation_binding_for_extern(name: &str) -> Option<ExternOperation
 // Metadata/test helper; TIR extraction uses `operation_binding_for_extern`.
 #[allow(dead_code)]
 pub(crate) fn operation_for_extern(name: &str) -> Option<EffectOperation> {
-    operation_binding_for_extern(name).map(|binding| binding.operation)
+    definition_for_extern(name).and_then(|definition| definition.operation)
 }
 
 pub(crate) fn capabilities_for_extern(name: &str) -> Option<CapabilitySet> {
-    let alloc = CapabilitySet::singleton(Capability::Alloc);
-    let io = CapabilitySet::singleton(Capability::Io);
-    let io_alloc = io.union(alloc);
-
-    match name {
-        "std.fs.exists" => Some(io),
-        "std.fs.read_text" | "std.fs.write_text" => Some(io_alloc),
-        "std.io.print" | "std.io.println" => Some(io),
-        "std.path.join" | "std.path.basename" => Some(alloc),
-        "std.strings.trim" | "std.strings.replace" => Some(alloc),
-        "std.strings.contains" | "std.strings.starts_with" | "std.strings.ends_with" => {
-            Some(CapabilitySet::empty())
-        }
-        _ => None,
-    }
+    definition_for_extern(name).map(|definition| definition.capabilities)
 }

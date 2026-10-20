@@ -486,11 +486,26 @@ resolution, address identity, or nondeterminism enforcement.
   exposes. Classifications are not inferred from a function's name, module,
   arguments or return type. An extern that is not explicitly classified fails
   closed.
+- K4.6B.1 makes the current registry/classifier agreement testable. Tests derive
+  native names from the production registry, compare them in both directions
+  with the compiler-owned classifier, and check the declared `std/*.tmpr`
+  signatures and the native argument positions. This is regression coverage, not
+  a generated single source of truth.
+- Classified operation identity, resource parameter keys and positional argument
+  bindings are **compiler-owned metadata**. The tests prove agreement with the
+  current native implementations; they do not let a native function choose or
+  relax its own classification.
 - Arbitrary native code is **not** sandboxed. A specialized effect can only
   describe what the classifier knows; it is not a memory- or capability-safety
   boundary for host code.
 - An extern call with no specialized classification for a denied parent
   capability fails closed (section 6.3).
+- Filesystem paths remain opaque source strings and are not canonicalized.
+  Symlinks, hard links, mount aliases and time-of-check/time-of-use races remain
+  outside static guarantees (section 6.4).
+- The runtime native resolver's identity is trusted. A different resolver may
+  execute different code with the same names; the compiler cannot authenticate
+  the implementation behind a resolved function pointer.
 - `Unsafe` and any future FFI authorization remain out of scope for K4.
 
 ## 7. E. Backend and tooling parity

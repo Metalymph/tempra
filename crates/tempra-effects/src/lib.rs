@@ -17,6 +17,7 @@ pub use analysis::{
     FunctionSpecializedEffectSummary, SpecializedEffectWitness, TirLocation,
 };
 pub use capability::{Capability, CapabilitySet};
+pub use externs::{known_externs, KnownExtern, KnownExternResource};
 pub use facts::{
     LocalEffectFact, ResourceFact, ResourceKnowledge, ResourceValue, SpecializedOperationFact,
     UnclassifiedOperationFact,

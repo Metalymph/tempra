@@ -1,8 +1,9 @@
 //! Declaration contracts and their compilation-local binding.
 
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use tempra_effects::{Capability, CapabilitySet};
+use tempra_effects::{Capability, CapabilitySet, EffectOperation, EffectParameter, ResourceValue};
 use tempra_hir::HirFunction;
 use tempra_span::Span;
 use tempra_tir::ir::TirFunctionId;
@@ -21,6 +22,45 @@ pub enum ContractSource {
     },
 }
 
+/// Canonical value of one specialized deny parameter.
+///
+/// `Any` is the explicit wildcard. `Exact` preserves declaration-site text or
+/// port values. This is contract metadata only; K4.5A performs no matching or
+/// enforcement.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SpecializedDenyValue {
+    /// Explicit wildcard `*`.
+    Any,
+    /// Exact text or port literal.
+    Exact(ResourceValue),
+}
+
+/// One canonical `parameter: value` restriction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpecializedDenyParameter {
+    /// Canonical parameter key from `tempra-effects`.
+    pub parameter: EffectParameter,
+    /// Literal or wildcard value.
+    pub value: SpecializedDenyValue,
+    /// Source span of `parameter: value`.
+    pub span: Span,
+}
+
+/// One canonical specialized deny clause.
+///
+/// Clauses are sorted by operation taxonomy order and then by canonical
+/// parameter order. Duplicate clauses are removed while retaining the first
+/// source occurrence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpecializedDenyClause {
+    /// Canonical operation from `tempra-effects`.
+    pub operation: EffectOperation,
+    /// Parameters in canonical taxonomy order.
+    pub parameters: Vec<SpecializedDenyParameter>,
+    /// Source span of the original clause.
+    pub span: Span,
+}
+
 /// Explicit user intent attached to one concrete TIR function.
 /// E3.2 compares this retained intent with the function's required capabilities.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,6 +72,9 @@ pub struct FunctionCapabilityContract {
     pub explicit_denied: CapabilitySet,
     /// Effective denied capabilities: explicit deny spellings union the pure restriction set.
     pub denied: CapabilitySet,
+    /// Canonical specialized clauses. These are retained as source intent and
+    /// are not compared with required effects in K4.5A.
+    pub specialized_denied: Vec<SpecializedDenyClause>,
     /// Existing function declaration span, excluding preceding attributes.
     pub declaration_span: Span,
     /// Complete spans of explicit `@deny` attributes only, in source order.
@@ -69,7 +112,7 @@ impl std::fmt::Display for ContractBindingError {
 
 impl std::error::Error for ContractBindingError {}
 
-// This is the sole frontend-to-canonical capability conversion. Neither AST nor
+// These are the sole frontend-to-canonical contract conversions. Neither AST nor
 // HIR imports analyzer types or reasons about capability requirements.
 pub(crate) const PURE_DENIED: CapabilitySet = CapabilitySet::singleton(Capability::Io)
     .union(CapabilitySet::singleton(Capability::Process))
@@ -86,6 +129,143 @@ fn canonical_capability(name: tempra_ast::DenyCapability) -> Capability {
         DenyCapability::Spawn => Capability::Spawn,
         DenyCapability::Nondeterminism => Capability::Nondeterminism,
     }
+}
+
+fn canonical_operation(name: tempra_ast::SpecializedOperation) -> EffectOperation {
+    use tempra_ast::SpecializedOperation;
+    match name {
+        SpecializedOperation::FsRead => EffectOperation::FsRead,
+        SpecializedOperation::FsWrite => EffectOperation::FsWrite,
+        SpecializedOperation::FsRemove => EffectOperation::FsRemove,
+        SpecializedOperation::NetConnect => EffectOperation::NetConnect,
+        SpecializedOperation::NetListen => EffectOperation::NetListen,
+        SpecializedOperation::IoRead => EffectOperation::IoRead,
+        SpecializedOperation::IoWrite => EffectOperation::IoWrite,
+        SpecializedOperation::ProcessExec => EffectOperation::ProcessExec,
+        SpecializedOperation::ProcessExit => EffectOperation::ProcessExit,
+        SpecializedOperation::SpawnTask => EffectOperation::SpawnTask,
+        SpecializedOperation::SpawnActor => EffectOperation::SpawnActor,
+    }
+}
+
+fn canonical_parameter(name: tempra_ast::SpecializedParameter) -> EffectParameter {
+    use tempra_ast::SpecializedParameter;
+    match name {
+        SpecializedParameter::Source => EffectParameter::Source,
+        SpecializedParameter::Destination => EffectParameter::Destination,
+        SpecializedParameter::Host => EffectParameter::Host,
+        SpecializedParameter::Port => EffectParameter::Port,
+        SpecializedParameter::Protocol => EffectParameter::Protocol,
+        SpecializedParameter::Executable => EffectParameter::Executable,
+        SpecializedParameter::Stream => EffectParameter::Stream,
+        SpecializedParameter::Scope => EffectParameter::Scope,
+    }
+}
+
+fn canonical_specialized_value(value: &tempra_ast::SpecializedValue) -> SpecializedDenyValue {
+    match value {
+        tempra_ast::SpecializedValue::Any => SpecializedDenyValue::Any,
+        tempra_ast::SpecializedValue::Text(text) => {
+            SpecializedDenyValue::Exact(ResourceValue::Text(text.clone()))
+        }
+        tempra_ast::SpecializedValue::Port(port) => {
+            SpecializedDenyValue::Exact(ResourceValue::Port(*port))
+        }
+    }
+}
+
+fn operation_order(operation: EffectOperation) -> usize {
+    EffectOperation::ALL
+        .iter()
+        .position(|candidate| *candidate == operation)
+        .expect("EffectOperation::ALL is exhaustive")
+}
+
+fn parameter_order(parameter: EffectParameter) -> usize {
+    EffectParameter::ALL
+        .iter()
+        .position(|candidate| *candidate == parameter)
+        .expect("EffectParameter::ALL is exhaustive")
+}
+
+fn compare_specialized_values(
+    left: &SpecializedDenyValue,
+    right: &SpecializedDenyValue,
+) -> Ordering {
+    use SpecializedDenyValue::Exact;
+    match (left, right) {
+        (SpecializedDenyValue::Any, SpecializedDenyValue::Any) => Ordering::Equal,
+        (SpecializedDenyValue::Any, _) => Ordering::Less,
+        (_, SpecializedDenyValue::Any) => Ordering::Greater,
+        (Exact(ResourceValue::Text(left)), Exact(ResourceValue::Text(right))) => left.cmp(right),
+        (Exact(ResourceValue::Port(left)), Exact(ResourceValue::Port(right))) => left.cmp(right),
+        (Exact(ResourceValue::Text(_)), Exact(ResourceValue::Port(_))) => Ordering::Less,
+        (Exact(ResourceValue::Port(_)), Exact(ResourceValue::Text(_))) => Ordering::Greater,
+    }
+}
+
+fn compare_specialized_parameters(
+    left: &[SpecializedDenyParameter],
+    right: &[SpecializedDenyParameter],
+) -> Ordering {
+    for (left, right) in left.iter().zip(right) {
+        let ordering = parameter_order(left.parameter)
+            .cmp(&parameter_order(right.parameter))
+            .then_with(|| compare_specialized_values(&left.value, &right.value));
+        if ordering != Ordering::Equal {
+            return ordering;
+        }
+    }
+    left.len().cmp(&right.len())
+}
+
+fn compare_specialized_clauses(
+    left: &SpecializedDenyClause,
+    right: &SpecializedDenyClause,
+) -> Ordering {
+    operation_order(left.operation)
+        .cmp(&operation_order(right.operation))
+        .then_with(|| compare_specialized_parameters(&left.parameters, &right.parameters))
+}
+
+fn canonicalize_specialized_denied(
+    clauses: &[tempra_ast::SpecializedDenyClause],
+) -> Vec<SpecializedDenyClause> {
+    let mut canonical: Vec<_> = clauses
+        .iter()
+        .map(|clause| SpecializedDenyClause {
+            operation: canonical_operation(clause.operation),
+            parameters: clause
+                .parameters
+                .iter()
+                .map(|parameter| SpecializedDenyParameter {
+                    parameter: canonical_parameter(parameter.parameter),
+                    value: canonical_specialized_value(&parameter.value),
+                    span: parameter.span,
+                })
+                .collect(),
+            span: clause.span,
+        })
+        .collect();
+
+    for clause in &mut canonical {
+        clause
+            .parameters
+            .sort_by_key(|parameter| parameter_order(parameter.parameter));
+    }
+
+    // Stable sorting keeps the first source occurrence of an identical clause.
+    canonical.sort_by(compare_specialized_clauses);
+    canonical.dedup_by(|left, right| {
+        left.operation == right.operation
+            && left.parameters.len() == right.parameters.len()
+            && left
+                .parameters
+                .iter()
+                .zip(&right.parameters)
+                .all(|(left, right)| left.parameter == right.parameter && left.value == right.value)
+    });
+    canonical
 }
 
 struct Binding {
@@ -110,11 +290,13 @@ impl ContractBindings {
     ) -> Result<(), crate::DriverError> {
         let contract = if declaration.deny_contract.is_some() || declaration.pure_span.is_some() {
             let mut explicit_denied = CapabilitySet::empty();
+            let mut specialized_denied = Vec::new();
             let mut attribute_spans = Vec::new();
             if let Some(syntax) = &declaration.deny_contract {
                 for name in &syntax.denied {
                     explicit_denied.insert(canonical_capability(*name));
                 }
+                specialized_denied = canonicalize_specialized_denied(&syntax.specialized_denied);
                 attribute_spans.clone_from(&syntax.attribute_spans);
             }
             let denied = if declaration.pure_span.is_some() {
@@ -125,6 +307,7 @@ impl ContractBindings {
             Some(FunctionCapabilityContract {
                 explicit_denied,
                 denied,
+                specialized_denied,
                 declaration_span: declaration.span,
                 attribute_spans,
                 pure_span: declaration.pure_span,
@@ -216,6 +399,93 @@ mod tests {
         assert_eq!(contract.pure_span, function.pure_span);
         assert!(contract.attribute_spans.is_empty());
         assert_eq!(contract.denied, PURE_DENIED);
+    }
+
+    #[test]
+    fn specialized_specializations_inherit_one_source_intent_on_distinct_ids() {
+        let source = "@deny(fs.write(destination: \"/private\")) fn work(type T, value: T) -> T { return value }";
+        let ast = tempra_parser::parse_source(source).unwrap();
+        let mut hir = tempra_hir::lower_file(source, &ast);
+        let context = tempra_typeck::check_file_with_context(&mut hir).unwrap();
+        let tempra_hir::HirItem::Function(function) = &hir.items[0] else {
+            panic!()
+        };
+        let mut module = ModuleBuilder::new();
+        let mut bindings = ContractBindings::default();
+        let origin = ContractSource::Module {
+            name: "a".into(),
+            path: PathBuf::from("a.tmpr"),
+        };
+        let mut ids = Vec::new();
+        for ty in [tempra_hir::Type::Int, tempra_hir::Type::String] {
+            let concrete = tempra_tir_lower::lower::lower_function_specialization(
+                function,
+                &context,
+                &mut module,
+                None,
+                Some("a"),
+                &[ty],
+            )
+            .unwrap();
+            bindings.register(concrete.id, function, &origin).unwrap();
+            bindings.register(concrete.id, function, &origin).unwrap();
+            ids.push(concrete.id);
+            module.add_function(concrete);
+        }
+        let compilation = crate::compilation::compile_tir_module(module.module, bindings).unwrap();
+        assert_ne!(ids[0], ids[1]);
+        assert_eq!(compilation.contract(ids[0]), compilation.contract(ids[1]));
+        let contract = compilation.contract(ids[0]).unwrap();
+        assert_eq!(contract.denied, CapabilitySet::empty());
+        assert_eq!(contract.specialized_denied.len(), 1);
+        assert_eq!(
+            contract.specialized_denied[0].operation,
+            EffectOperation::FsWrite
+        );
+        assert_eq!(
+            contract.specialized_denied[0].parameters[0].value,
+            SpecializedDenyValue::Exact(ResourceValue::Text("/private".to_owned()))
+        );
+        assert_eq!(contract.source, origin);
+        assert_eq!(contract.declaration_span, function.span);
+        assert_eq!(
+            &source[contract.specialized_denied[0].span.start as usize
+                ..contract.specialized_denied[0].span.end as usize],
+            "fs.write(destination: \"/private\")"
+        );
+    }
+
+    #[test]
+    fn specialized_contracts_inside_one_declaration_deduplicate_canonically() {
+        let source = "@deny(fs.write(destination: \"/x\"), fs.write(destination: \"/x\"), net.connect(host: \"h\", port: 1), net.connect(port: 1, host: \"h\")) fn f() -> Int64 { return 1 }";
+        let ast = tempra_parser::parse_source(source).unwrap();
+        let mut hir = tempra_hir::lower_file(source, &ast);
+        tempra_typeck::check_file_with_context(&mut hir).unwrap();
+        let tempra_hir::HirItem::Function(function) = &hir.items[0] else {
+            panic!()
+        };
+        let origin = ContractSource::InMemory;
+        let mut bindings = ContractBindings::default();
+        bindings
+            .register(TirFunctionId(0), function, &origin)
+            .unwrap();
+        let contracts = bindings.finish();
+        assert_eq!(contracts.len(), 1);
+        let contract = &contracts[0].1;
+        assert_eq!(contract.specialized_denied.len(), 2);
+        assert_eq!(
+            contract
+                .specialized_denied
+                .iter()
+                .map(|clause| clause.operation)
+                .collect::<Vec<_>>(),
+            vec![EffectOperation::FsWrite, EffectOperation::NetConnect]
+        );
+        assert_eq!(
+            &source[contract.specialized_denied[0].span.start as usize
+                ..contract.specialized_denied[0].span.end as usize],
+            "fs.write(destination: \"/x\")"
+        );
     }
 
     #[test]

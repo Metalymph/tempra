@@ -202,43 +202,74 @@ impl<'src> Parser<'src> {
                     span: self.current().span,
                 });
             }
-            let operation_name = format!("{}.{}", self.text(first.span), self.text(second.span));
-            let operation =
-                SpecializedOperation::from_name(&operation_name).ok_or_else(|| ParseError {
-                    message: format!("unknown specialized deny operation '{operation_name}'"),
-                    span: Span::new(first.span.start, second.span.end),
-                })?;
+            let target_span = Span::new(first.span.start, second.span.end);
+            let target_name = format!("{}.{}", self.text(first.span), self.text(second.span));
+
+            // A bare io.read/io.write is the cross-family category. Parentheses
+            // select the concrete generic operation instead.
             if !self.at(TokenKind::LeftParen) {
-                if operation.valid_parameter_keys().is_empty() {
+                if let Some(category) = SpecializedCategory::from_name(&target_name) {
                     specialized_denied.push(SpecializedDenyClause {
-                        operation,
+                        target: SpecializedDenyTarget::Category(category),
                         parameters: Vec::new(),
-                        span: Span::new(first.span.start, second.span.end),
+                        span: target_span,
+                        syntax: SpecializedDenySyntax::Bare,
                     });
                     return Ok(());
                 }
-                return Err(ParseError {
-                    message: format!(
-                        "specialized deny operation '{}' requires a parenthesized parameter list",
-                        operation.canonical_name()
-                    ),
-                    span: Span::new(first.span.start, second.span.end),
+            }
+
+            let operation =
+                SpecializedOperation::from_name(&target_name).ok_or_else(|| ParseError {
+                    message: format!("unknown specialized deny operation '{target_name}'"),
+                    span: target_span,
+                })?;
+            if !self.at(TokenKind::LeftParen) {
+                specialized_denied.push(SpecializedDenyClause {
+                    target: SpecializedDenyTarget::Operation(operation),
+                    parameters: Vec::new(),
+                    span: target_span,
+                    syntax: SpecializedDenySyntax::Bare,
                 });
+                return Ok(());
             }
             self.advance();
             let parameters = self.parse_specialized_deny_parameters(operation)?;
             let right = self.expect(TokenKind::RightParen)?;
             specialized_denied.push(SpecializedDenyClause {
-                operation,
+                target: SpecializedDenyTarget::Operation(operation),
                 parameters,
                 span: Span::new(first.span.start, right.span.end),
+                syntax: SpecializedDenySyntax::Parenthesized,
+            });
+            return Ok(());
+        }
+
+        if let Some(family) = SpecializedFamily::from_name(self.text(first.span)) {
+            if self.at(TokenKind::LeftParen) {
+                return Err(ParseError {
+                    message: format!(
+                        "specialized deny family '{}' does not accept parameters",
+                        family.canonical_name()
+                    ),
+                    span: self.current().span,
+                });
+            }
+            specialized_denied.push(SpecializedDenyClause {
+                target: SpecializedDenyTarget::Family(family),
+                parameters: Vec::new(),
+                span: first.span,
+                syntax: SpecializedDenySyntax::Bare,
             });
             return Ok(());
         }
 
         let capability =
             DenyCapability::from_name(self.text(first.span)).ok_or_else(|| ParseError {
-                message: format!("unknown public deny capability '{}'", self.text(first.span)),
+                message: format!(
+                    "unknown public deny capability or family '{}'",
+                    self.text(first.span)
+                ),
                 span: first.span,
             })?;
         if self.at(TokenKind::LeftParen) {

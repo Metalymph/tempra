@@ -36,8 +36,8 @@ fn specialized_syntax_survives_hir_lowering_and_typechecking() {
     let contract = lowered.deny_contract.as_ref().unwrap();
     assert_eq!(contract.specialized_denied.len(), 1);
     assert_eq!(
-        contract.specialized_denied[0].operation,
-        tempra_ast::SpecializedOperation::NetConnect
+        contract.specialized_denied[0].target,
+        tempra_ast::SpecializedDenyTarget::Operation(tempra_ast::SpecializedOperation::NetConnect)
     );
     assert_eq!(
         &source[contract.specialized_denied[0].span.start as usize
@@ -256,5 +256,128 @@ fn specialized_contract_binding_collisions_are_still_detected() {
         assert_ne!(error.previous_span, error.incoming_span);
         assert_eq!(error.previous_source, ContractSource::InMemory);
         assert_eq!(error.incoming_source, ContractSource::InMemory);
+    }
+}
+
+#[test]
+fn family_and_category_targets_survive_hir_lowering_without_flattening() {
+    let source =
+        "@deny(fs, net, io.read, io.write, io.read(), net.send()) fn f() -> Int64 { return 1 }";
+    let ast = tempra_parser::parse_source(source).unwrap();
+    let tempra_ast::Item::Function(function) = &ast.items[0] else {
+        panic!()
+    };
+    let mut hir = tempra_hir::lower_file(source, &ast);
+    tempra_typeck::check_file_with_context(&mut hir).unwrap();
+    let tempra_hir::HirItem::Function(lowered) = &hir.items[0] else {
+        panic!()
+    };
+    assert_eq!(function.deny_contract, lowered.deny_contract);
+
+    let contract = lowered.deny_contract.as_ref().unwrap();
+    let targets: Vec<_> = contract
+        .specialized_denied
+        .iter()
+        .map(|clause| clause.target)
+        .collect();
+    assert_eq!(
+        targets,
+        vec![
+            tempra_ast::SpecializedDenyTarget::Family(tempra_ast::SpecializedFamily::Fs),
+            tempra_ast::SpecializedDenyTarget::Family(tempra_ast::SpecializedFamily::Net),
+            tempra_ast::SpecializedDenyTarget::Category(tempra_ast::SpecializedCategory::IoRead),
+            tempra_ast::SpecializedDenyTarget::Category(tempra_ast::SpecializedCategory::IoWrite),
+            tempra_ast::SpecializedDenyTarget::Operation(tempra_ast::SpecializedOperation::IoRead),
+            tempra_ast::SpecializedDenyTarget::Operation(tempra_ast::SpecializedOperation::NetSend),
+        ]
+    );
+    assert_eq!(
+        contract
+            .specialized_denied
+            .iter()
+            .map(|clause| clause.syntax)
+            .collect::<Vec<_>>(),
+        vec![
+            tempra_ast::SpecializedDenySyntax::Bare,
+            tempra_ast::SpecializedDenySyntax::Bare,
+            tempra_ast::SpecializedDenySyntax::Bare,
+            tempra_ast::SpecializedDenySyntax::Bare,
+            tempra_ast::SpecializedDenySyntax::Parenthesized,
+            tempra_ast::SpecializedDenySyntax::Parenthesized,
+        ]
+    );
+}
+
+#[test]
+fn parameterless_existing_operations_remain_enforceable() {
+    let source = "@deny(fs.read, fs.write, fs.remove, net.connect, net.listen, process.exec, process.exit, spawn.task, spawn.actor, io.read(), io.write())\nfn f() -> Int64 { return 1 }";
+    let compilation = compile(source).unwrap();
+    let contract = compilation.contract(id(&compilation, "f")).unwrap();
+    assert_eq!(
+        contract
+            .specialized_denied
+            .iter()
+            .map(|clause| clause.operation)
+            .collect::<Vec<_>>(),
+        vec![
+            EffectOperation::FsRead,
+            EffectOperation::FsWrite,
+            EffectOperation::FsRemove,
+            EffectOperation::NetConnect,
+            EffectOperation::NetListen,
+            EffectOperation::IoRead,
+            EffectOperation::IoWrite,
+            EffectOperation::ProcessExec,
+            EffectOperation::ProcessExit,
+            EffectOperation::SpawnTask,
+            EffectOperation::SpawnActor,
+        ]
+    );
+}
+
+#[test]
+fn unenforced_family_category_and_new_network_targets_are_rejected_at_driver_boundary() {
+    for (source, target, expected_span) in [
+        ("@deny(fs) fn f() -> Int64 { return 1 }", "fs", "fs"),
+        ("@deny(net) fn f() -> Int64 { return 1 }", "net", "net"),
+        (
+            "@deny(io.read) fn f() -> Int64 { return 1 }",
+            "io.read",
+            "io.read",
+        ),
+        (
+            "@deny(io.write) fn f() -> Int64 { return 1 }",
+            "io.write",
+            "io.write",
+        ),
+        (
+            "@deny(net.send) fn f() -> Int64 { return 1 }",
+            "net.send",
+            "net.send",
+        ),
+        (
+            "@deny(net.receive) fn f() -> Int64 { return 1 }",
+            "net.receive",
+            "net.receive",
+        ),
+        (
+            "@deny(net.send()) fn f() -> Int64 { return 1 }",
+            "net.send",
+            "net.send()",
+        ),
+        (
+            "@deny(net.receive()) fn f() -> Int64 { return 1 }",
+            "net.receive",
+            "net.receive()",
+        ),
+    ] {
+        let Err(DriverError::UnsupportedSpecializedTarget(error)) = compile(source) else {
+            panic!("expected unsupported target rejection for {source}")
+        };
+        assert_eq!(error.target, target);
+        assert_eq!(
+            &source[error.span.start as usize..error.span.end as usize],
+            expected_span
+        );
     }
 }

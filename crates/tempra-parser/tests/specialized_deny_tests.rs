@@ -1,5 +1,6 @@
 use tempra_ast::{
-    DenyCapability, Item, SpecializedOperation, SpecializedParameter, SpecializedValue,
+    DenyCapability, Item, SpecializedCategory, SpecializedDenySyntax, SpecializedDenyTarget,
+    SpecializedFamily, SpecializedOperation, SpecializedParameter, SpecializedValue,
 };
 use tempra_parser::parse_source;
 
@@ -58,7 +59,11 @@ fn mixed_and_repeated_attributes_preserve_source_spans() {
     );
 
     let write = &contract.specialized_denied[0];
-    assert_eq!(write.operation, SpecializedOperation::FsWrite);
+    assert_eq!(
+        write.target,
+        SpecializedDenyTarget::Operation(SpecializedOperation::FsWrite)
+    );
+    assert_eq!(write.syntax, SpecializedDenySyntax::Parenthesized);
     assert_eq!(
         &source[write.span.start as usize..write.span.end as usize],
         "fs.write(destination: \"/private\")"
@@ -78,7 +83,11 @@ fn mixed_and_repeated_attributes_preserve_source_spans() {
     );
 
     let read = &contract.specialized_denied[1];
-    assert_eq!(read.operation, SpecializedOperation::FsRead);
+    assert_eq!(
+        read.target,
+        SpecializedDenyTarget::Operation(SpecializedOperation::FsRead)
+    );
+    assert_eq!(read.syntax, SpecializedDenySyntax::Parenthesized);
     assert_eq!(read.parameters[0].parameter, SpecializedParameter::Source);
     assert_eq!(
         read.parameters[0].value,
@@ -96,8 +105,8 @@ fn broad_and_specialized_clauses_mix_in_one_attribute() {
     );
     assert_eq!(contract.specialized_denied.len(), 1);
     assert_eq!(
-        contract.specialized_denied[0].operation,
-        SpecializedOperation::FsRead
+        contract.specialized_denied[0].target,
+        SpecializedDenyTarget::Operation(SpecializedOperation::FsRead)
     );
 }
 
@@ -108,7 +117,11 @@ fn exact_text_port_and_wildcard_values_are_parsed() {
     let (_, contract, _) = function_contract(source);
 
     let connect = &contract.specialized_denied[0];
-    assert_eq!(connect.operation, SpecializedOperation::NetConnect);
+    assert_eq!(
+        connect.target,
+        SpecializedDenyTarget::Operation(SpecializedOperation::NetConnect)
+    );
+    assert_eq!(connect.syntax, SpecializedDenySyntax::Parenthesized);
     assert_eq!(
         connect
             .parameters
@@ -129,8 +142,8 @@ fn exact_text_port_and_wildcard_values_are_parsed() {
     assert_eq!(connect.parameters[2].value, SpecializedValue::Any);
 
     assert_eq!(
-        contract.specialized_denied[1].operation,
-        SpecializedOperation::IoWrite
+        contract.specialized_denied[1].target,
+        SpecializedDenyTarget::Operation(SpecializedOperation::IoWrite)
     );
     assert_eq!(
         contract.specialized_denied[1].parameters[0].value,
@@ -144,13 +157,21 @@ fn zero_parameter_and_omitted_parameter_clauses_are_supported() {
     let (_, contract, _) = function_contract(source);
     assert_eq!(contract.specialized_denied.len(), 3);
     assert_eq!(
-        contract.specialized_denied[0].operation,
-        SpecializedOperation::ProcessExit
+        contract.specialized_denied[0].target,
+        SpecializedDenyTarget::Operation(SpecializedOperation::ProcessExit)
+    );
+    assert_eq!(
+        contract.specialized_denied[0].syntax,
+        SpecializedDenySyntax::Parenthesized
     );
     assert!(contract.specialized_denied[0].parameters.is_empty());
     assert_eq!(
-        contract.specialized_denied[1].operation,
-        SpecializedOperation::FsRead
+        contract.specialized_denied[1].target,
+        SpecializedDenyTarget::Operation(SpecializedOperation::FsRead)
+    );
+    assert_eq!(
+        contract.specialized_denied[1].syntax,
+        SpecializedDenySyntax::Parenthesized
     );
     assert!(contract.specialized_denied[1].parameters.is_empty());
     assert_eq!(
@@ -162,8 +183,12 @@ fn zero_parameter_and_omitted_parameter_clauses_are_supported() {
     let (_, contract, _) = function_contract(source);
     assert_eq!(contract.specialized_denied.len(), 1);
     assert_eq!(
-        contract.specialized_denied[0].operation,
-        SpecializedOperation::ProcessExit
+        contract.specialized_denied[0].target,
+        SpecializedDenyTarget::Operation(SpecializedOperation::ProcessExit)
+    );
+    assert_eq!(
+        contract.specialized_denied[0].syntax,
+        SpecializedDenySyntax::Bare
     );
     assert_eq!(
         &source[contract.specialized_denied[0].span.start as usize
@@ -272,9 +297,169 @@ fn malformed_wildcards_are_rejected() {
 }
 
 #[test]
+fn families_parse_as_distinct_targets() {
+    let source = "@deny(fs, net) fn f() {}";
+    let (_, contract, _) = function_contract(source);
+    assert!(contract.denied.is_empty());
+    assert_eq!(contract.specialized_denied.len(), 2);
+    assert_eq!(
+        contract.specialized_denied[0].target,
+        SpecializedDenyTarget::Family(SpecializedFamily::Fs)
+    );
+    assert_eq!(
+        contract.specialized_denied[1].target,
+        SpecializedDenyTarget::Family(SpecializedFamily::Net)
+    );
+    for clause in &contract.specialized_denied {
+        assert!(clause.parameters.is_empty());
+        assert_eq!(clause.syntax, SpecializedDenySyntax::Bare);
+    }
+    assert_eq!(
+        &source[contract.specialized_denied[0].span.start as usize
+            ..contract.specialized_denied[0].span.end as usize],
+        "fs"
+    );
+    assert_eq!(
+        &source[contract.specialized_denied[1].span.start as usize
+            ..contract.specialized_denied[1].span.end as usize],
+        "net"
+    );
+}
+
+#[test]
+fn parameterless_operation_targets_parse_without_parentheses() {
+    let operations = [
+        "fs.read",
+        "fs.write",
+        "fs.remove",
+        "net.connect",
+        "net.listen",
+        "net.send",
+        "net.receive",
+        "process.exec",
+        "process.exit",
+        "spawn.task",
+        "spawn.actor",
+    ];
+    for operation in operations {
+        let source = format!("@deny({operation}) fn f() {{}}");
+        let (_, contract, _) = function_contract(&source);
+        let operation_value = SpecializedOperation::from_name(operation).unwrap();
+        assert_eq!(
+            contract.specialized_denied[0].target,
+            SpecializedDenyTarget::Operation(operation_value),
+            "{operation}"
+        );
+        assert!(contract.specialized_denied[0].parameters.is_empty());
+        assert_eq!(
+            contract.specialized_denied[0].syntax,
+            SpecializedDenySyntax::Bare
+        );
+        assert_eq!(
+            &source[contract.specialized_denied[0].span.start as usize
+                ..contract.specialized_denied[0].span.end as usize],
+            operation
+        );
+    }
+}
+
+#[test]
+fn bare_io_read_and_write_are_categories_but_parenthesized_forms_are_operations() {
+    let source = "@deny(io.read, io.write, io.read(), io.write()) fn f() {}";
+    let (_, contract, _) = function_contract(source);
+    assert_eq!(contract.specialized_denied.len(), 4);
+    assert_eq!(
+        contract.specialized_denied[0].target,
+        SpecializedDenyTarget::Category(SpecializedCategory::IoRead)
+    );
+    assert_eq!(
+        contract.specialized_denied[1].target,
+        SpecializedDenyTarget::Category(SpecializedCategory::IoWrite)
+    );
+    assert_eq!(
+        contract.specialized_denied[2].target,
+        SpecializedDenyTarget::Operation(SpecializedOperation::IoRead)
+    );
+    assert_eq!(
+        contract.specialized_denied[3].target,
+        SpecializedDenyTarget::Operation(SpecializedOperation::IoWrite)
+    );
+    assert_eq!(
+        contract
+            .specialized_denied
+            .iter()
+            .map(|clause| clause.syntax)
+            .collect::<Vec<_>>(),
+        vec![
+            SpecializedDenySyntax::Bare,
+            SpecializedDenySyntax::Bare,
+            SpecializedDenySyntax::Parenthesized,
+            SpecializedDenySyntax::Parenthesized
+        ]
+    );
+    for clause in &contract.specialized_denied {
+        assert!(clause.parameters.is_empty());
+    }
+    let spans: Vec<_> = contract
+        .specialized_denied
+        .iter()
+        .map(|clause| &source[clause.span.start as usize..clause.span.end as usize])
+        .collect();
+    assert_eq!(
+        spans,
+        vec!["io.read", "io.write", "io.read()", "io.write()"]
+    );
+}
+
+#[test]
+fn families_reject_parenthesized_parameters() {
+    for (source, target) in [
+        ("@deny(fs()) fn f() {}", "fs"),
+        ("@deny(net(host: \"x\")) fn f() {}", "net"),
+    ] {
+        let error = parse_source(source).err().unwrap();
+        assert!(error.message.contains("specialized deny family"));
+        assert!(error.message.contains(target));
+    }
+}
+
+#[test]
+fn net_send_and_receive_reject_resource_parameters() {
+    for source in [
+        "@deny(net.send(host: \"x\")) fn f() {}",
+        "@deny(net.receive(port: 1)) fn f() {}",
+        "@deny(net.send(stream: \"x\")) fn f() {}",
+    ] {
+        let error = parse_source(source).err().unwrap();
+        assert!(error.message.contains("not valid"));
+    }
+    parse_source("@deny(net.send(), net.receive()) fn f() {}").unwrap();
+}
+
+#[test]
+fn unknown_families_and_operations_are_rejected() {
+    let source = "@deny(disk) fn f() {}";
+    let error = parse_source(source).err().unwrap();
+    assert!(error.message.contains("unknown public deny capability"));
+    assert_eq!(
+        &source[error.span.start as usize..error.span.end as usize],
+        "disk"
+    );
+
+    for operation in ["fs.delete", "net.fetch", "io.open", "spawn.thread"] {
+        let source = format!("@deny({operation}) fn f() {{}}");
+        let error = parse_source(&source).err().unwrap();
+        assert!(error.message.contains("unknown specialized deny operation"));
+        assert_eq!(
+            &source[error.span.start as usize..error.span.end as usize],
+            operation
+        );
+    }
+}
+
+#[test]
 fn unsupported_clause_forms_are_rejected() {
     for source in [
-        "@deny(fs.read) fn f() {}",
         "@deny(net.connect.extra(host: \"x\")) fn f() {}",
         "@deny(fs.read(source)) fn f() {}",
         "@deny(fs.read(source: \"x\") fn f() {}",
@@ -286,11 +471,5 @@ fn unsupported_clause_forms_are_rejected() {
     ] {
         assert!(parse_source(source).is_err(), "accepted {source}");
     }
-    let source = "@deny(fs.read) fn f() {}";
-    let error = parse_source(source).err().unwrap();
-    assert_eq!(
-        &source[error.span.start as usize..error.span.end as usize],
-        "fs.read"
-    );
     parse_source("@deny( fs . read ( source : \"x\" ) ) fn f() {}").unwrap();
 }

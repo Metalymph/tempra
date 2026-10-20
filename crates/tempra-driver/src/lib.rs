@@ -13,7 +13,7 @@ pub use compilation::VmCompilation;
 pub use config::{discover_stdlib_from_executable, CompilationConfig};
 pub use contracts::{
     ContractBindingError, ContractSource, FunctionCapabilityContract, SpecializedDenyClause,
-    SpecializedDenyParameter, SpecializedDenyValue,
+    SpecializedDenyParameter, SpecializedDenyValue, UnsupportedSpecializedTarget,
 };
 pub use effect_tooling::{
     capability_name, project_effect_diagnostics, EffectContractOrigin, EffectDiagnostic,

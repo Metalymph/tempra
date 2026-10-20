@@ -112,6 +112,32 @@ impl std::fmt::Display for ContractBindingError {
 
 impl std::error::Error for ContractBindingError {}
 
+/// A parsed specialized target that this milestone does not yet enforce.
+///
+/// K4.9A adds family, category and new network targets to the syntax and
+/// taxonomy. Driver binding, matching and enforcement remain at v0.1 until
+/// K4.9B–K4.9D. This error prevents newly parsed contracts from being silently
+/// treated as enforced.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnsupportedSpecializedTarget {
+    /// Canonical target spelling from the AST.
+    pub target: String,
+    /// Source span of the original clause.
+    pub span: Span,
+}
+
+impl std::fmt::Display for UnsupportedSpecializedTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "specialized deny target '{}' is recognized but not yet enforceable",
+            self.target
+        )
+    }
+}
+
+impl std::error::Error for UnsupportedSpecializedTarget {}
+
 // These are the sole frontend-to-canonical contract conversions. Neither AST nor
 // HIR imports analyzer types or reasons about capability requirements.
 pub(crate) const PURE_DENIED: CapabilitySet = CapabilitySet::singleton(Capability::Io)
@@ -131,20 +157,28 @@ fn canonical_capability(name: tempra_ast::DenyCapability) -> Capability {
     }
 }
 
-fn canonical_operation(name: tempra_ast::SpecializedOperation) -> EffectOperation {
+/// Maps only the v0.1 operation targets that the current matcher can enforce.
+///
+/// `net.send` and `net.receive` exist in the K4.9A taxonomy and syntax but are
+/// deliberately rejected at this boundary until K4.9B–K4.9D bind and enforce
+/// them.
+fn canonical_enforceable_operation(
+    name: tempra_ast::SpecializedOperation,
+) -> Option<EffectOperation> {
     use tempra_ast::SpecializedOperation;
     match name {
-        SpecializedOperation::FsRead => EffectOperation::FsRead,
-        SpecializedOperation::FsWrite => EffectOperation::FsWrite,
-        SpecializedOperation::FsRemove => EffectOperation::FsRemove,
-        SpecializedOperation::NetConnect => EffectOperation::NetConnect,
-        SpecializedOperation::NetListen => EffectOperation::NetListen,
-        SpecializedOperation::IoRead => EffectOperation::IoRead,
-        SpecializedOperation::IoWrite => EffectOperation::IoWrite,
-        SpecializedOperation::ProcessExec => EffectOperation::ProcessExec,
-        SpecializedOperation::ProcessExit => EffectOperation::ProcessExit,
-        SpecializedOperation::SpawnTask => EffectOperation::SpawnTask,
-        SpecializedOperation::SpawnActor => EffectOperation::SpawnActor,
+        SpecializedOperation::FsRead => Some(EffectOperation::FsRead),
+        SpecializedOperation::FsWrite => Some(EffectOperation::FsWrite),
+        SpecializedOperation::FsRemove => Some(EffectOperation::FsRemove),
+        SpecializedOperation::NetConnect => Some(EffectOperation::NetConnect),
+        SpecializedOperation::NetListen => Some(EffectOperation::NetListen),
+        SpecializedOperation::IoRead => Some(EffectOperation::IoRead),
+        SpecializedOperation::IoWrite => Some(EffectOperation::IoWrite),
+        SpecializedOperation::ProcessExec => Some(EffectOperation::ProcessExec),
+        SpecializedOperation::ProcessExit => Some(EffectOperation::ProcessExit),
+        SpecializedOperation::SpawnTask => Some(EffectOperation::SpawnTask),
+        SpecializedOperation::SpawnActor => Some(EffectOperation::SpawnActor),
+        SpecializedOperation::NetSend | SpecializedOperation::NetReceive => None,
     }
 }
 
@@ -230,11 +264,28 @@ fn compare_specialized_clauses(
 
 fn canonicalize_specialized_denied(
     clauses: &[tempra_ast::SpecializedDenyClause],
-) -> Vec<SpecializedDenyClause> {
-    let mut canonical: Vec<_> = clauses
-        .iter()
-        .map(|clause| SpecializedDenyClause {
-            operation: canonical_operation(clause.operation),
+) -> Result<Vec<SpecializedDenyClause>, UnsupportedSpecializedTarget> {
+    let mut canonical = Vec::with_capacity(clauses.len());
+    for clause in clauses {
+        let operation = match clause.target {
+            tempra_ast::SpecializedDenyTarget::Operation(operation) => {
+                canonical_enforceable_operation(operation).ok_or_else(|| {
+                    UnsupportedSpecializedTarget {
+                        target: clause.target.canonical_name().to_owned(),
+                        span: clause.span,
+                    }
+                })?
+            }
+            tempra_ast::SpecializedDenyTarget::Family(_)
+            | tempra_ast::SpecializedDenyTarget::Category(_) => {
+                return Err(UnsupportedSpecializedTarget {
+                    target: clause.target.canonical_name().to_owned(),
+                    span: clause.span,
+                });
+            }
+        };
+        canonical.push(SpecializedDenyClause {
+            operation,
             parameters: clause
                 .parameters
                 .iter()
@@ -245,8 +296,8 @@ fn canonicalize_specialized_denied(
                 })
                 .collect(),
             span: clause.span,
-        })
-        .collect();
+        });
+    }
 
     for clause in &mut canonical {
         clause
@@ -265,7 +316,7 @@ fn canonicalize_specialized_denied(
                 .zip(&right.parameters)
                 .all(|(left, right)| left.parameter == right.parameter && left.value == right.value)
     });
-    canonical
+    Ok(canonical)
 }
 
 struct Binding {
@@ -296,7 +347,10 @@ impl ContractBindings {
                 for name in &syntax.denied {
                     explicit_denied.insert(canonical_capability(*name));
                 }
-                specialized_denied = canonicalize_specialized_denied(&syntax.specialized_denied);
+                specialized_denied = canonicalize_specialized_denied(&syntax.specialized_denied)
+                    .map_err(|error| {
+                        crate::DriverError::UnsupportedSpecializedTarget(Box::new(error))
+                    })?;
                 attribute_spans.clone_from(&syntax.attribute_spans);
             }
             let denied = if declaration.pure_span.is_some() {

@@ -5,8 +5,8 @@ use crate::externs::{
 };
 use crate::{
     analyze, Capability, CapabilityAnalysisError, CapabilitySet, DirectCapabilitySource,
-    EffectOperation, EffectParameter, LocalEffectFact, ResourceKnowledge, ResourceValue,
-    SpecializedOperationFact, TirLocation,
+    EffectCategory, EffectFamily, EffectOperation, EffectParameter, LocalEffectFact,
+    ResourceKnowledge, ResourceValue, SpecializedOperationFact, TirLocation,
 };
 use std::collections::HashMap;
 use tempra_tir::ir::{
@@ -688,6 +688,8 @@ fn effect_operations_have_stable_exhaustive_order() {
         EffectOperation::FsRemove,
         EffectOperation::NetConnect,
         EffectOperation::NetListen,
+        EffectOperation::NetSend,
+        EffectOperation::NetReceive,
         EffectOperation::IoRead,
         EffectOperation::IoWrite,
         EffectOperation::ProcessExec,
@@ -702,6 +704,23 @@ fn effect_operations_have_stable_exhaustive_order() {
 }
 
 #[test]
+fn effect_operation_discriminants_preserve_existing_identities() {
+    assert_eq!(EffectOperation::FsRead as u8, 0);
+    assert_eq!(EffectOperation::FsWrite as u8, 1);
+    assert_eq!(EffectOperation::FsRemove as u8, 2);
+    assert_eq!(EffectOperation::NetConnect as u8, 3);
+    assert_eq!(EffectOperation::NetListen as u8, 4);
+    assert_eq!(EffectOperation::IoRead as u8, 5);
+    assert_eq!(EffectOperation::IoWrite as u8, 6);
+    assert_eq!(EffectOperation::ProcessExec as u8, 7);
+    assert_eq!(EffectOperation::ProcessExit as u8, 8);
+    assert_eq!(EffectOperation::SpawnTask as u8, 9);
+    assert_eq!(EffectOperation::SpawnActor as u8, 10);
+    assert_eq!(EffectOperation::NetSend as u8, 11);
+    assert_eq!(EffectOperation::NetReceive as u8, 12);
+}
+
+#[test]
 fn effect_operation_names_are_unique_and_canonical() {
     let expected = [
         (EffectOperation::FsRead, "fs.read"),
@@ -709,6 +728,8 @@ fn effect_operation_names_are_unique_and_canonical() {
         (EffectOperation::FsRemove, "fs.remove"),
         (EffectOperation::NetConnect, "net.connect"),
         (EffectOperation::NetListen, "net.listen"),
+        (EffectOperation::NetSend, "net.send"),
+        (EffectOperation::NetReceive, "net.receive"),
         (EffectOperation::IoRead, "io.read"),
         (EffectOperation::IoWrite, "io.write"),
         (EffectOperation::ProcessExec, "process.exec"),
@@ -738,6 +759,8 @@ fn effect_operations_map_to_exactly_one_existing_parent_capability() {
         (EffectOperation::FsRemove, Capability::Io),
         (EffectOperation::NetConnect, Capability::Io),
         (EffectOperation::NetListen, Capability::Io),
+        (EffectOperation::NetSend, Capability::Io),
+        (EffectOperation::NetReceive, Capability::Io),
         (EffectOperation::IoRead, Capability::Io),
         (EffectOperation::IoWrite, Capability::Io),
         (EffectOperation::ProcessExec, Capability::Process),
@@ -763,8 +786,109 @@ fn effect_operations_map_to_exactly_one_existing_parent_capability() {
 }
 
 #[test]
+fn effect_families_are_explicit_and_do_not_change_parents() {
+    assert_eq!(EffectFamily::ALL, [EffectFamily::Fs, EffectFamily::Net]);
+    assert_eq!(EffectFamily::from_name("fs"), Some(EffectFamily::Fs));
+    assert_eq!(EffectFamily::from_name("net"), Some(EffectFamily::Net));
+    assert_eq!(EffectFamily::from_name("io"), None);
+    assert_eq!(EffectFamily::Fs.canonical_name(), "fs");
+    assert_eq!(EffectFamily::Net.canonical_name(), "net");
+
+    let expected = [
+        (EffectOperation::FsRead, Some(EffectFamily::Fs)),
+        (EffectOperation::FsWrite, Some(EffectFamily::Fs)),
+        (EffectOperation::FsRemove, Some(EffectFamily::Fs)),
+        (EffectOperation::NetConnect, Some(EffectFamily::Net)),
+        (EffectOperation::NetListen, Some(EffectFamily::Net)),
+        (EffectOperation::NetSend, Some(EffectFamily::Net)),
+        (EffectOperation::NetReceive, Some(EffectFamily::Net)),
+        (EffectOperation::IoRead, None),
+        (EffectOperation::IoWrite, None),
+        (EffectOperation::ProcessExec, None),
+        (EffectOperation::ProcessExit, None),
+        (EffectOperation::SpawnTask, None),
+        (EffectOperation::SpawnActor, None),
+    ];
+
+    for (operation, family) in expected {
+        assert_eq!(operation.family(), family, "{}", operation.canonical_name());
+    }
+
+    for operation in EffectOperation::ALL {
+        if let Some(family) = operation.family() {
+            assert_eq!(operation.parent(), Capability::Io);
+            assert_eq!(
+                EffectFamily::ALL.contains(&family),
+                true,
+                "{} has an unknown family",
+                operation.canonical_name()
+            );
+        }
+    }
+}
+
+#[test]
+fn cross_family_categories_have_exact_membership() {
+    assert_eq!(
+        EffectCategory::ALL,
+        [EffectCategory::IoRead, EffectCategory::IoWrite]
+    );
+    assert_eq!(
+        EffectCategory::from_name("io.read"),
+        Some(EffectCategory::IoRead)
+    );
+    assert_eq!(
+        EffectCategory::from_name("io.write"),
+        Some(EffectCategory::IoWrite)
+    );
+    assert_eq!(EffectCategory::from_name("io"), None);
+    assert_eq!(EffectCategory::IoRead.canonical_name(), "io.read");
+    assert_eq!(EffectCategory::IoWrite.canonical_name(), "io.write");
+
+    let expected = [
+        (EffectOperation::FsRead, &[EffectCategory::IoRead][..]),
+        (EffectOperation::FsWrite, &[EffectCategory::IoWrite][..]),
+        (EffectOperation::FsRemove, &[][..]),
+        (EffectOperation::NetConnect, &[][..]),
+        (EffectOperation::NetListen, &[][..]),
+        (EffectOperation::NetSend, &[EffectCategory::IoWrite][..]),
+        (EffectOperation::NetReceive, &[EffectCategory::IoRead][..]),
+        (EffectOperation::IoRead, &[EffectCategory::IoRead][..]),
+        (EffectOperation::IoWrite, &[EffectCategory::IoWrite][..]),
+        (EffectOperation::ProcessExec, &[][..]),
+        (EffectOperation::ProcessExit, &[][..]),
+        (EffectOperation::SpawnTask, &[][..]),
+        (EffectOperation::SpawnActor, &[][..]),
+    ];
+
+    for (operation, categories) in expected {
+        assert_eq!(
+            operation.categories(),
+            categories,
+            "{}",
+            operation.canonical_name()
+        );
+        for category in EffectCategory::ALL {
+            assert_eq!(
+                operation.is_in_category(category),
+                categories.contains(&category),
+                "{} / {}",
+                operation.canonical_name(),
+                category.canonical_name()
+            );
+        }
+    }
+
+    assert!(!EffectOperation::FsRemove.is_in_category(EffectCategory::IoWrite));
+    assert!(!EffectOperation::NetConnect.is_in_category(EffectCategory::IoRead));
+    assert!(!EffectOperation::NetConnect.is_in_category(EffectCategory::IoWrite));
+    assert!(!EffectOperation::NetListen.is_in_category(EffectCategory::IoRead));
+    assert!(!EffectOperation::NetListen.is_in_category(EffectCategory::IoWrite));
+}
+
+#[test]
 fn effect_parameters_are_valid_only_where_declared() {
-    let expected: [(EffectOperation, &[EffectParameter]); 11] = [
+    let expected: [(EffectOperation, &[EffectParameter]); 13] = [
         (EffectOperation::FsRead, &[EffectParameter::Source]),
         (EffectOperation::FsWrite, &[EffectParameter::Destination]),
         (EffectOperation::FsRemove, &[EffectParameter::Destination]),
@@ -784,6 +908,8 @@ fn effect_parameters_are_valid_only_where_declared() {
                 EffectParameter::Protocol,
             ],
         ),
+        (EffectOperation::NetSend, &[]),
+        (EffectOperation::NetReceive, &[]),
         (EffectOperation::IoRead, &[EffectParameter::Stream]),
         (EffectOperation::IoWrite, &[EffectParameter::Stream]),
         (EffectOperation::ProcessExec, &[EffectParameter::Executable]),

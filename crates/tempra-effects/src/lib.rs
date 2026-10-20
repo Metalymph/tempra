@@ -22,7 +22,7 @@ pub use facts::{
     LocalEffectFact, ResourceFact, ResourceKnowledge, ResourceValue, SpecializedOperationFact,
     UnclassifiedOperationFact,
 };
-pub use operations::{EffectOperation, EffectParameter};
+pub use operations::{EffectCategory, EffectFamily, EffectOperation, EffectParameter};
 
 #[cfg(test)]
 mod tests;

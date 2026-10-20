@@ -151,6 +151,74 @@ impl DenyCapability {
     }
 }
 
+/// Validated specialized family spelling in `@deny` target syntax.
+///
+/// Families are syntax-level taxonomy groupings under the existing `Io`
+/// capability. They are not capabilities and allocate no permission bit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SpecializedFamily {
+    /// The `fs` family.
+    Fs,
+    /// The `net` family.
+    Net,
+}
+
+impl SpecializedFamily {
+    /// Every family in canonical taxonomy order.
+    pub const ALL: [Self; 2] = [Self::Fs, Self::Net];
+
+    /// Recognizes an exact family spelling.
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "fs" => Some(Self::Fs),
+            "net" => Some(Self::Net),
+            _ => None,
+        }
+    }
+
+    /// Returns the stable canonical lower-case spelling.
+    pub const fn canonical_name(self) -> &'static str {
+        match self {
+            Self::Fs => "fs",
+            Self::Net => "net",
+        }
+    }
+}
+
+/// Validated cross-family category spelling in `@deny` target syntax.
+///
+/// Categories are denial-side predicates. They do not change operation
+/// identity or capability membership.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SpecializedCategory {
+    /// The `io.read` category.
+    IoRead,
+    /// The `io.write` category.
+    IoWrite,
+}
+
+impl SpecializedCategory {
+    /// Every category in canonical taxonomy order.
+    pub const ALL: [Self; 2] = [Self::IoRead, Self::IoWrite];
+
+    /// Recognizes an exact category spelling.
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "io.read" => Some(Self::IoRead),
+            "io.write" => Some(Self::IoWrite),
+            _ => None,
+        }
+    }
+
+    /// Returns the stable canonical dotted spelling.
+    pub const fn canonical_name(self) -> &'static str {
+        match self {
+            Self::IoRead => "io.read",
+            Self::IoWrite => "io.write",
+        }
+    }
+}
+
 /// Validated specialized operation spelling in `@deny` clause syntax.
 ///
 /// Declaration order mirrors the closed specialized-effect taxonomy and is the
@@ -168,6 +236,10 @@ pub enum SpecializedOperation {
     NetConnect,
     /// `net.listen`.
     NetListen,
+    /// `net.send`.
+    NetSend,
+    /// `net.receive`.
+    NetReceive,
     /// `io.read`.
     IoRead,
     /// `io.write`.
@@ -184,12 +256,14 @@ pub enum SpecializedOperation {
 
 impl SpecializedOperation {
     /// Every operation in canonical taxonomy order.
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 13] = [
         Self::FsRead,
         Self::FsWrite,
         Self::FsRemove,
         Self::NetConnect,
         Self::NetListen,
+        Self::NetSend,
+        Self::NetReceive,
         Self::IoRead,
         Self::IoWrite,
         Self::ProcessExec,
@@ -206,6 +280,8 @@ impl SpecializedOperation {
             "fs.remove" => Some(Self::FsRemove),
             "net.connect" => Some(Self::NetConnect),
             "net.listen" => Some(Self::NetListen),
+            "net.send" => Some(Self::NetSend),
+            "net.receive" => Some(Self::NetReceive),
             "io.read" => Some(Self::IoRead),
             "io.write" => Some(Self::IoWrite),
             "process.exec" => Some(Self::ProcessExec),
@@ -224,6 +300,8 @@ impl SpecializedOperation {
             Self::FsRemove => "fs.remove",
             Self::NetConnect => "net.connect",
             Self::NetListen => "net.listen",
+            Self::NetSend => "net.send",
+            Self::NetReceive => "net.receive",
             Self::IoRead => "io.read",
             Self::IoWrite => "io.write",
             Self::ProcessExec => "process.exec",
@@ -243,6 +321,7 @@ impl SpecializedOperation {
                 SpecializedParameter::Port,
                 SpecializedParameter::Protocol,
             ],
+            Self::NetSend | Self::NetReceive => &[],
             Self::IoRead | Self::IoWrite => &[SpecializedParameter::Stream],
             Self::ProcessExec => &[SpecializedParameter::Executable],
             Self::ProcessExit => &[],
@@ -254,6 +333,51 @@ impl SpecializedOperation {
     pub fn accepts_parameter(self, parameter: SpecializedParameter) -> bool {
         self.valid_parameter_keys().contains(&parameter)
     }
+}
+
+/// Typed target of one specialized `@deny` clause.
+///
+/// Families and categories remain distinct from concrete operations; they are
+/// never flattened into operation lists by the parser or AST.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SpecializedDenyTarget {
+    /// A family denial such as `fs` or `net`.
+    Family(SpecializedFamily),
+    /// A cross-family category denial such as `io.read` or `io.write`.
+    Category(SpecializedCategory),
+    /// A concrete operation denial such as `fs.write` or `io.read()`.
+    Operation(SpecializedOperation),
+}
+
+impl SpecializedDenyTarget {
+    /// Returns the stable canonical spelling of this target.
+    pub const fn canonical_name(self) -> &'static str {
+        match self {
+            Self::Family(family) => family.canonical_name(),
+            Self::Category(category) => category.canonical_name(),
+            Self::Operation(operation) => operation.canonical_name(),
+        }
+    }
+
+    /// Returns the concrete operation when this target is not a family or category.
+    pub const fn operation(self) -> Option<SpecializedOperation> {
+        match self {
+            Self::Operation(operation) => Some(operation),
+            Self::Family(_) | Self::Category(_) => None,
+        }
+    }
+}
+
+/// Original surface form of a specialized deny clause.
+///
+/// This preserves the bare/parenthesized distinction in the AST. In particular,
+/// bare `io.read` is a category while `io.read()` is the generic operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpecializedDenySyntax {
+    /// The target was written without parentheses.
+    Bare,
+    /// The target was written with a parenthesized parameter list.
+    Parenthesized,
 }
 
 /// Typed parameter key recognized in a specialized `@deny` clause.
@@ -348,13 +472,15 @@ pub struct SpecializedDenyParameter {
 /// One specialized deny clause such as `fs.write(destination: "build/out.txt")`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpecializedDenyClause {
-    /// Validated operation.
-    pub operation: SpecializedOperation,
+    /// Validated family, category or concrete operation target.
+    pub target: SpecializedDenyTarget,
     /// Source-order parameters; duplicate keys are rejected by the parser.
     pub parameters: Vec<SpecializedDenyParameter>,
-    /// Span from the operation name through the closing `)`, or through the
-    /// operation name for a zero-parameter clause written without parentheses.
+    /// Span from the target name through the closing `)`, or through the target
+    /// name for a clause written without parentheses.
     pub span: Span,
+    /// Whether the original target was bare or parenthesized.
+    pub syntax: SpecializedDenySyntax,
 }
 
 /// Syntax-only intent from one or more `@deny` attributes on a function.

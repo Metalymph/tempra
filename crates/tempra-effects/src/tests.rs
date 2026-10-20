@@ -1,3 +1,4 @@
+use crate::externs::{capabilities_for_extern, operation_for_extern};
 use crate::{
     analyze, Capability, CapabilityAnalysisError, CapabilitySet, DirectCapabilitySource,
     EffectOperation, EffectParameter,
@@ -850,6 +851,120 @@ fn deferred_registry_metadata_does_not_imply_runtime_support() {
                 Err(CapabilityAnalysisError::UnclassifiedExtern { .. })
             ),
             "{name} must remain unclassified"
+        );
+    }
+}
+
+#[test]
+fn specialized_operation_for_extern_mappings_are_exact() {
+    let expected = [
+        ("std.fs.read_text", Some(EffectOperation::FsRead)),
+        ("std.fs.write_text", Some(EffectOperation::FsWrite)),
+        ("std.io.print", Some(EffectOperation::IoWrite)),
+        ("std.io.println", Some(EffectOperation::IoWrite)),
+    ];
+
+    for (name, operation) in expected {
+        assert_eq!(operation_for_extern(name), operation, "{name}");
+    }
+}
+
+#[test]
+fn std_fs_exists_remains_unclassified_without_forcing_fs_read() {
+    // The extern stays known for broad capability analysis...
+    assert_eq!(
+        capabilities_for_extern("std.fs.exists"),
+        Some(CapabilitySet::singleton(Capability::Io))
+    );
+    // ...but deliberately has no specialized operation.
+    assert_eq!(operation_for_extern("std.fs.exists"), None);
+}
+
+#[test]
+fn alloc_only_and_capability_free_externs_have_no_specialized_operation() {
+    for name in [
+        "std.path.join",
+        "std.path.basename",
+        "std.strings.trim",
+        "std.strings.replace",
+        "std.strings.contains",
+        "std.strings.starts_with",
+        "std.strings.ends_with",
+    ] {
+        assert!(
+            capabilities_for_extern(name).is_some(),
+            "{name} must stay known"
+        );
+        assert_eq!(operation_for_extern(name), None, "{name}");
+    }
+}
+
+#[test]
+fn unknown_externs_have_no_operation_and_stay_unclassified_errors() {
+    for name in ["vendor.unknown", "", "std.fs.read", "std.io.readln"] {
+        assert_eq!(capabilities_for_extern(name), None, "{name}");
+        assert_eq!(operation_for_extern(name), None, "{name}");
+
+        let called = module(vec![
+            function(0, "main", vec![call(0, 1)]),
+            extern_function(1, name),
+        ]);
+        assert!(
+            matches!(
+                analyze(&called),
+                Err(CapabilityAnalysisError::UnclassifiedExtern { .. })
+            ),
+            "{name} must remain unclassified"
+        );
+    }
+}
+
+#[test]
+fn every_classified_operation_parent_is_in_its_extern_capability_set() {
+    let classified = [
+        ("std.fs.read_text", EffectOperation::FsRead),
+        ("std.fs.write_text", EffectOperation::FsWrite),
+        ("std.io.print", EffectOperation::IoWrite),
+        ("std.io.println", EffectOperation::IoWrite),
+    ];
+
+    for (name, operation) in classified {
+        let capabilities =
+            capabilities_for_extern(name).unwrap_or_else(|| panic!("{name} must stay known"));
+        assert!(
+            capabilities.contains(operation.parent()),
+            "{name}: parent {:?} is missing from its capability set",
+            operation.parent()
+        );
+        assert_eq!(operation_for_extern(name), Some(operation), "{name}");
+    }
+}
+
+#[test]
+fn specialized_classification_does_not_change_broad_capability_requirements() {
+    let expected = [
+        ("std.fs.exists", &[Capability::Io][..]),
+        ("std.fs.read_text", &[Capability::Alloc, Capability::Io][..]),
+        (
+            "std.fs.write_text",
+            &[Capability::Alloc, Capability::Io][..],
+        ),
+        ("std.io.print", &[Capability::Io][..]),
+        ("std.io.println", &[Capability::Io][..]),
+        ("std.path.join", &[Capability::Alloc][..]),
+        ("std.path.basename", &[Capability::Alloc][..]),
+        ("std.strings.trim", &[Capability::Alloc][..]),
+        ("std.strings.replace", &[Capability::Alloc][..]),
+        ("std.strings.contains", &[][..]),
+        ("std.strings.starts_with", &[][..]),
+        ("std.strings.ends_with", &[][..]),
+    ];
+
+    for (name, capabilities_expected) in expected {
+        assert_eq!(
+            capabilities_for_extern(name),
+            Some(capabilities(capabilities_expected)),
+            "{name}"
         );
     }
 }

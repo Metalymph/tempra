@@ -25,8 +25,8 @@ pub enum ContractSource {
 /// Canonical value of one specialized deny parameter.
 ///
 /// `Any` is the explicit wildcard. `Exact` preserves declaration-site text or
-/// port values. This is contract metadata only; K4.5A performs no matching or
-/// enforcement.
+/// port values. K4.5B matches these values against propagated local-effect facts
+/// without changing how the clause was parsed or canonicalized.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SpecializedDenyValue {
     /// Explicit wildcard `*`.
@@ -72,8 +72,8 @@ pub struct FunctionCapabilityContract {
     pub explicit_denied: CapabilitySet,
     /// Effective denied capabilities: explicit deny spellings union the pure restriction set.
     pub denied: CapabilitySet,
-    /// Canonical specialized clauses. These are retained as source intent and
-    /// are not compared with required effects in K4.5A.
+    /// Canonical specialized clauses. These are matched independently against
+    /// propagated specialized-effect facts; they never contribute to `denied`.
     pub specialized_denied: Vec<SpecializedDenyClause>,
     /// Existing function declaration span, excluding preceding attributes.
     pub declaration_span: Span,

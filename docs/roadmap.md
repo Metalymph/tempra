@@ -157,8 +157,9 @@ distinguishes zero from signed overflow, and HIR, TIR, VM and actually-native JI
 execution return controlled failures rather than Rust panics, traps or accidental
 wrapping. Native pure and heap-aware call chains propagate `{ value, status }`
 without falling back after a semantic failure. E1 treats checked `Int64`
-add/sub/mul/div as conservative `Panic` origins. Cache trust is `semantics-5`;
-the bytecode format is unchanged. K3 remains in progress.
+add/sub/mul/div as conservative `Panic` origins. K4.5B raises cache trust to
+`semantics-6` while adding static specialized-effect enforcement; the bytecode
+format is unchanged. K3 remains in progress.
 
 ### R — Result / Value-Use Hardening
 

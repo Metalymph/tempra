@@ -7,17 +7,23 @@ mod enforcement;
 pub mod error;
 pub mod module_graph;
 pub mod pipeline;
+mod specialized_matching;
 
 pub use compilation::VmCompilation;
 pub use config::{discover_stdlib_from_executable, CompilationConfig};
-pub use contracts::{ContractBindingError, ContractSource, FunctionCapabilityContract};
+pub use contracts::{
+    ContractBindingError, ContractSource, FunctionCapabilityContract, SpecializedDenyClause,
+    SpecializedDenyParameter, SpecializedDenyValue,
+};
 pub use effect_tooling::{
     capability_name, project_effect_diagnostics, EffectContractOrigin, EffectDiagnostic,
     EffectDirectOriginKind, EffectFunctionIdentity, EffectInspection, EffectProjectionError,
     EffectQueryError, EffectRequirementInfo, EffectWitness, EffectWitnessCall, EffectWitnessOrigin,
     FunctionEffectInfo, CAPABILITY_DENIED_CODE,
 };
-pub use enforcement::{CapabilityContractInvariantError, CapabilityContractViolation};
+pub use enforcement::{
+    CapabilityContractInvariantError, CapabilityContractViolation, SpecializedContractViolation,
+};
 pub use error::DriverError;
 pub use pipeline::{
     check_file, check_file_with_config, check_source, compile_file_to_bytecode_with_analysis,
@@ -30,3 +36,4 @@ pub use pipeline::{
     run_source_vm_profiled, run_source_vm_with_options, run_source_with_args,
     run_source_with_experimental_vm, run_source_with_experimental_vm_jit, AnalysisFactsResult,
 };
+pub use specialized_matching::{match_specialized_clause, SpecializedMatch};

@@ -15,6 +15,9 @@ pub enum DriverError {
     ContractBindingError(Box<crate::ContractBindingError>),
     /// Denied requirements in ascending function ID, then capability order.
     CapabilityContractViolations(Vec<crate::CapabilityContractViolation>),
+    /// Specialized denied requirements in deterministic function, clause, origin
+    /// and classification order.
+    SpecializedContractViolations(Vec<crate::SpecializedContractViolation>),
     /// Inconsistent contract/analysis data; never treated as contract success.
     CapabilityContractInvariantError(crate::CapabilityContractInvariantError),
     TirInterpError(tempra_tir_interp::TirInterpError),
@@ -47,6 +50,13 @@ impl std::fmt::Display for DriverError {
             DriverError::ContractBindingError(e) => write!(f, "Contract binding error: {}", e),
             DriverError::CapabilityContractViolations(violations) => {
                 write!(f, "Capability contract violation(s): {}", violations.len())
+            }
+            DriverError::SpecializedContractViolations(violations) => {
+                write!(
+                    f,
+                    "Specialized capability contract violation(s): {}",
+                    violations.len()
+                )
             }
             DriverError::CapabilityContractInvariantError(error) => {
                 write!(f, "Capability contract invariant error: {error:?}")

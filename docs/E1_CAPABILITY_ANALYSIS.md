@@ -394,6 +394,12 @@ may predate the `Int64` add/sub/mul `Panic` origins and could otherwise bypass
 new `@deny(panic)` enforcement on a bytecode-only hit. The bytecode format and
 capability-metadata policy remain unchanged.
 
+K4.5B raises current trust to `semantics-6`. Revision-5 artifacts may retain
+specialized `@deny` clauses but predate their static enforcement, so a
+bytecode-only hit could otherwise bypass them. Specialized matching uses the
+existing capability analysis summaries and witnesses; the bytecode format, ABI
+and capability-metadata policy remain unchanged.
+
 The current analysis/LSP path remains frontend/typechecking-only. E6 converts to
 the existing general `Diagnostic` model but does not make the LSP compile through
 the smaller TIR/VM surface. Future LSP work must consume this projection without

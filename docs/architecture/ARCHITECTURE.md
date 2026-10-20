@@ -112,9 +112,10 @@ field diagnostics follow canonical source/module declaration order. These semant
 revisions are independent of bytecode format version.
 
 K3.2 raises current trust to `semantics-5` because checked `Int64` add/sub/mul
-now contribute `Panic` and revision-4 hits could bypass that enforcement. The
-shared `tempra-runtime` arithmetic contract is consumed by the HIR interpreter,
-TIR interpreter and VM. Eligible JIT functions implement equivalent checked
+now contribute `Panic` and revision-4 hits could bypass that enforcement.
+K4.5B raises current trust to `semantics-6` because revision-5 hits could bypass
+static specialized `@deny` enforcement. The shared `tempra-runtime` arithmetic
+contract is consumed by the HIR interpreter, TIR interpreter and VM. Eligible JIT functions implement equivalent checked
 Cranelift operations and propagate a C-compatible `{ value, status }` result
 through pure and heap-aware native calls. A non-zero status from native code is
 returned to the VM as a typed runtime failure and is never reclassified as
@@ -156,8 +157,9 @@ and the driver unions Io/Process/Spawn/Nondeterminism with explicit deny. Effect
 contracts retain pure provenance separately from explicit deny spans. Neither
 E1 analysis nor E3.2 enforcement changes; pure allows allocation and may-panic
 operations unless explicitly denied. The shared HIR presence guard covers pure
-without changing the execution adapters. `semantics-1` remains valid because the
-old parser rejected pure and changed annotations change source identity.
+without changing the execution adapters. `semantics-1` remained valid at that
+point because the old parser rejected pure and changed annotations change source
+identity.
 
 ```text
 tempra-tir

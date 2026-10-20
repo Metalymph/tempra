@@ -105,8 +105,8 @@ E3.2 compares denied sets with transitive requirements and retains the unchanged
 E1 witness per violation. Errors are ordered by function ID then capability.
 Cache hits remain analysis/contract-free. E3.2 originally introduced the
 `tempra-{CARGO_PKG_VERSION}-semantics-1` fingerprint; K1.7 raised it to revision
-2, K2.2 raised current trust to revision 3, K2.4 raised it to revision 4, and
-K3.2 raises it to revision 5.
+2, K2.2 raised current trust to revision 3, K2.4 raised it to revision 4, K3.2
+raised it to revision 5, and K4.5B requires revision 6.
 Older artifacts miss;
 fresh failures never populate or replace cache entries. The semantic revision
 versions reuse guarantees, not bytecode format. See [cache policy](../BYTECODE_CACHE.md).
@@ -173,8 +173,10 @@ K3.2 requires `semantics-5`: verified TIR capability analysis classifies checked
 `Int64` add/sub/mul/div as conservative `Panic`, and the supported HIR, TIR, VM
 and native JIT execution paths share one controlled overflow/division boundary.
 The JIT propagates arithmetic status through native callees rather than
-continuing with a placeholder or falling back. Bytecode opcodes and serialization
-format remain unchanged.
+continuing with a placeholder or falling back. K4.5B requires `semantics-6` so
+revision-5 artifacts retaining unenforced specialized `@deny` clauses cannot be
+reused; specialized matching reuses the existing analysis and witness pipeline.
+Bytecode opcodes and serialization format remain unchanged.
 
 `TirFunctionId` is a compilation-local identity rather than an index into the
 physical function vector. Bytecode lowering uses an explicit mapping for calls
@@ -190,7 +192,7 @@ without one produces a controlled diagnostic. Explicit relative roots are resolv
 once by the configuration API, so cwd may interpret a user-supplied relative path
 but never discovers std implicitly. This input does not participate in the
 single-source bytecode cache because that cache path does not construct a module
-graph; semantic revision remains `4`.
+graph; the semantic revision was then `4`.
 
 K2.5 verifies the supported bytecode path as a whole in independent compiler
 processes. With source/module order, build, host/target, options and resolved stdlib

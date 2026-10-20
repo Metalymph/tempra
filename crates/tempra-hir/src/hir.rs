@@ -57,7 +57,8 @@ pub struct HirGenericParam {
 #[derive(Debug, Clone)]
 pub struct HirFunction {
     pub span: Span,
-    /// Preserved syntax-only intent. Canonical capability conversion belongs to the driver.
+    /// Preserved syntax-only deny intent, including specialized clauses.
+    /// Canonical capability conversion belongs to the driver.
     pub deny_contract: Option<tempra_ast::DenyContract>,
     /// Preserved `@pure` intent; canonical expansion belongs exclusively to the driver.
     pub pure_span: Option<Span>,

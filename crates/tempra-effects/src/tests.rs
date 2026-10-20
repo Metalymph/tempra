@@ -1,7 +1,7 @@
 use crate::analysis::resource_facts_for_binding;
 use crate::externs::{
-    capabilities_for_extern, operation_binding_for_extern, operation_for_extern, BindingError,
-    ExternOperationBinding, ResourceBinding,
+    capabilities_for_extern, operation_binding_for_extern, operation_for_extern, static_binding,
+    BindingError, ExternOperationBinding, ResourceBinding,
 };
 use crate::{
     analyze, Capability, CapabilityAnalysisError, CapabilitySet, DirectCapabilitySource,
@@ -1704,4 +1704,531 @@ fn one_specialized_fact_is_created_per_classified_native_call() {
     }
 
     assert_eq!(analyze(&input).unwrap(), analysis);
+}
+
+#[test]
+fn propagates_specialized_facts_directly_and_transitively() {
+    let analysis = analyze(&module(vec![
+        function(
+            0,
+            "root",
+            vec![
+                call(0, 1),
+                string_const(1, "hello"),
+                call_with_args(2, 101, vec![TirValueId(1)]),
+            ],
+        ),
+        function(1, "middle", vec![call(0, 2)]),
+        function(
+            2,
+            "leaf",
+            vec![
+                string_const(0, "input.txt"),
+                call_with_args(1, 100, vec![TirValueId(0)]),
+            ],
+        ),
+        extern_function(100, "std.fs.read_text"),
+        extern_function(101, "std.io.print"),
+    ]))
+    .unwrap();
+
+    let root = analysis.specialized_summary(TirFunctionId(0)).unwrap();
+    assert_eq!(root.direct.len(), 1);
+    assert_eq!(root.transitive.len(), 1);
+
+    let direct = specialized(&root.direct[0]);
+    assert_eq!(direct.operation, EffectOperation::IoWrite);
+    assert_eq!(direct.location.function, TirFunctionId(0));
+
+    let read = &root.transitive[0];
+    assert_eq!(specialized(read).operation, EffectOperation::FsRead);
+    assert_eq!(read.location().function, TirFunctionId(2));
+    assert_eq!(
+        *resource_knowledge(specialized(read), EffectParameter::Source),
+        ResourceKnowledge::Exact(ResourceValue::Text("input.txt".to_owned()))
+    );
+
+    let middle = analysis.specialized_summary(TirFunctionId(1)).unwrap();
+    assert!(middle.direct.is_empty());
+    assert_eq!(middle.transitive, root.transitive);
+
+    let leaf = analysis.specialized_summary(TirFunctionId(2)).unwrap();
+    assert_eq!(leaf.direct, root.transitive);
+    assert!(leaf.transitive.is_empty());
+
+    let direct_witness = analysis
+        .specialized_witness(TirFunctionId(0), &root.direct[0])
+        .unwrap();
+    assert!(direct_witness.calls.is_empty());
+    assert_eq!(&direct_witness.origin, &root.direct[0]);
+
+    let transitive_witness = analysis
+        .specialized_witness(TirFunctionId(0), read)
+        .unwrap();
+    assert_eq!(transitive_witness.calls.len(), 2);
+    assert_eq!(transitive_witness.calls[0].caller, TirFunctionId(0));
+    assert_eq!(transitive_witness.calls[0].callee, TirFunctionId(1));
+    assert_eq!(transitive_witness.calls[1].callee, TirFunctionId(2));
+    assert_eq!(&transitive_witness.origin, read);
+    assert_eq!(transitive_witness.origin.location(), read.location());
+}
+
+#[test]
+fn diamond_graphs_deduplicate_origins_and_pick_shortest_witness() {
+    let input = module(vec![
+        function(0, "root", vec![call(0, 1), call(1, 2)]),
+        function(1, "left", vec![call(0, 3)]),
+        function(2, "right", vec![call(0, 3)]),
+        function(
+            3,
+            "leaf",
+            vec![
+                string_const(0, "shared.txt"),
+                call_with_args(1, 100, vec![TirValueId(0)]),
+            ],
+        ),
+        extern_function(100, "std.fs.read_text"),
+    ]);
+    let analysis = analyze(&input).unwrap();
+
+    let root = analysis.specialized_summary(TirFunctionId(0)).unwrap();
+    assert!(root.direct.is_empty());
+    assert_eq!(root.transitive.len(), 1);
+    let origin = root.transitive[0].clone();
+    assert_eq!(specialized(&origin).operation, EffectOperation::FsRead);
+
+    for function in [1, 2] {
+        let summary = analysis
+            .specialized_summary(TirFunctionId(function))
+            .unwrap();
+        assert_eq!(summary.direct.len(), 0);
+        assert_eq!(summary.transitive, vec![origin.clone()]);
+    }
+
+    let witness = analysis
+        .specialized_witness(TirFunctionId(0), &origin)
+        .unwrap();
+    assert_eq!(witness.calls.len(), 2);
+    assert_eq!(witness.calls[0].caller, TirFunctionId(0));
+    // Lower callee function ID wins the deterministic shortest-path tie.
+    assert_eq!(witness.calls[0].callee, TirFunctionId(1));
+    assert_eq!(witness.calls[1].caller, TirFunctionId(1));
+    assert_eq!(witness.calls[1].callee, TirFunctionId(3));
+    assert_eq!(&witness.origin, &origin);
+
+    assert_eq!(analyze(&input).unwrap(), analysis);
+}
+
+#[test]
+fn recursive_and_mutually_recursive_summaries_terminate() {
+    let analysis = analyze(&module(vec![
+        function(
+            0,
+            "self_recursive",
+            vec![
+                string_const(0, "self.txt"),
+                call_with_args(1, 100, vec![TirValueId(0)]),
+                call(2, 0),
+            ],
+        ),
+        function(
+            1,
+            "left",
+            vec![
+                string_const(0, "left.txt"),
+                call_with_args(1, 101, vec![TirValueId(0)]),
+                call(2, 2),
+            ],
+        ),
+        function(
+            2,
+            "right",
+            vec![
+                string_const(0, "right.txt"),
+                call_with_args(1, 102, vec![TirValueId(0)]),
+                call(2, 1),
+            ],
+        ),
+        function(3, "root", vec![call(0, 1)]),
+        extern_function(100, "std.fs.read_text"),
+        extern_function(101, "std.fs.write_text"),
+        extern_function(102, "std.fs.write_text"),
+    ]))
+    .unwrap();
+
+    let self_recursive = analysis.specialized_summary(TirFunctionId(0)).unwrap();
+    assert_eq!(self_recursive.direct.len(), 1);
+    assert!(self_recursive.transitive.is_empty());
+    let self_witness = analysis
+        .specialized_witness(TirFunctionId(0), &self_recursive.direct[0])
+        .unwrap();
+    assert!(self_witness.calls.is_empty());
+
+    let left = analysis.specialized_summary(TirFunctionId(1)).unwrap();
+    let right = analysis.specialized_summary(TirFunctionId(2)).unwrap();
+    assert_eq!(left.direct.len(), 1);
+    assert_eq!(left.transitive, right.direct);
+    assert_eq!(right.direct.len(), 1);
+    assert_eq!(right.transitive, left.direct);
+
+    let root = analysis.specialized_summary(TirFunctionId(3)).unwrap();
+    assert_eq!(
+        root.transitive,
+        vec![left.direct[0].clone(), right.direct[0].clone()]
+    );
+
+    let right_origin = right.direct[0].clone();
+    let witness = analysis
+        .specialized_witness(TirFunctionId(3), &right_origin)
+        .unwrap();
+    assert_eq!(witness.calls.len(), 2);
+    assert_eq!(witness.calls[0].callee, TirFunctionId(1));
+    assert_eq!(witness.calls[1].callee, TirFunctionId(2));
+    assert_eq!(&witness.origin, &right_origin);
+}
+
+#[test]
+fn distinct_origins_with_equal_resources_are_not_merged() {
+    let analysis = analyze(&module(vec![
+        function(0, "root", vec![call(0, 1), call(1, 2)]),
+        function(
+            1,
+            "first",
+            vec![
+                string_const(0, "same.txt"),
+                call_with_args(1, 100, vec![TirValueId(0)]),
+            ],
+        ),
+        function(
+            2,
+            "second",
+            vec![
+                string_const(0, "same.txt"),
+                call_with_args(1, 100, vec![TirValueId(0)]),
+            ],
+        ),
+        extern_function(100, "std.fs.write_text"),
+    ]))
+    .unwrap();
+
+    let root = analysis.specialized_summary(TirFunctionId(0)).unwrap();
+    assert!(root.direct.is_empty());
+    assert_eq!(root.transitive.len(), 2);
+    assert_ne!(root.transitive[0].location(), root.transitive[1].location());
+    assert_eq!(
+        root.transitive
+            .iter()
+            .map(LocalEffectFact::location)
+            .collect::<Vec<_>>(),
+        vec![
+            TirLocation {
+                function: TirFunctionId(1),
+                block: TirBlockId(0),
+                instruction_index: 1,
+            },
+            TirLocation {
+                function: TirFunctionId(2),
+                block: TirBlockId(0),
+                instruction_index: 1,
+            },
+        ]
+    );
+
+    for origin in &root.transitive {
+        let fact = specialized(origin);
+        assert_eq!(fact.operation, EffectOperation::FsWrite);
+        assert_eq!(
+            *resource_knowledge(fact, EffectParameter::Destination),
+            ResourceKnowledge::Exact(ResourceValue::Text("same.txt".to_owned()))
+        );
+    }
+
+    for (origin, callee) in root
+        .transitive
+        .iter()
+        .zip([TirFunctionId(1), TirFunctionId(2)])
+    {
+        let witness = analysis
+            .specialized_witness(TirFunctionId(0), origin)
+            .unwrap();
+        assert_eq!(witness.calls.len(), 1);
+        assert_eq!(witness.calls[0].callee, callee);
+        assert_eq!(&witness.origin, origin);
+    }
+}
+
+#[test]
+fn propagated_unknown_resources_are_not_specialized_from_caller_arguments() {
+    let mut callee = function(
+        1,
+        "reader",
+        vec![call_with_args(1, 100, vec![TirValueId(0)])],
+    );
+    callee.params = vec![(TirValueId(0), TirType::String)];
+
+    let analysis = analyze(&module(vec![
+        function(
+            0,
+            "caller",
+            vec![
+                string_const(0, "caller-argument.txt"),
+                call_with_args(1, 1, vec![TirValueId(0)]),
+            ],
+        ),
+        callee,
+        extern_function(100, "std.fs.read_text"),
+    ]))
+    .unwrap();
+
+    let callee_summary = analysis.specialized_summary(TirFunctionId(1)).unwrap();
+    assert_eq!(callee_summary.direct.len(), 1);
+    let origin = callee_summary.direct[0].clone();
+    assert_eq!(
+        *resource_knowledge(specialized(&origin), EffectParameter::Source),
+        ResourceKnowledge::Unknown
+    );
+
+    let caller_summary = analysis.specialized_summary(TirFunctionId(0)).unwrap();
+    assert_eq!(caller_summary.transitive, vec![origin.clone()]);
+    assert_ne!(
+        *resource_knowledge(
+            specialized(&caller_summary.transitive[0]),
+            EffectParameter::Source
+        ),
+        ResourceKnowledge::Exact(ResourceValue::Text("caller-argument.txt".to_owned()))
+    );
+
+    let witness = analysis
+        .specialized_witness(TirFunctionId(0), &origin)
+        .unwrap();
+    assert_eq!(witness.calls.len(), 1);
+    assert_eq!(witness.origin.location().function, TirFunctionId(1));
+}
+
+#[test]
+fn propagation_preserves_exact_and_unknown_resource_knowledge() {
+    let mut dynamic = function(
+        2,
+        "dynamic",
+        vec![call_with_args(1, 100, vec![TirValueId(0)])],
+    );
+    dynamic.params = vec![(TirValueId(0), TirType::String)];
+
+    let analysis = analyze(&module(vec![
+        function(0, "root", vec![call(0, 1), call(1, 2)]),
+        function(
+            1,
+            "exact",
+            vec![
+                string_const(0, "exact.txt"),
+                call_with_args(1, 100, vec![TirValueId(0)]),
+            ],
+        ),
+        dynamic,
+        extern_function(100, "std.fs.read_text"),
+    ]))
+    .unwrap();
+
+    let root = analysis.specialized_summary(TirFunctionId(0)).unwrap();
+    assert_eq!(root.transitive.len(), 2);
+    assert_eq!(root.transitive[0].location().function, TirFunctionId(1));
+    assert_eq!(root.transitive[1].location().function, TirFunctionId(2));
+
+    let exact = specialized(&root.transitive[0]);
+    assert_eq!(exact.operation, EffectOperation::FsRead);
+    assert_eq!(resource_parameters(exact), vec![EffectParameter::Source]);
+    assert_eq!(
+        *resource_knowledge(exact, EffectParameter::Source),
+        ResourceKnowledge::Exact(ResourceValue::Text("exact.txt".to_owned()))
+    );
+
+    let unknown = specialized(&root.transitive[1]);
+    assert_eq!(unknown.operation, EffectOperation::FsRead);
+    assert_eq!(resource_parameters(unknown), vec![EffectParameter::Source]);
+    assert_eq!(
+        *resource_knowledge(unknown, EffectParameter::Source),
+        ResourceKnowledge::Unknown
+    );
+}
+
+#[test]
+fn propagates_unclassified_operations_under_known_capabilities() {
+    let analysis = analyze(&module(vec![
+        function(
+            0,
+            "root",
+            vec![
+                string_const(0, "hello"),
+                call_with_args(1, 101, vec![TirValueId(0)]),
+                call(2, 1),
+            ],
+        ),
+        function(
+            1,
+            "exists",
+            vec![
+                string_const(0, "."),
+                call_with_args(1, 100, vec![TirValueId(0)]),
+            ],
+        ),
+        extern_function(100, "std.fs.exists"),
+        extern_function(101, "std.io.print"),
+    ]))
+    .unwrap();
+
+    let exists = analysis.specialized_summary(TirFunctionId(1)).unwrap();
+    assert_eq!(exists.direct.len(), 1);
+    assert!(matches!(
+        &exists.direct[0],
+        LocalEffectFact::UnclassifiedOperation(fact)
+            if fact.capability == Capability::Io
+                && fact.extern_name == "std.fs.exists"
+    ));
+
+    let root = analysis.specialized_summary(TirFunctionId(0)).unwrap();
+    assert_eq!(root.direct.len(), 1);
+    assert_eq!(
+        specialized(&root.direct[0]).operation,
+        EffectOperation::IoWrite
+    );
+    assert_eq!(root.transitive, exists.direct);
+    assert!(matches!(
+        &root.transitive[0],
+        LocalEffectFact::UnclassifiedOperation(fact)
+            if fact.capability == Capability::Io
+    ));
+
+    assert_eq!(
+        analysis.summary(TirFunctionId(0)).unwrap().required,
+        capabilities(&[Capability::Alloc, Capability::Io])
+    );
+
+    let witness = analysis
+        .specialized_witness(TirFunctionId(0), &root.transitive[0])
+        .unwrap();
+    assert_eq!(witness.calls.len(), 1);
+    assert_eq!(witness.calls[0].callee, TirFunctionId(1));
+    assert_eq!(witness.origin.location().function, TirFunctionId(1));
+}
+
+#[test]
+fn specialized_propagation_does_not_change_broad_summaries_or_witnesses() {
+    let analysis = analyze(&module(vec![
+        function(0, "root", vec![call(0, 1)]),
+        function(
+            1,
+            "leaf",
+            vec![
+                string_const(0, "input.txt"),
+                call_with_args(1, 100, vec![TirValueId(0)]),
+                string_const(2, "out.txt"),
+                string_const(3, "contents"),
+                call_with_args(4, 101, vec![TirValueId(2), TirValueId(3)]),
+            ],
+        ),
+        extern_function(100, "std.fs.read_text"),
+        extern_function(101, "std.fs.write_text"),
+    ]))
+    .unwrap();
+
+    let both = capabilities(&[Capability::Alloc, Capability::Io]);
+    let root = analysis.summary(TirFunctionId(0)).unwrap();
+    assert_eq!(root.direct, CapabilitySet::empty());
+    assert_eq!(root.required, both);
+    let leaf = analysis.summary(TirFunctionId(1)).unwrap();
+    assert_eq!(leaf.direct, both);
+    assert_eq!(leaf.required, both);
+
+    let io_witness = analysis.witness(TirFunctionId(0), Capability::Io).unwrap();
+    assert_eq!(io_witness.calls.len(), 1);
+    assert_eq!(io_witness.calls[0].callee, TirFunctionId(1));
+    assert_eq!(io_witness.origin.location.function, TirFunctionId(1));
+    assert_eq!(io_witness.origin.location.instruction_index, 1);
+
+    let alloc_witness = analysis
+        .witness(TirFunctionId(0), Capability::Alloc)
+        .unwrap();
+    assert_eq!(alloc_witness.calls.len(), 1);
+    assert_eq!(alloc_witness.origin.location.function, TirFunctionId(1));
+    assert_eq!(alloc_witness.origin.location.instruction_index, 0);
+
+    assert_eq!(
+        analysis
+            .specialized_summary(TirFunctionId(0))
+            .unwrap()
+            .transitive
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn specialized_witness_uses_deterministic_callsite_tie_breaks() {
+    let analysis = analyze(&module(vec![
+        function_with_blocks(
+            0,
+            "root",
+            // Store the numerically later block first; the canonical order is
+            // block 3 before block 9.
+            vec![
+                block(9, vec![call(0, 1)]),
+                block(3, vec![call(0, 1), call(1, 1)]),
+            ],
+        ),
+        function(
+            1,
+            "leaf",
+            vec![
+                string_const(0, "leaf.txt"),
+                call_with_args(1, 100, vec![TirValueId(0)]),
+            ],
+        ),
+        extern_function(100, "std.fs.read_text"),
+    ]))
+    .unwrap();
+
+    let root = analysis.specialized_summary(TirFunctionId(0)).unwrap();
+    assert_eq!(root.transitive.len(), 1);
+    let witness = analysis
+        .specialized_witness(TirFunctionId(0), &root.transitive[0])
+        .unwrap();
+    assert_eq!(witness.calls.len(), 1);
+    assert_eq!(witness.calls[0].callsite.block, TirBlockId(3));
+    assert_eq!(witness.calls[0].callsite.instruction_index, 0);
+}
+
+#[test]
+#[should_panic(expected = "compiler-owned extern operation binding must be valid")]
+fn invalid_static_binding_is_a_compiler_error() {
+    let _ = static_binding(
+        EffectOperation::FsRead,
+        [ResourceBinding::argument(EffectParameter::Destination, 0)],
+    );
+}
+
+#[test]
+fn specialized_witness_prefers_a_shorter_path_to_the_same_origin() {
+    let analysis = analyze(&module(vec![
+        function(0, "root", vec![call(0, 1), call(1, 2)]),
+        function(1, "middle", vec![call(0, 2)]),
+        function(
+            2,
+            "leaf",
+            vec![
+                string_const(0, "shortest.txt"),
+                call_with_args(1, 100, vec![TirValueId(0)]),
+            ],
+        ),
+        extern_function(100, "std.fs.read_text"),
+    ]))
+    .unwrap();
+
+    let root = analysis.specialized_summary(TirFunctionId(0)).unwrap();
+    assert_eq!(root.transitive.len(), 1);
+    let witness = analysis
+        .specialized_witness(TirFunctionId(0), &root.transitive[0])
+        .unwrap();
+    assert_eq!(witness.calls.len(), 1);
+    assert_eq!(witness.calls[0].callee, TirFunctionId(2));
+    assert_eq!(witness.origin.location().function, TirFunctionId(2));
 }

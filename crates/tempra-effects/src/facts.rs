@@ -1,10 +1,12 @@
 //! Compilation-local specialized-operation facts derived from verified TIR.
 //!
-//! This module performs conservative local extraction only. It does not build a
-//! second call graph, propagate facts, enforce specialized contracts, insert
-//! runtime guards, or claim runtime availability. Operation identity and
-//! resource knowledge are kept separate so a known operation with an unknown
-//! resource is never collapsed into a generic broad capability.
+//! This module defines conservative local extraction and the fact vocabulary.
+//! Call-graph propagation and witnesses live in `analysis` and reuse the
+//! existing internal call edges; this module does not build a second call graph,
+//! enforce specialized contracts, insert runtime guards, or claim runtime
+//! availability. Operation identity and resource knowledge are kept separate so
+//! a known operation with an unknown resource is never collapsed into a generic
+//! broad capability.
 
 use crate::{Capability, EffectOperation, EffectParameter, TirLocation};
 use std::collections::HashMap;
@@ -48,8 +50,10 @@ pub struct ResourceFact {
 
 /// A call to a known extern with an explicitly classified specialized operation.
 ///
-/// Holding this fact does not mean the call is allowed, enforced, or reachable
-/// at runtime. Facts are local to one call instruction.
+/// The fact's origin is one call instruction. Per-function summaries may carry
+/// the same fact transitively without changing its original [`TirLocation`].
+/// Holding this fact does not mean the call is allowed, enforced, or reachable at
+/// runtime.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SpecializedOperationFact {
     /// Specialized operation identity, preserved even when resources are unknown.

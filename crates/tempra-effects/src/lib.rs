@@ -13,7 +13,8 @@ mod operations;
 
 pub use analysis::{
     analyze, CallEdge, CapabilityAnalysis, CapabilityAnalysisError, CapabilityWitness,
-    DirectCapabilityOrigin, DirectCapabilitySource, FunctionCapabilitySummary, TirLocation,
+    DirectCapabilityOrigin, DirectCapabilitySource, FunctionCapabilitySummary,
+    FunctionSpecializedEffectSummary, SpecializedEffectWitness, TirLocation,
 };
 pub use capability::{Capability, CapabilitySet};
 pub use facts::{

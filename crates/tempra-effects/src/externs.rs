@@ -101,11 +101,17 @@ fn parameter_rank(parameter: EffectParameter) -> usize {
         .expect("EffectParameter::ALL is exhaustive")
 }
 
-fn binding(
+/// Builds one compiler-owned static binding, panicking on invalid metadata.
+///
+/// A panic here reports an internal compiler-metadata defect. It is deliberately
+/// not a [`BindingError`] returned through analysis, so it can never become a
+/// recoverable Tempra source diagnostic.
+pub(crate) fn static_binding(
     operation: EffectOperation,
     resources: impl IntoIterator<Item = ResourceBinding>,
-) -> Option<ExternOperationBinding> {
-    ExternOperationBinding::new(operation, resources).ok()
+) -> ExternOperationBinding {
+    ExternOperationBinding::new(operation, resources)
+        .expect("compiler-owned extern operation binding must be valid")
 }
 
 /// Returns the explicit resource binding for a known extern.
@@ -121,22 +127,26 @@ fn binding(
 ///   argument. Argument 0 is printed content and must never be interpreted as
 ///   the stream, so `stream` stays [`crate::ResourceKnowledge::Unknown`].
 ///
-/// Invalid static metadata yields `None` and therefore fails closed as an
-/// unclassified operation; the table is independently checked by tests.
+/// `None` means the extern has no specialized operation binding, either because
+/// it is genuinely unknown or because it is a known extern with no specialized
+/// operation (for example `std.fs.exists`). It never represents invalid
+/// compiler-owned metadata: that panics through [`static_binding`] instead of
+/// degrading into a recoverable source diagnostic. The table is independently
+/// checked by tests.
 pub(crate) fn operation_binding_for_extern(name: &str) -> Option<ExternOperationBinding> {
     match name {
-        "std.fs.read_text" => binding(
+        "std.fs.read_text" => Some(static_binding(
             EffectOperation::FsRead,
             [ResourceBinding::argument(EffectParameter::Source, 0)],
-        ),
-        "std.fs.write_text" => binding(
+        )),
+        "std.fs.write_text" => Some(static_binding(
             EffectOperation::FsWrite,
             [ResourceBinding::argument(EffectParameter::Destination, 0)],
-        ),
-        "std.io.print" | "std.io.println" => binding(
+        )),
+        "std.io.print" | "std.io.println" => Some(static_binding(
             EffectOperation::IoWrite,
             [ResourceBinding::unknown(EffectParameter::Stream)],
-        ),
+        )),
         _ => None,
     }
 }

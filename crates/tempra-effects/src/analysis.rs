@@ -107,6 +107,44 @@ pub struct CapabilityWitness {
     pub origin: DirectCapabilityOrigin,
 }
 
+/// Direct and transitively reachable specialized-effect facts for one defined
+/// function.
+///
+/// `direct` and `transitive` are disjoint: a fact whose original call site is in
+/// the summarised function is always direct, even when that function is
+/// recursive. Facts are identified by their complete original
+/// [`LocalEffectFact`], including the originating [`TirLocation`]; distinct call
+/// sites with equal operations and resources remain distinct.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FunctionSpecializedEffectSummary {
+    /// Function described by this summary.
+    pub function: TirFunctionId,
+    /// Facts whose original call site is in this function, in canonical order.
+    pub direct: Vec<LocalEffectFact>,
+    /// Facts from other functions reachable through internal calls, in
+    /// canonical order.
+    pub transitive: Vec<LocalEffectFact>,
+}
+
+impl FunctionSpecializedEffectSummary {
+    /// Iterates over direct facts followed by transitive facts.
+    pub fn reachable(&self) -> impl Iterator<Item = &LocalEffectFact> {
+        self.direct.iter().chain(self.transitive.iter())
+    }
+}
+
+/// One deterministic shortest internal call path to a reachable effect fact.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpecializedEffectWitness {
+    /// Ordered internal calls from the queried function to the origin function.
+    ///
+    /// This is empty when the origin is directly in the queried function.
+    pub calls: Vec<CallEdge>,
+    /// Original local-effect fact. Its [`TirLocation`] is the final origin and
+    /// is never rewritten to a caller callsite.
+    pub origin: LocalEffectFact,
+}
+
 /// Structured failures detected by capability analysis.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CapabilityAnalysisError {
@@ -197,10 +235,11 @@ impl fmt::Display for CapabilityAnalysisError {
 
 impl Error for CapabilityAnalysisError {}
 
-/// Complete capability facts derived from one TIR module.
+/// Complete capability and specialized-effect facts derived from one TIR module.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CapabilityAnalysis {
     summaries: Vec<FunctionCapabilitySummary>,
+    specialized_summaries: Vec<FunctionSpecializedEffectSummary>,
     call_edges: Vec<CallEdge>,
     direct_origins: Vec<DirectCapabilityOrigin>,
     local_effect_facts: Vec<LocalEffectFact>,
@@ -237,14 +276,29 @@ impl CapabilityAnalysis {
         &self.direct_origins
     }
 
-    /// Returns local specialized-operation facts in deterministic structural
-    /// order.
+    /// Returns the origin specialized-operation facts in deterministic
+    /// structural order.
     ///
-    /// These facts are extracted per call instruction and are not propagated
-    /// through the call graph. Holding a fact does not enforce or authorize
-    /// anything.
+    /// These facts are extracted per call instruction. Per-function reachability
+    /// is available through [`Self::specialized_summary`]. Holding a fact does
+    /// not enforce or authorize anything.
     pub fn local_effect_facts(&self) -> &[LocalEffectFact] {
         &self.local_effect_facts
+    }
+
+    /// Returns all specialized-effect summaries in ascending function-ID order.
+    pub fn specialized_summaries(&self) -> &[FunctionSpecializedEffectSummary] {
+        &self.specialized_summaries
+    }
+
+    /// Looks up the specialized-effect summary for a defined function.
+    pub fn specialized_summary(
+        &self,
+        function: TirFunctionId,
+    ) -> Option<&FunctionSpecializedEffectSummary> {
+        self.summary_indices
+            .get(&function)
+            .map(|index| &self.specialized_summaries[*index])
     }
 
     /// Iterates over direct origins belonging to `function`.
@@ -305,13 +359,67 @@ impl CapabilityAnalysis {
 
         None
     }
+
+    /// Reconstructs a deterministic shortest internal call path from
+    /// `function` to the reachable local-effect origin `origin`.
+    ///
+    /// The origin must be present in the function's
+    /// [`FunctionSpecializedEffectSummary`] and is matched by its complete
+    /// identity, including its original [`TirLocation`]. Call ordering is the
+    /// existing deterministic [`CallEdge`] order, so ties between shortest paths
+    /// resolve by callee function ID and then callsite block and instruction.
+    pub fn specialized_witness(
+        &self,
+        function: TirFunctionId,
+        origin: &LocalEffectFact,
+    ) -> Option<SpecializedEffectWitness> {
+        let summary = self.specialized_summary(function)?;
+        if !summary.reachable().any(|fact| fact == origin) {
+            return None;
+        }
+
+        let mut queue = VecDeque::from([(function, Vec::new())]);
+        let mut visited = HashSet::from([function]);
+
+        while let Some((current, path)) = queue.pop_front() {
+            let Some(current_summary) = self.specialized_summary(current) else {
+                continue;
+            };
+            if current_summary.direct.iter().any(|fact| fact == origin) {
+                return Some(SpecializedEffectWitness {
+                    calls: path,
+                    origin: origin.clone(),
+                });
+            }
+
+            for edge in self.outgoing_calls(current) {
+                let Some(callee_summary) = self.specialized_summary(edge.callee) else {
+                    continue;
+                };
+                if !callee_summary.reachable().any(|fact| fact == origin)
+                    || !visited.insert(edge.callee)
+                {
+                    continue;
+                }
+
+                let mut next_path = path.clone();
+                next_path.push(*edge);
+                queue.push_back((edge.callee, next_path));
+            }
+        }
+
+        None
+    }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
 struct SummaryState {
     function: TirFunctionId,
     direct: CapabilitySet,
     required: CapabilitySet,
+    direct_effects: Vec<LocalEffectFact>,
+    transitive_effects: Vec<LocalEffectFact>,
+    transitive_effect_set: HashSet<LocalEffectFact>,
 }
 
 /// Analyzes an already verified TIR module without mutating it.
@@ -357,6 +465,9 @@ pub fn analyze(module: &TirModule) -> Result<CapabilityAnalysis, CapabilityAnaly
             function: function.id,
             direct: CapabilitySet::empty(),
             required: CapabilitySet::empty(),
+            direct_effects: Vec::new(),
+            transitive_effects: Vec::new(),
+            transitive_effect_set: HashSet::new(),
         })
         .collect();
     let state_indices: HashMap<TirFunctionId, usize> = states
@@ -474,6 +585,11 @@ pub fn analyze(module: &TirModule) -> Result<CapabilityAnalysis, CapabilityAnaly
     direct_origins.sort_by_key(origin_order);
     local_effect_facts.sort_by_key(local_fact_order);
 
+    for fact in &local_effect_facts {
+        let state_index = state_indices[&fact.location().function];
+        states[state_index].direct_effects.push(fact.clone());
+    }
+
     let mut reverse_edges = vec![Vec::new(); states.len()];
     for edge in &internal_edges {
         let caller_index = state_indices[&edge.caller];
@@ -489,28 +605,72 @@ pub fn analyze(module: &TirModule) -> Result<CapabilityAnalysis, CapabilityAnaly
     let mut queued = vec![true; states.len()];
     while let Some(callee_index) = queue.pop_front() {
         queued[callee_index] = false;
+
         let callee_required = states[callee_index].required;
         for caller_index in reverse_edges[callee_index].iter().copied() {
-            let merged = states[caller_index].required.union(callee_required);
-            if merged == states[caller_index].required {
+            if caller_index == callee_index {
+                // A self-edge cannot add capabilities or distinct effect origins.
                 continue;
             }
-            states[caller_index].required = merged;
-            if !queued[caller_index] {
+            let mut changed = false;
+
+            let merged = states[caller_index].required.union(callee_required);
+            if merged != states[caller_index].required {
+                states[caller_index].required = merged;
+                changed = true;
+            }
+
+            // Reachable facts carry their original identity. Facts already
+            // originating in the caller stay direct and are never duplicated
+            // into the transitive set, which makes recursive SCCs finite.
+            let caller_function = states[caller_index].function;
+            let new_effects: Vec<LocalEffectFact> = states[callee_index]
+                .direct_effects
+                .iter()
+                .chain(states[callee_index].transitive_effects.iter())
+                .filter(|fact| fact.location().function != caller_function)
+                .filter(|fact| !states[caller_index].transitive_effect_set.contains(*fact))
+                .cloned()
+                .collect();
+
+            if !new_effects.is_empty() {
+                for fact in new_effects {
+                    if states[caller_index]
+                        .transitive_effect_set
+                        .insert(fact.clone())
+                    {
+                        states[caller_index].transitive_effects.push(fact);
+                    }
+                }
+                changed = true;
+            }
+
+            if changed && !queued[caller_index] {
                 queue.push_back(caller_index);
                 queued[caller_index] = true;
             }
         }
     }
 
-    let summaries: Vec<_> = states
-        .into_iter()
-        .map(|state| FunctionCapabilitySummary {
+    let mut summaries = Vec::with_capacity(states.len());
+    let mut specialized_summaries = Vec::with_capacity(states.len());
+    for mut state in states {
+        summaries.push(FunctionCapabilitySummary {
             function: state.function,
             direct: state.direct,
             required: state.required,
-        })
-        .collect();
+        });
+
+        state.direct_effects.sort_by_key(local_fact_order);
+        let mut transitive = state.transitive_effects;
+        transitive.sort_by_key(local_fact_order);
+        specialized_summaries.push(FunctionSpecializedEffectSummary {
+            function: state.function,
+            direct: state.direct_effects,
+            transitive,
+        });
+    }
+
     let summary_indices = summaries
         .iter()
         .enumerate()
@@ -519,6 +679,7 @@ pub fn analyze(module: &TirModule) -> Result<CapabilityAnalysis, CapabilityAnaly
 
     Ok(CapabilityAnalysis {
         summaries,
+        specialized_summaries,
         call_edges,
         direct_origins,
         local_effect_facts,

@@ -141,6 +141,31 @@ fn human_violation_uses_real_source_and_named_witness() {
 }
 
 #[test]
+fn json_specialized_violation_is_not_reported_as_successful_inspection() {
+    let (_dir, path) = write(
+        r#"
+import std.fs;
+
+@deny(fs.write(destination: "blocked.txt"))
+pub fn main() -> Int64 {
+    let result = std.fs.write_text("blocked.txt", "data");
+    return match result { Ok(_) => 0 Err(_) => 1 };
+}
+"#,
+    );
+    let output = run(&path, true);
+    assert_eq!(output.status.code(), Some(1));
+    let document = json_stdout(&output);
+    assert!(document["functions"].as_array().unwrap().is_empty());
+    let diagnostic = &document["diagnostics"][0];
+    assert_eq!(diagnostic["severity"], "error");
+    assert!(diagnostic["message"]
+        .as_str()
+        .unwrap()
+        .contains("Specialized capability contract violation"));
+}
+
+#[test]
 fn json_transitive_and_multiple_violations_remain_structured_and_stable() {
     let dir = TestDir::new();
     std::fs::write(

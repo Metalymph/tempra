@@ -167,6 +167,7 @@ mod contract_tests {
             "@deny(io) fn generic(type T, value: T) -> T { return value }",
             "extend Int64 { @deny(io) fn bad_method(self) -> Int64 { return self } }",
             "@deny(panic) fn bad() -> Int64 { return 10 / 2 }",
+            "@deny(fs.write(destination: \"blocked.txt\")) fn bad_specialized() {}",
             "@pure fn bad() {} let partial = 9",
             "@pure fn generic(type T, value: T) -> T { return value }",
             "extend Int64 { @pure fn bad_method(self) -> Int64 { return self } }",
@@ -187,6 +188,10 @@ mod contract_tests {
             .interpreter
             .functions
             .contains_key("Int64.bad_method"));
+        assert!(!session
+            .interpreter
+            .functions
+            .contains_key("bad_specialized"));
         assert!(
             matches!(session.eval_input("bad()"), ReplOutcome::Diagnostic(message) if message.starts_with("Type Error:"))
         );

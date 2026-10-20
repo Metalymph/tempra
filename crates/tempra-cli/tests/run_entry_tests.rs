@@ -178,3 +178,60 @@ fn entry_results_are_applied_in_experimental_jit_mode() {
     assert_eq!(output.status.code(), Some(1), "stderr: {}", stderr(&output));
     assert_eq!(stderr(&output), "error: Uncaught error: boom\n");
 }
+
+#[test]
+fn specialized_contracts_never_reach_cli_execution() {
+    let dir = TestDir::new();
+    let blocked = dir.path().join("blocked.txt");
+    let allowed = dir.path().join("allowed.txt");
+    let violating = format!(
+        r#"
+import std.fs;
+
+@deny(fs.write(destination: "{blocked}"))
+pub fn main() -> Int64 {{
+    let result = std.fs.write_text("{blocked}", "data");
+    return match result {{ Ok(_) => 0 Err(_) => 1 }};
+}}
+"#,
+        blocked = blocked.display(),
+    );
+
+    for experimental_vm in [false, true] {
+        let output = run_source(&violating, experimental_vm);
+        assert_eq!(output.status.code(), Some(1), "stderr: {}", stderr(&output));
+        assert!(
+            !blocked.exists(),
+            "the contract must fail before any CLI execution path writes its target"
+        );
+        let stderr = stderr(&output);
+        if experimental_vm {
+            assert!(
+                stderr.contains("Specialized capability contract violation"),
+                "{stderr}"
+            );
+        } else {
+            assert!(
+                stderr.contains("Capability-contract enforcement is not supported"),
+                "{stderr}"
+            );
+        }
+    }
+
+    let valid = format!(
+        r#"
+import std.fs;
+
+@deny(fs.write(destination: "{blocked}"))
+pub fn main() -> Int64 {{
+    let result = std.fs.write_text("{allowed}", "data");
+    return match result {{ Ok(_) => 0 Err(_) => 1 }};
+}}
+"#,
+        blocked = blocked.display(),
+        allowed = allowed.display(),
+    );
+    let output = run_source(&valid, true);
+    assert_success(&output);
+    assert!(allowed.exists(), "a valid VM CLI program must execute");
+}

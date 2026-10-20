@@ -116,6 +116,21 @@ K2 implementation   DONE
 K3.1 runtime parity audit DONE
 K3.2 Int64 parity    DONE
 K3 implementation   IN PROGRESS
+
+K4 specialized-effect track
+K4.1 specification                    DONE
+K4.2 taxonomy/parameters              DONE
+K4.3 TIR classification               DONE
+K4.4 propagation/witnesses            DONE
+K4.5A syntax/provenance               DONE
+K4.5B enforcement/semantics-6         DONE
+K4.6A boundary audit                  DONE
+K4.6B.1 native boundary integrity     DONE
+K4.6B.2 compilation boundary tests    DONE
+K4.6C guarantee documentation         DONE
+K4.6 specialized-effect guarantees    DONE
+K4.7 backend parity/reproducibility   NEXT
+K4.8 coverage-gap ledger              PLANNED
 ```
 
 K1.7 raises the cache trust fingerprint from `semantics-1` to `semantics-2`, so
@@ -160,6 +175,20 @@ without falling back after a semantic failure. E1 treats checked `Int64`
 add/sub/mul/div as conservative `Panic` origins. K4.5B raises cache trust to
 `semantics-6` while adding static specialized-effect enforcement; the bytecode
 format is unchanged. K3 remains in progress.
+
+K4.6 is complete. K4.6A found no contract-enforcement bypass while auditing the
+compilation, runtime and FFI boundaries. K4.6B.1 added native
+registry/classifier/signature integrity regressions; K4.6B.2 added fresh
+source/file, module-graph, VM/profiling/JIT, cache, unsupported-path,
+unknown-extern and inspection boundary regressions. K4.6C records the actual
+specialized-effect guarantees and trust limits in
+[Specialized Effects v0.1](specs/specialized-effects-v0.1.md). The implemented
+guarantee is compile-time only: broad `@deny`/`@pure` remains authoritative,
+specialized matching is fail-closed for unknown resources/operations, unsupported
+interpreters reject annotated input, and no runtime guard, filesystem sandbox,
+network isolation or native-code sandbox exists. K4.6C is documentation-only and
+does not change source, runtime behavior, cache format or `semantics-6`. K4.7
+backend parity/reproducibility is next; K4.8 coverage-gap ledger remains planned.
 
 ### R — Result / Value-Use Hardening
 

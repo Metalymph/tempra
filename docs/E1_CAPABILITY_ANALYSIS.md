@@ -1,7 +1,12 @@
 # E1 Capability Analysis
 
 > [!NOTE]
-> **Status: E1–E6 implemented.** E1 provides pure analysis; E2 retains facts; E3 acquires/enforces `@deny` and prevents bypass; E4 adds `@pure`; E6 projects the existing facts for diagnostics and inspection.
+> **Status: E1–E6 implemented; K4.2–K4.6 specialized refinements implemented.**
+> E1 provides pure analysis; E2 retains facts; E3 acquires/enforces `@deny` and
+> prevents bypass; E4 adds `@pure`; E6 projects the existing facts for
+> diagnostics and inspection. K4.6 adds compiler-owned specialized operation
+> refinements and fail-closed resource matching over the same analysis. See
+> [Specialized Effects v0.1](specs/specialized-effects-v0.1.md).
 
 ## Goal and boundary
 
@@ -404,6 +409,60 @@ The current analysis/LSP path remains frontend/typechecking-only. E6 converts to
 the existing general `Diagnostic` model but does not make the LSP compile through
 the smaller TIR/VM surface. Future LSP work must consume this projection without
 adding a second analyzer.
+
+## K4.6 specialized-effect guarantees (implemented)
+
+K4.2–K4.6 add a compiler-owned refinement layer over the seven broad
+capabilities without changing `Capability`, `CapabilitySet`, the six public
+`@deny` spellings, `@pure`, or bytecode. Specialized clauses are parsed into
+canonical operation/resource metadata and retained in
+`FunctionCapabilityContract.specialized_denied`; they never contribute to the
+broad `denied` set. Operation identity and resource knowledge are separate, so a
+known `fs.write` is never collapsed into generic `Io`.
+
+Specialized analysis reuses E1's verified-TIR scan, call graph, fixed point and
+witnesses. Current production bindings classify `std.fs.read_text` as `fs.read`
+(source argument 0), `std.fs.write_text` as `fs.write` (destination argument 0),
+and `std.io.print`/`println` as `io.write` with unknown stream. A known extern
+with a broad parent but no specialized operation, such as `std.fs.exists`, is
+recorded as `UnclassifiedOperation` and is a potential match for any specialized
+denial under that parent. Different known operations are disjoint. Exact
+resources match only equal exact values; unknown or missing resources under an
+exact restriction, duplicate/wrong-kind metadata and unknown operations under a
+denied parent all fail closed. `*` matches any resource of an identified
+operation. Only `Disjoint` is safe.
+
+Enforcement runs after TIR verification and before bytecode lowering. Broad
+`denied ∩ required` remains authoritative and its `CapabilityContractViolations`
+error is returned first when present. Otherwise specialized clause matching
+returns deterministic `SpecializedContractViolations` containing the canonical
+clause, fact, `DefiniteMatch`/`PotentialMatch` classification, witness and full
+contract provenance. Missing summaries/witnesses are typed invariant errors, not
+success. A rejected program therefore never reaches bytecode execution.
+
+HIR execution, test execution, REPL and source TIR interpretation continue to
+reject all annotated input before execution. `check` and `emit-tir` remain
+non-enforcing tooling; raw TIR interpretation has no source-contract metadata.
+Effect inspection compiles fresh and enforces, but current specialized
+violations surface as `EffectQueryError::Compiler(DriverError::
+SpecializedContractViolations)` rather than an E6 structured diagnostic; the E6
+schema is unchanged. Successful inspection likewise does not yet serialize
+specialized clauses or requirements.
+
+K4.5B raised cache trust to `semantics-6`, so revision-5 artifacts retaining
+unenforced specialized clauses cannot be reused. Cache hits remain
+bytecode-only, trusted local artifacts and never reconstruct specialized facts.
+The classifier is the compiler-owned classification authority; it remains a
+separate table from the production native registry and the declared `std/*.tmpr`
+signatures. K4.6B.1 regression tests synchronize the three views; none generates
+another.
+Resolver identity is trusted, native code is unsandboxed, and filesystem
+parameters are opaque spellings with no canonicalization, symlink/hard-link,
+mount-alias or TOCTOU guarantee. K4.6A found no bypass; K4.6B.2 covers fresh
+source/file compilation, VM/profiling/JIT, cache, unsupported paths, unknown
+externs and inspection boundaries. K4.6C records the actual guarantees in
+[Specialized Effects v0.1](specs/specialized-effects-v0.1.md). K4.7 backend
+parity is next.
 
 ## Post-E6 state and next compiler milestone
 

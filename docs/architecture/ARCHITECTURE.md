@@ -194,8 +194,15 @@ opaque source spellings: no canonicalization, symlink/hard-link confinement,
 mount-alias protection or TOCTOU guarantee is claimed. K4.6A found no bypass;
 K4.6B.2 covers fresh source/file, VM/profiling/JIT, cache, unsupported paths,
 unknown externs and inspection boundaries. K4.6C records the guarantees in
-[Specialized Effects v0.1](../specs/specialized-effects-v0.1.md); K4.7 backend
-parity is next.
+[Specialized Effects v0.1](../specs/specialized-effects-v0.1.md). K4.7A audited
+differential coverage, K4.7B added focused source/file, enforcement, determinism,
+inspection and VM/JIT regressions, and K4.7C established independent-process
+canonical violation parity. The gate verdict is **PASS** for supported
+same-build, same-host/target paths. Native `std.*` calls remain outside JIT v1:
+the calling entry is rejected and the interpreter executes the native call. This
+is documented as an unsupported execution path, not an enforcement bypass; no
+runtime guard or JIT architecture change was introduced. K4.8 owns the full
+per-operation coverage-gap ledger.
 
 ```text
 tempra-tir

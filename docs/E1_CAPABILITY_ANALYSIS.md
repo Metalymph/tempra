@@ -1,11 +1,13 @@
 # E1 Capability Analysis
 
 > [!NOTE]
-> **Status: E1–E6 implemented; K4.2–K4.6 specialized refinements implemented.**
+> **Status: E1–E6 implemented; K4.2–K4.7 specialized refinements implemented.**
 > E1 provides pure analysis; E2 retains facts; E3 acquires/enforces `@deny` and
 > prevents bypass; E4 adds `@pure`; E6 projects the existing facts for
 > diagnostics and inspection. K4.6 adds compiler-owned specialized operation
-> refinements and fail-closed resource matching over the same analysis. See
+> refinements and fail-closed resource matching over the same analysis. K4.7
+> establishes differential parity for supported source/file, cache, VM and JIT
+> paths and records the native-JIT limitation. See
 > [Specialized Effects v0.1](specs/specialized-effects-v0.1.md).
 
 ## Goal and boundary
@@ -461,8 +463,13 @@ parameters are opaque spellings with no canonicalization, symlink/hard-link,
 mount-alias or TOCTOU guarantee. K4.6A found no bypass; K4.6B.2 covers fresh
 source/file compilation, VM/profiling/JIT, cache, unsupported paths, unknown
 externs and inspection boundaries. K4.6C records the actual guarantees in
-[Specialized Effects v0.1](specs/specialized-effects-v0.1.md). K4.7 backend
-parity is next.
+[Specialized Effects v0.1](specs/specialized-effects-v0.1.md). K4.7A audited
+differential coverage, K4.7B added the focused differential suite and K4.7C
+established independent-process canonical violation parity. The K4.7 verdict is
+**PASS** for supported same-build, same-host/target paths. Native `std.*` calls
+are not JIT-eligible in JIT v1; the calling entry falls back to the interpreter,
+which is documented as unsupported native-JIT coverage rather than an
+enforcement bypass. K4.8 owns the full per-operation coverage-gap ledger.
 
 ## Post-E6 state and next compiler milestone
 

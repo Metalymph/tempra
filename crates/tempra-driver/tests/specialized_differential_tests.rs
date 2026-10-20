@@ -1,17 +1,18 @@
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use tempra_driver::{
-    check_file, compile_file_to_bytecode_with_analysis,
+    capability_name, check_file, compile_file_to_bytecode_with_analysis,
     compile_file_to_bytecode_with_analysis_with_config, compile_to_bytecode_with_analysis,
     inspect_effects_file, CapabilityContractViolation, CompilationConfig, DriverError,
-    EffectQueryError, FunctionCapabilityContract, SpecializedContractViolation, SpecializedMatch,
-    VmCompilation,
+    EffectQueryError, FunctionCapabilityContract, SpecializedContractViolation,
+    SpecializedDenyClause, SpecializedDenyValue, SpecializedMatch, VmCompilation,
 };
 use tempra_effects::{
     Capability, CapabilityAnalysis, CapabilitySet, EffectOperation, EffectParameter,
-    LocalEffectFact, ResourceKnowledge, ResourceValue,
+    LocalEffectFact, ResourceFact, ResourceKnowledge, ResourceValue,
 };
 use tempra_span::Span;
 use tempra_tir::ir::TirFunctionId;
@@ -126,6 +127,9 @@ pub fn main() -> Int64 {
     return sum - 550
 }
 "#;
+
+const SPECIALIZED_CHILD_MARKER: &str = "TEMPRA_K4_7C_SPECIALIZED_CHILD";
+const SPECIALIZED_CHILD_ROOT: &str = "TEMPRA_K4_7C_SPECIALIZED_ROOT";
 
 fn rich_source(annotation: &str) -> String {
     format!(
@@ -301,6 +305,146 @@ fn normalized_function_names(compilation: &VmCompilation) -> Vec<(TirFunctionId,
             (function.id, name.to_owned())
         })
         .collect()
+}
+
+fn canonical_function_name(names: &[(TirFunctionId, String)], function: TirFunctionId) -> String {
+    names
+        .iter()
+        .find(|(id, _)| *id == function)
+        .map(|(_, name)| name.clone())
+        .unwrap_or_else(|| format!("fn#{}", function.0))
+}
+
+fn canonical_escape(value: &str) -> String {
+    let mut escaped = String::new();
+    for character in value.chars() {
+        match character {
+            '\\' => escaped.push_str("\\\\"),
+            ';' => escaped.push_str("\\;"),
+            '=' => escaped.push_str("\\="),
+            ',' => escaped.push_str("\\,"),
+            '[' => escaped.push_str("\\["),
+            ']' => escaped.push_str("\\]"),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            _ => escaped.push(character),
+        }
+    }
+    escaped
+}
+
+fn canonical_deny_value(value: &SpecializedDenyValue) -> String {
+    match value {
+        SpecializedDenyValue::Any => "*".to_owned(),
+        SpecializedDenyValue::Exact(ResourceValue::Text(text)) => {
+            format!("text:{}", canonical_escape(text))
+        }
+        SpecializedDenyValue::Exact(ResourceValue::Port(port)) => format!("port:{port}"),
+    }
+}
+
+fn canonical_clause(clause: &SpecializedDenyClause) -> String {
+    let parameters: Vec<_> = clause
+        .parameters
+        .iter()
+        .map(|parameter| {
+            format!(
+                "{}={}",
+                parameter.parameter.canonical_name(),
+                canonical_deny_value(&parameter.value)
+            )
+        })
+        .collect();
+    format!(
+        "{}({})",
+        clause.operation.canonical_name(),
+        parameters.join(",")
+    )
+}
+
+fn canonical_resource(resource: &ResourceFact) -> String {
+    let knowledge = match &resource.knowledge {
+        ResourceKnowledge::Exact(ResourceValue::Text(text)) => {
+            format!("text:{}", canonical_escape(text))
+        }
+        ResourceKnowledge::Exact(ResourceValue::Port(port)) => format!("port:{port}"),
+        ResourceKnowledge::Unknown => "unknown".to_owned(),
+    };
+    format!("{}={knowledge}", resource.parameter.canonical_name())
+}
+
+fn canonical_classification(classification: SpecializedMatch) -> &'static str {
+    match classification {
+        SpecializedMatch::Disjoint => "disjoint",
+        SpecializedMatch::DefiniteMatch => "definite",
+        SpecializedMatch::PotentialMatch => "potential",
+    }
+}
+
+fn canonical_violation(
+    violation: &SpecializedContractViolation,
+    names: &[(TirFunctionId, String)],
+) -> String {
+    let (fact, resources, extern_name) = match &violation.fact {
+        LocalEffectFact::Specialized(observed) => {
+            let resources: Vec<_> = observed.resources.iter().map(canonical_resource).collect();
+            (
+                format!("specialized:{}", observed.operation.canonical_name()),
+                resources.join(","),
+                observed.extern_name.clone(),
+            )
+        }
+        LocalEffectFact::UnclassifiedOperation(observed) => (
+            format!("unclassified:{}", capability_name(observed.capability)),
+            String::new(),
+            observed.extern_name.clone(),
+        ),
+    };
+
+    let origin = violation.fact.location();
+    let origin_identity = format!(
+        "{}@{}:{}",
+        canonical_function_name(names, origin.function),
+        origin.block.0,
+        origin.instruction_index
+    );
+    let witness: Vec<_> = violation
+        .witness
+        .calls
+        .iter()
+        .map(|call| {
+            format!(
+                "{}@{}:{}->{}",
+                canonical_function_name(names, call.caller),
+                call.callsite.block.0,
+                call.callsite.instruction_index,
+                canonical_function_name(names, call.callee)
+            )
+        })
+        .collect();
+
+    format!(
+        "function={};clause={};classification={};fact={};resources=[{}];origin={};witness=[{}];extern={}",
+        canonical_function_name(names, violation.function),
+        canonical_clause(&violation.clause),
+        canonical_classification(violation.classification),
+        fact,
+        resources,
+        origin_identity,
+        witness.join(">"),
+        canonical_escape(&extern_name)
+    )
+}
+
+fn canonical_violation_report(
+    violations: &[SpecializedContractViolation],
+    names: &[(TirFunctionId, String)],
+) -> String {
+    violations
+        .iter()
+        .map(|violation| canonical_violation(violation, names))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn normalized_contracts(compilation: &VmCompilation) -> Vec<(String, ContractObservation)> {
@@ -685,6 +829,212 @@ fn non_executing_check_file_does_not_certify_specialized_enforcement() {
             DriverError::SpecializedContractViolations(ref violations)
         )) if violations.len() == 1
     ));
+}
+
+#[test]
+fn specialized_reproducibility_subprocess_child() {
+    if std::env::var_os(SPECIALIZED_CHILD_MARKER).is_none() {
+        return;
+    }
+
+    let root = PathBuf::from(std::env::var_os(SPECIALIZED_CHILD_ROOT).unwrap());
+    fs::create_dir_all(&root).unwrap();
+    let path = write_source(&root, "");
+
+    // A disjoint valid contract keeps TIR and contract binding identical while
+    // letting this process recover structural function names for the report.
+    fs::write(
+        &path,
+        rich_source("@deny(process.exec(executable: \"/never\"))"),
+    )
+    .unwrap();
+    let valid = compile_file_to_bytecode_with_analysis(&path).unwrap();
+    let names = normalized_function_names(&valid);
+
+    fs::write(
+        &path,
+        rich_source("@deny(fs.write(destination: \"blocked.txt\"))"),
+    )
+    .unwrap();
+    let outcome = compile_outcome(&path, &CompilationConfig::default());
+    let CompilationOutcome::Specialized(violations) = outcome else {
+        panic!("rich fixture must be rejected in the child process, got {outcome:?}");
+    };
+
+    fs::write(
+        root.join("specialized-violations.txt"),
+        canonical_violation_report(&violations, &names),
+    )
+    .unwrap();
+}
+
+#[test]
+fn independent_processes_have_one_canonical_specialized_violation_report() {
+    let fixture = tempfile::tempdir().unwrap();
+    let cwd_a = tempfile::tempdir().unwrap();
+    let cwd_b = tempfile::tempdir().unwrap();
+    fs::create_dir_all(cwd_b.path().join("nested/work")).unwrap();
+    let cwd_b = cwd_b.path().join("nested/work");
+    let current_test = std::env::current_exe().unwrap();
+    let runs = std::env::var("TEMPRA_K4_7C_SPECIALIZED_RUNS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(8);
+    let mut expected: Option<String> = None;
+
+    for run in 0..runs {
+        let root = fixture.path().join(format!("process-{run}"));
+        let cwd = if run % 2 == 0 { cwd_a.path() } else { &cwd_b };
+        let output = Command::new(&current_test)
+            .arg("--exact")
+            .arg("specialized_reproducibility_subprocess_child")
+            .arg("--nocapture")
+            .current_dir(cwd)
+            .env(SPECIALIZED_CHILD_MARKER, "1")
+            .env(SPECIALIZED_CHILD_ROOT, &root)
+            .env("TEMPRA_K4_7C_INCIDENTAL_RUN", run.to_string())
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "child {run} failed:\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let report = fs::read_to_string(root.join("specialized-violations.txt")).unwrap();
+        let lines: Vec<_> = report.lines().collect();
+        assert_eq!(lines.len(), 7, "child {run} must report every violation");
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.contains("classification=definite"))
+                .count(),
+            5,
+            "child {run} definite count"
+        );
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.contains("classification=potential"))
+                .count(),
+            2,
+            "child {run} potential count"
+        );
+        assert!(
+            report.contains("clause=fs.write(destination=text:blocked.txt)"),
+            "child {run} must retain the canonical denied clause"
+        );
+        assert!(
+            report.contains("resources=[destination=text:blocked.txt]"),
+            "child {run} must retain exact resource knowledge"
+        );
+        assert!(
+            report.contains("resources=[destination=unknown]"),
+            "child {run} must retain unknown resource knowledge"
+        );
+        assert!(
+            report.contains("fact=unclassified:io"),
+            "child {run} must retain fail-closed unclassified facts"
+        );
+        assert!(
+            report.contains("extern=std.fs.exists"),
+            "child {run} must retain extern identity"
+        );
+        assert!(
+            report.contains("witness=[main@"),
+            "child {run} must retain structured witness call sequences"
+        );
+        assert!(
+            !report.contains("fn#") && !report.contains('/'),
+            "child {run} report must be name-normalized and path-free"
+        );
+        assert_eq!(expected.get_or_insert_with(|| report.clone()), &report);
+    }
+}
+
+#[test]
+#[cfg(feature = "jit-cranelift")]
+fn native_std_calls_are_not_jit_eligible() {
+    let cases = [
+        (
+            "std.fs.exists",
+            r#"
+import std.fs;
+
+@deny(process.exec(executable: "/never"))
+pub fn main() -> Int64 {
+    if std.fs.exists("jit-native-never-exists.txt") {
+        return 1
+    }
+    return 0
+}
+"#,
+        ),
+        (
+            "std.io.println",
+            r#"
+import std.io;
+
+@deny(process.exec(executable: "/never"))
+pub fn main() -> Int64 {
+    std.io.println("jit-native-io-is-not-compiled")
+    return 0
+}
+"#,
+        ),
+    ];
+
+    let dir = tempfile::tempdir().unwrap();
+    for (name, source) in cases {
+        let path = write_source(dir.path(), source);
+        let compilation = compile_file_to_bytecode_with_analysis(&path).unwrap();
+        let entry = entry_name(&compilation).to_owned();
+
+        let mut options = VmOptions::default();
+        options.profiling = true;
+        options.jit_enabled = true;
+        options.hot_call_threshold = 0;
+        options.hot_backedge_threshold = 0;
+        options.jit_min_instruction_count = 0;
+        let (value, profile) = tempra_vm::Interpreter::run_function_profiled_with_resolver(
+            compilation.bytecode(),
+            &entry,
+            vec![],
+            options,
+            Some(tempra_native::registry::resolve),
+        )
+        .unwrap();
+
+        assert_eq!(value, VmValue::Int64(0), "{name}");
+        let stats = profile
+            .function_stats
+            .iter()
+            .find(|stats| stats.function_name == entry)
+            .unwrap_or_else(|| panic!("{name} must retain entry profile data"));
+        assert!(
+            stats.jit_compile_attempts > 0,
+            "{name} entry must reach JIT eligibility"
+        );
+        assert_eq!(
+            stats.jit_compile_successes, 0,
+            "{name} must not be compiled by JIT v1"
+        );
+        assert!(
+            stats.jit_rejected_count > 0,
+            "{name} must be rejected before native execution"
+        );
+        assert_eq!(
+            stats.jit_runtime_calls, 0,
+            "{name} must execute through the interpreter fallback"
+        );
+        let reason = stats.jit_rejection_reason.as_deref().unwrap_or("");
+        assert!(
+            reason.contains("Call target not JIT eligible") || reason.contains("Unsupported type"),
+            "{name} must expose a JIT v1 signature/call-target rejection, got: {reason}"
+        );
+    }
 }
 
 #[test]

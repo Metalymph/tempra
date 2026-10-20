@@ -129,7 +129,10 @@ K4.6B.1 native boundary integrity     DONE
 K4.6B.2 compilation boundary tests    DONE
 K4.6C guarantee documentation         DONE
 K4.6 specialized-effect guarantees    DONE
-K4.7 backend parity/reproducibility   NEXT
+K4.7A differential coverage audit     DONE
+K4.7B focused differential tests      DONE
+K4.7C final specialized parity gate   PASS
+K4.7 backend parity/reproducibility   DONE
 K4.8 coverage-gap ledger              PLANNED
 ```
 
@@ -187,8 +190,21 @@ guarantee is compile-time only: broad `@deny`/`@pure` remains authoritative,
 specialized matching is fail-closed for unknown resources/operations, unsupported
 interpreters reject annotated input, and no runtime guard, filesystem sandbox,
 network isolation or native-code sandbox exists. K4.6C is documentation-only and
-does not change source, runtime behavior, cache format or `semantics-6`. K4.7
-backend parity/reproducibility is next; K4.8 coverage-gap ledger remains planned.
+does not change source, runtime behavior, cache format or `semantics-6`.
+
+K4.7 is complete. K4.7A audited existing differential coverage; K4.7B added
+focused source/file, explicit-stdlib-root, enforcement-outcome, deterministic
+violation, broad-invariance, inspection and VM/JIT regressions. K4.7C adds
+independent-process canonical specialized-violation evidence and records the
+native `std.*` JIT limitation: JIT v1 rejects entries that call these natives and
+the interpreter fallback executes them, with no specialized-enforcement bypass.
+The gate verdict is **PASS** for the supported same-build, same-host/target
+surface. Runtime guards, Wasm/AOT enforcement, unbound taxonomy operations,
+structured E6 specialized diagnostics and cross-machine parity remain explicitly
+unsupported or deferred in
+[Specialized Effects v0.1](specs/specialized-effects-v0.1.md#104-final-gate-verdict).
+K4.7C changes tests and documentation only; cache format and `semantics-6` are
+unchanged. K4.8 publishes the full per-operation coverage-gap ledger.
 
 ### R — Result / Value-Use Hardening
 

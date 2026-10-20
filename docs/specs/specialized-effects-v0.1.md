@@ -1,12 +1,15 @@
 # Tempra Specialized Effects v0.1
 
 > [!NOTE]
-> **Status: K4.2–K4.6 implemented.**
+> **Status: K4.2–K4.7 implemented.**
 >
 > K4.6A (boundary audit), K4.6B.1 (native registry/classifier/signature
-> integrity), K4.6B.2 (compilation-boundary regressions) and K4.6C
-> (guarantee documentation) are complete. K4.7 backend parity/reproducibility
-> is next; K4.8 coverage-gap ledger remains planned.
+> integrity), K4.6B.2 (compilation-boundary regressions), K4.6C
+> (guarantee documentation), K4.7A (differential coverage audit), K4.7B
+> (focused differential tests) and K4.7C (final parity gate) are complete.
+> The K4.7 verdict is **PASS** for the supported same-build, same-host/target
+> paths, with the unsupported and deferred paths listed in section 10. K4.8
+> retains ownership of the full taxonomy coverage-gap ledger.
 >
 > This document records the guarantees that the current compiler actually
 > provides, the trust assumptions behind them and the limits that must not be
@@ -557,7 +560,7 @@ This is the current documented limitation. K4.6C does not add a specialized
 diagnostic code, a specialized E6 schema, structured witness output or JSON
 fields.
 
-## 10. G. Milestone status
+## 10. G. Milestone status and K4.7 parity gate
 
 ```text
 K4.1 specialized-effects specification       DONE
@@ -571,8 +574,11 @@ K4.6B.1 native registry/classifier/signature   DONE
 K4.6B.2 compilation-boundary regressions       DONE
 K4.6C guarantee documentation                  DONE
 K4.6  specialized-effect guarantee milestone   DONE
-K4.7  backend parity/reproducibility gate      NEXT
-K4.8  coverage-gap ledger and non-goal review  PLANNED
+K4.7A differential coverage audit              DONE
+K4.7B focused differential tests               DONE
+K4.7C final specialized parity gate            PASS
+K4.7  backend parity/reproducibility gate      DONE
+K4.8  full coverage-gap ledger and non-goals   PLANNED
 ```
 
 K4.6A found no contract-enforcement bypass in the audited compilation, runtime
@@ -582,9 +588,103 @@ VM/profiling/JIT, bytecode-cache, HIR/source-TIR/REPL unsupported-path,
 unknown-extern and effect-inspection boundary regressions while retaining broad
 `@deny`/`@pure` parity coverage.
 
-K4.7 will compare accept/reject decisions, deterministic ordering and witnesses
-across every enforcing backend and add any future runtime-guard parity tests.
-K4.8 will publish the enforceable/deferred ledger for every taxonomy operation.
+K4.7A audited the existing differential surface. K4.7B added focused
+source/file, explicit-stdlib-root, accepted/rejected, deterministic violation,
+broad-fact invariance, non-certifying inspection and VM/JIT regressions. K4.7C
+adds independent-process canonical violation evidence and fixes the native-JIT
+limitation in the ledger below. It does not change source, runtime, cache
+format, diagnostics or `semantics-6`.
+
+### 10.1 Coverage ledger
+
+| Verified property | Primary evidence | State |
+|---|---|---|
+| Fresh source and file paths agree on broad facts, witnesses, contracts and execution. | `specialized_differential_tests::source_and_file_paths_agree_on_broad_facts_witnesses_and_contracts` | Supported |
+| Equivalent file paths agree on specialized facts, exact/unknown resources, provenance and bytecode across default and explicit stdlib roots. | `specialized_differential_tests::equivalent_file_paths_agree_on_specialized_facts_resources_and_provenance` | Supported |
+| Accepted, definite, potential, transitive, broad-first and `@pure` outcomes agree across equivalent file paths. | `specialized_differential_tests::equivalent_file_paths_agree_on_accepted_and_rejected_enforcement_outcomes` | Supported |
+| Repeated fresh compilations preserve violation order, classification, origin, resources and witness lengths. | `specialized_differential_tests::specialized_violations_are_deterministic_across_fresh_compilations` | Supported |
+| Independent processes with different cwd values produce one canonical report of denied clause, classification, fact, origin identity, resource knowledge, witness call sequence and extern identity. | `specialized_differential_tests::independent_processes_have_one_canonical_specialized_violation_report` | Supported |
+| Adding specialized clauses does not change broad facts, broad witnesses or bytecode. | `specialized_differential_tests::adding_specialized_classification_does_not_change_broad_facts_or_witnesses` | Supported |
+| `check_file` does not certify enforcement; inspection compiles fresh and enforces specialized contracts. | `specialized_differential_tests::non_executing_check_file_does_not_certify_specialized_enforcement` | Supported |
+| A valid specialized program has equivalent VM and actually-compiled JIT results for the JIT-supported arithmetic subset. | `specialized_differential_tests::valid_specialized_program_has_equivalent_vm_and_jit_results` | Supported subset |
+| JIT options do not bypass compile-time specialized enforcement; JIT consumes already-enforced bytecode. | `compilation_boundary_tests::jit_options_do_not_bypass_specialized_compile_enforcement`, `jit_compiled_programs_retain_specialized_contracts` | Supported |
+| Cache miss enforces; compatible hit is verified-bytecode-only; stale revisions, source changes and failed compilation are incompatible misses. | `compilation_boundary_tests::cache_miss_enforces_and_compatible_hit_is_reused`, `stale_semantic_revision_is_rejected_before_execution`, `source_changes_select_a_new_verified_cache_identity`, `failed_compilation_does_not_replace_a_valid_specialized_artifact`; `deny_enforcement_tests::normal_and_profiled_vm_execute_a_real_enforcement_aware_cache_hit` | Supported; K4.7C added no duplicate cache test |
+| HIR, source TIR, test and REPL paths reject annotated input before execution. | `compilation_boundary_tests::hir_and_source_tir_entry_points_reject_specialized_annotations`; existing source-execution adapter tests | Explicit rejection |
+| Native registry, classifier and declared signatures agree on names, parent capabilities and resource positions. | `native_boundary_integrity::registry_classifier_and_declared_signatures_agree_exactly`, `specialized_bindings_follow_declared_signatures_and_native_positions`, `native_handlers_honor_verified_resource_positions` | Supported regression coverage |
+
+Cross-process evidence compares structured, normalized fields rather than debug
+formatting. Function names are module-unqualified; identity is the tuple of
+name, block and instruction index; resource values are canonical text/port or
+`unknown`; witness entries are caller callsite to callee. The report contains no
+absolute paths and is compared across eight fresh processes run from two
+different working directories.
+
+### 10.2 Intentionally unsupported paths
+
+These paths are not silently counted as passing parity:
+
+- **Runtime dynamic-resource guards:** unsupported. There is no runtime
+  specialized-effect check, syscall interception, filesystem sandbox or native
+  confinement. Dynamic values are decided statically or fail closed.
+- **Native `std.*` calls under JIT:** unsupported by the current JIT v1. JIT
+  eligibility recursively requires callees to be eligible and requires an
+  `Int64` return for source-level JIT functions; none of the relevant
+  `std.fs`/`std.io` native externs returns `Int64` (`Bool`, `String!`, `Unit!`
+  and `Unit` forms are present). Entries that call them are rejected by the JIT
+  and execute through the interpreter fallback.
+  `native_std_calls_are_not_jit_eligible` proves both
+  `std.fs.exists` and `std.io.println` are rejected, execute correctly and make
+  zero JIT runtime calls. This is a JIT implementation limitation, not a
+  specialized-enforcement bypass; K4.7C does not change JIT architecture.
+- **HIR, source TIR, test runner and REPL:** annotated input is rejected before
+  execution, so there is no alternate enforcement backend to compare.
+- **Source-only compilation of `std.*` imports:** the source-only API has no
+  module graph and rejects imported standard-library names. Specialized-fact
+  differential coverage therefore uses file/module paths. This is an API
+  limitation, not a missing enforcement check.
+- **Wasm/AOT and future backends:** no specialized-enforcement implementation is
+  claimed. A future backend must reuse the same analysis or reject annotated
+  input.
+- **Structured specialized diagnostics:** E6 still projects specialized
+  violations as generic compiler errors with no specialized schema or witness
+  JSON.
+- **Cross-machine/cross-target reproducibility:** not claimed. K4.7 covers the
+  supported same-build, same-host/target surface.
+- **Taxonomy operations without production bindings:** `fs.remove`, `net.*`,
+  `io.read`, `process.exec`, `process.exit` and `spawn.*` remain syntax-only or
+  HIR-only coverage gaps. A clause for them has no reachable production fact to
+  match.
+
+### 10.3 Deferred coverage gaps
+
+- Full accept/reject differentials for unbound taxonomy operations require
+  production bindings and remain deferred to later language milestones.
+- Native `std.*` VM/JIT differential execution is blocked by the JIT limitation
+  above; it must not be fabricated by changing the JIT architecture for this
+  gate.
+- Cross-process cache-hit specialized side-effect parity is not separately
+  exercised. Cache hits are bytecode-only and K4.6B.2 already covers compatible
+  hit/miss, stale revision, source identity, failed-write and normal/profiled
+  execution behavior.
+- Cross-process filesystem/native side effects are not compared. K4.7C's
+  cross-process evidence covers violation data, not host side effects.
+- Full E6 specialized diagnostic projection and any specialized diagnostic code
+  remain deferred without a schema change.
+- Cross-machine artifact equality and native-code portability remain outside the
+  Level 3 reproducibility claim.
+
+### 10.4 Final gate verdict
+
+**PASS** for the supported K4.7 specialized-effect parity gate: same build,
+same host and target, fresh source/file compilation, compatible cache hits,
+ordinary/profiled VM, JIT for its supported subset, and explicit rejection on
+unsupported execution paths.
+
+No enforcement bypass or demonstrated parity discrepancy was found in those
+supported paths. The native-JIT call limitation, Wasm/AOT absence, unbound
+taxonomy operations, E6 diagnostic projection and cross-machine scope are
+explicitly unsupported or deferred above and are not counted as passing.
+K4.8 will publish the full per-operation enforceable/deferred ledger.
 
 ## 11. Deferred work and explicit coverage gaps
 
@@ -599,6 +699,14 @@ K4.8 will publish the enforceable/deferred ledger for every taxonomy operation.
   feasibility.
 - Wasm/AOT enforcement: future backends must reuse the same analysis and reject
   annotated input if they cannot enforce it.
+- Native `std.*` calls under JIT v1: the JIT rejects the calling entry and the
+  interpreter executes the native call. Supporting native calls in JIT is
+  deferred; this gate does not modify the JIT architecture.
+- Cross-machine/cross-target specialized reproducibility: not claimed; K4.7 is a
+  same-build, same-host/target Level 3 result.
+- Cross-process specialized cache-hit side effects and native filesystem side
+  effects: not separately compared; K4.6B.2 covers cache behavior and K4.7C
+  covers canonical violation data.
 - Structured specialized diagnostics and E6 JSON projection: deferred without
   schema changes.
 - Specialized diagnostic code selection: undecided; currently a generic compiler
@@ -628,6 +736,9 @@ K4.8 will publish the enforceable/deferred ledger for every taxonomy operation.
   artifacts are not signed or authenticated and carry no specialized metadata.
 - Unsupported execution paths reject all annotated input.
 - `check`, `emit-tir` and raw TIR interpretation are not contract certification.
+- K4.7 passes the supported same-build, same-host/target differential parity gate.
+  Native `std.*` JIT execution, Wasm/AOT, E6 structured specialized diagnostics,
+  unbound taxonomy operations and cross-machine parity are explicitly excluded.
 - Effect inspection enforces specialized contracts but currently reports them
   through a generic compiler error, not the E6 structured diagnostic schema.
 

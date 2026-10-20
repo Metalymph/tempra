@@ -52,10 +52,13 @@ pub struct ResourceFact {
 /// at runtime. Facts are local to one call instruction.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SpecializedOperationFact {
-    /// Specialized operation identity, preserved even when `resource` is unknown.
+    /// Specialized operation identity, preserved even when resources are unknown.
     pub operation: EffectOperation,
-    /// Bound resource parameter and its knowledge.
-    pub resource: ResourceFact,
+    /// Every declared parameter exactly once, in [`EffectParameter::ALL`] order.
+    ///
+    /// Parameters whose value could not be proved are present with
+    /// [`ResourceKnowledge::Unknown`]; they are never silently omitted.
+    pub resources: Vec<ResourceFact>,
     /// Structural location of the call instruction.
     pub location: TirLocation,
     /// TIR ID of the extern declaration.

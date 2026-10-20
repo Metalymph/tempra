@@ -1,4 +1,6 @@
-use crate::externs::{capabilities_for_extern, operation_binding_for_extern};
+use crate::externs::{
+    capabilities_for_extern, operation_binding_for_extern, ExternOperationBinding,
+};
 use crate::facts::{
     FunctionValueIndex, LocalEffectFact, ResourceFact, ResourceKnowledge, ResourceValue,
     SpecializedOperationFact, UnclassifiedOperationFact,
@@ -572,29 +574,48 @@ fn record_local_effect_facts(
         return;
     };
 
-    let knowledge = binding
-        .argument_index
-        .and_then(|index| arguments.get(index).copied())
-        .map(|argument| match values.resolve(argument, location) {
-            ResourceKnowledge::Exact(value)
-                if resource_value_matches(binding.parameter, &value) =>
-            {
-                ResourceKnowledge::Exact(value)
-            }
-            _ => ResourceKnowledge::Unknown,
-        })
-        .unwrap_or(ResourceKnowledge::Unknown);
-
     facts.push(LocalEffectFact::Specialized(SpecializedOperationFact {
         operation: binding.operation,
-        resource: ResourceFact {
-            parameter: binding.parameter,
-            knowledge,
-        },
+        resources: resource_facts_for_binding(&binding, values, arguments, location),
         location,
         extern_id: target.id,
         extern_name: target.name.clone(),
     }));
+}
+
+/// Extracts every parameter declared by `binding` for one call.
+///
+/// The result keeps the binding's canonical [`EffectParameter::ALL`] order and
+/// contains one entry per declared parameter. Parameters without a statically
+/// provable value are recorded as [`ResourceKnowledge::Unknown`].
+pub(crate) fn resource_facts_for_binding(
+    binding: &ExternOperationBinding,
+    values: &FunctionValueIndex<'_>,
+    arguments: &[TirValueId],
+    location: TirLocation,
+) -> Vec<ResourceFact> {
+    binding
+        .resources
+        .iter()
+        .map(|resource| {
+            let knowledge = resource
+                .argument_index
+                .and_then(|index| arguments.get(index).copied())
+                .map(|argument| match values.resolve(argument, location) {
+                    ResourceKnowledge::Exact(value)
+                        if resource_value_matches(resource.parameter, &value) =>
+                    {
+                        ResourceKnowledge::Exact(value)
+                    }
+                    _ => ResourceKnowledge::Unknown,
+                })
+                .unwrap_or(ResourceKnowledge::Unknown);
+            ResourceFact {
+                parameter: resource.parameter,
+                knowledge,
+            }
+        })
+        .collect()
 }
 
 fn resource_value_matches(parameter: EffectParameter, value: &ResourceValue) -> bool {

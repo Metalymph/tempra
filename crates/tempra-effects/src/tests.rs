@@ -1,4 +1,8 @@
-use crate::externs::{capabilities_for_extern, operation_for_extern};
+use crate::analysis::resource_facts_for_binding;
+use crate::externs::{
+    capabilities_for_extern, operation_binding_for_extern, operation_for_extern, BindingError,
+    ExternOperationBinding, ResourceBinding,
+};
 use crate::{
     analyze, Capability, CapabilityAnalysisError, CapabilitySet, DirectCapabilitySource,
     EffectOperation, EffectParameter, LocalEffectFact, ResourceKnowledge, ResourceValue,
@@ -83,6 +87,30 @@ fn specialized(fact: &LocalEffectFact) -> &SpecializedOperationFact {
             panic!("expected specialized fact, got unclassified {fact:?}")
         }
     }
+}
+
+fn resource_knowledge(
+    fact: &SpecializedOperationFact,
+    parameter: EffectParameter,
+) -> &ResourceKnowledge {
+    fact.resources
+        .iter()
+        .find(|resource| resource.parameter == parameter)
+        .map(|resource| &resource.knowledge)
+        .unwrap_or_else(|| {
+            panic!(
+                "{} does not declare {}",
+                fact.operation.canonical_name(),
+                parameter.canonical_name()
+            )
+        })
+}
+
+fn resource_parameters(fact: &SpecializedOperationFact) -> Vec<EffectParameter> {
+    fact.resources
+        .iter()
+        .map(|resource| resource.parameter)
+        .collect()
 }
 
 fn module(functions: Vec<TirFunction>) -> TirModule {
@@ -1020,9 +1048,10 @@ fn extracts_exact_filesystem_literals_and_ignores_write_content() {
 
     let read = specialized(&facts[0]);
     assert_eq!(read.operation, EffectOperation::FsRead);
-    assert_eq!(read.resource.parameter, EffectParameter::Source);
+    assert_eq!(read.resources.len(), 1);
+    assert_eq!(resource_parameters(read), vec![EffectParameter::Source]);
     assert_eq!(
-        read.resource.knowledge,
+        *resource_knowledge(read, EffectParameter::Source),
         ResourceKnowledge::Exact(ResourceValue::Text("input.txt".to_owned()))
     );
     assert_eq!(
@@ -1038,14 +1067,17 @@ fn extracts_exact_filesystem_literals_and_ignores_write_content() {
 
     let write = specialized(&facts[1]);
     assert_eq!(write.operation, EffectOperation::FsWrite);
-    assert_eq!(write.resource.parameter, EffectParameter::Destination);
     assert_eq!(
-        write.resource.knowledge,
+        resource_parameters(write),
+        vec![EffectParameter::Destination]
+    );
+    assert_eq!(
+        *resource_knowledge(write, EffectParameter::Destination),
         ResourceKnowledge::Exact(ResourceValue::Text("build/out.txt".to_owned()))
     );
     // The second write_text argument is file content, not the destination.
     assert_ne!(
-        write.resource.knowledge,
+        *resource_knowledge(write, EffectParameter::Destination),
         ResourceKnowledge::Exact(ResourceValue::Text("file contents".to_owned()))
     );
     assert_eq!(write.location.instruction_index, 4);
@@ -1071,7 +1103,10 @@ fn resource_value_kind_must_match_the_bound_parameter() {
 
     let fact = specialized(&analysis.local_effect_facts()[0]);
     assert_eq!(fact.operation, EffectOperation::FsRead);
-    assert_eq!(fact.resource.knowledge, ResourceKnowledge::Unknown);
+    assert_eq!(
+        *resource_knowledge(fact, EffectParameter::Source),
+        ResourceKnowledge::Unknown
+    );
 }
 
 #[test]
@@ -1108,14 +1143,18 @@ fn dynamic_filesystem_arguments_keep_identity_with_unknown_resource() {
 
     let read = specialized(&facts[0]);
     assert_eq!(read.operation, EffectOperation::FsRead);
-    assert_eq!(read.resource.parameter, EffectParameter::Source);
-    assert_eq!(read.resource.knowledge, ResourceKnowledge::Unknown);
+    assert_eq!(
+        *resource_knowledge(read, EffectParameter::Source),
+        ResourceKnowledge::Unknown
+    );
     assert_eq!(read.location.function, TirFunctionId(0));
 
     let write = specialized(&facts[1]);
     assert_eq!(write.operation, EffectOperation::FsWrite);
-    assert_eq!(write.resource.parameter, EffectParameter::Destination);
-    assert_eq!(write.resource.knowledge, ResourceKnowledge::Unknown);
+    assert_eq!(
+        *resource_knowledge(write, EffectParameter::Destination),
+        ResourceKnowledge::Unknown
+    );
     assert_eq!(write.location.function, TirFunctionId(1));
 }
 
@@ -1184,10 +1223,13 @@ fn print_and_println_never_treat_content_as_the_stream() {
     for (fact, content) in facts.iter().zip(["hello", "world"]) {
         let fact = specialized(fact);
         assert_eq!(fact.operation, EffectOperation::IoWrite);
-        assert_eq!(fact.resource.parameter, EffectParameter::Stream);
-        assert_eq!(fact.resource.knowledge, ResourceKnowledge::Unknown);
+        assert_eq!(resource_parameters(fact), vec![EffectParameter::Stream]);
+        assert_eq!(
+            *resource_knowledge(fact, EffectParameter::Stream),
+            ResourceKnowledge::Unknown
+        );
         assert_ne!(
-            fact.resource.knowledge,
+            *resource_knowledge(fact, EffectParameter::Stream),
             ResourceKnowledge::Exact(ResourceValue::Text(content.to_owned()))
         );
     }
@@ -1318,7 +1360,10 @@ fn non_dominating_ambiguous_and_indirect_definitions_are_unknown() {
     for fact in facts {
         let fact = specialized(fact);
         assert_eq!(fact.operation, EffectOperation::FsRead);
-        assert_eq!(fact.resource.knowledge, ResourceKnowledge::Unknown);
+        assert_eq!(
+            *resource_knowledge(fact, EffectParameter::Source),
+            ResourceKnowledge::Unknown
+        );
     }
 }
 
@@ -1418,4 +1463,245 @@ fn unknown_externs_never_become_local_facts() {
         analyze(&called),
         Err(CapabilityAnalysisError::UnclassifiedExtern { .. })
     ));
+}
+
+#[test]
+fn native_operation_bindings_are_valid_and_canonical() {
+    let expected = [
+        (
+            "std.fs.read_text",
+            EffectOperation::FsRead,
+            EffectParameter::Source,
+            Some(0),
+        ),
+        (
+            "std.fs.write_text",
+            EffectOperation::FsWrite,
+            EffectParameter::Destination,
+            Some(0),
+        ),
+        (
+            "std.io.print",
+            EffectOperation::IoWrite,
+            EffectParameter::Stream,
+            None,
+        ),
+        (
+            "std.io.println",
+            EffectOperation::IoWrite,
+            EffectParameter::Stream,
+            None,
+        ),
+    ];
+
+    for (name, operation, parameter, argument_index) in expected {
+        let binding = operation_binding_for_extern(name).unwrap_or_else(|| panic!("{name}"));
+        assert_eq!(binding.operation, operation, "{name}");
+        assert_eq!(
+            binding.resources,
+            vec![ResourceBinding {
+                parameter,
+                argument_index,
+            }],
+            "{name}"
+        );
+        // Re-validating the table entry proves the static metadata satisfies the
+        // same invariants as synthetic bindings.
+        assert!(
+            ExternOperationBinding::new(binding.operation, binding.resources).is_ok(),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn synthetic_multi_parameter_binding_orders_and_extracts_resources() {
+    // Declared deliberately out of order. This binding is internal test metadata
+    // only; no net extern or native operation is added.
+    let binding = ExternOperationBinding::new(
+        EffectOperation::NetConnect,
+        [
+            ResourceBinding::unknown(EffectParameter::Protocol),
+            ResourceBinding::argument(EffectParameter::Port, 1),
+            ResourceBinding::argument(EffectParameter::Host, 0),
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        binding
+            .resources
+            .iter()
+            .map(|resource| resource.parameter)
+            .collect::<Vec<_>>(),
+        vec![
+            EffectParameter::Host,
+            EffectParameter::Port,
+            EffectParameter::Protocol
+        ]
+    );
+
+    let body = function(
+        0,
+        "connect",
+        vec![
+            string_const(0, "db.internal"),
+            int_const(1, 5432),
+            call_with_args(2, 100, vec![TirValueId(0), TirValueId(1)]),
+        ],
+    );
+    let values = crate::facts::FunctionValueIndex::new(&body);
+    let callsite = TirLocation {
+        function: TirFunctionId(0),
+        block: TirBlockId(0),
+        instruction_index: 2,
+    };
+    let resources =
+        resource_facts_for_binding(&binding, &values, &[TirValueId(0), TirValueId(1)], callsite);
+
+    assert_eq!(
+        resources
+            .iter()
+            .map(|resource| resource.parameter)
+            .collect::<Vec<_>>(),
+        vec![
+            EffectParameter::Host,
+            EffectParameter::Port,
+            EffectParameter::Protocol
+        ]
+    );
+    assert_eq!(
+        resources[0].knowledge,
+        ResourceKnowledge::Exact(ResourceValue::Text("db.internal".to_owned()))
+    );
+    assert_eq!(
+        resources[1].knowledge,
+        ResourceKnowledge::Exact(ResourceValue::Port(5432))
+    );
+    assert_eq!(resources[2].knowledge, ResourceKnowledge::Unknown);
+}
+
+#[test]
+fn duplicate_and_invalid_synthetic_bindings_are_rejected() {
+    assert_eq!(
+        ExternOperationBinding::new(
+            EffectOperation::NetConnect,
+            [
+                ResourceBinding::argument(EffectParameter::Host, 0),
+                ResourceBinding::argument(EffectParameter::Host, 1),
+            ],
+        ),
+        Err(BindingError::DuplicateParameter {
+            operation: EffectOperation::NetConnect,
+            parameter: EffectParameter::Host,
+        })
+    );
+
+    assert_eq!(
+        ExternOperationBinding::new(
+            EffectOperation::FsRead,
+            [ResourceBinding::argument(EffectParameter::Destination, 0)],
+        ),
+        Err(BindingError::InvalidParameter {
+            operation: EffectOperation::FsRead,
+            parameter: EffectParameter::Destination,
+        })
+    );
+
+    assert_eq!(
+        ExternOperationBinding::new(
+            EffectOperation::IoWrite,
+            [ResourceBinding::unknown(EffectParameter::Host)],
+        ),
+        Err(BindingError::InvalidParameter {
+            operation: EffectOperation::IoWrite,
+            parameter: EffectParameter::Host,
+        })
+    );
+
+    // Zero resources remain valid for an operation that declares none.
+    assert!(ExternOperationBinding::new(
+        EffectOperation::ProcessExit,
+        std::iter::empty::<ResourceBinding>(),
+    )
+    .is_ok());
+}
+
+#[test]
+fn missing_bound_arguments_are_recorded_as_unknown() {
+    let binding = ExternOperationBinding::new(
+        EffectOperation::NetConnect,
+        [
+            ResourceBinding::argument(EffectParameter::Host, 0),
+            ResourceBinding::argument(EffectParameter::Port, 1),
+            ResourceBinding::unknown(EffectParameter::Protocol),
+        ],
+    )
+    .unwrap();
+
+    let body = function(
+        0,
+        "connect",
+        vec![
+            string_const(0, "db.internal"),
+            call_with_args(1, 100, vec![TirValueId(0)]),
+        ],
+    );
+    let values = crate::facts::FunctionValueIndex::new(&body);
+    let callsite = TirLocation {
+        function: TirFunctionId(0),
+        block: TirBlockId(0),
+        instruction_index: 1,
+    };
+    let resources = resource_facts_for_binding(&binding, &values, &[TirValueId(0)], callsite);
+
+    assert_eq!(resources.len(), 3);
+    assert_eq!(
+        resources[0].knowledge,
+        ResourceKnowledge::Exact(ResourceValue::Text("db.internal".to_owned()))
+    );
+    assert_eq!(resources[1].knowledge, ResourceKnowledge::Unknown);
+    assert_eq!(resources[2].knowledge, ResourceKnowledge::Unknown);
+}
+
+#[test]
+fn one_specialized_fact_is_created_per_classified_native_call() {
+    let caller = function(
+        0,
+        "main",
+        vec![
+            string_const(0, "input.txt"),
+            call_with_args(1, 100, vec![TirValueId(0)]),
+            string_const(2, "hello"),
+            call_with_args(3, 101, vec![TirValueId(2)]),
+            string_const(4, "build/out.txt"),
+            string_const(5, "contents"),
+            call_with_args(6, 102, vec![TirValueId(4), TirValueId(5)]),
+        ],
+    );
+    let input = module(vec![
+        caller,
+        extern_function(100, "std.fs.read_text"),
+        extern_function(101, "std.io.print"),
+        extern_function(102, "std.fs.write_text"),
+    ]);
+    let analysis = analyze(&input).unwrap();
+
+    let specialized: Vec<_> = analysis
+        .local_effect_facts()
+        .iter()
+        .map(specialized)
+        .collect();
+    assert_eq!(specialized.len(), 3);
+    assert_eq!(
+        specialized
+            .iter()
+            .map(|fact| fact.location.instruction_index)
+            .collect::<Vec<_>>(),
+        vec![1, 3, 6]
+    );
+    for fact in &specialized {
+        assert_eq!(fact.resources.len(), 1);
+    }
+
+    assert_eq!(analyze(&input).unwrap(), analysis);
 }

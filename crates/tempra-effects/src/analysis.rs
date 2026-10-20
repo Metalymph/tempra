@@ -1,5 +1,9 @@
-use crate::externs::capabilities_for_extern;
-use crate::{Capability, CapabilitySet};
+use crate::externs::{capabilities_for_extern, operation_binding_for_extern};
+use crate::facts::{
+    FunctionValueIndex, LocalEffectFact, ResourceFact, ResourceKnowledge, ResourceValue,
+    SpecializedOperationFact, UnclassifiedOperationFact,
+};
+use crate::{Capability, CapabilitySet, EffectParameter};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::error::Error;
 use std::fmt;
@@ -197,6 +201,7 @@ pub struct CapabilityAnalysis {
     summaries: Vec<FunctionCapabilitySummary>,
     call_edges: Vec<CallEdge>,
     direct_origins: Vec<DirectCapabilityOrigin>,
+    local_effect_facts: Vec<LocalEffectFact>,
     summary_indices: HashMap<TirFunctionId, usize>,
 }
 
@@ -228,6 +233,16 @@ impl CapabilityAnalysis {
     /// Returns every direct origin in deterministic structural order.
     pub fn direct_origins(&self) -> &[DirectCapabilityOrigin] {
         &self.direct_origins
+    }
+
+    /// Returns local specialized-operation facts in deterministic structural
+    /// order.
+    ///
+    /// These facts are extracted per call instruction and are not propagated
+    /// through the call graph. Holding a fact does not enforce or authorize
+    /// anything.
+    pub fn local_effect_facts(&self) -> &[LocalEffectFact] {
+        &self.local_effect_facts
     }
 
     /// Iterates over direct origins belonging to `function`.
@@ -351,6 +366,7 @@ pub fn analyze(module: &TirModule) -> Result<CapabilityAnalysis, CapabilityAnaly
     let mut call_edges = Vec::new();
     let mut internal_edges = Vec::new();
     let mut direct_origins = Vec::new();
+    let mut local_effect_facts = Vec::new();
 
     for function in functions
         .iter()
@@ -361,6 +377,7 @@ pub fn analyze(module: &TirModule) -> Result<CapabilityAnalysis, CapabilityAnaly
         let mut value_types: HashMap<TirValueId, TirType> =
             function.params.iter().cloned().collect();
         let mut slot_types: HashMap<TirSlotId, TirType> = HashMap::new();
+        let value_index = FunctionValueIndex::new(function);
         let mut blocks: Vec<_> = function.blocks.iter().collect();
         blocks.sort_by_key(|block| block.id.0);
 
@@ -391,7 +408,7 @@ pub fn analyze(module: &TirModule) -> Result<CapabilityAnalysis, CapabilityAnaly
                     &mut slot_types,
                 );
 
-                let TirInstr::Call(_, target_id, _) = instruction else {
+                let TirInstr::Call(_, target_id, arguments) = instruction else {
                     continue;
                 };
 
@@ -428,6 +445,14 @@ pub fn analyze(module: &TirModule) -> Result<CapabilityAnalysis, CapabilityAnaly
                             name: target.name.clone(),
                         },
                     );
+                    record_local_effect_facts(
+                        &mut local_effect_facts,
+                        &value_index,
+                        target,
+                        arguments,
+                        location,
+                        capabilities,
+                    );
                 } else if target.blocks.is_empty() {
                     return Err(CapabilityAnalysisError::UnresolvedDeclaration {
                         caller: function.id,
@@ -445,6 +470,7 @@ pub fn analyze(module: &TirModule) -> Result<CapabilityAnalysis, CapabilityAnaly
     call_edges.sort_by_key(call_edge_order);
     internal_edges.sort_by_key(call_edge_order);
     direct_origins.sort_by_key(origin_order);
+    local_effect_facts.sort_by_key(local_fact_order);
 
     let mut reverse_edges = vec![Vec::new(); states.len()];
     for edge in &internal_edges {
@@ -493,6 +519,7 @@ pub fn analyze(module: &TirModule) -> Result<CapabilityAnalysis, CapabilityAnaly
         summaries,
         call_edges,
         direct_origins,
+        local_effect_facts,
         summary_indices,
     })
 }
@@ -513,6 +540,88 @@ fn record_origin(
             source: source.clone(),
         });
     }
+}
+
+fn record_local_effect_facts(
+    facts: &mut Vec<LocalEffectFact>,
+    values: &FunctionValueIndex<'_>,
+    target: &TirFunction,
+    arguments: &[TirValueId],
+    location: TirLocation,
+    capabilities: CapabilitySet,
+) {
+    let Some(binding) = operation_binding_for_extern(&target.name) else {
+        // No specialized operation is declared. Record the explicit
+        // unknown-operation-within-parent state only for capabilities that have
+        // a specialized taxonomy; `Alloc` and `Panic` refinements are deferred.
+        for capability in capabilities.iter() {
+            if matches!(
+                capability,
+                Capability::Io | Capability::Process | Capability::Spawn
+            ) {
+                facts.push(LocalEffectFact::UnclassifiedOperation(
+                    UnclassifiedOperationFact {
+                        capability,
+                        location,
+                        extern_id: target.id,
+                        extern_name: target.name.clone(),
+                    },
+                ));
+            }
+        }
+        return;
+    };
+
+    let knowledge = binding
+        .argument_index
+        .and_then(|index| arguments.get(index).copied())
+        .map(|argument| match values.resolve(argument, location) {
+            ResourceKnowledge::Exact(value)
+                if resource_value_matches(binding.parameter, &value) =>
+            {
+                ResourceKnowledge::Exact(value)
+            }
+            _ => ResourceKnowledge::Unknown,
+        })
+        .unwrap_or(ResourceKnowledge::Unknown);
+
+    facts.push(LocalEffectFact::Specialized(SpecializedOperationFact {
+        operation: binding.operation,
+        resource: ResourceFact {
+            parameter: binding.parameter,
+            knowledge,
+        },
+        location,
+        extern_id: target.id,
+        extern_name: target.name.clone(),
+    }));
+}
+
+fn resource_value_matches(parameter: EffectParameter, value: &ResourceValue) -> bool {
+    match parameter {
+        EffectParameter::Port => matches!(value, ResourceValue::Port(_)),
+        EffectParameter::Source
+        | EffectParameter::Destination
+        | EffectParameter::Host
+        | EffectParameter::Executable
+        | EffectParameter::Stream => matches!(value, ResourceValue::Text(_)),
+        EffectParameter::Protocol | EffectParameter::Scope => false,
+    }
+}
+
+fn local_fact_order(fact: &LocalEffectFact) -> (usize, usize, usize, u8, u8) {
+    let location = fact.location();
+    let (variant, detail) = match fact {
+        LocalEffectFact::Specialized(fact) => (0, fact.operation as u8),
+        LocalEffectFact::UnclassifiedOperation(fact) => (1, fact.capability as u8),
+    };
+    (
+        location.function.0,
+        location.block.0,
+        location.instruction_index,
+        variant,
+        detail,
+    )
 }
 
 fn classify_instruction(

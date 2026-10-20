@@ -8,6 +8,7 @@
 mod analysis;
 mod capability;
 mod externs;
+mod facts;
 mod operations;
 
 pub use analysis::{
@@ -15,6 +16,10 @@ pub use analysis::{
     DirectCapabilityOrigin, DirectCapabilitySource, FunctionCapabilitySummary, TirLocation,
 };
 pub use capability::{Capability, CapabilitySet};
+pub use facts::{
+    LocalEffectFact, ResourceFact, ResourceKnowledge, ResourceValue, SpecializedOperationFact,
+    UnclassifiedOperationFact,
+};
 pub use operations::{EffectOperation, EffectParameter};
 
 #[cfg(test)]

@@ -1,19 +1,24 @@
 use crate::externs::{capabilities_for_extern, operation_for_extern};
 use crate::{
     analyze, Capability, CapabilityAnalysisError, CapabilitySet, DirectCapabilitySource,
-    EffectOperation, EffectParameter,
+    EffectOperation, EffectParameter, LocalEffectFact, ResourceKnowledge, ResourceValue,
+    SpecializedOperationFact, TirLocation,
 };
 use std::collections::HashMap;
 use tempra_tir::ir::{
     TirBlock, TirBlockId, TirConst, TirFunction, TirFunctionId, TirInstr, TirKey, TirModule,
-    TirTerminator, TirType, TirValueId,
+    TirSlotId, TirTerminator, TirType, TirValueId,
 };
 
 fn block(id: usize, instrs: Vec<TirInstr>) -> TirBlock {
+    block_with_terminator(id, instrs, TirTerminator::Ret(None))
+}
+
+fn block_with_terminator(id: usize, instrs: Vec<TirInstr>, terminator: TirTerminator) -> TirBlock {
     TirBlock {
         id: TirBlockId(id),
         instrs,
-        terminator: Some(TirTerminator::Ret(None)),
+        terminator: Some(terminator),
     }
 }
 
@@ -57,6 +62,27 @@ fn declaration(id: usize, name: &str) -> TirFunction {
 
 fn call(destination: usize, target: usize) -> TirInstr {
     TirInstr::Call(TirValueId(destination), TirFunctionId(target), Vec::new())
+}
+
+fn call_with_args(destination: usize, target: usize, arguments: Vec<TirValueId>) -> TirInstr {
+    TirInstr::Call(TirValueId(destination), TirFunctionId(target), arguments)
+}
+
+fn string_const(id: usize, value: &str) -> TirInstr {
+    TirInstr::Const(TirValueId(id), TirConst::String(value.to_owned()))
+}
+
+fn int_const(id: usize, value: i64) -> TirInstr {
+    TirInstr::Const(TirValueId(id), TirConst::Int64(value))
+}
+
+fn specialized(fact: &LocalEffectFact) -> &SpecializedOperationFact {
+    match fact {
+        LocalEffectFact::Specialized(fact) => fact,
+        LocalEffectFact::UnclassifiedOperation(fact) => {
+            panic!("expected specialized fact, got unclassified {fact:?}")
+        }
+    }
 }
 
 fn module(functions: Vec<TirFunction>) -> TirModule {
@@ -967,4 +993,429 @@ fn specialized_classification_does_not_change_broad_capability_requirements() {
             "{name}"
         );
     }
+}
+
+#[test]
+fn extracts_exact_filesystem_literals_and_ignores_write_content() {
+    let caller = function(
+        0,
+        "main",
+        vec![
+            string_const(0, "input.txt"),
+            call_with_args(1, 100, vec![TirValueId(0)]),
+            string_const(2, "build/out.txt"),
+            string_const(3, "file contents"),
+            call_with_args(4, 101, vec![TirValueId(2), TirValueId(3)]),
+        ],
+    );
+    let analysis = analyze(&module(vec![
+        caller,
+        extern_function(100, "std.fs.read_text"),
+        extern_function(101, "std.fs.write_text"),
+    ]))
+    .unwrap();
+
+    let facts = analysis.local_effect_facts();
+    assert_eq!(facts.len(), 2);
+
+    let read = specialized(&facts[0]);
+    assert_eq!(read.operation, EffectOperation::FsRead);
+    assert_eq!(read.resource.parameter, EffectParameter::Source);
+    assert_eq!(
+        read.resource.knowledge,
+        ResourceKnowledge::Exact(ResourceValue::Text("input.txt".to_owned()))
+    );
+    assert_eq!(
+        read.location,
+        TirLocation {
+            function: TirFunctionId(0),
+            block: TirBlockId(0),
+            instruction_index: 1,
+        }
+    );
+    assert_eq!(read.extern_id, TirFunctionId(100));
+    assert_eq!(read.extern_name, "std.fs.read_text");
+
+    let write = specialized(&facts[1]);
+    assert_eq!(write.operation, EffectOperation::FsWrite);
+    assert_eq!(write.resource.parameter, EffectParameter::Destination);
+    assert_eq!(
+        write.resource.knowledge,
+        ResourceKnowledge::Exact(ResourceValue::Text("build/out.txt".to_owned()))
+    );
+    // The second write_text argument is file content, not the destination.
+    assert_ne!(
+        write.resource.knowledge,
+        ResourceKnowledge::Exact(ResourceValue::Text("file contents".to_owned()))
+    );
+    assert_eq!(write.location.instruction_index, 4);
+}
+
+#[test]
+fn resource_value_kind_must_match_the_bound_parameter() {
+    // Verified TIR cannot pass an integer path, but a malformed or future TIR
+    // producer must not turn a numeric constant into an exact text resource.
+    let caller = function(
+        0,
+        "main",
+        vec![
+            int_const(0, 8080),
+            call_with_args(1, 100, vec![TirValueId(0)]),
+        ],
+    );
+    let analysis = analyze(&module(vec![
+        caller,
+        extern_function(100, "std.fs.read_text"),
+    ]))
+    .unwrap();
+
+    let fact = specialized(&analysis.local_effect_facts()[0]);
+    assert_eq!(fact.operation, EffectOperation::FsRead);
+    assert_eq!(fact.resource.knowledge, ResourceKnowledge::Unknown);
+}
+
+#[test]
+fn dynamic_filesystem_arguments_keep_identity_with_unknown_resource() {
+    // A slot load and a parameter are both deliberately opaque.
+    let reader = function(
+        0,
+        "reader",
+        vec![
+            TirInstr::Slot(TirSlotId(0), TirType::String),
+            string_const(0, "dynamic.txt"),
+            TirInstr::Store(TirSlotId(0), TirValueId(0)),
+            TirInstr::Load(TirValueId(1), TirSlotId(0)),
+            call_with_args(2, 100, vec![TirValueId(1)]),
+        ],
+    );
+    let mut writer = function(
+        1,
+        "writer",
+        vec![call_with_args(9, 101, vec![TirValueId(0)])],
+    );
+    writer.params = vec![(TirValueId(0), TirType::String)];
+
+    let analysis = analyze(&module(vec![
+        reader,
+        writer,
+        extern_function(100, "std.fs.read_text"),
+        extern_function(101, "std.fs.write_text"),
+    ]))
+    .unwrap();
+
+    let facts = analysis.local_effect_facts();
+    assert_eq!(facts.len(), 2);
+
+    let read = specialized(&facts[0]);
+    assert_eq!(read.operation, EffectOperation::FsRead);
+    assert_eq!(read.resource.parameter, EffectParameter::Source);
+    assert_eq!(read.resource.knowledge, ResourceKnowledge::Unknown);
+    assert_eq!(read.location.function, TirFunctionId(0));
+
+    let write = specialized(&facts[1]);
+    assert_eq!(write.operation, EffectOperation::FsWrite);
+    assert_eq!(write.resource.parameter, EffectParameter::Destination);
+    assert_eq!(write.resource.knowledge, ResourceKnowledge::Unknown);
+    assert_eq!(write.location.function, TirFunctionId(1));
+}
+
+#[test]
+fn known_capability_without_operation_is_explicitly_unclassified() {
+    let caller = function(
+        0,
+        "main",
+        vec![
+            string_const(0, "."),
+            call_with_args(1, 100, vec![TirValueId(0)]),
+            call(2, 101),
+        ],
+    );
+
+    let analysis = analyze(&module(vec![
+        caller,
+        extern_function(100, "std.fs.exists"),
+        extern_function(101, "std.path.join"),
+    ]))
+    .unwrap();
+
+    let facts = analysis.local_effect_facts();
+    // `std.fs.exists` is Io but has no specialized operation. `std.path.join` is
+    // Alloc-only, and alloc refinements are deferred, so it produces no fact.
+    assert_eq!(facts.len(), 1);
+    match &facts[0] {
+        LocalEffectFact::UnclassifiedOperation(fact) => {
+            assert_eq!(fact.capability, Capability::Io);
+            assert_eq!(fact.extern_name, "std.fs.exists");
+            assert_eq!(fact.extern_id, TirFunctionId(100));
+            assert_eq!(
+                fact.location,
+                TirLocation {
+                    function: TirFunctionId(0),
+                    block: TirBlockId(0),
+                    instruction_index: 1,
+                }
+            );
+        }
+        other => panic!("expected unclassified operation, got {other:?}"),
+    }
+}
+
+#[test]
+fn print_and_println_never_treat_content_as_the_stream() {
+    let caller = function(
+        0,
+        "main",
+        vec![
+            string_const(0, "hello"),
+            call_with_args(1, 100, vec![TirValueId(0)]),
+            string_const(2, "world"),
+            call_with_args(3, 101, vec![TirValueId(2)]),
+        ],
+    );
+    let analysis = analyze(&module(vec![
+        caller,
+        extern_function(100, "std.io.print"),
+        extern_function(101, "std.io.println"),
+    ]))
+    .unwrap();
+
+    let facts = analysis.local_effect_facts();
+    assert_eq!(facts.len(), 2);
+    for (fact, content) in facts.iter().zip(["hello", "world"]) {
+        let fact = specialized(fact);
+        assert_eq!(fact.operation, EffectOperation::IoWrite);
+        assert_eq!(fact.resource.parameter, EffectParameter::Stream);
+        assert_eq!(fact.resource.knowledge, ResourceKnowledge::Unknown);
+        assert_ne!(
+            fact.resource.knowledge,
+            ResourceKnowledge::Exact(ResourceValue::Text(content.to_owned()))
+        );
+    }
+}
+
+#[test]
+fn multiple_calls_have_stable_ordered_locations() {
+    let early = function(
+        3,
+        "early",
+        vec![
+            string_const(0, "early.txt"),
+            call_with_args(1, 100, vec![TirValueId(0)]),
+        ],
+    );
+    let late = function_with_blocks(
+        9,
+        "late",
+        vec![
+            // Deliberately store the numerically later block first.
+            block(
+                7,
+                vec![
+                    string_const(1, "seven.txt"),
+                    call_with_args(2, 100, vec![TirValueId(1)]),
+                ],
+            ),
+            block(
+                2,
+                vec![
+                    string_const(0, "two.txt"),
+                    call_with_args(1, 100, vec![TirValueId(0)]),
+                ],
+            ),
+        ],
+    );
+    let input = module(vec![late, early, extern_function(100, "std.fs.read_text")]);
+    let analysis = analyze(&input).unwrap();
+    let facts = analysis.local_effect_facts();
+
+    let locations: Vec<_> = facts.iter().map(LocalEffectFact::location).collect();
+    assert_eq!(
+        locations,
+        vec![
+            TirLocation {
+                function: TirFunctionId(3),
+                block: TirBlockId(0),
+                instruction_index: 1,
+            },
+            TirLocation {
+                function: TirFunctionId(9),
+                block: TirBlockId(2),
+                instruction_index: 1,
+            },
+            TirLocation {
+                function: TirFunctionId(9),
+                block: TirBlockId(7),
+                instruction_index: 1,
+            },
+        ]
+    );
+
+    assert_eq!(analyze(&input).unwrap(), analysis);
+}
+
+#[test]
+fn non_dominating_ambiguous_and_indirect_definitions_are_unknown() {
+    let cross_block = function_with_blocks(
+        0,
+        "cross_block",
+        vec![
+            block_with_terminator(
+                0,
+                vec![TirInstr::Const(TirValueId(9), TirConst::Bool(true))],
+                TirTerminator::CondBr(TirValueId(9), TirBlockId(1), TirBlockId(2)),
+            ),
+            // The constant is defined in one sibling branch...
+            block_with_terminator(
+                1,
+                vec![string_const(0, "cross")],
+                TirTerminator::Br(TirBlockId(3)),
+            ),
+            // ...but the call is in the other, so the definition does not
+            // dominate the callsite.
+            block_with_terminator(
+                2,
+                vec![call_with_args(1, 100, vec![TirValueId(0)])],
+                TirTerminator::Br(TirBlockId(3)),
+            ),
+            block(3, Vec::new()),
+        ],
+    );
+    let after_call = function(
+        1,
+        "after_call",
+        vec![
+            call_with_args(1, 100, vec![TirValueId(0)]),
+            string_const(0, "too late"),
+        ],
+    );
+    let ambiguous = function(
+        2,
+        "ambiguous",
+        vec![
+            string_const(0, "first"),
+            string_const(0, "second"),
+            call_with_args(1, 100, vec![TirValueId(0)]),
+        ],
+    );
+    let mut parameter = function(
+        3,
+        "parameter",
+        vec![call_with_args(1, 100, vec![TirValueId(0)])],
+    );
+    parameter.params = vec![(TirValueId(0), TirType::String)];
+
+    let analysis = analyze(&module(vec![
+        cross_block,
+        after_call,
+        ambiguous,
+        parameter,
+        extern_function(100, "std.fs.read_text"),
+    ]))
+    .unwrap();
+
+    let facts = analysis.local_effect_facts();
+    assert_eq!(facts.len(), 4);
+    for fact in facts {
+        let fact = specialized(fact);
+        assert_eq!(fact.operation, EffectOperation::FsRead);
+        assert_eq!(fact.resource.knowledge, ResourceKnowledge::Unknown);
+    }
+}
+
+#[test]
+fn local_fact_extraction_does_not_change_broad_capability_requirements() {
+    let caller = function(
+        0,
+        "main",
+        vec![
+            string_const(0, "input.txt"),
+            call_with_args(1, 100, vec![TirValueId(0)]),
+            string_const(2, "build/out.txt"),
+            string_const(3, "file contents"),
+            call_with_args(4, 101, vec![TirValueId(2), TirValueId(3)]),
+        ],
+    );
+    let analysis = analyze(&module(vec![
+        caller,
+        extern_function(100, "std.fs.read_text"),
+        extern_function(101, "std.fs.write_text"),
+    ]))
+    .unwrap();
+
+    let summary = analysis.summary(TirFunctionId(0)).unwrap();
+    assert_eq!(
+        summary.direct,
+        capabilities(&[Capability::Alloc, Capability::Io])
+    );
+    assert_eq!(summary.required, summary.direct);
+    assert_eq!(
+        analysis
+            .origins_for_capability(TirFunctionId(0), Capability::Io)
+            .count(),
+        2
+    );
+    // Three string constants plus the Alloc half of both extern calls.
+    assert_eq!(
+        analysis
+            .origins_for_capability(TirFunctionId(0), Capability::Alloc)
+            .count(),
+        5
+    );
+}
+
+#[test]
+fn numeric_constants_have_exact_port_resource_values() {
+    let body = function(
+        0,
+        "port",
+        vec![
+            int_const(0, 8080),
+            call_with_args(1, 100, vec![TirValueId(0)]),
+        ],
+    );
+    let index = crate::facts::FunctionValueIndex::new(&body);
+    let callsite = TirLocation {
+        function: TirFunctionId(0),
+        block: TirBlockId(0),
+        instruction_index: 1,
+    };
+    assert_eq!(
+        index.resolve(TirValueId(0), callsite),
+        ResourceKnowledge::Exact(ResourceValue::Port(8080))
+    );
+
+    for value in [-1, 65_536] {
+        let body = function(
+            0,
+            "port",
+            vec![
+                int_const(0, value),
+                call_with_args(1, 100, vec![TirValueId(0)]),
+            ],
+        );
+        let index = crate::facts::FunctionValueIndex::new(&body);
+        assert_eq!(
+            index.resolve(TirValueId(0), callsite),
+            ResourceKnowledge::Unknown,
+            "{value}"
+        );
+    }
+}
+
+#[test]
+fn unknown_externs_never_become_local_facts() {
+    let unused = module(vec![
+        function(0, "main", Vec::new()),
+        extern_function(1, "vendor.unknown"),
+    ]);
+    assert!(analyze(&unused).unwrap().local_effect_facts().is_empty());
+
+    let called = module(vec![
+        function(0, "main", vec![call(0, 1)]),
+        extern_function(1, "vendor.unknown"),
+    ]);
+    assert!(matches!(
+        analyze(&called),
+        Err(CapabilityAnalysisError::UnclassifiedExtern { .. })
+    ));
 }

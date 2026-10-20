@@ -8,8 +8,15 @@
 > (guarantee documentation), K4.7A (differential coverage audit), K4.7B
 > (focused differential tests) and K4.7C (final parity gate) are complete.
 > The K4.7 verdict is **PASS** for the supported same-build, same-host/target
-> paths, with the unsupported and deferred paths listed in section 10. K4.8
-> retains ownership of the full taxonomy coverage-gap ledger.
+> paths, with the unsupported and deferred paths listed in section 10.
+>
+> K4.8 adds a **specification-only** normative extension for families,
+> parameterless operation denials, cross-family categories and the missing
+> network taxonomy in
+> [Specialized Effects v0.2](specialized-effects-v0.2.md). It is not
+> implemented. This document remains the description of current behavior and
+> `semantics-6`; K4.10 owns the final coverage ledger after the K4.9
+> implementation sequence.
 >
 > This document records the guarantees that the current compiler actually
 > provides, the trust assumptions behind them and the limits that must not be
@@ -101,8 +108,10 @@ The taxonomy is closed in v0.1. Operation declaration order is canonical.
 
 An accepted clause for an operation without a reachable production binding does
 not create authorization or enforcement. It also does not make the operation
-safe; it records a restriction that currently has nothing to match. K4.8 owns
-the explicit coverage ledger.
+safe; it records a restriction that currently has nothing to match. K4.8 is the
+specification-only family/operation extension in
+[Specialized Effects v0.2](specialized-effects-v0.2.md); K4.10 owns the explicit
+coverage ledger after implementation.
 
 `std.fs.exists` is deliberately classified as broad `Io` with **no specialized
 operation**. A call therefore produces an `UnclassifiedOperation(Io)` fact.
@@ -560,7 +569,7 @@ This is the current documented limitation. K4.6C does not add a specialized
 diagnostic code, a specialized E6 schema, structured witness output or JSON
 fields.
 
-## 10. G. Milestone status and K4.7 parity gate
+## 10. G. Milestone status and specialized gates
 
 ```text
 K4.1 specialized-effects specification       DONE
@@ -578,7 +587,14 @@ K4.7A differential coverage audit              DONE
 K4.7B focused differential tests               DONE
 K4.7C final specialized parity gate            PASS
 K4.7  backend parity/reproducibility gate      DONE
-K4.8  full coverage-gap ledger and non-goals   PLANNED
+K4.8  family/operation semantics spec          DONE (specification only)
+K4.9A taxonomy and parser/AST targets          PLANNED
+K4.9B canonical contracts and driver           PLANNED
+K4.9C analysis and classifier metadata         PLANNED
+K4.9D family/category matcher and enforcement  PLANNED
+K4.9E semantic revision and cache migration    PLANNED
+K4.9  family/operation implementation          PLANNED
+K4.10 final effects gate and coverage ledger   PLANNED
 ```
 
 K4.6A found no contract-enforcement bypass in the audited compilation, runtime
@@ -594,6 +610,13 @@ broad-fact invariance, non-certifying inspection and VM/JIT regressions. K4.7C
 adds independent-process canonical violation evidence and fixes the native-JIT
 limitation in the ledger below. It does not change source, runtime, cache
 format, diagnostics or `semantics-6`.
+
+K4.8 is documentation-only. It records the proposed v0.2 family, parameterless
+operation, cross-family category and network semantics in
+[Specialized Effects v0.2](specialized-effects-v0.2.md). That proposal is not
+implemented and does not change this document's current guarantees. The K4.9
+implementation sequence must add and test those semantics; K4.10 then publishes
+the final per-operation coverage ledger.
 
 ### 10.1 Coverage ledger
 
@@ -684,7 +707,8 @@ No enforcement bypass or demonstrated parity discrepancy was found in those
 supported paths. The native-JIT call limitation, Wasm/AOT absence, unbound
 taxonomy operations, E6 diagnostic projection and cross-machine scope are
 explicitly unsupported or deferred above and are not counted as passing.
-K4.8 will publish the full per-operation enforceable/deferred ledger.
+K4.8 is the specification-only v0.2 extension; K4.10 will publish the full
+per-operation enforceable/deferred ledger after the K4.9 implementation.
 
 ## 11. Deferred work and explicit coverage gaps
 
@@ -744,6 +768,8 @@ K4.8 will publish the full per-operation enforceable/deferred ledger.
 
 ## 13. References
 
+- [Specialized Effects v0.2](specialized-effects-v0.2.md) — proposed,
+  specification-only family/operation extension
 - [Capability contracts v0.1](effects-v0.1.md)
 - [E1 capability analysis](../E1_CAPABILITY_ANALYSIS.md)
 - [Bytecode cache](../BYTECODE_CACHE.md)

@@ -133,7 +133,14 @@ K4.7A differential coverage audit     DONE
 K4.7B focused differential tests      DONE
 K4.7C final specialized parity gate   PASS
 K4.7 backend parity/reproducibility   DONE
-K4.8 coverage-gap ledger              PLANNED
+K4.8 family/operation semantics spec  DONE (specification only)
+K4.9A taxonomy/parser/AST targets     PLANNED
+K4.9B canonical contracts/driver      PLANNED
+K4.9C analysis/classifier metadata    PLANNED
+K4.9D family/category matcher         PLANNED
+K4.9E revision/cache/diagnostics      PLANNED
+K4.9 family/operation implementation  PLANNED
+K4.10 final effects gate              PLANNED
 ```
 
 K1.7 raises the cache trust fingerprint from `semantics-1` to `semantics-2`, so
@@ -204,7 +211,23 @@ structured E6 specialized diagnostics and cross-machine parity remain explicitly
 unsupported or deferred in
 [Specialized Effects v0.1](specs/specialized-effects-v0.1.md#104-final-gate-verdict).
 K4.7C changes tests and documentation only; cache format and `semantics-6` are
-unchanged. K4.8 publishes the full per-operation coverage-gap ledger.
+unchanged.
+
+K4.8 is documentation-only. It records the normative v0.2 extension for `fs`
+and `net` families, parameterless operation denials, `io.read`/`io.write`
+cross-family categories, `net.send`/`net.receive`, and conservative
+future-operation matching in
+[Specialized Effects v0.2](specs/specialized-effects-v0.2.md). It does not
+modify the parser, AST, taxonomy, contracts, matcher, native classifier,
+runtime or cache. The current compiler remains v0.1 on `semantics-6`.
+
+K4.9 implements that specification in sequence: K4.9A taxonomy and parser/AST
+targets; K4.9B canonical contracts and driver binding; K4.9C analysis and
+classifier metadata; K4.9D family/category matching and enforcement; K4.9E
+semantic revision, cache migration and diagnostics. The implementation must
+bump the semantic revision before v0.2 artifacts are trusted. K4.10 then runs
+the final effects gate and publishes the full per-operation
+enforceable/deferred coverage ledger; K4.8 no longer owns that ledger.
 
 ### R — Result / Value-Use Hardening
 

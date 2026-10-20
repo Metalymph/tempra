@@ -7,8 +7,12 @@
 > diagnostics and inspection. K4.6 adds compiler-owned specialized operation
 > refinements and fail-closed resource matching over the same analysis. K4.7
 > establishes differential parity for supported source/file, cache, VM and JIT
-> paths and records the native-JIT limitation. See
-> [Specialized Effects v0.1](specs/specialized-effects-v0.1.md).
+> paths and records the native-JIT limitation. K4.8 is a specification-only
+> extension for families, cross-family categories and network operations; it is
+> not implemented. See
+> [Specialized Effects v0.1](specs/specialized-effects-v0.1.md) for current
+> behavior and [Specialized Effects v0.2](specs/specialized-effects-v0.2.md) for
+> the proposal.
 
 ## Goal and boundary
 
@@ -469,7 +473,10 @@ established independent-process canonical violation parity. The K4.7 verdict is
 **PASS** for supported same-build, same-host/target paths. Native `std.*` calls
 are not JIT-eligible in JIT v1; the calling entry falls back to the interpreter,
 which is documented as unsupported native-JIT coverage rather than an
-enforcement bypass. K4.8 owns the full per-operation coverage-gap ledger.
+enforcement bypass. K4.8 is the specification-only v0.2 family/operation
+extension and does not change this analysis. The K4.9 implementation sequence
+must add the new taxonomy and matching; K4.10 owns the full per-operation
+coverage-gap ledger.
 
 ## Post-E6 state and next compiler milestone
 

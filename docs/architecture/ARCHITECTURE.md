@@ -201,8 +201,16 @@ canonical violation parity. The gate verdict is **PASS** for supported
 same-build, same-host/target paths. Native `std.*` calls remain outside JIT v1:
 the calling entry is rejected and the interpreter executes the native call. This
 is documented as an unsupported execution path, not an enforcement bypass; no
-runtime guard or JIT architecture change was introduced. K4.8 owns the full
-per-operation coverage-gap ledger.
+runtime guard or JIT architecture change was introduced.
+
+K4.8 is documentation-only. It specifies the proposed v0.2 `fs`/`net` families,
+parameterless operation denials, cross-family `io.read`/`io.write` categories,
+`net.send`/`net.receive` and conservative future-operation matching in
+[Specialized Effects v0.2](../specs/specialized-effects-v0.2.md). The parser,
+AST, taxonomy, contracts, matcher, native classifier and cache remain at v0.1
+and `semantics-6`. K4.9 implements the proposal in the documented sequence; the
+implementation must bump the semantic revision before its artifacts are
+trusted. K4.10 owns the final per-operation coverage-gap ledger.
 
 ```text
 tempra-tir

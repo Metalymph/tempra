@@ -11,7 +11,7 @@ use tempra_bytecode::verify::verify_module;
 #[cfg(feature = "jit-cranelift")]
 use std::collections::HashMap;
 #[cfg(feature = "jit-cranelift")]
-use tempra_jit_cranelift::helpers::{JitHeapScalar, JitRuntimeContext};
+use tempra_jit_cranelift::helpers::JitRuntimeContext;
 #[cfg(feature = "jit-cranelift")]
 use tempra_jit_cranelift::{
     compile_function_heap_aware, is_heap_requiring, JitEngine, JitFunctionI64,
@@ -129,52 +129,42 @@ impl<'a> Interpreter<'a> {
                         }
                     }
                 }
-                let mut returned_err = false;
-                if marshal_ok {
+
+                if !marshal_ok {
+                    // Unsupported value at the native boundary: fall back to the
+                    // interpreter. This is not a native runtime failure.
+                    if let Some(ref mut prof) = self.profiling {
+                        let stats = &mut prof.stats[function_id.0 as usize];
+                        stats.jit_fallback_calls += 1;
+                        stats.jit_heap_fallbacks += 1;
+                    }
+                } else {
                     let before_helpers = ctx.helper_calls;
                     let before_allocs = ctx.allocation_count();
 
                     let start_native = std::time::Instant::now();
-                    match jit_fn.call_with_ctx(&mut ctx as *mut JitRuntimeContext, &i64_args) {
-                        Ok(res) => {
-                            let elapsed = start_native.elapsed().as_nanos() as u64;
-                            let delta_helpers = ctx.helper_calls - before_helpers;
-                            let delta_allocs = ctx.allocation_count() - before_allocs;
-                            if let Some(ref mut prof) = self.profiling {
-                                let stats = &mut prof.stats[function_id.0 as usize];
-                                stats.jit_runtime_calls += 1;
-                                stats.jit_heap_runtime_calls += 1;
-                                stats.jit_heap_helper_calls += delta_helpers;
-                                stats.jit_heap_handle_allocations += delta_allocs;
-                                stats.jit_heap_context_objects += ctx.object_count() as u64;
-                                stats.jit_heap_handle_cache_hits += ctx.cache_hits;
-                                stats.jit_heap_handle_cache_misses += ctx.cache_misses;
-                                stats.jit_total_native_time_ns += elapsed;
-                            }
-                            return Ok(VmValue::Int64(res));
-                        }
-                        Err(JitRuntimeError::Int64Arithmetic(error)) => {
-                            let elapsed = start_native.elapsed().as_nanos() as u64;
-                            if let Some(ref mut prof) = self.profiling {
-                                let stats = &mut prof.stats[function_id.0 as usize];
-                                stats.jit_runtime_calls += 1;
-                                stats.jit_heap_runtime_calls += 1;
-                                stats.jit_heap_errors += 1;
-                                stats.jit_total_native_time_ns += elapsed;
-                            }
-                            return Err(VmError::Int64Arithmetic(error));
-                        }
-                        Err(_) => {
-                            returned_err = true;
+                    let result =
+                        jit_fn.call_with_ctx(&mut ctx as *mut JitRuntimeContext, &i64_args);
+                    let elapsed = start_native.elapsed().as_nanos() as u64;
+
+                    if let Some(ref mut prof) = self.profiling {
+                        let stats = &mut prof.stats[function_id.0 as usize];
+                        stats.jit_runtime_calls += 1;
+                        stats.jit_heap_runtime_calls += 1;
+                        stats.jit_heap_helper_calls += ctx.helper_calls - before_helpers;
+                        stats.jit_heap_handle_allocations += ctx.allocation_count() - before_allocs;
+                        stats.jit_heap_context_objects += ctx.object_count() as u64;
+                        stats.jit_heap_handle_cache_hits += ctx.cache_hits;
+                        stats.jit_heap_handle_cache_misses += ctx.cache_misses;
+                        stats.jit_total_native_time_ns += elapsed;
+                        if result.is_err() {
+                            stats.jit_heap_errors += 1;
                         }
                     }
-                }
-                if let Some(ref mut prof) = self.profiling {
-                    let stats = &mut prof.stats[function_id.0 as usize];
-                    stats.jit_fallback_calls += 1;
-                    stats.jit_heap_fallbacks += 1;
-                    if returned_err || !marshal_ok {
-                        stats.jit_heap_errors += 1;
+
+                    match result {
+                        Ok(res) => return Ok(VmValue::Int64(res)),
+                        Err(error) => return Err(jit_runtime_error_to_vm(error)),
                     }
                 }
             }
@@ -190,32 +180,27 @@ impl<'a> Interpreter<'a> {
                         break;
                     }
                 }
-                if compatible {
-                    let start_native = std::time::Instant::now();
-                    match jit_fn.call_i64(&i64_args) {
-                        Ok(res) => {
-                            let elapsed = start_native.elapsed().as_nanos() as u64;
-                            if let Some(ref mut prof) = self.profiling {
-                                prof.stats[function_id.0 as usize].jit_runtime_calls += 1;
-                                prof.stats[function_id.0 as usize].jit_total_native_time_ns +=
-                                    elapsed;
-                            }
-                            return Ok(VmValue::Int64(res));
-                        }
-                        Err(JitRuntimeError::Int64Arithmetic(error)) => {
-                            let elapsed = start_native.elapsed().as_nanos() as u64;
-                            if let Some(ref mut prof) = self.profiling {
-                                prof.stats[function_id.0 as usize].jit_runtime_calls += 1;
-                                prof.stats[function_id.0 as usize].jit_total_native_time_ns +=
-                                    elapsed;
-                            }
-                            return Err(VmError::Int64Arithmetic(error));
-                        }
-                        Err(_) => {}
+
+                if !compatible {
+                    // Unsupported value at the native boundary: fall back to the
+                    // interpreter. This is not a native runtime failure.
+                    if let Some(ref mut prof) = self.profiling {
+                        prof.stats[function_id.0 as usize].jit_fallback_calls += 1;
                     }
-                }
-                if let Some(ref mut prof) = self.profiling {
-                    prof.stats[function_id.0 as usize].jit_fallback_calls += 1;
+                } else {
+                    let start_native = std::time::Instant::now();
+                    let result = jit_fn.call_i64(&i64_args);
+                    let elapsed = start_native.elapsed().as_nanos() as u64;
+
+                    if let Some(ref mut prof) = self.profiling {
+                        prof.stats[function_id.0 as usize].jit_runtime_calls += 1;
+                        prof.stats[function_id.0 as usize].jit_total_native_time_ns += elapsed;
+                    }
+
+                    match result {
+                        Ok(res) => return Ok(VmValue::Int64(res)),
+                        Err(error) => return Err(jit_runtime_error_to_vm(error)),
+                    }
                 }
             }
         }
@@ -576,9 +561,6 @@ impl<'a> Interpreter<'a> {
             // Increment IP before execution
             let (frame_func_id, current_ip) = {
                 let frame = self.call_stack.last_mut().unwrap();
-                let target_func = &self.module.functions[frame.function_id.0 as usize];
-                let instr = &target_func.code[frame.ip];
-
                 let func_id = frame.function_id;
                 let ip = frame.ip;
                 frame.ip += 1;
@@ -835,55 +817,49 @@ impl<'a> Interpreter<'a> {
                                 }
                             }
 
-                            let mut success = false;
-                            let mut returned_err = false;
-                            let mut delta_helpers = 0;
-                            let mut delta_allocs = 0;
-                            let mut final_objects = 0;
-
                             if marshal_ok {
                                 let before_helpers = ctx.helper_calls;
                                 let before_allocs = ctx.allocation_count();
 
-                                match jit_fn
-                                    .call_with_ctx(&mut ctx as *mut JitRuntimeContext, &i64_args)
-                                {
-                                    Ok(res) => {
-                                        self.push(VmValue::Int64(res))?;
-                                        success = true;
-                                        delta_helpers = ctx.helper_calls - before_helpers;
-                                        delta_allocs = ctx.allocation_count() - before_allocs;
-                                        final_objects = ctx.object_count() as u64;
-                                    }
-                                    Err(_) => {
-                                        returned_err = true;
-                                    }
-                                }
-                            }
+                                let start_native = std::time::Instant::now();
+                                let result = jit_fn
+                                    .call_with_ctx(&mut ctx as *mut JitRuntimeContext, &i64_args);
+                                let elapsed = start_native.elapsed().as_nanos() as u64;
 
-                            if let Some(ref mut prof) = self.profiling {
-                                let stats = &mut prof.stats[target_id.0 as usize];
-                                if success {
+                                if let Some(ref mut prof) = self.profiling {
+                                    let stats = &mut prof.stats[target_id.0 as usize];
                                     stats.jit_runtime_calls += 1;
                                     stats.jit_heap_runtime_calls += 1;
-                                    stats.jit_heap_helper_calls += delta_helpers;
-                                    stats.jit_heap_handle_allocations += delta_allocs;
-                                    stats.jit_heap_context_objects += final_objects;
+                                    stats.jit_heap_helper_calls +=
+                                        ctx.helper_calls - before_helpers;
+                                    stats.jit_heap_handle_allocations +=
+                                        ctx.allocation_count() - before_allocs;
+                                    stats.jit_heap_context_objects += ctx.object_count() as u64;
                                     stats.jit_heap_handle_cache_hits += ctx.cache_hits;
                                     stats.jit_heap_handle_cache_misses += ctx.cache_misses;
-                                } else {
-                                    stats.jit_fallback_calls += 1;
-                                    stats.jit_heap_fallbacks += 1;
-                                    if returned_err || !marshal_ok {
+                                    stats.jit_total_native_time_ns += elapsed;
+                                    if result.is_err() {
                                         stats.jit_heap_errors += 1;
                                     }
                                 }
+
+                                match result {
+                                    Ok(res) => {
+                                        self.push(VmValue::Int64(res))?;
+                                        continue;
+                                    }
+                                    Err(error) => return Err(jit_runtime_error_to_vm(error)),
+                                }
                             }
 
-                            if success {
-                                continue;
+                            // Unsupported value at the native boundary: fall back to
+                            // the interpreter. This is not a native runtime failure.
+                            if let Some(ref mut prof) = self.profiling {
+                                let stats = &mut prof.stats[target_id.0 as usize];
+                                stats.jit_fallback_calls += 1;
+                                stats.jit_heap_fallbacks += 1;
                             }
-                            // Fallback: put args back on stack
+                            // Put args back on stack for the interpreter.
                             for arg in args {
                                 self.push(arg)?;
                             }
@@ -907,26 +883,32 @@ impl<'a> Interpreter<'a> {
                                 }
                             }
 
-                            let mut success = false;
                             if compatible {
-                                if let Ok(res) = jit_fn.call_i64(&i64_args) {
-                                    self.push(VmValue::Int64(res))?;
-                                    success = true;
+                                let start_native = std::time::Instant::now();
+                                let result = jit_fn.call_i64(&i64_args);
+                                let elapsed = start_native.elapsed().as_nanos() as u64;
+
+                                if let Some(ref mut prof) = self.profiling {
+                                    let stats = &mut prof.stats[target_id.0 as usize];
+                                    stats.jit_runtime_calls += 1;
+                                    stats.jit_total_native_time_ns += elapsed;
+                                }
+
+                                match result {
+                                    Ok(res) => {
+                                        self.push(VmValue::Int64(res))?;
+                                        continue;
+                                    }
+                                    Err(error) => return Err(jit_runtime_error_to_vm(error)),
                                 }
                             }
 
+                            // Unsupported value at the native boundary: fall back to
+                            // the interpreter. This is not a native runtime failure.
                             if let Some(ref mut prof) = self.profiling {
-                                if success {
-                                    prof.stats[target_id.0 as usize].jit_runtime_calls += 1;
-                                } else {
-                                    prof.stats[target_id.0 as usize].jit_fallback_calls += 1;
-                                }
+                                prof.stats[target_id.0 as usize].jit_fallback_calls += 1;
                             }
-
-                            if success {
-                                continue;
-                            }
-                            // Fallback: put args back on stack
+                            // Put args back on stack for the interpreter.
                             for arg in args {
                                 self.push(arg)?;
                             }
@@ -1386,6 +1368,20 @@ impl<'a> Interpreter<'a> {
                 found: other.type_name().into(),
             }),
         }
+    }
+}
+
+/// Converts a native JIT failure into a VM error.
+///
+/// Native runtime failures are returned to the caller and never trigger VM
+/// fallback: by the time the native wrapper reports an error, the function has
+/// already started executing and re-running it in the interpreter would
+/// duplicate side effects.
+#[cfg(feature = "jit-cranelift")]
+fn jit_runtime_error_to_vm(error: JitRuntimeError) -> VmError {
+    match error {
+        JitRuntimeError::Int64Arithmetic(error) => VmError::Int64Arithmetic(error),
+        other => VmError::Native(other.to_string()),
     }
 }
 

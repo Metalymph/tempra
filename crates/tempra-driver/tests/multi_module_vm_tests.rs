@@ -10,6 +10,79 @@ fn run_tempra_vm_file(entry: &PathBuf) -> Result<VmValue, DriverError> {
 }
 
 #[test]
+fn test_entry_module_unqualified_function_call() {
+    let dir = tempdir().unwrap();
+    let main_path = dir.path().join("main.tmpr");
+
+    // Forward reference: `add` is declared after `main` in source order.
+    let main_src = r#"
+pub fn main() -> Int64 {
+    return add(10, 20)
+}
+
+fn add(a: Int64, b: Int64) -> Int64 {
+    return a + b
+}
+"#;
+
+    fs::write(&main_path, main_src).unwrap();
+
+    let res = run_tempra_vm_file(&main_path).unwrap();
+    assert_eq!(res, VmValue::Int64(30));
+}
+
+#[test]
+fn test_imported_module_unqualified_function_call() {
+    let dir = tempdir().unwrap();
+    let math_path = dir.path().join("math.tmpr");
+    let main_path = dir.path().join("main.tmpr");
+
+    let math_src = r#"
+fn double(x: Int64) -> Int64 {
+    return x * 2
+}
+
+pub fn doubled(x: Int64) -> Int64 {
+    return double(x)
+}
+"#;
+
+    let main_src = r#"
+import math;
+
+pub fn main() -> Int64 {
+    return math.doubled(21)
+}
+"#;
+
+    fs::write(&math_path, math_src).unwrap();
+    fs::write(&main_path, main_src).unwrap();
+
+    let res = run_tempra_vm_file(&main_path).unwrap();
+    assert_eq!(res, VmValue::Int64(42));
+}
+
+#[test]
+fn test_hir_unqualified_function_call_unchanged() {
+    let dir = tempdir().unwrap();
+    let main_path = dir.path().join("main.tmpr");
+
+    let main_src = r#"
+pub fn main() {
+    let _sum = add(10, 20)
+}
+
+fn add(a: Int64, b: Int64) -> Int64 {
+    return a + b
+}
+"#;
+
+    fs::write(&main_path, main_src).unwrap();
+
+    tempra_driver::run_file_with_args(&main_path, &[]).unwrap();
+}
+
+#[test]
 fn test_local_module_import() {
     let dir = tempdir().unwrap();
     let math_path = dir.path().join("math.tmpr");

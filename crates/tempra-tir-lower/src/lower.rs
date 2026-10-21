@@ -259,6 +259,10 @@ pub struct LowerContext<'a> {
     pub module_builder: &'a mut ModuleBuilder,
     pub self_ty: Option<Type>,
     pub generic_subs: HashMap<String, Type>,
+    /// Module prefix used to qualify top-level function lookups in the
+    /// module-graph compilation path. `None` means the single-file path,
+    /// where type checking registers unqualified function names.
+    pub module_prefix: Option<String>,
     /// (SlotId, Type, is_mutable)
     pub locals: HashMap<String, (TirSlotId, TirType, bool)>,
     pub local_hir_types: HashMap<String, Type>,
@@ -278,9 +282,34 @@ impl<'a> LowerContext<'a> {
             module_builder,
             self_ty,
             generic_subs,
+            module_prefix: None,
             locals: HashMap::new(),
             local_hir_types: HashMap::new(),
         }
+    }
+
+    /// Resolves a top-level function name using the module currently being
+    /// lowered. The module-graph path registers functions as `module.function`,
+    /// while single-file compilation registers them unqualified.
+    fn lookup_function(
+        &self,
+        name: &str,
+    ) -> Option<(String, tempra_typeck::context::FunctionSignature)> {
+        if let Some(prefix) = self
+            .module_prefix
+            .as_deref()
+            .filter(|prefix| !prefix.is_empty())
+        {
+            let qualified = format!("{}.{}", prefix, name);
+            if let Some(sig) = self.type_ctx.functions.get(&qualified) {
+                return Some((qualified, sig.clone()));
+            }
+        }
+
+        self.type_ctx
+            .functions
+            .get(name)
+            .map(|sig| (name.to_string(), sig.clone()))
     }
 
     fn collect_locals_from_statement(&mut self, stmt: &HirStatement) -> Result<(), TirLowerError> {
@@ -579,7 +608,7 @@ impl<'a> LowerContext<'a> {
                         }
                         "Ok" | "Err" => Ok(Type::Unknown),
                         _ => {
-                            if let Some(sig) = self.type_ctx.functions.get(name.as_str()) {
+                            if let Some((_, sig)) = self.lookup_function(name) {
                                 Ok(sig.return_type.clone())
                             } else {
                                 Err(TirLowerError::UnsupportedExpr(
@@ -662,6 +691,17 @@ impl<'a> LowerContext<'a> {
         } else {
             Ok(match_ty)
         }
+    }
+
+    /// Whether control can continue past the block currently being lowered.
+    ///
+    /// A block that is not terminated may still be unreachable: the existing
+    /// lowering strategy creates an empty join block after an `if` whose
+    /// branches all terminate, so that unreachable statements can still be
+    /// lowered. Such a join must not be mistaken for a live fallthrough by an
+    /// enclosing `if`.
+    fn block_falls_through(&self, block_id: TirBlockId) -> bool {
+        !self.builder.is_terminated() && self.builder.is_block_reachable_from_entry(block_id)
     }
 
     pub fn lower_statement(&mut self, stmt: &HirStatement) -> Result<(), TirLowerError> {
@@ -1055,17 +1095,7 @@ impl<'a> LowerContext<'a> {
         &self,
         name: &str,
     ) -> Option<(String, tempra_typeck::context::FunctionSignature)> {
-        if !self.type_ctx.current_module.is_empty() {
-            let qualified = format!("{}.{}", self.type_ctx.current_module, name);
-            if let Some(sig) = self.type_ctx.functions.get(&qualified) {
-                return Some((qualified, sig.clone()));
-            }
-        }
-
-        self.type_ctx
-            .functions
-            .get(name)
-            .map(|sig| (name.to_string(), sig.clone()))
+        self.lookup_function(name)
     }
 
     fn resolve_collection_callback(
@@ -2246,7 +2276,7 @@ impl<'a> LowerContext<'a> {
                     self.lower_statement(stmt)?;
                 }
                 t_block = self.builder.get_current_block().unwrap();
-                let t_terminated = self.builder.is_terminated();
+                let t_falls_through = self.block_falls_through(t_block);
 
                 // Else block
                 self.builder.set_current_block(f_block);
@@ -2265,23 +2295,24 @@ impl<'a> LowerContext<'a> {
                     }
                 }
                 f_block = self.builder.get_current_block().unwrap();
-                let f_terminated = self.builder.is_terminated();
+                let f_falls_through = self.block_falls_through(f_block);
 
-                if t_terminated && f_terminated {
-                    // Both branches terminate. We still create a join block so that
-                    // subsequent instructions (which are unreachable) can be appended
-                    // without causing a "block already terminated" error.
+                if !t_falls_through && !f_falls_through {
+                    // Neither branch can reach the join. We still create a block so
+                    // that subsequent instructions (which are unreachable) can be
+                    // appended without causing a "block already terminated" error.
+                    // The block has no incoming edges and is therefore unreachable.
                     let end_block = self.builder.new_block();
                     self.builder.set_current_block(end_block);
                     Ok(TirValueId(0))
                 } else {
                     let end_block = self.builder.new_block();
 
-                    if !t_terminated {
+                    if t_falls_through {
                         self.builder.set_current_block(t_block);
                         self.builder.build_br(end_block)?;
                     }
-                    if !f_terminated {
+                    if f_falls_through {
                         self.builder.set_current_block(f_block);
                         self.builder.build_br(end_block)?;
                     }
@@ -2657,7 +2688,7 @@ impl<'a> LowerContext<'a> {
                             .map_err(|e| e.into());
                     }
 
-                    if let Some(sig) = self.type_ctx.functions.get(name) {
+                    if let Some((resolved_name, sig)) = self.lookup_function(name) {
                         if sig.params.len() != c.args.len() {
                             return Err(TirLowerError::UnsupportedExpr(
                                 format!(
@@ -2679,7 +2710,7 @@ impl<'a> LowerContext<'a> {
                             arg_values.push(self.lower_expression(arg_expr)?);
                         }
 
-                        let func_id = self.module_builder.declare_function(name);
+                        let func_id = self.module_builder.declare_function(&resolved_name);
                         return self
                             .builder
                             .build_call(func_id, arg_values)
@@ -2933,7 +2964,7 @@ impl<'a> LowerContext<'a> {
             self.lower_statement(stmt)?;
         }
         t_block = self.builder.get_current_block().unwrap();
-        let t_terminated = self.builder.is_terminated();
+        let t_falls_through = self.block_falls_through(t_block);
 
         // Restore locals after then block (bindings should not leak)
         self.locals = old_locals;
@@ -2953,23 +2984,24 @@ impl<'a> LowerContext<'a> {
             }
         }
         f_block = self.builder.get_current_block().unwrap();
-        let f_terminated = self.builder.is_terminated();
+        let f_falls_through = self.block_falls_through(f_block);
 
-        if t_terminated && f_terminated {
-            // Both branches terminate. We still create a join block so that
-            // subsequent instructions (which are unreachable) can be appended
-            // without causing a "block already terminated" error.
+        if !t_falls_through && !f_falls_through {
+            // Neither branch can reach the join. We still create a block so
+            // that subsequent instructions (which are unreachable) can be
+            // appended without causing a "block already terminated" error.
+            // The block has no incoming edges and is therefore unreachable.
             let end_block = self.builder.new_block();
             self.builder.set_current_block(end_block);
             Ok(TirValueId(0))
         } else {
             let end_block = self.builder.new_block();
 
-            if !t_terminated {
+            if t_falls_through {
                 self.builder.set_current_block(t_block);
                 self.builder.build_br(end_block)?;
             }
-            if !f_terminated {
+            if f_falls_through {
                 self.builder.set_current_block(f_block);
                 self.builder.build_br(end_block)?;
             }
@@ -3594,6 +3626,7 @@ fn lower_function_inner(
         self_ty.clone(),
         generic_subs.clone(),
     );
+    ctx.module_prefix = module_prefix.map(str::to_string);
 
     // Create entry block
     let entry_block = ctx.builder.new_block();
@@ -3623,19 +3656,23 @@ fn lower_function_inner(
         if ctx.builder.func.return_type == TirType::Unit {
             ctx.builder.build_ret(None)?;
         } else {
-            // If the current block is not the entry block and has no predecessors,
-            // it's an unreachable block created by a fully terminating branch (e.g. if with both returns).
-            // We must still terminate it for the verifier, so we use unreachable.
+            // A block can have predecessors and still be unreachable when those
+            // predecessors are themselves unreachable (e.g. a join nested inside
+            // an `if` whose branches all return). Only a block reachable from the
+            // entry can represent a genuinely missing return path.
             let current_block_id = ctx.builder.get_current_block().unwrap();
-            if current_block_id.0 == 0 || ctx.builder.has_predecessors(current_block_id) {
+            if ctx.builder.is_block_reachable_from_entry(current_block_id) {
                 let body_span = func.body.as_ref().map_or(func.span, |b| b.span);
                 return Err(TirLowerError::MissingReturn(body_span));
-            } else {
-                // Unreachable join block, terminate it
-                ctx.builder.build_unreachable()?;
             }
+            // Otherwise the continuation is dead. Leave it unterminated; it is
+            // pruned below.
         }
     }
+
+    // Abandoned continuation blocks cannot affect execution, and the verifier
+    // must not see them as missing returns. Remove them from the final CFG.
+    ctx.builder.prune_unreachable_blocks();
 
     Ok(ctx.builder.build())
 }

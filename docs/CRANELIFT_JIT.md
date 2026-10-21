@@ -114,12 +114,14 @@ The VM always maintains the stack-based interpreter as the primary runtime. If:
 1. A function uses unsupported types (Strings, Structs, etc.).
 2. JIT compilation fails.
 3. The function signature is not compatible with the JIT ABI.
+4. A VM value cannot be marshalled across the native boundary.
 
 Then the VM transparently falls back to interpreting the bytecode, ensuring correctness over performance.
 
-Checked `Int64` overflow or division-by-zero returned by successfully executing
-native code is not a rejection or compatibility failure and therefore does not
-fall back.
+A runtime failure produced by already-running native code is different. Checked `Int64`
+overflow/division-by-zero and heap-helper failures (bounds, type, or handle errors) are
+returned to the VM as typed errors. They never trigger fallback and never re-execute the
+function in the interpreter.
 
 ### JIT Cache
 Compiled functions are stored in an in-memory cache (`HashMap<FunctionId, JitFunctionI64>`) within the `Interpreter` instance.

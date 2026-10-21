@@ -137,3 +137,28 @@ fn main() -> Int64 {
         VmValue::Int64(42),
     );
 }
+
+#[test]
+fn nested_terminating_branches_execute_through_tir_interpreter() {
+    let source = r#"
+fn classify(n: Int64) -> Int64 {
+    if n < 0 {
+        return -1
+    } else {
+        if n == 0 {
+            return 0
+        } else {
+            if n > 100 { return 2 } else { return 1 }
+        }
+    }
+}
+
+fn main() -> Int64 {
+    return classify(150)
+}
+"#;
+
+    emit_tir_source(source).expect("nested terminating branches must produce valid TIR");
+    let actual = tempra_driver::pipeline::interpret_tir_source(source, "main", vec![]).unwrap();
+    assert_eq!(actual, tempra_tir_interp::TirRuntimeValue::Int64(2));
+}

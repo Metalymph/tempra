@@ -93,6 +93,11 @@ runtime and effect-analysis revision: checked `Int64` add/sub/mul/div now have o
 host-safe contract and conservative `Panic` facts. It does not change comptime's
 canonical HIR authority or the bytecode format.
 
+K4.5B raises current trust to `tempra-{CARGO_PKG_VERSION}-semantics-6` because
+revision-5 artifacts may contain specialized `@deny` clauses that were retained
+without static enforcement. Comptime's HIR authority and the bytecode format are
+unchanged.
+
 ```text
 K1 audit/spec        DONE
 K1.1 facade          DONE

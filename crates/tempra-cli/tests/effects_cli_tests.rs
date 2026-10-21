@@ -141,6 +141,112 @@ fn human_violation_uses_real_source_and_named_witness() {
 }
 
 #[test]
+fn json_specialized_violation_is_not_reported_as_successful_inspection() {
+    let (_dir, path) = write(
+        r#"
+import std.fs;
+
+@deny(fs.write(destination: "blocked.txt"))
+pub fn main() -> Int64 {
+    let result = std.fs.write_text("blocked.txt", "data");
+    return match result { Ok(_) => 0 Err(_) => 1 };
+}
+"#,
+    );
+    let output = run(&path, true);
+    assert_eq!(output.status.code(), Some(1));
+    let document = json_stdout(&output);
+    assert!(document["functions"].as_array().unwrap().is_empty());
+    let diagnostic = &document["diagnostics"][0];
+    assert_eq!(diagnostic["severity"], "error");
+    assert!(diagnostic["message"]
+        .as_str()
+        .unwrap()
+        .contains("Specialized capability contract violation"));
+}
+
+#[test]
+fn v02_specialized_failures_preserve_generic_e6_output_and_single_json_document() {
+    let cases = [
+        (
+            "fs",
+            "let result = std.fs.write_text(\"blocked.txt\", \"data\");",
+            false,
+        ),
+        (
+            "io.write",
+            "let result = std.fs.write_text(\"blocked.txt\", \"data\");",
+            true,
+        ),
+        ("io.write()", "std.io.println(\"x\");", false),
+        (
+            "fs.write(destination: \"blocked.txt\")",
+            "let result = std.fs.write_text(\"blocked.txt\", \"data\");",
+            false,
+        ),
+        (
+            "fs.write(destination: \"blocked.txt\")",
+            "let result = std.fs.write_text(path, \"data\");",
+            true,
+        ),
+        ("net", "let found = std.fs.exists(path);", true),
+    ];
+    for (target, operation, transitive) in cases {
+        let body = if transitive {
+            format!("fn helper(path: String) {{ {operation} }} @deny({target}) pub fn main() {{ helper(\"blocked.txt\") }}")
+        } else {
+            format!("@deny({target}) pub fn main() {{ {operation} }}")
+        };
+        let (_dir, path) = write(&format!("import std.fs; import std.io; {body}"));
+        let first = run(&path, true);
+        assert_eq!(first.status.code(), Some(1), "{target}");
+        assert_eq!(
+            json_stdout(&first),
+            serde_json::json!({
+                "diagnostics": [{
+                    "severity": "error", "code": null,
+                    "message": "Specialized capability contract violation(s): 1",
+                    "labels": [], "notes": [],
+                }],
+                "functions": [],
+            })
+        );
+        let second = run(&path, true);
+        assert_eq!(second.status.code(), Some(1));
+        json_stdout(&second);
+        assert_eq!(first.stdout, second.stdout);
+        let human = run(&path, false);
+        assert_eq!(human.status.code(), Some(1));
+        assert!(human.stdout.is_empty());
+        assert_eq!(
+            String::from_utf8(human.stderr).unwrap(),
+            "error: Specialized capability contract violation(s): 1\n"
+        );
+    }
+}
+
+#[test]
+fn valid_specialized_inspection_keeps_current_e6_projection_limit_explicit() {
+    let (_dir, path) = write("@deny(fs, io.write()) pub fn main() -> Int64 { return 42 }");
+    let output = run(&path, true);
+    assert!(output.status.success());
+    let document = json_stdout(&output);
+    assert_eq!(document["diagnostics"], serde_json::json!([]));
+    let contract = &document["functions"][0]["contract"];
+    assert_eq!(contract["effective_denied"], serde_json::json!([]));
+    assert_eq!(contract["explicit_denied"], serde_json::json!([]));
+    // The typed driver retains specialized clauses, but current E6 does not
+    // project them. Keep that documented limitation separate from enforcement.
+    assert!(contract.get("specialized_denied").is_none());
+    let human = run(&path, false);
+    assert!(human.status.success());
+    assert!(human.stderr.is_empty());
+    assert!(String::from_utf8(human.stdout)
+        .unwrap()
+        .contains("  contract: none\n"));
+}
+
+#[test]
 fn json_transitive_and_multiple_violations_remain_structured_and_stable() {
     let dir = TestDir::new();
     std::fs::write(

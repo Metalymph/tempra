@@ -1,5 +1,5 @@
 use std::fs;
-use tempra_native::registry::resolve;
+use tempra_native::registry::{registered_natives, resolve};
 
 #[test]
 fn test_registry_coverage() {
@@ -33,6 +33,20 @@ fn test_registry_coverage() {
         "Missing native registry targets for: {:?}",
         missing
     );
+}
+
+#[test]
+fn net_transfer_operations_have_no_native_bindings() {
+    // `net.send` and `net.receive` are taxonomy-only in v0.2. The native
+    // registry is a separate compiler-owned table; no network implementation or
+    // registration may appear without an explicit classifier operation.
+    assert!(registered_natives().all(|(module, _)| module != "std.net"));
+    for function in ["connect", "listen", "send", "receive"] {
+        assert!(
+            resolve("std.net", function).is_none(),
+            "std.net.{function} must not gain an implicit native binding"
+        );
+    }
 }
 
 #[test]

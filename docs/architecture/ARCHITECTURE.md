@@ -39,8 +39,8 @@ Source
       → canonical comptime facade and HIR pruning/materialization
   → TIR lowering
   → TIR verification
-  → Capability analysis (fresh compilation)
-  → Deny contract enforcement
+  → Capability analysis (broad and specialized facts, fresh compilation)
+  → Broad and specialized contract enforcement
   → Bytecode lowering
   → Bytecode verification
   → VmCompilation (retained TIR, capability facts, bytecode)
@@ -112,12 +112,16 @@ field diagnostics follow canonical source/module declaration order. These semant
 revisions are independent of bytecode format version.
 
 K3.2 raises current trust to `semantics-5` because checked `Int64` add/sub/mul
-now contribute `Panic` and revision-4 hits could bypass that enforcement. The
-shared `tempra-runtime` arithmetic contract is consumed by the HIR interpreter,
-TIR interpreter and VM. Eligible JIT functions implement equivalent checked
+now contribute `Panic` and revision-4 hits could bypass that enforcement.
+K4.5B raised trust to `semantics-6` because revision-5 hits could bypass
+static specialized `@deny` enforcement. K4.9D raises current trust to `semantics-7`
+for v0.2 family/category enforcement; K4.9E confirms compatibility without a
+further revision. The shared `tempra-runtime` arithmetic
+contract is consumed by the HIR interpreter, TIR interpreter and VM. Eligible JIT functions implement equivalent checked
 Cranelift operations and propagate a C-compatible `{ value, status }` result
-through pure and heap-aware native calls; arithmetic failure is returned to the
-VM as a typed error and never reclassified as fallback.
+through pure and heap-aware native calls. A non-zero status from native code is
+returned to the VM as a typed runtime failure and is never reclassified as
+fallback or re-executed in the interpreter.
 
 ## Capability analysis insertion point
 
@@ -155,8 +159,72 @@ and the driver unions Io/Process/Spawn/Nondeterminism with explicit deny. Effect
 contracts retain pure provenance separately from explicit deny spans. Neither
 E1 analysis nor E3.2 enforcement changes; pure allows allocation and may-panic
 operations unless explicitly denied. The shared HIR presence guard covers pure
-without changing the execution adapters. `semantics-1` remains valid because the
-old parser rejected pure and changed annotations change source identity.
+without changing the execution adapters. `semantics-1` remained valid at that
+point because the old parser rejected pure and changed annotations change source
+identity.
+
+### K4.6 specialized refinements (implemented)
+
+K4.6 adds compiler-owned specialized operations as a refinement over broad
+capabilities. `Capability`, `CapabilitySet`, `@pure`, broad `@deny` and bytecode
+are unchanged. Specialized clauses live in the compilation-local contract side
+table and reuse the same E1 summaries, call graph and witnesses. Operation
+identity and resource knowledge stay separate: exact literals and `*` are
+supported; unknown resources, missing classification and unclassified operations
+under a denied parent fail closed. Different known operations are disjoint.
+Broad violation results remain authoritative and are returned before specialized
+results.
+
+Classification is explicit compiler metadata, not inference from native names or
+types. The production `tempra-native` registry and the `tempra-effects`
+classifier remain separate tables; K4.6B.1 cross-crate tests require exact name,
+parent-capability, signature and resource-position agreement. Resolver identity
+is trusted, native code is not sandboxed and native handlers still validate their
+arguments manually.
+
+Enforcement runs before bytecode lowering. VM, profiled VM and JIT consume only
+already-enforced bytecode; there is no runtime specialized-effect guard. HIR,
+test, REPL and source-TIR execution reject any annotated input; `check` and
+`emit-tir` remain non-enforcing tooling. Effect inspection compiles fresh and
+enforces, but specialized violations currently surface as a generic compiler
+error rather than an E6 structured diagnostic; the E6 schema is unchanged.
+
+K4.5B raised cache trust to `semantics-6`, so revision-5 artifacts retaining
+unenforced specialized clauses cannot be reused. Hits remain trusted
+bytecode-only artifacts with no reconstructed facts. Filesystem parameters are
+opaque source spellings: no canonicalization, symlink/hard-link confinement,
+mount-alias protection or TOCTOU guarantee is claimed. K4.6A found no bypass;
+K4.6B.2 covers fresh source/file, VM/profiling/JIT, cache, unsupported paths,
+unknown externs and inspection boundaries. K4.6C records the guarantees in
+[Specialized Effects v0.1](../specs/specialized-effects-v0.1.md). K4.7A audited
+differential coverage, K4.7B added focused source/file, enforcement, determinism,
+inspection and VM/JIT regressions, and K4.7C established independent-process
+canonical violation parity. The gate verdict is **PASS** for supported
+same-build, same-host/target paths. Native `std.*` calls remain outside JIT v1:
+the calling entry is rejected and the interpreter executes the native call. This
+is documented as an unsupported execution path, not an enforcement bypass; no
+runtime guard or JIT architecture change was introduced.
+
+K4.8 is documentation-only. It specifies the proposed v0.2 `fs`/`net` families,
+parameterless operation denials, cross-family `io.read`/`io.write` categories,
+`net.send`/`net.receive` and conservative future-operation matching in
+[Specialized Effects v0.2](../specs/specialized-effects-v0.2.md). K4.9A–E now
+implement and review that vocabulary and enforcement under `semantics-7`.
+Family/category predicates use canonical classification without expanding to
+operation lists; unknown membership under the relevant parent is potential.
+Resource-qualified generic I/O remains operation-scoped. The typed specialized
+error retains targets, resources, spans, classifications and witnesses, but E6
+still reports a generic count and omits specialized intent from successful CLI
+inspection. Module/file compilation explicitly rejects annotated extend methods
+because it does not lower those methods; source compilation binds supported
+methods normally. No runtime guard, sandbox or connection identity is added.
+K4.10's [final gate and ledger](../K4_SPECIALIZED_EFFECTS_GATE.md) is PASS for
+this bounded static surface: three production-classified operation identities,
+ten taxonomy-only identities, with rejected and limited execution paths stated
+separately. The gate adds one missing verifier precondition for malformed
+parameter/local layouts, returning the existing error before indexing. This
+completes the specialized-effects track while retaining all documented native,
+source-provenance, tooling, runtime-guard and sandbox limitations.
 
 ```text
 tempra-tir

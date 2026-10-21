@@ -257,14 +257,20 @@ pub fn stack_effect(
             let pops = if func.ret == BytecodeType::Unit { 0 } else { 1 };
             StackEffect { pops, pushes: 0 }
         }
-        BytecodeInstr::Call(_id, argc) => StackEffect {
-            pops: *argc,
-            pushes: if module.functions[_id.0 as usize].ret == BytecodeType::Unit {
-                0
-            } else {
-                1
-            },
-        },
+        BytecodeInstr::Call(id, argc) => {
+            let target = module
+                .functions
+                .get(id.0 as usize)
+                .ok_or(BytecodeError::InvalidFunctionId(*id))?;
+            StackEffect {
+                pops: *argc,
+                pushes: if target.ret == BytecodeType::Unit {
+                    0
+                } else {
+                    1
+                },
+            }
+        }
         BytecodeInstr::MakeEnum(_name, _variant, argc) => StackEffect {
             pops: *argc,
             pushes: 1,

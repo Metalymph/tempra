@@ -8,12 +8,21 @@
 mod analysis;
 mod capability;
 mod externs;
+mod facts;
+mod operations;
 
 pub use analysis::{
     analyze, CallEdge, CapabilityAnalysis, CapabilityAnalysisError, CapabilityWitness,
-    DirectCapabilityOrigin, DirectCapabilitySource, FunctionCapabilitySummary, TirLocation,
+    DirectCapabilityOrigin, DirectCapabilitySource, FunctionCapabilitySummary,
+    FunctionSpecializedEffectSummary, SpecializedEffectWitness, TirLocation,
 };
 pub use capability::{Capability, CapabilitySet};
+pub use externs::{known_externs, KnownExtern, KnownExternResource};
+pub use facts::{
+    LocalEffectFact, ResourceFact, ResourceKnowledge, ResourceValue, SpecializedOperationFact,
+    UnclassifiedOperationFact,
+};
+pub use operations::{EffectCategory, EffectFamily, EffectOperation, EffectParameter};
 
 #[cfg(test)]
 mod tests;

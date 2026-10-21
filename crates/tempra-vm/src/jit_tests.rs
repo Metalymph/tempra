@@ -52,6 +52,11 @@ fn test_jit_integration_add() {
 
     assert_eq!(res, VmValue::Int64(30));
     assert!(interp.jit_cache.contains_key(&add_id));
+
+    let profile = interp.build_profile();
+    let stats = &profile.function_stats[add_id.0 as usize];
+    assert!(stats.jit_runtime_calls > 0, "add should execute natively");
+    assert_eq!(stats.jit_fallback_calls, 0);
 }
 
 #[test]
@@ -325,6 +330,8 @@ fn jit_int64_failures_are_native_and_never_fall_back() {
             VmValue::Int64(42)
         );
         assert!(interpreter.jit_cache.contains_key(&function_id));
+        let before_failure =
+            interpreter.build_profile().function_stats[function_id.0 as usize].clone();
         assert_eq!(
             interpreter.run_function_id(
                 function_id,
@@ -336,6 +343,8 @@ fn jit_int64_failures_are_native_and_never_fall_back() {
         let stats = &interpreter.build_profile().function_stats[function_id.0 as usize];
         assert_eq!(stats.jit_runtime_calls, 1);
         assert_eq!(stats.jit_fallback_calls, 0);
+        assert_eq!(stats.call_count, before_failure.call_count);
+        assert_eq!(stats.instruction_count, before_failure.instruction_count);
     }
 }
 
@@ -466,6 +475,181 @@ fn heap_aware_jit_call_chain_propagates_arithmetic_status() {
     assert_eq!(stats.jit_runtime_calls, 1);
     assert_eq!(stats.jit_fallback_calls, 0);
     assert_eq!(stats.jit_heap_fallbacks, 0);
+}
+
+#[test]
+#[cfg(feature = "jit-cranelift")]
+fn jit_call_boundary_propagates_native_failure_without_reexecution() {
+    let mut module = BytecodeModule::new();
+    let c0 = module.add_constant(BytecodeConstant::Int64(1));
+    let c1 = module.add_constant(BytecodeConstant::Int64(2));
+
+    let mut leaf = BytecodeFunction::new(
+        "call_leaf".into(),
+        vec![BytecodeType::Int64, BytecodeType::Int64],
+        BytecodeType::Int64,
+    );
+    leaf.locals = vec![BytecodeType::Int64, BytecodeType::Int64];
+    leaf.code.extend([
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::LoadLocal(LocalId(1)),
+        BytecodeInstr::AddI64,
+        BytecodeInstr::Return,
+    ]);
+    leaf.max_stack = 2;
+    let leaf_id = module.add_function(leaf);
+
+    // The caller stays interpreted because MakeArray is not JIT-eligible. This
+    // exercises the VM's Call-bytecode native boundary rather than an inlined
+    // native call chain.
+    let mut caller = BytecodeFunction::new(
+        "call_caller".into(),
+        vec![BytecodeType::Int64, BytecodeType::Int64],
+        BytecodeType::Int64,
+    );
+    caller.locals = vec![BytecodeType::Int64, BytecodeType::Int64];
+    caller.code.extend([
+        BytecodeInstr::ConstI64(c0),
+        BytecodeInstr::ConstI64(c1),
+        BytecodeInstr::MakeArray(2),
+        BytecodeInstr::Pop,
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::LoadLocal(LocalId(1)),
+        BytecodeInstr::Call(leaf_id, 2),
+        BytecodeInstr::Return,
+    ]);
+    caller.max_stack = 2;
+    let caller_id = module.add_function(caller);
+
+    let mut interpreter = Interpreter::with_options(&module, eager_jit_options());
+
+    for _ in 0..3 {
+        assert_eq!(
+            interpreter
+                .run_function_id(caller_id, vec![VmValue::Int64(20), VmValue::Int64(22)])
+                .unwrap(),
+            VmValue::Int64(42)
+        );
+    }
+    assert!(!interpreter.jit_cache.contains_key(&caller_id));
+    assert!(interpreter.jit_cache.contains_key(&leaf_id));
+
+    let before = interpreter.build_profile();
+    let before_leaf = before.function_stats[leaf_id.0 as usize].clone();
+    assert!(before_leaf.jit_runtime_calls > 0);
+
+    assert_eq!(
+        interpreter.run_function_id(caller_id, vec![VmValue::Int64(i64::MAX), VmValue::Int64(1)]),
+        Err(crate::VmError::Int64Arithmetic(
+            tempra_runtime::Int64ArithmeticError::Overflow
+        ))
+    );
+
+    let after = interpreter.build_profile();
+    let after_leaf = &after.function_stats[leaf_id.0 as usize];
+    assert_eq!(
+        after_leaf.jit_runtime_calls,
+        before_leaf.jit_runtime_calls + 1
+    );
+    assert_eq!(
+        after_leaf.jit_fallback_calls,
+        before_leaf.jit_fallback_calls
+    );
+    assert_eq!(after_leaf.call_count, before_leaf.call_count);
+    assert_eq!(after_leaf.instruction_count, before_leaf.instruction_count);
+}
+
+#[test]
+#[cfg(feature = "jit-cranelift")]
+fn heap_jit_call_boundary_propagates_native_failure_without_reexecution() {
+    let mut module = BytecodeModule::new();
+    let c1 = module.add_constant(BytecodeConstant::Int64(1));
+    let c2 = module.add_constant(BytecodeConstant::Int64(2));
+    let c5 = module.add_constant(BytecodeConstant::Int64(5));
+
+    let mut leaf = BytecodeFunction::new(
+        "heap_call_leaf".into(),
+        vec![BytecodeType::Any],
+        BytecodeType::Int64,
+    );
+    leaf.locals = vec![BytecodeType::Any];
+    leaf.code.extend([
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::ConstI64(c5),
+        BytecodeInstr::GetIndex,
+        BytecodeInstr::Return,
+    ]);
+    leaf.max_stack = 2;
+    let leaf_id = module.add_function(leaf);
+
+    let mut caller = BytecodeFunction::new(
+        "heap_call_caller".into(),
+        vec![BytecodeType::Any],
+        BytecodeType::Int64,
+    );
+    caller.locals = vec![BytecodeType::Any];
+    caller.code.extend([
+        BytecodeInstr::ConstI64(c1),
+        BytecodeInstr::ConstI64(c2),
+        BytecodeInstr::MakeArray(2),
+        BytecodeInstr::Pop,
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::Call(leaf_id, 1),
+        BytecodeInstr::Return,
+    ]);
+    caller.max_stack = 2;
+    let caller_id = module.add_function(caller);
+
+    let long = VmValue::Array(std::rc::Rc::new(vec![
+        VmValue::Int64(10),
+        VmValue::Int64(20),
+        VmValue::Int64(30),
+        VmValue::Int64(40),
+        VmValue::Int64(50),
+        VmValue::Int64(60),
+    ]));
+
+    let mut interpreter = Interpreter::with_options(&module, eager_jit_options());
+
+    for _ in 0..3 {
+        assert_eq!(
+            interpreter
+                .run_function_id(caller_id, vec![long.clone()])
+                .unwrap(),
+            VmValue::Int64(60)
+        );
+    }
+    assert!(!interpreter.jit_cache_heap.contains_key(&caller_id));
+    assert!(interpreter.jit_cache_heap.contains_key(&leaf_id));
+
+    let before = interpreter.build_profile();
+    let before_leaf = before.function_stats[leaf_id.0 as usize].clone();
+    assert!(before_leaf.jit_heap_runtime_calls > 0);
+
+    let short = VmValue::Array(std::rc::Rc::new(vec![
+        VmValue::Int64(10),
+        VmValue::Int64(20),
+    ]));
+    let res = interpreter.run_function_id(caller_id, vec![short]);
+    assert!(matches!(res, Err(crate::VmError::Native(_))));
+
+    let after = interpreter.build_profile();
+    let after_leaf = &after.function_stats[leaf_id.0 as usize];
+    assert_eq!(
+        after_leaf.jit_heap_runtime_calls,
+        before_leaf.jit_heap_runtime_calls + 1
+    );
+    assert_eq!(after_leaf.jit_heap_errors, before_leaf.jit_heap_errors + 1);
+    assert_eq!(
+        after_leaf.jit_heap_fallbacks,
+        before_leaf.jit_heap_fallbacks
+    );
+    assert_eq!(
+        after_leaf.jit_fallback_calls,
+        before_leaf.jit_fallback_calls
+    );
+    assert_eq!(after_leaf.call_count, before_leaf.call_count);
+    assert_eq!(after_leaf.instruction_count, before_leaf.instruction_count);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -970,7 +1154,7 @@ fn test_heap_jit_array_get_matches_vm() {
 
 #[test]
 #[cfg(feature = "jit-cranelift")]
-fn test_heap_jit_array_get_oob_fallback_or_error() {
+fn test_heap_jit_array_get_oob_is_native_error_without_fallback() {
     let mut module = BytecodeModule::new();
     let func_id = build_array_get_func(&mut module);
 
@@ -992,15 +1176,26 @@ fn test_heap_jit_array_get_oob_fallback_or_error() {
         .run_function_id(func_id, vec![arr.clone(), VmValue::Int64(0)])
         .unwrap();
 
+    let before = interp.build_profile().function_stats[func_id.0 as usize].clone();
+
     // Second call: JIT is warm. Call with OOB index.
-    // The JIT execution returns JIT_STATUS_ERROR_OUT_OF_BOUNDS, triggering VM fallback.
+    // The native helper reports out-of-bounds; this is a native runtime
+    // failure and must not re-execute the function in the interpreter.
     let res = interp.run_function_id(func_id, vec![arr, VmValue::Int64(5)]);
-    assert!(res.is_err()); // VM should return OOB error
+    assert!(matches!(res, Err(crate::VmError::Native(_))));
 
     let p = interp.build_profile();
     let stats = &p.function_stats[func_id.0 as usize];
-    assert_eq!(stats.jit_heap_fallbacks, 1);
-    assert_eq!(stats.jit_heap_errors, 1);
+    assert_eq!(stats.jit_runtime_calls, before.jit_runtime_calls + 1);
+    assert_eq!(
+        stats.jit_heap_runtime_calls,
+        before.jit_heap_runtime_calls + 1
+    );
+    assert_eq!(stats.jit_heap_errors, before.jit_heap_errors + 1);
+    assert_eq!(stats.jit_heap_fallbacks, before.jit_heap_fallbacks);
+    assert_eq!(stats.jit_fallback_calls, before.jit_fallback_calls);
+    assert_eq!(stats.call_count, before.call_count);
+    assert_eq!(stats.instruction_count, before.instruction_count);
 }
 
 fn build_two_strings_func(module: &mut BytecodeModule) -> tempra_bytecode::function::FunctionId {
@@ -1184,7 +1379,7 @@ fn test_jit_vm_repeated_array_arg_reuses_handle() {
 
 #[test]
 #[cfg(feature = "jit-cranelift")]
-fn test_jit_vm_unsupported_array_no_dedup_or_fallback() {
+fn test_jit_vm_unsupported_array_marshalling_falls_back_without_error() {
     let mut module = BytecodeModule::new();
     let func_id = build_two_arrays_func(&mut module);
 
@@ -1221,8 +1416,11 @@ fn test_jit_vm_unsupported_array_no_dedup_or_fallback() {
 
     let p = interp.build_profile();
     let stats = &p.function_stats[func_id.0 as usize];
-    // Should fall back since marshalling returned None
+    // Should fall back since marshalling returned None, but this is not a
+    // native runtime failure and must not increment the error counter.
     assert_eq!(stats.jit_heap_fallbacks, 1);
+    assert_eq!(stats.jit_heap_errors, 0);
+    assert_eq!(stats.jit_runtime_calls, 0);
     // Dedup cache hits and misses should be 0 for this call because marshalling didn't use the JIT helper context
     // The previous call to JIT was compiled but not executed natively because it compiled during Call 1.
     // So the stats are:

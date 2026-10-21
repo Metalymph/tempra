@@ -1,6 +1,8 @@
-use tempra_driver::run_source_vm_with_options;
+use tempra_driver::{run_source_hir, run_source_vm_with_options};
+use tempra_interpreter::value::Value;
 use tempra_vm::profile::VmOptions;
 use tempra_vm::value::VmValue;
+use tempra_vm::VmError;
 
 #[test]
 #[cfg(feature = "jit-cranelift")]
@@ -358,13 +360,18 @@ fn test_jit_policy_rejects_unsupported_permanently() {
         fn greet(s: Bool) -> Int64 { if s { return 1 } else { return 0 } }
         fn main() -> Int64 { return greet(true) }
     "#;
+    let hir_res = run_source_hir(source, &[]).expect("HIR run failed");
     let mut options = VmOptions::default();
     options.jit_enabled = true;
     options.profiling = true;
     options.hot_call_threshold = 0;
     options.jit_min_instruction_count = 0;
 
-    let (_, profile) = tempra_driver::run_source_vm_profiled(source, options).unwrap();
+    let (res, profile) = tempra_driver::run_source_vm_profiled(source, options).unwrap();
+    assert!(
+        matches!((&hir_res, &res), (Value::Int64(hir), VmValue::Int64(vm)) if hir == vm),
+        "HIR/VM mismatch: HIR={hir_res:?} VM={res:?}"
+    );
     let greet = profile
         .function_stats
         .iter()
@@ -380,6 +387,83 @@ fn test_jit_policy_rejects_unsupported_permanently() {
         "rejection reason must be set"
     );
     assert_eq!(greet.jit_permanent_rejections, 1);
+    // Pre-execution rejection is a safe fallback to the interpreter: the
+    // rejected function must never run as native code or enter the marshalling
+    // fallback path.
+    assert_eq!(
+        greet.jit_runtime_calls, 0,
+        "rejected function must not execute natively"
+    );
+    assert_eq!(greet.jit_fallback_calls, 0);
+}
+
+#[test]
+#[cfg(feature = "jit-cranelift")]
+fn test_driver_jit_checked_arithmetic_failure_is_native_without_fallback() {
+    let source = r#"
+        fn add(a: Int64, b: Int64) -> Int64 {
+            return a + b
+        }
+        fn main() -> Int64 {
+            return add(1, 2)
+        }
+    "#;
+
+    // HIR and non-JIT VM references agree for the supported program.
+    let hir_res = run_source_hir(source, &[]).expect("HIR run failed");
+    assert!(matches!(hir_res, Value::Int64(3)));
+    let mut no_jit = VmOptions::default();
+    no_jit.jit_enabled = false;
+    assert_eq!(
+        run_source_vm_with_options(source, &[], no_jit).unwrap(),
+        VmValue::Int64(3)
+    );
+
+    let mut options = VmOptions::default();
+    options.jit_enabled = true;
+    options.profiling = true;
+    options.hot_call_threshold = 0;
+    options.jit_min_instruction_count = 0;
+
+    let hash = tempra_driver::cache::compute_source_hash(source);
+    let cache_path = tempra_driver::cache::get_cache_path(&hash);
+    let module = tempra_driver::compile_to_bytecode(source, &cache_path).unwrap();
+    let add_id = tempra_bytecode::function::FunctionId(
+        module
+            .functions
+            .iter()
+            .position(|f| f.name == "add")
+            .unwrap() as u32,
+    );
+
+    let mut interpreter = tempra_vm::Interpreter::with_options(&module, options);
+
+    // First call compiles `add` (eager threshold) and executes interpretively.
+    assert_eq!(
+        interpreter
+            .run_function_id(add_id, vec![VmValue::Int64(1), VmValue::Int64(2)])
+            .unwrap(),
+        VmValue::Int64(3)
+    );
+    let before = interpreter.build_profile().function_stats[add_id.0 as usize].clone();
+    assert_eq!(before.jit_compile_successes, 1, "add must compile");
+
+    // Second call executes natively and fails a checked-arithmetic operation.
+    // The native failure must propagate and must not silently fall back or
+    // re-execute interpretively.
+    let failure =
+        interpreter.run_function_id(add_id, vec![VmValue::Int64(i64::MAX), VmValue::Int64(1)]);
+    assert!(
+        matches!(failure, Err(VmError::Int64Arithmetic(_))),
+        "expected native Int64 arithmetic error, got {:?}",
+        failure
+    );
+
+    let after = interpreter.build_profile().function_stats[add_id.0 as usize].clone();
+    assert_eq!(after.jit_runtime_calls, before.jit_runtime_calls + 1);
+    assert_eq!(after.jit_fallback_calls, before.jit_fallback_calls);
+    assert_eq!(after.call_count, before.call_count);
+    assert_eq!(after.instruction_count, before.instruction_count);
 }
 
 #[test]
@@ -525,12 +609,16 @@ fn test_jit_enabled_vm_executes() {
                     x = add(x, i)
                 }
             }
-            return x
+            return x - 550
         }
     "#;
     // Use the new driver function that threads jit_enabled
     let result = tempra_driver::run_source_with_experimental_vm_jit(source, &[], true);
-    assert!(result.is_ok(), "JIT-enabled run failed: {:?}", result.err());
+    assert!(
+        matches!(result, Ok(()) | Err(tempra_driver::DriverError::Exit(0))),
+        "JIT-enabled run failed: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -580,7 +668,12 @@ fn test_jit_enabled_unsupported_function_fallback() {
             return s.len()
         }
     "#;
-    // Should succeed — the string function falls back to the interpreter
+    // The string function falls back to the interpreter; main still completes and
+    // its Int result becomes a process exit signal.
     let result = tempra_driver::run_source_with_experimental_vm_jit(source, &[], true);
-    assert!(result.is_ok(), "JIT fallback failed: {:?}", result.err());
+    assert!(
+        matches!(result, Err(tempra_driver::DriverError::Exit(5))),
+        "JIT fallback failed: {:?}",
+        result.err()
+    );
 }

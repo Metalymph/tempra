@@ -115,6 +115,11 @@ zero from signed overflow, and lowered negation inherits checked `sub` behavior.
 All supported runtime consumers use the shared contract; host panics, native
 traps and profile-dependent wrapping are not semantic outcomes.
 
+K4.5B raises cache trust to `semantics-6` without changing TIR or bytecode
+formats. Revision-5 artifacts can retain specialized `@deny` clauses that were
+not statically enforced; current compilation matches those clauses against the
+existing specialized-effect summaries and witnesses.
+
 This section does not define future TIR opcodes. Their exact representation belongs to the corresponding phase specifications.
 
 ## Capability-analysis contract

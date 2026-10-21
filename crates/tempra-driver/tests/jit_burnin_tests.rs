@@ -1,8 +1,25 @@
 use std::fs;
 use std::path::PathBuf;
 use tempra_driver::{run_source_hir, run_source_vm_profiled};
+use tempra_interpreter::value::Value;
 use tempra_vm::profile::VmOptions;
 use tempra_vm::value::VmValue;
+
+/// Compare the HIR reference value with the VM/JIT result for the scalar subset
+/// exercised by the burn-in corpus.
+fn assert_hir_vm_match(hir: &Value, vm: &VmValue, context: &str) {
+    match (hir, vm) {
+        (Value::Unit, VmValue::Unit) => {}
+        (Value::Bool(a), VmValue::Bool(b)) => assert_eq!(a, b, "Bool mismatch in {context}"),
+        (Value::Int64(a), VmValue::Int64(b)) => assert_eq!(a, b, "Int64 mismatch in {context}"),
+        (Value::UInt8(a), VmValue::UInt8(b)) => assert_eq!(a, b, "UInt8 mismatch in {context}"),
+        (Value::Float64(a), VmValue::Float64(b)) => {
+            assert_eq!(a, b, "Float64 mismatch in {context}")
+        }
+        (Value::String(a), VmValue::String(b)) => assert_eq!(a, b, "String mismatch in {context}"),
+        (hir, vm) => panic!("unsupported HIR/VM comparison in {context}: HIR={hir:?} VM={vm:?}"),
+    }
+}
 
 fn run_burnin_test(filename: &str, expected: i64, should_compile: bool) {
     run_burnin_test_with_options(filename, expected, should_compile, VmOptions::default());
@@ -21,7 +38,7 @@ fn run_burnin_test_with_options(
     let source = fs::read_to_string(&path).expect(&format!("failed to read {:?}", path));
 
     // 1. Get reference result from HIR interpreter
-    let _ref_res = run_source_hir(&source, &[]).expect("HIR run failed");
+    let hir_res = run_source_hir(&source, &[]).expect("HIR run failed");
 
     // 2. Run with JIT enabled
     options.jit_enabled = true;
@@ -37,6 +54,9 @@ fn run_burnin_test_with_options(
 
     let (res, profile) = run_source_vm_profiled(&source, options).expect("VM JIT run failed");
 
+    // 3. The VM/JIT result must agree with both the HIR reference and the
+    //    expected value.
+    assert_hir_vm_match(&hir_res, &res, filename);
     assert_eq!(
         res,
         VmValue::Int64(expected),
@@ -53,6 +73,19 @@ fn run_burnin_test_with_options(
         assert!(
             successes > 0,
             "Expected at least one function to compile in {}",
+            filename
+        );
+
+        // A successful compilation is not proof that native code ran; require
+        // the runtime-call counter to show native execution too.
+        let native_calls: u64 = profile
+            .function_stats
+            .iter()
+            .map(|f| f.jit_runtime_calls)
+            .sum();
+        assert!(
+            native_calls > 0,
+            "Expected native JIT execution in {}",
             filename
         );
     } else {
@@ -128,10 +161,12 @@ fn main() -> Int64 {
     return total
 }
 "#;
+    let hir_res = run_source_hir(source, &[]).expect("HIR run failed");
     let mut options = VmOptions::default();
     options.jit_enabled = true;
     options.hot_call_threshold = 2;
     let (res, profile) = tempra_driver::run_source_vm_profiled(source, options).unwrap();
+    assert_hir_vm_match(&hir_res, &res, "jit_burnin_deep_nested_branches");
     assert_eq!(res, VmValue::Int64(36));
     let successes: u64 = profile
         .function_stats
@@ -139,6 +174,15 @@ fn main() -> Int64 {
         .map(|f| f.jit_compile_successes)
         .sum();
     assert!(successes > 0);
+    let native_calls: u64 = profile
+        .function_stats
+        .iter()
+        .map(|f| f.jit_runtime_calls)
+        .sum();
+    assert!(
+        native_calls > 0,
+        "deep nested branches must execute natively"
+    );
 }
 
 #[test]
@@ -167,10 +211,12 @@ fn main() -> Int64 {
     return total
 }
 "#;
+    let hir_res = run_source_hir(source, &[]).expect("HIR run failed");
     let mut options = VmOptions::default();
     options.jit_enabled = true;
     options.hot_call_threshold = 1;
     let (res, _) = tempra_driver::run_source_vm_profiled(source, options).unwrap();
+    assert_hir_vm_match(&hir_res, &res, "jit_burnin_bool_logic_chain");
     assert_eq!(res, VmValue::Int64(1 + 2 + 3)); // 6
 }
 
@@ -202,13 +248,16 @@ fn jit_warm_run_reuses_compiled_functions() {
         }
     "#;
 
+    let hir_res = run_source_hir(source, &[]).expect("HIR run failed");
     let mut options = VmOptions::default();
     options.jit_enabled = true;
     options.profiling = true;
     options.hot_call_threshold = 2;
     options.jit_min_instruction_count = 0;
 
-    let (_, profile) = run_source_vm_profiled(source, options).expect("VM run failed");
+    let (res, profile) = run_source_vm_profiled(source, options).expect("VM run failed");
+    assert_hir_vm_match(&hir_res, &res, "jit_warm_run_reuses_compiled_functions");
+    assert_eq!(res, VmValue::Int64(55)); // sum(1..=10)
     let add_stats = profile
         .function_stats
         .iter()
@@ -237,12 +286,14 @@ fn jit_repeated_execution_stress() {
             return x
         }
     "#;
+    let hir_res = run_source_hir(source, &[]).expect("HIR run failed");
     let mut options = VmOptions::default();
     options.jit_enabled = true;
     options.hot_call_threshold = 2;
 
     for _ in 0..20 {
         let (res, _) = run_source_vm_profiled(source, options).unwrap();
+        assert_hir_vm_match(&hir_res, &res, "jit_repeated_execution_stress");
         assert_eq!(res, VmValue::Int64(10));
     }
 }
@@ -259,12 +310,14 @@ fn jit_differential_micro_tests() {
     ];
 
     for (source, expected) in cases {
+        let hir_res = run_source_hir(source, &[]).expect("HIR run failed");
         let mut options = VmOptions::default();
         options.jit_enabled = true;
         options.hot_call_threshold = 0; // Eager
         options.jit_min_instruction_count = 0;
 
         let (res, _) = run_source_vm_profiled(source, options).expect("JIT run failed");
+        assert_hir_vm_match(&hir_res, &res, source);
         assert_eq!(
             res,
             VmValue::Int64(expected),

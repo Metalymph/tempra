@@ -102,6 +102,13 @@ pub fn verify_function_direct(
     if func.code.is_empty() {
         return Ok(());
     }
+    // Every parameter occupies an initialized local. A malformed artifact must
+    // fail verification before indexing the local-state vector.
+    if func.params.len() > func.locals.len() {
+        return Err(BytecodeVerifyError::InvalidLocalId(LocalId(
+            func.locals.len() as u32,
+        )));
+    }
 
     let mut states: HashMap<usize, VerificationState> = HashMap::new();
     let mut worklist: VecDeque<usize> = VecDeque::new();

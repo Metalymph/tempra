@@ -1022,8 +1022,10 @@ remains unchanged.
 
 K3.2 raises current trust to `semantics-5` after establishing checked,
 host-safe `Int64` arithmetic and its conservative `Panic` origins across the
-supported runtime paths. This semantic revision still does not change the
-bytecode format or serialize capability metadata.
+supported runtime paths. K4.5B raises current trust to `semantics-6` because
+revision-5 artifacts may retain specialized `@deny` clauses without their static
+enforcement. These semantic revisions still do not change the bytecode format or
+serialize capability metadata.
 
 K2.5 does not change compiler semantics or the fingerprint. It establishes a
 permanent cross-process gate requiring identical raw artifacts for the currently

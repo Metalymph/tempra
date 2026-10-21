@@ -154,6 +154,18 @@ with direct capabilities, transitive required capabilities and the retained
 source contract. Contract failures use stable code `capability-denied` and show
 the canonical E1 witness path.
 
+That detailed rendering applies to **broad capability violations**. K4.9E
+confirms a remaining projection gap for specialized v0.2 family/category/operation
+violations: human output reports only `Specialized capability contract
+violation(s): N`. JSON uses the existing generic compiler-error shape (`code:
+null`, count-only `message`, empty `labels` and `notes`, empty `functions`) and
+does not expose each specialized violation's target, classification, resource,
+source span or witness. The typed driver error preserves all those facts.
+Successful JSON inspection also omits specialized clauses/requirements; human
+inspection may show `contract: none` for specialized-only intent. CLI inspection
+therefore cannot yet answer specialized-contract queries completely. A dedicated
+projection remains tooling follow-up; K4.9E introduces no E6 schema change.
+
 JSON output always writes exactly one document to stdout. It contains top-level
 `diagnostics` and `functions` arrays. Capability diagnostics include function
 ID/name, capability, deny/pure origin, source identity, byte spans and a structured

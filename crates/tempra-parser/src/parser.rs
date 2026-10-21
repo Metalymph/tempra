@@ -133,6 +133,7 @@ impl<'src> Parser<'src> {
         &mut self,
     ) -> Result<(Option<DenyContract>, Option<Span>), ParseError> {
         let mut denied = Vec::new();
+        let mut specialized_denied = Vec::new();
         let mut attribute_spans = Vec::new();
         let mut pure_span = None;
         while self.at(TokenKind::At) {
@@ -164,18 +165,7 @@ impl<'src> Parser<'src> {
             self.expect(TokenKind::LeftParen)?;
             // Requiring the first name also rejects empty lists in repeated attributes.
             loop {
-                let argument = self.expect_identifier()?;
-                let capability =
-                    DenyCapability::from_name(self.text(argument.span)).ok_or_else(|| {
-                        ParseError {
-                            message: format!(
-                                "unknown public deny capability '{}'",
-                                self.text(argument.span)
-                            ),
-                            span: argument.span,
-                        }
-                    })?;
-                denied.push(capability);
+                self.parse_deny_argument(&mut denied, &mut specialized_denied)?;
                 if !self.eat(TokenKind::Comma) || self.at(TokenKind::RightParen) {
                     break;
                 }
@@ -191,10 +181,224 @@ impl<'src> Parser<'src> {
         Ok((
             Some(DenyContract {
                 denied,
+                specialized_denied,
                 attribute_spans,
             }),
             pure_span,
         ))
+    }
+
+    fn parse_deny_argument(
+        &mut self,
+        denied: &mut Vec<DenyCapability>,
+        specialized_denied: &mut Vec<SpecializedDenyClause>,
+    ) -> Result<(), ParseError> {
+        let first = self.expect_identifier()?;
+        if self.eat(TokenKind::Dot) {
+            let second = self.expect_identifier()?;
+            if self.at(TokenKind::Dot) {
+                return Err(ParseError {
+                    message: "specialized deny operation names must contain exactly one '.'".into(),
+                    span: self.current().span,
+                });
+            }
+            let target_span = Span::new(first.span.start, second.span.end);
+            let target_name = format!("{}.{}", self.text(first.span), self.text(second.span));
+
+            // A bare io.read/io.write is the cross-family category. Parentheses
+            // select the concrete generic operation instead.
+            if !self.at(TokenKind::LeftParen) {
+                if let Some(category) = SpecializedCategory::from_name(&target_name) {
+                    specialized_denied.push(SpecializedDenyClause {
+                        target: SpecializedDenyTarget::Category(category),
+                        parameters: Vec::new(),
+                        span: target_span,
+                        syntax: SpecializedDenySyntax::Bare,
+                    });
+                    return Ok(());
+                }
+            }
+
+            let operation =
+                SpecializedOperation::from_name(&target_name).ok_or_else(|| ParseError {
+                    message: format!("unknown specialized deny operation '{target_name}'"),
+                    span: target_span,
+                })?;
+            if !self.at(TokenKind::LeftParen) {
+                specialized_denied.push(SpecializedDenyClause {
+                    target: SpecializedDenyTarget::Operation(operation),
+                    parameters: Vec::new(),
+                    span: target_span,
+                    syntax: SpecializedDenySyntax::Bare,
+                });
+                return Ok(());
+            }
+            self.advance();
+            let parameters = self.parse_specialized_deny_parameters(operation)?;
+            let right = self.expect(TokenKind::RightParen)?;
+            specialized_denied.push(SpecializedDenyClause {
+                target: SpecializedDenyTarget::Operation(operation),
+                parameters,
+                span: Span::new(first.span.start, right.span.end),
+                syntax: SpecializedDenySyntax::Parenthesized,
+            });
+            return Ok(());
+        }
+
+        if let Some(family) = SpecializedFamily::from_name(self.text(first.span)) {
+            if self.at(TokenKind::LeftParen) {
+                return Err(ParseError {
+                    message: format!(
+                        "specialized deny family '{}' does not accept parameters",
+                        family.canonical_name()
+                    ),
+                    span: self.current().span,
+                });
+            }
+            specialized_denied.push(SpecializedDenyClause {
+                target: SpecializedDenyTarget::Family(family),
+                parameters: Vec::new(),
+                span: first.span,
+                syntax: SpecializedDenySyntax::Bare,
+            });
+            return Ok(());
+        }
+
+        let capability =
+            DenyCapability::from_name(self.text(first.span)).ok_or_else(|| ParseError {
+                message: format!(
+                    "unknown public deny capability or family '{}'",
+                    self.text(first.span)
+                ),
+                span: first.span,
+            })?;
+        if self.at(TokenKind::LeftParen) {
+            return Err(ParseError {
+                message: format!(
+                    "broad deny capability '{}' does not accept parameters",
+                    self.text(first.span)
+                ),
+                span: self.current().span,
+            });
+        }
+        denied.push(capability);
+        Ok(())
+    }
+
+    fn parse_specialized_deny_parameters(
+        &mut self,
+        operation: SpecializedOperation,
+    ) -> Result<Vec<SpecializedDenyParameter>, ParseError> {
+        let mut parameters = Vec::new();
+        if self.at(TokenKind::RightParen) {
+            return Ok(parameters);
+        }
+        loop {
+            let name = self.expect_identifier()?;
+            let parameter =
+                SpecializedParameter::from_name(self.text(name.span)).ok_or_else(|| {
+                    ParseError {
+                        message: format!(
+                            "unknown specialized deny parameter '{}'",
+                            self.text(name.span)
+                        ),
+                        span: name.span,
+                    }
+                })?;
+            if !operation.accepts_parameter(parameter) {
+                return Err(ParseError {
+                    message: format!(
+                        "parameter '{}' is not valid for specialized deny operation '{}'",
+                        parameter.canonical_name(),
+                        operation.canonical_name()
+                    ),
+                    span: name.span,
+                });
+            }
+            if parameters
+                .iter()
+                .any(|argument: &SpecializedDenyParameter| argument.parameter == parameter)
+            {
+                return Err(ParseError {
+                    message: format!(
+                        "duplicate specialized deny parameter '{}' for operation '{}'",
+                        parameter.canonical_name(),
+                        operation.canonical_name()
+                    ),
+                    span: name.span,
+                });
+            }
+            self.expect(TokenKind::Colon)?;
+            let (value, value_span) = self.parse_specialized_deny_value(parameter)?;
+            parameters.push(SpecializedDenyParameter {
+                parameter,
+                value,
+                span: Span::new(name.span.start, value_span.end),
+            });
+            if !self.eat(TokenKind::Comma) || self.at(TokenKind::RightParen) {
+                break;
+            }
+        }
+        Ok(parameters)
+    }
+
+    fn parse_specialized_deny_value(
+        &mut self,
+        parameter: SpecializedParameter,
+    ) -> Result<(SpecializedValue, Span), ParseError> {
+        let token = self.current();
+        match token.kind {
+            TokenKind::Star => {
+                self.advance();
+                if !self.at(TokenKind::Comma) && !self.at(TokenKind::RightParen) {
+                    return Err(ParseError {
+                        message: "wildcard '*' must be the complete parameter value".into(),
+                        span: token.span,
+                    });
+                }
+                Ok((SpecializedValue::Any, token.span))
+            }
+            TokenKind::StringLiteral if parameter != SpecializedParameter::Port => {
+                self.advance();
+                let literal = self.text(token.span);
+                Ok((
+                    SpecializedValue::Text(literal[1..literal.len() - 1].to_owned()),
+                    token.span,
+                ))
+            }
+            TokenKind::IntegerLiteral if parameter == SpecializedParameter::Port => {
+                self.advance();
+                let literal = self.text(token.span);
+                let port = literal.parse::<u16>().map_err(|_| ParseError {
+                    message: format!(
+                        "port literal '{}' is outside the supported range 0..=65535",
+                        literal
+                    ),
+                    span: token.span,
+                })?;
+                Ok((SpecializedValue::Port(port), token.span))
+            }
+            TokenKind::StringLiteral => Err(ParseError {
+                message: format!(
+                    "specialized deny parameter '{}' requires a numeric port literal or '*'",
+                    parameter.canonical_name()
+                ),
+                span: token.span,
+            }),
+            TokenKind::IntegerLiteral => Err(ParseError {
+                message: format!(
+                    "specialized deny parameter '{}' requires a quoted string literal or '*'",
+                    parameter.canonical_name()
+                ),
+                span: token.span,
+            }),
+            _ => Err(ParseError {
+                message:
+                    "specialized deny parameter value must be a quoted string, numeric port, or '*'"
+                        .into(),
+                span: token.span,
+            }),
+        }
     }
 
     fn parse_import(&mut self) -> Result<ImportItem, ParseError> {

@@ -13,8 +13,15 @@ pub enum DriverError {
     CapabilityAnalysisError(tempra_effects::CapabilityAnalysisError),
     /// A user contract could not be bound unambiguously to a concrete TIR function.
     ContractBindingError(Box<crate::ContractBindingError>),
+    /// A specialized target is incompatible with its resource parameters.
+    SpecializedDenyBindingError(Box<crate::SpecializedDenyBindingError>),
+    /// A parsed specialized target is not enforceable by this compiler milestone.
+    UnsupportedSpecializedTarget(Box<crate::UnsupportedSpecializedTarget>),
     /// Denied requirements in ascending function ID, then capability order.
     CapabilityContractViolations(Vec<crate::CapabilityContractViolation>),
+    /// Specialized denied requirements in deterministic function, clause, origin
+    /// and classification order.
+    SpecializedContractViolations(Vec<crate::SpecializedContractViolation>),
     /// Inconsistent contract/analysis data; never treated as contract success.
     CapabilityContractInvariantError(crate::CapabilityContractInvariantError),
     TirInterpError(tempra_tir_interp::TirInterpError),
@@ -45,8 +52,21 @@ impl std::fmt::Display for DriverError {
                 write!(f, "Capability analysis error: {}", e)
             }
             DriverError::ContractBindingError(e) => write!(f, "Contract binding error: {}", e),
+            DriverError::SpecializedDenyBindingError(e) => {
+                write!(f, "Specialized contract binding error: {}", e)
+            }
+            DriverError::UnsupportedSpecializedTarget(e) => {
+                write!(f, "Unsupported specialized contract: {}", e)
+            }
             DriverError::CapabilityContractViolations(violations) => {
                 write!(f, "Capability contract violation(s): {}", violations.len())
+            }
+            DriverError::SpecializedContractViolations(violations) => {
+                write!(
+                    f,
+                    "Specialized capability contract violation(s): {}",
+                    violations.len()
+                )
             }
             DriverError::CapabilityContractInvariantError(error) => {
                 write!(f, "Capability contract invariant error: {error:?}")

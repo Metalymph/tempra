@@ -116,6 +116,32 @@ K2 implementation   DONE
 K3.1 runtime parity audit DONE
 K3.2 Int64 parity    DONE
 K3 implementation   IN PROGRESS
+
+K4 specialized-effect track
+K4.1 specification                    DONE
+K4.2 taxonomy/parameters              DONE
+K4.3 TIR classification               DONE
+K4.4 propagation/witnesses            DONE
+K4.5A syntax/provenance               DONE
+K4.5B enforcement/semantics-6         DONE
+K4.6A boundary audit                  DONE
+K4.6B.1 native boundary integrity     DONE
+K4.6B.2 compilation boundary tests    DONE
+K4.6C guarantee documentation         DONE
+K4.6 specialized-effect guarantees    DONE
+K4.7A differential coverage audit     DONE
+K4.7B focused differential tests      DONE
+K4.7C final specialized parity gate   PASS
+K4.7 backend parity/reproducibility   DONE
+K4.8 family/operation semantics spec  DONE (specification only)
+K4.9A taxonomy/parser/AST targets     DONE
+K4.9B canonical contracts/driver      DONE
+K4.9C analysis/classifier metadata    DONE
+K4.9D family/category enforcement     DONE (semantics-7)
+K4.9E cache/diagnostic review         DONE
+K4.9 family/operation implementation  DONE
+K4.10 final effects gate              DONE (bounded PASS)
+K4 specialized-effect track           DONE
 ```
 
 K1.7 raises the cache trust fingerprint from `semantics-1` to `semantics-2`, so
@@ -157,8 +183,71 @@ distinguishes zero from signed overflow, and HIR, TIR, VM and actually-native JI
 execution return controlled failures rather than Rust panics, traps or accidental
 wrapping. Native pure and heap-aware call chains propagate `{ value, status }`
 without falling back after a semantic failure. E1 treats checked `Int64`
-add/sub/mul/div as conservative `Panic` origins. Cache trust is `semantics-5`;
-the bytecode format is unchanged. K3 remains in progress.
+add/sub/mul/div as conservative `Panic` origins. K4.5B raises cache trust to
+`semantics-6` while adding static specialized-effect enforcement; the bytecode
+format is unchanged. K3 remains in progress.
+
+K4.6 is complete. K4.6A found no contract-enforcement bypass while auditing the
+compilation, runtime and FFI boundaries. K4.6B.1 added native
+registry/classifier/signature integrity regressions; K4.6B.2 added fresh
+source/file, module-graph, VM/profiling/JIT, cache, unsupported-path,
+unknown-extern and inspection boundary regressions. K4.6C records the actual
+specialized-effect guarantees and trust limits in
+[Specialized Effects v0.1](specs/specialized-effects-v0.1.md). The implemented
+guarantee is compile-time only: broad `@deny`/`@pure` remains authoritative,
+specialized matching is fail-closed for unknown resources/operations, unsupported
+interpreters reject annotated input, and no runtime guard, filesystem sandbox,
+network isolation or native-code sandbox exists. K4.6C is documentation-only and
+does not change source, runtime behavior, cache format or `semantics-6`.
+
+K4.7 is complete. K4.7A audited existing differential coverage; K4.7B added
+focused source/file, explicit-stdlib-root, enforcement-outcome, deterministic
+violation, broad-invariance, inspection and VM/JIT regressions. K4.7C adds
+independent-process canonical specialized-violation evidence and records the
+native `std.*` JIT limitation: JIT v1 rejects entries that call these natives and
+the interpreter fallback executes them, with no specialized-enforcement bypass.
+The gate verdict is **PASS** for the supported same-build, same-host/target
+surface. Runtime guards, Wasm/AOT enforcement, unbound taxonomy operations,
+structured E6 specialized diagnostics and cross-machine parity remain explicitly
+unsupported or deferred in
+[Specialized Effects v0.1](specs/specialized-effects-v0.1.md#104-final-gate-verdict).
+K4.7C changes tests and documentation only; cache format and `semantics-6` are
+unchanged.
+
+K4.8 is documentation-only. It records the normative v0.2 extension for `fs`
+and `net` families, parameterless operation denials, `io.read`/`io.write`
+cross-family categories, `net.send`/`net.receive`, and conservative
+future-operation matching in
+[Specialized Effects v0.2](specs/specialized-effects-v0.2.md). It does not
+modify the parser, AST, taxonomy, contracts, matcher, native classifier,
+runtime or cache. At that checkpoint the compiler remained v0.1 on `semantics-6`.
+
+K4.9 implements that specification in sequence: K4.9A taxonomy and parser/AST
+targets; K4.9B canonical contracts and driver binding; K4.9C analysis and
+classifier metadata; K4.9D family/category matching and enforcement; K4.9E
+cache and diagnostic compatibility review. K4.9A–E are implemented: contracts
+retain targets without expansion, matching uses total canonical operation
+metadata and unclassified facts remain conservative. Broad enforcement stays
+first. K4.9D atomically raises trust to `semantics-7`, with no cache migration,
+format change, runtime guards or native network APIs. Module/file extend methods
+with contracts are explicitly rejected because that frontend does not lower
+them; source-compiler method binding remains supported. K4.9E confirms v0.1
+resource-qualified compatibility and `semantics-7` cache trust without another
+semantic change. Typed specialized violations retain target kinds, spans,
+classifications and witnesses, but CLI E6 still renders only a generic error
+count and omits specialized intent from successful inspection. This is a
+documented tooling limitation, not a complete specialized JSON/query surface.
+K4.10 completes the bounded final gate and publishes the full per-operation
+[coverage ledger](K4_SPECIALIZED_EFFECTS_GATE.md). The verdict is PASS for the
+supported static compiler surface: three production-classified operation
+identities (four bindings), no additional TIR-only producer and ten taxonomy-only
+operation identities. Synthetic matching coverage is not executable native
+coverage. The gate also closes a malformed-cache verifier panic for parameters
+without local slots using an existing controlled error. Rich specialized E6
+projection, module/file extend lowering, missing native APIs, connection identity,
+runtime guards, path confinement, broader FFI enforcement and actor integration
+remain explicit limits/follow-ups. This completes the K4 specialized-effect
+track, not all runtime/backend work or a sandbox guarantee.
 
 ### R — Result / Value-Use Hardening
 

@@ -250,6 +250,8 @@ fn test_serialize_roundtrip_minimal() {
     assert!(decoded.module.functions.is_empty());
 }
 
+// `3.14` is an intentional serialization fixture, not an approximation of PI.
+#[allow(clippy::approx_constant)]
 #[test]
 fn test_serialize_roundtrip_complex() {
     let mut module = BytecodeModule::new();

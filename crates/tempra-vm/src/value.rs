@@ -38,7 +38,7 @@ impl VmValue {
             VmValue::Tuple(_) => "Tuple",
             VmValue::Array(_) => "Array",
             VmValue::Slice { .. } => "Slice",
-            VmValue::Struct { name: _, .. } => "Struct", // We could return the actual name, but matching the signature is simpler for now
+            VmValue::Struct { .. } => "Struct", // We could return the actual name, but matching the signature is simpler for now
         }
     }
 }

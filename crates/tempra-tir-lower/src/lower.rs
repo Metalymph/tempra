@@ -445,14 +445,12 @@ impl<'a> LowerContext<'a> {
                         return Ok(Type::Namespace(qualified));
                     }
                 }
-                if m.field == "len" {
-                    if matches!(obj_ty, Type::Array(_) | Type::Slice(_) | Type::String) {
-                        return Ok(Type::Int64);
-                    }
-                } else if m.field == "bytes" {
-                    if matches!(obj_ty, Type::String) {
-                        return Ok(Type::Slice(Box::new(Type::UInt8)));
-                    }
+                if m.field == "len"
+                    && matches!(obj_ty, Type::Array(_) | Type::Slice(_) | Type::String)
+                {
+                    return Ok(Type::Int64);
+                } else if m.field == "bytes" && matches!(obj_ty, Type::String) {
+                    return Ok(Type::Slice(Box::new(Type::UInt8)));
                 }
 
                 // If it's a struct field access
@@ -2846,16 +2844,14 @@ impl<'a> LowerContext<'a> {
             }
             HirExpression::Member(m) => {
                 let obj_ty = self.infer_expr_type(&m.object)?;
-                if m.field == "len" {
-                    if matches!(obj_ty, Type::Array(_) | Type::Slice(_) | Type::String) {
-                        let obj = self.lower_expression(&m.object)?;
-                        return self.builder.build_len(obj).map_err(|e| e.into());
-                    }
-                } else if m.field == "size" {
-                    if matches!(obj_ty, Type::String) {
-                        let obj = self.lower_expression(&m.object)?;
-                        return self.builder.build_size(obj).map_err(|e| e.into());
-                    }
+                if m.field == "len"
+                    && matches!(obj_ty, Type::Array(_) | Type::Slice(_) | Type::String)
+                {
+                    let obj = self.lower_expression(&m.object)?;
+                    return self.builder.build_len(obj).map_err(|e| e.into());
+                } else if m.field == "size" && matches!(obj_ty, Type::String) {
+                    let obj = self.lower_expression(&m.object)?;
+                    return self.builder.build_size(obj).map_err(|e| e.into());
                 }
 
                 // If it's a struct field access

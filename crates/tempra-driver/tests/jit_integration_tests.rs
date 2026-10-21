@@ -1,3 +1,5 @@
+#![cfg(feature = "jit-cranelift")]
+
 use tempra_driver::{run_source_hir, run_source_vm_with_options};
 use tempra_interpreter::value::Value;
 use tempra_vm::profile::VmOptions;

@@ -91,55 +91,51 @@ pub fn validate_pattern_against_type(
 
             // 1. Centralized Resolution: Check if the name refers to a Type (Built-in, Struct, or Enum)
             let resolved_ty = ctx.resolve_type_name(&name_val);
-            if resolved_ty != Type::Unknown {
-                if pat_args.is_empty() {
-                    if !crate::types::types_compatible(&resolved_ty, val_ty)
-                        && *val_ty != Type::Error
-                    {
-                        // No error for 'is' tests usually, but Tempra's pattern matching can be strict.
-                    }
+            if resolved_ty != Type::Unknown && pat_args.is_empty() {
+                if !crate::types::types_compatible(&resolved_ty, val_ty) && *val_ty != Type::Error {
+                    // No error for 'is' tests usually, but Tempra's pattern matching can be strict.
+                }
 
-                    // If it resolved to an Enum, we still need to check if the user meant
-                    // a unit variant of THAT enum vs the enum type itself.
-                    if let Type::Enum(enum_name, _) = &resolved_ty {
-                        if let Some(info) = ctx.enums.get(enum_name) {
-                            if info.variants.contains_key(&name_val) {
-                                // Ambiguity: Name is both the Enum type and a Variant name.
-                                // Tempra convention: Variant takes priority if it's a unit variant.
-                                // But 'if x is EnumName' is a common type test.
-                            }
+                // If it resolved to an Enum, we still need to check if the user meant
+                // a unit variant of THAT enum vs the enum type itself.
+                if let Type::Enum(enum_name, _) = &resolved_ty {
+                    if let Some(info) = ctx.enums.get(enum_name) {
+                        if info.variants.contains_key(&name_val) {
+                            // Ambiguity: Name is both the Enum type and a Variant name.
+                            // Tempra convention: Variant takes priority if it's a unit variant.
+                            // But 'if x is EnumName' is a common type test.
                         }
                     }
+                }
 
-                    // If it's a Type Test, we're done here.
-                    // But we should probably rewrite it to a specific TypeTest pattern
-                    // or keep it as is if the evaluator understands it.
-                    // Actually, if enum_name == name_val, it's explicitly allowed.
-                    if let Type::Enum(enum_name, _) = val_ty {
-                        if enum_name == &name_val {
-                            return Some(resolved_ty);
-                        }
-                    }
-                    // For built-ins and structs:
-                    if resolved_ty == *val_ty {
+                // If it's a Type Test, we're done here.
+                // But we should probably rewrite it to a specific TypeTest pattern
+                // or keep it as is if the evaluator understands it.
+                // Actually, if enum_name == name_val, it's explicitly allowed.
+                if let Type::Enum(enum_name, _) = val_ty {
+                    if enum_name == &name_val {
                         return Some(resolved_ty);
                     }
+                }
+                // For built-ins and structs:
+                if resolved_ty == *val_ty {
+                    return Some(resolved_ty);
+                }
 
-                    // If it resolves to a type but val_ty is different,
-                    // we still treat it as a Type Test (which might evaluate to false).
-                    // However, to keep it simple, only return Some if it's likely a type test.
-                    // Part 2.1 requires 'is Int' to work.
-                    if matches!(
-                        resolved_ty,
-                        Type::Int
-                            | Type::String
-                            | Type::Bool
-                            | Type::Struct(_, _)
-                            | Type::Enum(_, _)
-                            | Type::Never
-                    ) {
-                        return Some(resolved_ty);
-                    }
+                // If it resolves to a type but val_ty is different,
+                // we still treat it as a Type Test (which might evaluate to false).
+                // However, to keep it simple, only return Some if it's likely a type test.
+                // Part 2.1 requires 'is Int' to work.
+                if matches!(
+                    resolved_ty,
+                    Type::Int
+                        | Type::String
+                        | Type::Bool
+                        | Type::Struct(_, _)
+                        | Type::Enum(_, _)
+                        | Type::Never
+                ) {
+                    return Some(resolved_ty);
                 }
 
                 // If it's an Enum type but we have arguments, or it didn't match the bare name test,
@@ -310,7 +306,7 @@ pub fn validate_pattern_against_type(
                     }
                 }
             }
-            return None;
+            None
         }
         HirPattern::Literal(span, lit_expr) => {
             // Pattern literals are immutable here as they are simple constants.
@@ -330,7 +326,7 @@ pub fn validate_pattern_against_type(
                     *span,
                 );
             }
-            return None;
+            None
         }
         HirPattern::Struct(span, name, fields) => {
             if let Type::Struct(struct_name, args) = val_ty {
@@ -380,7 +376,7 @@ pub fn validate_pattern_against_type(
                     *span,
                 );
             }
-            return None;
+            None
         }
         HirPattern::Tuple(span, items) => {
             if let Type::Tuple(element_types) = val_ty {
@@ -404,7 +400,7 @@ pub fn validate_pattern_against_type(
                     *span,
                 );
             }
-            return None;
+            None
         }
         HirPattern::Or(_span, alternatives) => {
             if alternatives.is_empty() {
@@ -452,9 +448,9 @@ pub fn validate_pattern_against_type(
                 }
             }
 
-            return None;
+            None
         }
-        HirPattern::EnumConstructor(_) => return None,
+        HirPattern::EnumConstructor(_) => None,
     }
 }
 

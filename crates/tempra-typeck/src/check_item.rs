@@ -308,7 +308,7 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
                 let qual_name = qualify(ctx, &s.name);
                 let mut generic_params = Vec::new();
                 for p in &s.generic_params {
-                    if let Some(_) = &p.constraint {
+                    if p.constraint.is_some() {
                         ctx.error("interface constraints on struct generic parameters are not yet supported".to_string(), p.span);
                     }
                     let id = crate::types::GenericParamId(ctx.next_generic_param_id);
@@ -355,7 +355,7 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
                 let qual_name = qualify(ctx, &e.name);
                 let mut generic_params = Vec::new();
                 for p in &e.generic_params {
-                    if let Some(_) = &p.constraint {
+                    if p.constraint.is_some() {
                         ctx.error("interface constraints on enum generic parameters are not yet supported".to_string(), p.span);
                     }
                     let id = crate::types::GenericParamId(ctx.next_generic_param_id);

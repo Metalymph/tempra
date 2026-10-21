@@ -454,7 +454,9 @@ fn jit_helper_string_len_ascii() {
     let arg_handle = builder.block_params(block)[1];
 
     let helper_sig_ref = builder.import_signature(sig);
-    let helper_addr = builder.ins().iconst(types::I64, tmpr_jit_string_len as i64);
+    let helper_addr = builder
+        .ins()
+        .iconst(types::I64, tmpr_jit_string_len as *const () as i64);
     let call = builder
         .ins()
         .call_indirect(helper_sig_ref, helper_addr, &[arg_ctx, arg_handle]);
@@ -515,7 +517,9 @@ fn jit_helper_string_len_unicode() {
     let arg_handle = builder.block_params(block)[1];
 
     let helper_sig_ref = builder.import_signature(sig);
-    let helper_addr = builder.ins().iconst(types::I64, tmpr_jit_string_len as i64);
+    let helper_addr = builder
+        .ins()
+        .iconst(types::I64, tmpr_jit_string_len as *const () as i64);
     let call = builder
         .ins()
         .call_indirect(helper_sig_ref, helper_addr, &[arg_ctx, arg_handle]);
@@ -575,7 +579,9 @@ fn jit_helper_string_len_invalid_handle() {
     let arg_handle = builder.block_params(block)[1];
 
     let helper_sig_ref = builder.import_signature(sig);
-    let helper_addr = builder.ins().iconst(types::I64, tmpr_jit_string_len as i64);
+    let helper_addr = builder
+        .ins()
+        .iconst(types::I64, tmpr_jit_string_len as *const () as i64);
     let call = builder
         .ins()
         .call_indirect(helper_sig_ref, helper_addr, &[arg_ctx, arg_handle]);
@@ -632,7 +638,9 @@ fn jit_helper_string_len_null_context() {
     let arg_handle = builder.block_params(block)[1];
 
     let helper_sig_ref = builder.import_signature(sig);
-    let helper_addr = builder.ins().iconst(types::I64, tmpr_jit_string_len as i64);
+    let helper_addr = builder
+        .ins()
+        .iconst(types::I64, tmpr_jit_string_len as *const () as i64);
     let call = builder
         .ins()
         .call_indirect(helper_sig_ref, helper_addr, &[arg_ctx, arg_handle]);
@@ -694,7 +702,7 @@ fn jit_helper_string_size_ascii() {
     let helper_sig_ref = builder.import_signature(sig);
     let helper_addr = builder
         .ins()
-        .iconst(types::I64, tmpr_jit_string_size as i64);
+        .iconst(types::I64, tmpr_jit_string_size as *const () as i64);
     let call = builder
         .ins()
         .call_indirect(helper_sig_ref, helper_addr, &[arg_ctx, arg_handle]);
@@ -759,7 +767,7 @@ fn jit_helper_string_size_unicode() {
     let helper_sig_ref = builder.import_signature(sig);
     let helper_addr = builder
         .ins()
-        .iconst(types::I64, tmpr_jit_string_size as i64);
+        .iconst(types::I64, tmpr_jit_string_size as *const () as i64);
     let call = builder
         .ins()
         .call_indirect(helper_sig_ref, helper_addr, &[arg_ctx, arg_handle]);
@@ -824,7 +832,9 @@ fn jit_helper_array_len_int64() {
     let arg_handle = builder.block_params(block)[1];
 
     let helper_sig_ref = builder.import_signature(sig);
-    let helper_addr = builder.ins().iconst(types::I64, tmpr_jit_array_len as i64);
+    let helper_addr = builder
+        .ins()
+        .iconst(types::I64, tmpr_jit_array_len as *const () as i64);
     let call = builder
         .ins()
         .call_indirect(helper_sig_ref, helper_addr, &[arg_ctx, arg_handle]);
@@ -885,7 +895,9 @@ fn jit_helper_array_len_type_error_on_string() {
     let arg_handle = builder.block_params(block)[1];
 
     let helper_sig_ref = builder.import_signature(sig);
-    let helper_addr = builder.ins().iconst(types::I64, tmpr_jit_array_len as i64);
+    let helper_addr = builder
+        .ins()
+        .iconst(types::I64, tmpr_jit_array_len as *const () as i64);
     let call = builder
         .ins()
         .call_indirect(helper_sig_ref, helper_addr, &[arg_ctx, arg_handle]);
@@ -945,7 +957,9 @@ fn jit_helper_string_len_type_error_on_array() {
     let arg_handle = builder.block_params(block)[1];
 
     let helper_sig_ref = builder.import_signature(sig);
-    let helper_addr = builder.ins().iconst(types::I64, tmpr_jit_string_len as i64);
+    let helper_addr = builder
+        .ins()
+        .iconst(types::I64, tmpr_jit_string_len as *const () as i64);
     let call = builder
         .ins()
         .call_indirect(helper_sig_ref, helper_addr, &[arg_ctx, arg_handle]);
@@ -1006,7 +1020,7 @@ fn jit_helper_array_get_i64_first() {
     let helper_sig_ref = builder.import_signature(sig);
     let helper_addr = builder
         .ins()
-        .iconst(types::I64, tmpr_jit_array_get_i64 as i64);
+        .iconst(types::I64, tmpr_jit_array_get_i64 as *const () as i64);
     let call = builder
         .ins()
         .call_indirect(helper_sig_ref, helper_addr, &args);
@@ -1068,7 +1082,7 @@ fn jit_helper_array_get_i64_negative_value() {
     let helper_sig_ref = builder.import_signature(sig);
     let helper_addr = builder
         .ins()
-        .iconst(types::I64, tmpr_jit_array_get_i64 as i64);
+        .iconst(types::I64, tmpr_jit_array_get_i64 as *const () as i64);
     let call = builder
         .ins()
         .call_indirect(helper_sig_ref, helper_addr, &args);
@@ -1130,7 +1144,7 @@ fn jit_helper_array_get_i64_out_of_bounds() {
     let helper_sig_ref = builder.import_signature(sig);
     let helper_addr = builder
         .ins()
-        .iconst(types::I64, tmpr_jit_array_get_i64 as i64);
+        .iconst(types::I64, tmpr_jit_array_get_i64 as *const () as i64);
     let call = builder
         .ins()
         .call_indirect(helper_sig_ref, helper_addr, &args);
@@ -1196,7 +1210,7 @@ fn jit_helper_array_get_i64_type_error_on_non_i64() {
     let helper_sig_ref = builder.import_signature(sig);
     let helper_addr = builder
         .ins()
-        .iconst(types::I64, tmpr_jit_array_get_i64 as i64);
+        .iconst(types::I64, tmpr_jit_array_get_i64 as *const () as i64);
     let call = builder
         .ins()
         .call_indirect(helper_sig_ref, helper_addr, &args);
@@ -1264,7 +1278,7 @@ fn jit_helper_status_consumed_array_get_ok() {
     let helper_sig_ref = builder.import_signature(helper_sig);
     let helper_addr = builder
         .ins()
-        .iconst(types::I64, tmpr_jit_array_get_i64 as i64);
+        .iconst(types::I64, tmpr_jit_array_get_i64 as *const () as i64);
     let call = builder
         .ins()
         .call_indirect(helper_sig_ref, helper_addr, &args);
@@ -1444,7 +1458,7 @@ fn jit_helper_struct_get_i64_first_field() {
     let helper_sig_ref = builder.import_signature(sig);
     let helper_addr = builder
         .ins()
-        .iconst(types::I64, tmpr_jit_struct_get_i64 as i64);
+        .iconst(types::I64, tmpr_jit_struct_get_i64 as *const () as i64);
     let call = builder
         .ins()
         .call_indirect(helper_sig_ref, helper_addr, &args);
@@ -1562,7 +1576,9 @@ fn jit_helper_enum_tag_option_some() {
 
     let args = builder.block_params(block).to_vec();
     let helper_sig_ref = builder.import_signature(sig);
-    let helper_addr = builder.ins().iconst(types::I64, tmpr_jit_enum_tag as i64);
+    let helper_addr = builder
+        .ins()
+        .iconst(types::I64, tmpr_jit_enum_tag as *const () as i64);
     let call = builder
         .ins()
         .call_indirect(helper_sig_ref, helper_addr, &args);
@@ -1597,7 +1613,7 @@ fn jit_helper_enum_tag_option_some() {
 #[test]
 fn jit_helper_enum_tag_errors_and_wrapper() {
     use crate::error::JitRuntimeError;
-    use crate::helpers::{tmpr_jit_enum_tag, JitHeapScalar, JitRuntimeContext};
+    use crate::helpers::{tmpr_jit_enum_tag, JitRuntimeContext};
 
     let mut ctx = JitRuntimeContext::new();
     let e_handle = ctx.alloc_enum("Option", "None", 0, vec![]);
@@ -1658,7 +1674,7 @@ fn jit_helper_enum_unwrap_i64_option_some() {
     let helper_sig_ref = builder.import_signature(sig);
     let helper_addr = builder
         .ins()
-        .iconst(types::I64, tmpr_jit_enum_unwrap_i64 as i64);
+        .iconst(types::I64, tmpr_jit_enum_unwrap_i64 as *const () as i64);
     let call = builder
         .ins()
         .call_indirect(helper_sig_ref, helper_addr, &args);
@@ -1728,11 +1744,11 @@ fn jit_alloc_string_empty_returns_handle() {
     let mut ctx = JitRuntimeContext::new();
     let ctx_ptr = &mut ctx as *mut JitRuntimeContext;
 
-    let res = tmpr_jit_alloc_string_empty(ctx_ptr);
+    let res = unsafe { tmpr_jit_alloc_string_empty(ctx_ptr) };
     let handle1 = res.to_result().expect("Should allocate successfully");
     assert_ne!(handle1, 0, "Handle(0) is reserved and invalid");
 
-    let res2 = tmpr_jit_alloc_string_empty(ctx_ptr);
+    let res2 = unsafe { tmpr_jit_alloc_string_empty(ctx_ptr) };
     let handle2 = res2.to_result().expect("Should allocate successfully");
     assert_ne!(handle2, 0);
     assert_ne!(
@@ -1748,7 +1764,7 @@ fn jit_alloc_string_empty_handle_can_be_used_with_len() {
     let mut ctx = JitRuntimeContext::new();
     let ctx_ptr = &mut ctx as *mut JitRuntimeContext;
 
-    let alloc_res = tmpr_jit_alloc_string_empty(ctx_ptr);
+    let alloc_res = unsafe { tmpr_jit_alloc_string_empty(ctx_ptr) };
     let handle = alloc_res.to_result().expect("Should allocate successfully");
 
     // Pass the newly allocated handle to another helper
@@ -1782,7 +1798,7 @@ fn jit_helper_string_concat_ascii_and_errors() {
     let ctx_ptr = &mut ctx as *mut JitRuntimeContext;
 
     // 1. Success case: "hello" + "world"
-    let res = tmpr_jit_string_concat(ctx_ptr, left.0, right.0);
+    let res = unsafe { tmpr_jit_string_concat(ctx_ptr, left.0, right.0) };
     let new_handle_val = res.to_result().expect("Should concatenate successfully");
 
     assert_ne!(new_handle_val, 0);
@@ -1798,19 +1814,19 @@ fn jit_helper_string_concat_ascii_and_errors() {
     assert_eq!(size_res.to_result().unwrap(), 10);
 
     // 2. Type error (left is not a string)
-    let res = tmpr_jit_string_concat(ctx_ptr, a_handle.0, right.0);
+    let res = unsafe { tmpr_jit_string_concat(ctx_ptr, a_handle.0, right.0) };
     assert_eq!(res.to_result(), Err(JitRuntimeError::TypeError));
 
     // 3. Type error (right is not a string)
-    let res = tmpr_jit_string_concat(ctx_ptr, left.0, a_handle.0);
+    let res = unsafe { tmpr_jit_string_concat(ctx_ptr, left.0, a_handle.0) };
     assert_eq!(res.to_result(), Err(JitRuntimeError::TypeError));
 
     // 4. Invalid handle
-    let res = tmpr_jit_string_concat(ctx_ptr, 9999, right.0);
+    let res = unsafe { tmpr_jit_string_concat(ctx_ptr, 9999, right.0) };
     assert_eq!(res.to_result(), Err(JitRuntimeError::InvalidHandle));
 
     // 5. Null context
-    let res = tmpr_jit_string_concat(std::ptr::null_mut(), left.0, right.0);
+    let res = unsafe { tmpr_jit_string_concat(std::ptr::null_mut(), left.0, right.0) };
     assert_eq!(res.to_result(), Err(JitRuntimeError::InvalidContext));
 }
 
@@ -1825,7 +1841,7 @@ fn jit_helper_string_concat_unicode() {
     let right = ctx.alloc_string("👋".to_string());
     let ctx_ptr = &mut ctx as *mut JitRuntimeContext;
 
-    let res = tmpr_jit_string_concat(ctx_ptr, left.0, right.0);
+    let res = unsafe { tmpr_jit_string_concat(ctx_ptr, left.0, right.0) };
     let new_handle_val = res
         .to_result()
         .expect("Should concatenate unicode successfully");
@@ -1854,7 +1870,7 @@ fn jit_helper_array_push_i64_empty_and_non_empty() {
     let ctx_ptr = &mut ctx as *mut JitRuntimeContext;
 
     // 1. Push to empty array
-    let res = tmpr_jit_array_push_i64(ctx_ptr, empty_handle.0, 42);
+    let res = unsafe { tmpr_jit_array_push_i64(ctx_ptr, empty_handle.0, 42) };
     let new_handle1 = res.to_result().expect("Should push successfully");
 
     assert_ne!(new_handle1, 0);
@@ -1885,7 +1901,7 @@ fn jit_helper_array_push_i64_empty_and_non_empty() {
     );
 
     // 2. Push to non-empty array (negative value)
-    let res = tmpr_jit_array_push_i64(ctx_ptr, non_empty_handle.0, -99);
+    let res = unsafe { tmpr_jit_array_push_i64(ctx_ptr, non_empty_handle.0, -99) };
     let new_handle2 = res.to_result().expect("Should push successfully");
 
     assert_ne!(new_handle2, 0);
@@ -1926,15 +1942,15 @@ fn jit_helper_array_push_i64_errors() {
     let ctx_ptr = &mut ctx as *mut JitRuntimeContext;
 
     // 1. Type error (pushing to a string)
-    let res = tmpr_jit_array_push_i64(ctx_ptr, string_handle.0, 42);
+    let res = unsafe { tmpr_jit_array_push_i64(ctx_ptr, string_handle.0, 42) };
     assert_eq!(res.to_result(), Err(JitRuntimeError::TypeError));
 
     // 2. Invalid handle
-    let res = tmpr_jit_array_push_i64(ctx_ptr, 9999, 42);
+    let res = unsafe { tmpr_jit_array_push_i64(ctx_ptr, 9999, 42) };
     assert_eq!(res.to_result(), Err(JitRuntimeError::InvalidHandle));
 
     // 3. Null context
-    let res = tmpr_jit_array_push_i64(std::ptr::null_mut(), string_handle.0, 42);
+    let res = unsafe { tmpr_jit_array_push_i64(std::ptr::null_mut(), string_handle.0, 42) };
     assert_eq!(res.to_result(), Err(JitRuntimeError::InvalidContext));
 }
 
@@ -2256,7 +2272,6 @@ fn jit_rejects_make_array_explicit_msg() {
 #[test]
 fn jit_rejects_struct_get_explicit_msg() {
     use crate::engine::explain_jit_eligibility;
-    use tempra_bytecode::constant::ConstId;
     let mut module = BytecodeModule::new();
     let field_id = module.add_constant(tempra_bytecode::constant::BytecodeConstant::String(
         "age".into(),

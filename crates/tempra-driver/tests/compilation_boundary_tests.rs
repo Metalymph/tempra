@@ -252,8 +252,10 @@ pub fn main() -> Int64 { return 10 / 2 }
 pub fn main() -> Int64 { return 42 }
 "#;
     let _guard = CacheGuard::for_source(profiled_valid);
-    let mut options = VmOptions::default();
-    options.profiling = true;
+    let options = VmOptions {
+        profiling: true,
+        ..Default::default()
+    };
     let (value, profile) = run_source_vm_profiled(profiled_valid, options).unwrap();
     assert_eq!(value, VmValue::Int64(42));
     assert!(profile

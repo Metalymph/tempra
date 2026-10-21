@@ -99,6 +99,10 @@ impl SliceValue {
         self.end - self.start
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     pub fn get(&self, index: usize) -> Option<Value> {
         if index < self.len() {
             match &self.parent {

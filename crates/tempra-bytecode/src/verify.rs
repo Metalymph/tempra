@@ -115,8 +115,8 @@ pub fn verify_function_direct(
 
     // Initial state: params are initialized, stack is empty
     let mut initial_locals_init = vec![false; func.locals.len()];
-    for i in 0..func.params.len() {
-        initial_locals_init[i] = true;
+    for init in initial_locals_init.iter_mut().take(func.params.len()) {
+        *init = true;
     }
 
     let initial_state = VerificationState {
@@ -324,7 +324,7 @@ pub fn verify_function_direct(
                         .ok_or(BytecodeVerifyError::InvalidFunctionId(id))?;
                     if target.params.len() != argc as usize {
                         return Err(BytecodeVerifyError::CallArityMismatch {
-                            id: id,
+                            id,
                             expected: target.params.len() as u16,
                             found: argc,
                         });

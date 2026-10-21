@@ -73,9 +73,8 @@ fn test_calls() {
 }
 
 fn assert_invalid_parse(source: &str) {
-    match parse_source(source) {
-        Ok(_) => panic!("Expected parse failure: {}", source),
-        Err(_) => {}
+    if parse_source(source).is_ok() {
+        panic!("Expected parse failure: {}", source);
     }
 }
 

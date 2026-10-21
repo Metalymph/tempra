@@ -655,8 +655,10 @@ pub fn run_source_with_experimental_vm_jit(
     args: &[String],
     jit_enabled: bool,
 ) -> Result<(), DriverError> {
-    let mut options = tempra_vm::profile::VmOptions::default();
-    options.jit_enabled = jit_enabled;
+    let options = tempra_vm::profile::VmOptions {
+        jit_enabled,
+        ..Default::default()
+    };
     let value = run_source_vm_with_options(source, args, options)?;
     normalize_vm_entry_value(value)
 }

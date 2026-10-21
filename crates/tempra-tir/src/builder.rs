@@ -8,6 +8,12 @@ pub struct ModuleBuilder {
     pub function_table: HashMap<String, TirFunctionId>,
 }
 
+impl Default for ModuleBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ModuleBuilder {
     pub fn new() -> Self {
         Self {

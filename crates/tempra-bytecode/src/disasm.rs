@@ -16,7 +16,7 @@ pub fn disassemble_module(module: &BytecodeModule) -> String {
     for (i, _) in module.functions.iter().enumerate() {
         if let Ok(s) = disassemble_function(module, FunctionId(i as u32)) {
             out.push_str(&s);
-            out.push_str("\n");
+            out.push('\n');
         }
     }
 

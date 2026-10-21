@@ -134,6 +134,10 @@ impl DocumentLoader for DiskDocumentLoader {
     }
 }
 
+// The unit error is part of this public loader's existing contract; load
+// diagnostics are accumulated in `diagnostics`, and changing the error type
+// would be an unrelated public API change.
+#[allow(clippy::result_unit_err)]
 pub fn load_module_graph(
     entry_path: &Path,
     loader: &dyn DocumentLoader,
@@ -174,6 +178,9 @@ pub fn load_module_graph(
     Ok(graph)
 }
 
+// The recursive loader threads its state explicitly; collapsing these
+// parameters into a context struct would be a larger, unrelated refactor.
+#[allow(clippy::too_many_arguments)]
 fn load_module_recursive(
     name: String,
     path: PathBuf,

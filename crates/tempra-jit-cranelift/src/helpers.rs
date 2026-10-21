@@ -218,6 +218,12 @@ pub enum JitHeapScalar {
     Handle(HeapHandle),
 }
 
+impl Default for JitRuntimeContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl JitRuntimeContext {
     pub fn new() -> Self {
         Self {
@@ -605,7 +611,14 @@ pub extern "C" fn tmpr_jit_enum_unwrap_i64(
 /// Helper implementation for allocating an empty string.
 ///
 /// ABI: (ctx: *mut JitRuntimeContext) -> JitHelperResult
-pub extern "C" fn tmpr_jit_alloc_string_empty(ctx: *mut JitRuntimeContext) -> JitHelperResult {
+///
+/// # Safety
+///
+/// `ctx` must be null or point to a valid, properly aligned
+/// `JitRuntimeContext` with exclusive access for the duration of the call.
+pub unsafe extern "C" fn tmpr_jit_alloc_string_empty(
+    ctx: *mut JitRuntimeContext,
+) -> JitHelperResult {
     if ctx.is_null() {
         return JitHelperResult {
             value: 0,
@@ -624,7 +637,12 @@ pub extern "C" fn tmpr_jit_alloc_string_empty(ctx: *mut JitRuntimeContext) -> Ji
 /// Helper implementation for concatenating two strings.
 ///
 /// ABI: (ctx: *mut JitRuntimeContext, left_handle: u64, right_handle: u64) -> JitHelperResult
-pub extern "C" fn tmpr_jit_string_concat(
+///
+/// # Safety
+///
+/// `ctx` must be null or point to a valid, properly aligned
+/// `JitRuntimeContext` with exclusive access for the duration of the call.
+pub unsafe extern "C" fn tmpr_jit_string_concat(
     ctx: *mut JitRuntimeContext,
     left_handle: u64,
     right_handle: u64,
@@ -646,7 +664,12 @@ pub extern "C" fn tmpr_jit_string_concat(
 /// Helper implementation for array push with value semantics.
 ///
 /// ABI: (ctx: *mut JitRuntimeContext, array_handle: u64, value: i64) -> JitHelperResult
-pub extern "C" fn tmpr_jit_array_push_i64(
+///
+/// # Safety
+///
+/// `ctx` must be null or point to a valid, properly aligned
+/// `JitRuntimeContext` with exclusive access for the duration of the call.
+pub unsafe extern "C" fn tmpr_jit_array_push_i64(
     ctx: *mut JitRuntimeContext,
     array_handle: u64,
     value: i64,

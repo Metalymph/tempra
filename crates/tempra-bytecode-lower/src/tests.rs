@@ -256,7 +256,6 @@ fn test_peephole_fuses_superinstructions() {
     use crate::lower_tir_module;
     use tempra_bytecode::disasm::disassemble_module;
     use tempra_bytecode::verify::verify_module;
-    use tempra_tir::*;
 
     let mut module = TirModule::default();
     let mut func = TirFunction {

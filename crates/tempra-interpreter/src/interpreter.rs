@@ -444,13 +444,13 @@ impl Interpreter {
             self.leave_comptime_call(entered_frame);
             return error;
         }
-        for (param, arg) in func.parameters.iter().zip(args.into_iter()) {
+        for (param, arg) in func.parameters.iter().zip(args) {
             env.insert(param.name.clone(), arg);
         }
 
         // Bind generic parameters
         if let Some(t_args) = type_args {
-            for (param, arg) in func.generic_parameters.iter().zip(t_args.into_iter()) {
+            for (param, arg) in func.generic_parameters.iter().zip(t_args) {
                 env.insert(param.name.clone(), arg);
             }
         }
@@ -529,7 +529,7 @@ impl Interpreter {
             self.leave_comptime_call(entered_frame);
             return Err("Arg count mismatch for closure".into());
         }
-        for (param, arg) in closure.params.iter().zip(args.into_iter()) {
+        for (param, arg) in closure.params.iter().zip(args) {
             env.insert(param.name.clone(), arg);
         }
 

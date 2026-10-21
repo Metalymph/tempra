@@ -10,6 +10,12 @@ pub struct JitEngine {
     pub(crate) module: JITModule,
 }
 
+impl Default for JitEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl JitEngine {
     pub fn new() -> Self {
         let mut flag_builder = settings::builder();

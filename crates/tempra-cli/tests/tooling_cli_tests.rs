@@ -8,7 +8,7 @@ fn test_cli_check_json_valid() {
     fs::write(&file_path, "fn main() { let x = 123; }").unwrap();
 
     let output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--bin",
             "tempra",
@@ -36,7 +36,7 @@ fn test_cli_diagnostics_json_invalid() {
     fs::write(&file_path, "fn main() { let x: String = 123; }").unwrap();
 
     let output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--bin",
             "tempra",
@@ -67,7 +67,7 @@ fn test_cli_symbols_json() {
     fs::write(&file_path, "struct Point { x: Int64 } fn add(a: Int64) {}").unwrap();
 
     let output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--bin",
             "tempra",

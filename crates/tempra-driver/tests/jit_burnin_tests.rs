@@ -1,3 +1,5 @@
+#![cfg(feature = "jit-cranelift")]
+
 use std::fs;
 use std::path::PathBuf;
 use tempra_driver::{run_source_hir, run_source_vm_profiled};

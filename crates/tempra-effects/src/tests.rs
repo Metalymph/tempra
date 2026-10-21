@@ -831,9 +831,8 @@ fn effect_families_are_explicit_and_do_not_change_parents() {
     for operation in EffectOperation::ALL {
         if let Some(family) = operation.family() {
             assert_eq!(operation.parent(), Capability::Io);
-            assert_eq!(
+            assert!(
                 EffectFamily::ALL.contains(&family),
-                true,
                 "{} has an unknown family",
                 operation.canonical_name()
             );

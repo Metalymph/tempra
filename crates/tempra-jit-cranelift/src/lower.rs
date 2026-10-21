@@ -84,25 +84,31 @@ fn emit_checked_i64_div(builder: &mut FunctionBuilder<'_>, left: Value, right: V
 }
 
 pub fn is_instr_supported(instr: &BytecodeInstr) -> bool {
-    match instr {
-        BytecodeInstr::ConstI64(_) => true,
-        BytecodeInstr::LoadLocal(_) => true,
-        BytecodeInstr::StoreLocal(_) => true,
-        BytecodeInstr::AddI64
-        | BytecodeInstr::SubI64
-        | BytecodeInstr::MulI64
-        | BytecodeInstr::DivI64 => true,
-        BytecodeInstr::Eq | BytecodeInstr::LtI64 | BytecodeInstr::GtI64 => true,
-        BytecodeInstr::Jump(_) | BytecodeInstr::JumpIfFalse(_) => true,
-        BytecodeInstr::Return => true,
-        BytecodeInstr::AddI64LL(_, _) | BytecodeInstr::AddI64LC(_, _) => true,
-        BytecodeInstr::ConstBool(_)
-        | BytecodeInstr::Not
-        | BytecodeInstr::And
-        | BytecodeInstr::Or => true,
-        BytecodeInstr::Len | BytecodeInstr::Size | BytecodeInstr::GetIndex => true,
-        _ => false,
-    }
+    matches!(
+        instr,
+        BytecodeInstr::ConstI64(_)
+            | BytecodeInstr::LoadLocal(_)
+            | BytecodeInstr::StoreLocal(_)
+            | BytecodeInstr::AddI64
+            | BytecodeInstr::SubI64
+            | BytecodeInstr::MulI64
+            | BytecodeInstr::DivI64
+            | BytecodeInstr::Eq
+            | BytecodeInstr::LtI64
+            | BytecodeInstr::GtI64
+            | BytecodeInstr::Jump(_)
+            | BytecodeInstr::JumpIfFalse(_)
+            | BytecodeInstr::Return
+            | BytecodeInstr::AddI64LL(_, _)
+            | BytecodeInstr::AddI64LC(_, _)
+            | BytecodeInstr::ConstBool(_)
+            | BytecodeInstr::Not
+            | BytecodeInstr::And
+            | BytecodeInstr::Or
+            | BytecodeInstr::Len
+            | BytecodeInstr::Size
+            | BytecodeInstr::GetIndex
+    )
 }
 
 /// Returns true when a bytecode function requires the heap-aware JIT path.
@@ -196,7 +202,7 @@ pub fn compile_function_i64(
     }
 
     // Create blocks for jump targets
-    for (_, block) in jump_targets.iter_mut() {
+    for block in jump_targets.values_mut() {
         *block = Some(builder.create_block());
     }
 
@@ -444,9 +450,7 @@ pub fn compile_function_i64(
                     .declare_function(&target_name, Linkage::Export, &sig)
                     .map_err(|e| JitCompileError::CraneliftError(e.to_string()))?;
 
-                let local_callee = engine
-                    .module
-                    .declare_func_in_func(callee_id, &mut builder.func);
+                let local_callee = engine.module.declare_func_in_func(callee_id, builder.func);
                 let call_inst = builder.ins().call(local_callee, &args);
                 let results = builder.inst_results(call_inst).to_vec();
                 let value = results[0];
@@ -473,7 +477,7 @@ pub fn compile_function_i64(
         .declare_function(&func_name, Linkage::Export, &engine.ctx.func.signature)
         .map_err(|e| JitCompileError::CraneliftError(e.to_string()))?;
 
-    let _result = engine
+    engine
         .module
         .define_function(id, &mut engine.ctx)
         .map_err(|e| JitCompileError::CraneliftError(format!("Compilation error: {}", e)))?;
@@ -573,7 +577,7 @@ pub fn compile_function_heap_aware(
     }
 
     // Create blocks for jump targets
-    for (_, block) in jump_targets.iter_mut() {
+    for block in jump_targets.values_mut() {
         *block = Some(builder.create_block());
     }
 
@@ -899,9 +903,7 @@ pub fn compile_function_heap_aware(
                     .declare_function(&target_name, Linkage::Export, &sig)
                     .map_err(|e| JitCompileError::CraneliftError(e.to_string()))?;
 
-                let local_callee = engine
-                    .module
-                    .declare_func_in_func(callee_id, &mut builder.func);
+                let local_callee = engine.module.declare_func_in_func(callee_id, builder.func);
                 let call_inst = builder.ins().call(local_callee, &args);
                 let results = builder.inst_results(call_inst).to_vec();
 
@@ -941,7 +943,7 @@ pub fn compile_function_heap_aware(
         .declare_function(&func_name, Linkage::Export, &engine.ctx.func.signature)
         .map_err(|e| JitCompileError::CraneliftError(e.to_string()))?;
 
-    let _result = engine
+    engine
         .module
         .define_function(id, &mut engine.ctx)
         .map_err(|e| JitCompileError::CraneliftError(format!("Compilation error: {}", e)))?;

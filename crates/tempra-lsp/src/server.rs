@@ -130,7 +130,7 @@ fn convert_diagnostics(
             Diagnostic {
                 range,
                 severity: severity_to_lsp(d.severity),
-                code: d.code.map(|c| NumberOrString::String(c)),
+                code: d.code.map(NumberOrString::String),
                 source: Some("tempra".to_string()),
                 message: d.message,
                 related_information: None,

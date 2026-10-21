@@ -1,10 +1,10 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::Path;
 use tempfile::tempdir;
 use tempra_driver::DriverError;
 use tempra_vm::value::VmValue;
 
-fn run_tempra_vm_file(entry: &PathBuf) -> Result<VmValue, DriverError> {
+fn run_tempra_vm_file(entry: &Path) -> Result<VmValue, DriverError> {
     let options = tempra_vm::profile::VmOptions::default();
     tempra_driver::run_file_with_experimental_vm_jit(entry, &[], options.jit_enabled)
 }

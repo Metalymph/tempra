@@ -47,7 +47,7 @@ impl<'src> Lowerer<'src> {
     fn lower_interface(&self, item: &ast::InterfaceItem) -> HirInterface {
         HirInterface {
             span: item.span,
-            visibility: item.visibility.into(),
+            visibility: item.visibility,
             name: self.text(item.name.span),
             methods: item
                 .methods
@@ -448,9 +448,7 @@ impl<'src> Lowerer<'src> {
                             mode: self.lower_capture_mode(named.mode),
                             name: self.text(named.name.span).to_string(),
                         }),
-                        ast::Capture::RecursiveSelf(span) => {
-                            HirCapture::RecursiveSelf(span.clone())
-                        }
+                        ast::Capture::RecursiveSelf(span) => HirCapture::RecursiveSelf(*span),
                     })
                     .collect(),
                 parameters: c

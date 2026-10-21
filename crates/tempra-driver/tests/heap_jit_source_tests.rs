@@ -1,3 +1,5 @@
+#![cfg(feature = "jit-cranelift")]
+
 use tempra_bytecode::function::{BytecodeFunction, BytecodeType};
 use tempra_bytecode::opcode::BytecodeInstr;
 use tempra_bytecode::BytecodeModule;

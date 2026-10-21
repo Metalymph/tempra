@@ -129,10 +129,11 @@ impl<'a> FunctionLowerer<'a> {
         for block in &self.tir_func.blocks {
             for instr in &block.instrs {
                 if let Some(id) = get_instr_res_id(instr) {
-                    if !self.value_to_local.contains_key(&id) {
-                        self.value_to_local.insert(id, LocalId(next_local));
+                    self.value_to_local.entry(id).or_insert_with(|| {
+                        let local = LocalId(next_local);
                         next_local += 1;
-                    }
+                        local
+                    });
                 }
             }
         }

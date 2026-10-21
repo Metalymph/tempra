@@ -7,6 +7,12 @@ pub struct BytecodeModule {
     pub functions: Vec<BytecodeFunction>,
 }
 
+impl Default for BytecodeModule {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BytecodeModule {
     pub fn new() -> Self {
         Self {

@@ -191,6 +191,12 @@ pub struct TypeContext {
     pub module_facts: HashMap<String, crate::facts::TypecheckFacts>,
 }
 
+impl Default for TypeContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TypeContext {
     pub fn new() -> Self {
         let mut ctx = Self {
@@ -567,10 +573,10 @@ impl TypeContext {
                             }
                         }
                     } else {
-                        self.error(format!("associated type projection is only valid on constrained generic parameters"), *span);
+                        self.error("associated type projection is only valid on constrained generic parameters".to_string(), *span);
                     }
                 } else if base_ty != Type::Error {
-                    self.error(format!("associated type projection is only valid on constrained generic parameters"), *span);
+                    self.error("associated type projection is only valid on constrained generic parameters".to_string(), *span);
                 }
                 Type::Error
             }
@@ -708,42 +714,42 @@ impl TypeContext {
                 let itf = &self.interfaces[&itf_name];
                 (itf.methods.contains_key(method_name), itf.visibility)
             };
-            if has_method {
-                if crate::check_expr::satisfies_interface_no_errors(self, receiver_ty, &itf_name) {
-                    let req = self.interfaces[&itf_name]
-                        .methods
-                        .get(method_name)
-                        .cloned()
-                        .unwrap();
-                    if let Some(mappings) = self.infer_associated_types(receiver_ty, &itf_name) {
-                        return Some(FunctionSignature {
-                            visibility,
-                            generic_params: Vec::new(),
-                            params: req
-                                .params
-                                .iter()
-                                .enumerate()
-                                .map(|(i, p_ty)| FunctionParam {
-                                    name: if i == 0 {
-                                        "self".to_string()
-                                    } else {
-                                        format!("p{}", i)
-                                    },
-                                    ty: self.resolve_associated_types(
-                                        &substitute_self(p_ty, receiver_ty),
-                                        &mappings,
-                                    ),
-                                    is_inout: req.param_inout[i],
-                                    kind: ParameterKind::Runtime,
-                                })
-                                .collect(),
-                            return_type: self.resolve_associated_types(
-                                &substitute_self(&req.return_type, receiver_ty),
-                                &mappings,
-                            ),
-                            is_fallible: false,
-                        });
-                    }
+            if has_method
+                && crate::check_expr::satisfies_interface_no_errors(self, receiver_ty, &itf_name)
+            {
+                let req = self.interfaces[&itf_name]
+                    .methods
+                    .get(method_name)
+                    .cloned()
+                    .unwrap();
+                if let Some(mappings) = self.infer_associated_types(receiver_ty, &itf_name) {
+                    return Some(FunctionSignature {
+                        visibility,
+                        generic_params: Vec::new(),
+                        params: req
+                            .params
+                            .iter()
+                            .enumerate()
+                            .map(|(i, p_ty)| FunctionParam {
+                                name: if i == 0 {
+                                    "self".to_string()
+                                } else {
+                                    format!("p{}", i)
+                                },
+                                ty: self.resolve_associated_types(
+                                    &substitute_self(p_ty, receiver_ty),
+                                    &mappings,
+                                ),
+                                is_inout: req.param_inout[i],
+                                kind: ParameterKind::Runtime,
+                            })
+                            .collect(),
+                        return_type: self.resolve_associated_types(
+                            &substitute_self(&req.return_type, receiver_ty),
+                            &mappings,
+                        ),
+                        is_fallible: false,
+                    });
                 }
             }
         }
@@ -834,23 +840,26 @@ impl TypeContext {
             }
         }
 
-        if let Type::GenericParam { id, constraint, .. } = ty {
-            if let Some(c) = constraint {
-                if c == interface_name {
-                    let mut mappings = HashMap::new();
-                    if let Some(itf) = self.interfaces.get(c) {
-                        for assoc in &itf.associated_types {
-                            mappings.insert(
-                                assoc.clone(),
-                                Type::Projection {
-                                    base: *id,
-                                    assoc: assoc.clone(),
-                                },
-                            );
-                        }
+        if let Type::GenericParam {
+            id,
+            constraint: Some(c),
+            ..
+        } = ty
+        {
+            if c == interface_name {
+                let mut mappings = HashMap::new();
+                if let Some(itf) = self.interfaces.get(c) {
+                    for assoc in &itf.associated_types {
+                        mappings.insert(
+                            assoc.clone(),
+                            Type::Projection {
+                                base: *id,
+                                assoc: assoc.clone(),
+                            },
+                        );
                     }
-                    return Some(mappings);
                 }
+                return Some(mappings);
             }
         }
         if let Type::Interface(name) = ty {
@@ -1189,23 +1198,21 @@ impl TypeContext {
         if let Type::Struct(name, _) = ty {
             if self.interfaces.contains_key(name) {
                 self.error(
-                    format!(
-                        "interfaces are static constraints and cannot be used as runtime types"
-                    ),
+                    "interfaces are static constraints and cannot be used as runtime types"
+                        .to_string(),
                     span,
                 );
             }
         } else if let Type::Interface(_) = ty {
             self.error(
-                format!("interfaces are static constraints and cannot be used as runtime types"),
+                "interfaces are static constraints and cannot be used as runtime types".to_string(),
                 span,
             );
         } else if let Type::Enum(name, _) = ty {
             if self.interfaces.contains_key(name) {
                 self.error(
-                    format!(
-                        "interfaces are static constraints and cannot be used as runtime types"
-                    ),
+                    "interfaces are static constraints and cannot be used as runtime types"
+                        .to_string(),
                     span,
                 );
             }
@@ -1215,7 +1222,7 @@ impl TypeContext {
     pub fn verify_no_self(&mut self, ty: &Type, span: tempra_span::Span) {
         if ty.contains_self() {
             self.error(
-                format!("'Self' is only allowed within interface requirements"),
+                "'Self' is only allowed within interface requirements".to_string(),
                 span,
             );
         }

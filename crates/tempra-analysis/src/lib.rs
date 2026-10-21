@@ -239,6 +239,7 @@ impl WorkspaceEdit {
     /// - Checks for overlaps between edits.
     /// - Deduplicates exact duplicate edits.
     /// - Sorts the edits deterministically in reverse order (descending start offset).
+    ///
     /// Returns `Err` if there are overlapping edits.
     pub fn validate_and_clean(&mut self) -> Result<(), String> {
         for (uri, edits) in &mut self.changes {
@@ -1609,7 +1610,7 @@ impl AnalysisSession {
 
         let mut target_uri = None;
         if let Some(ns_name) = &early_module_name {
-            for (uri, _) in self.documents.iter() {
+            for uri in self.documents.keys() {
                 if uri.as_str().ends_with(&format!("/{}.tmpr", ns_name)) {
                     target_uri = Some(uri.clone());
                     break;
@@ -1647,7 +1648,7 @@ impl AnalysisSession {
                     if let Some(target_res) = self.analysis_cache.get(&uri) {
                         for sym in &target_res.symbols {
                             // Only suggest public symbols
-                            if sym.signature.as_ref().map_or(false, |s| s.contains("pub")) {
+                            if sym.signature.as_ref().is_some_and(|s| s.contains("pub")) {
                                 let kind = match sym.kind {
                                     tempra_diagnostics::SymbolKind::Function => {
                                         CompletionKind::Function
@@ -1671,7 +1672,7 @@ impl AnalysisSession {
                 });
 
                 if let Some(mut base_name) = type_to_base_name(&ty) {
-                    if let Some(last) = base_name.split('.').last() {
+                    if let Some(last) = base_name.split('.').next_back() {
                         base_name = last.to_string();
                     }
                     let prefix = format!("{}.", base_name);
@@ -2074,7 +2075,7 @@ impl SemanticIndex {
     }
 }
 
-fn get_token_text<'a>(token: tempra_lexer::Token, source: &'a str) -> &'a str {
+fn get_token_text(token: tempra_lexer::Token, source: &str) -> &str {
     let start = token.span.start as usize;
     let end = token.span.end as usize;
     if start <= end && end <= source.len() {
@@ -2099,6 +2100,12 @@ pub struct SemanticResolver {
     globals: HashMap<String, usize>,
     scopes: Vec<HashMap<String, usize>>,
     symbols: Vec<SemanticSymbol>,
+}
+
+impl Default for SemanticResolver {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SemanticResolver {

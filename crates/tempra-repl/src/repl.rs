@@ -21,6 +21,12 @@ pub struct ReplSession {
     env: RuntimeEnv,
 }
 
+impl Default for ReplSession {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ReplSession {
     pub fn new() -> Self {
         let mut type_ctx = TypeContext::new();

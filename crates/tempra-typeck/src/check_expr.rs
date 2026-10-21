@@ -32,8 +32,8 @@ fn get_call_arg_mut<'a>(
     if idx < args.len() && matches!(&args[idx], HirCallArgument::Positional(_)) {
         found_idx = Some(idx);
     } else {
-        for i in 0..args.len() {
-            if let HirCallArgument::Named(n) = &args[i] {
+        for (i, arg) in args.iter().enumerate() {
+            if let HirCallArgument::Named(n) = arg {
                 if n.name == arg_name {
                     found_idx = Some(i);
                     break;
@@ -308,7 +308,7 @@ fn resolve_name(
     }
 
     // Check if it exists outside isolation boundary for closures
-    if let Some(_) = ctx.scopes.lookup_anywhere(name) {
+    if ctx.scopes.lookup_anywhere(name).is_some() {
         return Err(format!(
             "use of external value '{}' requires explicit capture",
             name
@@ -329,13 +329,13 @@ fn resolve_name(
 
     if !ctx.current_module.is_empty() {
         let qualified = format!("{}.{}", ctx.current_module, name);
-        if let Some(_) = ctx.structs.get(&qualified) {
+        if ctx.structs.contains_key(&qualified) {
             return Ok(ResolvedName::Type(Type::Struct(qualified, vec![])));
         }
-        if let Some(_) = ctx.enums.get(&qualified) {
+        if ctx.enums.contains_key(&qualified) {
             return Ok(ResolvedName::Type(Type::Enum(qualified, vec![])));
         }
-        if let Some(_) = ctx.interfaces.get(&qualified) {
+        if ctx.interfaces.contains_key(&qualified) {
             return Ok(ResolvedName::Type(Type::Interface(qualified)));
         }
     }
@@ -345,13 +345,13 @@ fn resolve_name(
         return Ok(ResolvedName::Type(ty));
     }
 
-    if let Some(_) = ctx.structs.get(name) {
+    if ctx.structs.contains_key(name) {
         return Ok(ResolvedName::Type(Type::Struct(name.to_string(), vec![])));
     }
-    if let Some(_) = ctx.enums.get(name) {
+    if ctx.enums.contains_key(name) {
         return Ok(ResolvedName::Type(Type::Enum(name.to_string(), vec![])));
     }
-    if let Some(_) = ctx.interfaces.get(name) {
+    if ctx.interfaces.contains_key(name) {
         // Interface names are not valid value types (except as constraints)
         return Ok(ResolvedName::Type(Type::Interface(name.to_string())));
     }
@@ -568,10 +568,8 @@ fn resolve_callee(
             match &obj_ty {
                 Type::Namespace(ns) => ResolvedCallee::Namespace(ns.clone(), m.field.clone()),
                 Type::Struct(name, _) => {
-                    if let Some(field_ty) = ctx.lookup_field(name, &m.field) {
-                        if let Type::Function(params, ret) = field_ty {
-                            return ResolvedCallee::Closure(params, *ret);
-                        }
+                    if let Some(Type::Function(params, ret)) = ctx.lookup_field(name, &m.field) {
+                        return ResolvedCallee::Closure(params, *ret);
                     }
                     ResolvedCallee::Method(obj_ty.clone(), m.field.clone())
                 }
@@ -1277,7 +1275,7 @@ fn check_builtin(
             Some(Type::Never)
         }
         "expect" => {
-            if args.len() < 1 {
+            if args.is_empty() {
                 ctx.error(
                     format!(
                         "function 'expect' expects at least 1 argument, found {}",
@@ -1533,7 +1531,7 @@ fn check_os_builtin(
 ) -> Type {
     match name {
         "args" => {
-            if args.len() != 0 {
+            if !args.is_empty() {
                 ctx.error(
                     format!("'os.args' expects 0 arguments, found {}", args.len()),
                     span,
@@ -1542,7 +1540,7 @@ fn check_os_builtin(
             Type::Array(Box::new(Type::String))
         }
         "cwd" => {
-            if args.len() != 0 {
+            if !args.is_empty() {
                 ctx.error(
                     format!("'os.cwd' expects 0 arguments, found {}", args.len()),
                     span,
@@ -1732,7 +1730,7 @@ fn check_array_method(
                 args,
                 span,
                 0,
-                &[elem_ty.clone()],
+                std::slice::from_ref(&elem_ty),
                 Some(&Type::Bool),
             );
             Type::Array(Box::new(elem_ty))
@@ -1747,7 +1745,7 @@ fn check_array_method(
                 args,
                 span,
                 0,
-                &[elem_ty.clone()],
+                std::slice::from_ref(&elem_ty),
                 Some(&Type::Bool),
             );
             Type::Option(Box::new(elem_ty))
@@ -2063,7 +2061,7 @@ fn check_collection_callback(
 
     let mut inferred = std::collections::HashMap::new();
     for (param, expected) in runtime_params.iter().zip(expected_params.iter()) {
-        if let Err(_) = match_generic_types(&param.ty, expected, &mut inferred) {
+        if match_generic_types(&param.ty, expected, &mut inferred).is_err() {
             ctx.error(
                 format!(
                     "'{}' callback '{}' parameter type mismatch: expected {}, found {}",
@@ -2746,7 +2744,7 @@ fn check_function_call(
                 } else {
                     None
                 };
-                let arg_ty = check_expression(ctx, *arg_expr, expected_arg_ty.as_ref());
+                let arg_ty = check_expression(ctx, arg_expr, expected_arg_ty.as_ref());
                 arg_types.push(arg_ty);
             }
             None => arg_types.push(Type::Error),
@@ -2767,23 +2765,20 @@ fn check_function_call(
             );
             return Type::Error;
         }
-        for (param, ty) in sig.generic_params.iter().zip(t_args.into_iter()) {
+        for (param, ty) in sig.generic_params.iter().zip(t_args) {
             inferred.insert(param.id, ty);
         }
     } else {
         if !sig.generic_params.is_empty() {
             for (i, param) in sig.params.iter().enumerate() {
                 if let Some(arg_ty) = arg_types.get(i) {
-                    if *arg_ty != Type::Error {
-                        if match_generic_types(&param.ty, arg_ty, &mut inferred).is_err() {
-                            ctx.error(
-                                format!(
-                                    "type mismatch during generic inference for '{}'",
-                                    func_name
-                                ),
-                                c.span,
-                            );
-                        }
+                    if *arg_ty != Type::Error
+                        && match_generic_types(&param.ty, arg_ty, &mut inferred).is_err()
+                    {
+                        ctx.error(
+                            format!("type mismatch during generic inference for '{}'", func_name),
+                            c.span,
+                        );
                     }
                 }
             }
@@ -2844,7 +2839,7 @@ fn check_function_call(
             }
 
             if param.kind == tempra_ast::ParameterKind::Comptime {
-                match evaluate_comptime_arg(ctx, *arg_expr, &substituted_param_ty) {
+                match evaluate_comptime_arg(ctx, arg_expr, &substituted_param_ty) {
                     Ok(val) => comptime_args.push(val),
                     Err((msg, span)) => {
                         ctx.error(msg, span);
@@ -3064,10 +3059,8 @@ fn check_member(ctx: &mut TypeContext, m: &mut HirMember, _expected: Option<&Typ
                 return Type::Error;
             }
         }
-    } else if matches!(object_ty, Type::Array(_) | Type::Slice(_)) {
-        if m.field == "len" {
-            return Type::Int64;
-        }
+    } else if matches!(object_ty, Type::Array(_) | Type::Slice(_)) && m.field == "len" {
+        return Type::Int64;
     }
 
     // Projection (T.Item, MyIter.Item) is only valid in type positions.
@@ -3275,7 +3268,7 @@ fn depends_on_generic_param(expr: &HirExpression, ctx: &TypeContext) -> bool {
                     HirCallArgument::Positional(e) => depends_on_generic_param(e, ctx),
                     HirCallArgument::Named(n) => depends_on_generic_param(&n.value, ctx),
                 })
-                || c.type_args.as_ref().map_or(false, |targs| {
+                || c.type_args.as_ref().is_some_and(|targs| {
                     targs.iter().any(|t| match t {
                         HirType::Named(_, n) => {
                             ctx.current_generic_params_info.iter().any(|p| &p.name == n)
@@ -3323,7 +3316,7 @@ fn check_if(ctx: &mut TypeContext, i: &mut HirIf, expected: Option<&Type>) -> Ty
             ctx.error("comptime if condition must be Bool".to_string(), i.span);
         }
 
-        if let Err((msg, span)) = semantic_check_comptime_expr(&mut i.condition, ctx) {
+        if let Err((msg, span)) = semantic_check_comptime_expr(&i.condition, ctx) {
             ctx.error(msg, span);
             return Type::Error;
         }
@@ -3332,7 +3325,7 @@ fn check_if(ctx: &mut TypeContext, i: &mut HirIf, expected: Option<&Type>) -> Ty
             return expected.cloned().unwrap_or(Type::Unknown);
         }
 
-        let val = match ctx.eval_comptime_expr(&mut i.condition) {
+        let val = match ctx.eval_comptime_expr(&i.condition) {
             Ok(v) => v,
             Err(e) => {
                 ctx.error(
@@ -3354,7 +3347,8 @@ fn check_if(ctx: &mut TypeContext, i: &mut HirIf, expected: Option<&Type>) -> Ty
                 // Prune the else branch if the then branch is selected
                 i.else_branch = None;
                 // Rewrite condition to literal true
-                i.condition = Box::new(HirExpression::Bool(i.condition.span(), true));
+                let condition_span = i.condition.span();
+                *i.condition = HirExpression::Bool(condition_span, true);
 
                 then_ty
             } else {
@@ -3367,7 +3361,8 @@ fn check_if(ctx: &mut TypeContext, i: &mut HirIf, expected: Option<&Type>) -> Ty
                 // Prune the then branch if the else branch is selected
                 i.then_block.statements.clear();
                 // Rewrite condition to literal false
-                i.condition = Box::new(HirExpression::Bool(i.condition.span(), false));
+                let condition_span = i.condition.span();
+                *i.condition = HirExpression::Bool(condition_span, false);
 
                 else_ty
             };
@@ -3419,7 +3414,7 @@ fn check_match(ctx: &mut TypeContext, m: &mut HirMatch, expected: Option<&Type>)
             return Type::Error;
         }
 
-        if let Err((msg, span)) = semantic_check_comptime_expr(&mut m.value, ctx) {
+        if let Err((msg, span)) = semantic_check_comptime_expr(&m.value, ctx) {
             ctx.error(msg, span);
             return Type::Error;
         }
@@ -3428,7 +3423,7 @@ fn check_match(ctx: &mut TypeContext, m: &mut HirMatch, expected: Option<&Type>)
             return expected.cloned().unwrap_or(Type::Unknown);
         }
 
-        let val = match ctx.eval_comptime_expr(&mut m.value) {
+        let val = match ctx.eval_comptime_expr(&m.value) {
             Ok(v) => v,
             Err(e) => {
                 ctx.error(
@@ -4213,8 +4208,8 @@ fn check_closure(ctx: &mut TypeContext, c: &mut HirClosure, expected: Option<&Ty
                 }
             }
             HirCapture::RecursiveSelf(span) => {
-                if let Some(_prev_span) = seen_captures.insert("self".into(), span.clone()) {
-                    ctx.error("duplicate capture: 'self'", span.clone());
+                if let Some(_prev_span) = seen_captures.insert("self".into(), *span) {
+                    ctx.error("duplicate capture: 'self'", *span);
                 }
                 has_recursive_self = true;
             }
@@ -4451,10 +4446,8 @@ fn semantic_check_block(block: &HirBlock, ctx: &TypeContext) -> Result<(), (Stri
             HirStatement::Let(l) => semantic_check_comptime_expr(&l.value, ctx)?,
             HirStatement::Var(v) => semantic_check_comptime_expr(&v.value, ctx)?,
             HirStatement::Expr(e) => semantic_check_comptime_expr(e, ctx)?,
-            HirStatement::Return(opt_e) => {
-                if let Some(e) = opt_e {
-                    semantic_check_comptime_expr(e, ctx)?;
-                }
+            HirStatement::Return(Some(e)) => {
+                semantic_check_comptime_expr(e, ctx)?;
             }
             _ => {}
         }
@@ -4463,30 +4456,27 @@ fn semantic_check_block(block: &HirBlock, ctx: &TypeContext) -> Result<(), (Stri
 }
 
 pub(crate) fn satisfies_interface(ctx: &mut TypeContext, ty: &Type, interface_name: &str) -> bool {
-    if interface_name == "Collection" {
-        if matches!(ty, Type::Array(_) | Type::Slice(_)) {
-            return true;
-        }
+    if interface_name == "Collection" && matches!(ty, Type::Array(_) | Type::Slice(_)) {
+        return true;
     }
-    if interface_name == "Iterator" {
-        if matches!(ty, Type::ArrayIter(_) | Type::SliceIter(_)) {
-            return true;
-        }
+    if interface_name == "Iterator" && matches!(ty, Type::ArrayIter(_) | Type::SliceIter(_)) {
+        return true;
     }
-    if interface_name == "Iterable" {
-        if matches!(ty, Type::Array(_) | Type::Slice(_) | Type::String) {
-            return true;
-        }
+    if interface_name == "Iterable" && matches!(ty, Type::Array(_) | Type::Slice(_) | Type::String)
+    {
+        return true;
     }
 
-    if let Type::GenericParam { constraint, .. } = ty {
-        if let Some(c) = constraint {
-            if c == interface_name {
-                return true;
-            }
-            if satisfies_interface_no_errors(ctx, &Type::Interface(c.clone()), interface_name) {
-                return true;
-            }
+    if let Type::GenericParam {
+        constraint: Some(c),
+        ..
+    } = ty
+    {
+        if c == interface_name {
+            return true;
+        }
+        if satisfies_interface_no_errors(ctx, &Type::Interface(c.clone()), interface_name) {
+            return true;
         }
     }
     if let Type::Interface(name) = ty {
@@ -4622,30 +4612,27 @@ pub(crate) fn satisfies_interface(ctx: &mut TypeContext, ty: &Type, interface_na
 }
 
 pub fn satisfies_interface_no_errors(ctx: &TypeContext, ty: &Type, interface_name: &str) -> bool {
-    if interface_name == "Collection" {
-        if matches!(ty, Type::Array(_) | Type::Slice(_)) {
-            return true;
-        }
+    if interface_name == "Collection" && matches!(ty, Type::Array(_) | Type::Slice(_)) {
+        return true;
     }
-    if interface_name == "Iterator" {
-        if matches!(ty, Type::ArrayIter(_) | Type::SliceIter(_)) {
-            return true;
-        }
+    if interface_name == "Iterator" && matches!(ty, Type::ArrayIter(_) | Type::SliceIter(_)) {
+        return true;
     }
-    if interface_name == "Iterable" {
-        if matches!(ty, Type::Array(_) | Type::Slice(_) | Type::String) {
-            return true;
-        }
+    if interface_name == "Iterable" && matches!(ty, Type::Array(_) | Type::Slice(_) | Type::String)
+    {
+        return true;
     }
 
-    if let Type::GenericParam { constraint, .. } = ty {
-        if let Some(c) = constraint {
-            if c == interface_name {
-                return true;
-            }
-            if satisfies_interface_no_errors(ctx, &Type::Interface(c.clone()), interface_name) {
-                return true;
-            }
+    if let Type::GenericParam {
+        constraint: Some(c),
+        ..
+    } = ty
+    {
+        if c == interface_name {
+            return true;
+        }
+        if satisfies_interface_no_errors(ctx, &Type::Interface(c.clone()), interface_name) {
+            return true;
         }
     }
     if let Type::Interface(name) = ty {

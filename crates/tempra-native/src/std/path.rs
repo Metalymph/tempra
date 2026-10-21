@@ -12,7 +12,7 @@ pub fn join(args: &[VmValue]) -> Result<VmValue, String> {
         return Err("join expects String".to_string());
     };
     let path = Path::new(a.as_str()).join(b.as_str());
-    Ok(VmValue::String(path.to_string_lossy().into_owned().into()))
+    Ok(VmValue::String(path.to_string_lossy().into_owned()))
 }
 
 pub fn basename(args: &[VmValue]) -> Result<VmValue, String> {
@@ -23,5 +23,5 @@ pub fn basename(args: &[VmValue]) -> Result<VmValue, String> {
         return Err("basename expects String".to_string());
     };
     let base = Path::new(a.as_str()).file_name().unwrap_or_default();
-    Ok(VmValue::String(base.to_string_lossy().into_owned().into()))
+    Ok(VmValue::String(base.to_string_lossy().into_owned()))
 }

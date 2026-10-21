@@ -35,18 +35,34 @@ All heap-allocated values are represented in the JIT as a **HeapHandle**.
 
 Interaction with the heap is performed via static calls to "Runtime Helpers" provided by the VM.
 
-### 4.1 Fallible Helper ABI: (Value, Status)
-Helpers that can fail (e.g., due to bounds checks or type mismatches) follow a dual-return ABI:
-- **Return 0**: The primary result value (often a `HeapHandle` or `Int64`).
-- **Return 1**: A status code (`Int64`). `0` indicates success; non-zero indicates a specific error.
+### 4.1 Fallible Helper ABI: out pointer + (Value, Status)
+
+Helpers that can fail (e.g., due to bounds checks or type mismatches) report a
+`(value, status)` pair. The pair is **written through a caller-provided out
+pointer** passed as the first argument; the helper itself returns `Unit`:
+
+```text
+extern "C" fn(out: *mut JitHelperResult, <parameters...>) -> ()
+```
+
+The out slot holds a C-compatible `{ value: u64, status: i64 }` record
+(`JitHelperResult`, 16 bytes). `status == 0` indicates success; non-zero
+indicates a specific error.
+
+Returning the pair by value is deliberately avoided: SysV returns a 16-byte
+aggregate in registers, but Windows x64 returns it through a hidden pointer that
+displaces the first parameter, so the generated code and the Rust callee would
+disagree. Passing storage explicitly is unambiguous on every target. Rust-side
+callers obtain the pair as a normal `JitHelperResult`; JIT-generated callers
+allocate a stack slot and read `value`/`status` back from it.
 
 ### 4.2 Initial Helper Set (Proposed)
 
 | Helper | Signature | Description |
 |---|---|---|
-| `tmpr_jit_string_len` | `(HeapHandle) -> i64` | Returns the number of characters. |
-| `tmpr_jit_array_get` | `(HeapHandle, i64) -> (HeapHandle, i64)` | Returns `(element_handle, status)`. |
-| `tmpr_jit_struct_get` | `(HeapHandle, i64) -> (HeapHandle, i64)` | Returns `(field_handle, status)`. |
+| `tmpr_jit_string_len` | `(out, HeapHandle) -> ()` | Writes the character count to `out`. |
+| `tmpr_jit_array_get` | `(out, HeapHandle, i64) -> ()` | Writes `(element_handle, status)` to `out`. |
+| `tmpr_jit_struct_get` | `(out, HeapHandle, i64) -> ()` | Writes `(field_handle, status)` to `out`. |
 
 ## 5. Error Handling
 

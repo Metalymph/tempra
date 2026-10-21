@@ -37,7 +37,7 @@ pub fn interpret_function(
     let mut frame = Frame::new(func, module);
 
     // Bind parameters
-    for ((param_id, _ty), arg_val) in func.params.iter().zip(args.into_iter()) {
+    for ((param_id, _ty), arg_val) in func.params.iter().zip(args) {
         frame.values.insert(*param_id, arg_val);
     }
 
@@ -266,7 +266,7 @@ impl<'a> Frame<'a> {
 
                 // Recursive call via new frame — skip verification (already done at top level)
                 let mut child_frame = Frame::new(callee, self.module);
-                for ((param_id, _ty), arg_val) in callee.params.iter().zip(call_args.into_iter()) {
+                for ((param_id, _ty), arg_val) in callee.params.iter().zip(call_args) {
                     child_frame.values.insert(*param_id, arg_val);
                 }
                 let result = child_frame.execute()?;

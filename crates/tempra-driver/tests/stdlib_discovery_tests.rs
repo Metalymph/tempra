@@ -25,7 +25,7 @@ fn write_path_program(path: &Path) {
 import std.path;
 
 pub fn main() -> Int64 {
-    if std.path.join("a", "b") == "a/b" {
+    if std.path.basename("example.txt") == "example.txt" {
         return 41;
     }
     return 0;

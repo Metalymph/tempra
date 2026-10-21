@@ -19,28 +19,28 @@ pub struct JitHelperInfo {
 
 #[derive(Debug, Clone)]
 pub enum JitHelperSignature {
-    /// (ctx: *mut JitRuntimeContext, HeapHandle) -> JitHelperResult (value=len, status)
+    /// (out: *mut JitHelperResult, ctx: *mut JitRuntimeContext, HeapHandle) -> (); writes value=len, status
     StringLen,
     GenericLen,
-    /// (ctx: *mut JitRuntimeContext, HeapHandle) -> JitHelperResult (value=byte_count, status)
+    /// (out: *mut JitHelperResult, ctx: *mut JitRuntimeContext, HeapHandle) -> (); writes value=byte_count, status
     StringSize,
     GenericSize,
-    /// (ctx: *mut JitRuntimeContext, HeapHandle) -> JitHelperResult (value=len, status)
+    /// (out: *mut JitHelperResult, ctx: *mut JitRuntimeContext, HeapHandle) -> (); writes value=len, status
     ArrayLen,
-    /// (ctx: *mut JitRuntimeContext, HeapHandle, i64) -> JitHelperResult (value=handle, status)
+    /// (out: *mut JitHelperResult, ctx: *mut JitRuntimeContext, HeapHandle, i64) -> (); writes value=handle, status
     ArrayGet,
     GenericGetI64,
-    /// (ctx: *mut JitRuntimeContext, HeapHandle, u64) -> JitHelperResult (value=i64_bits, status)
+    /// (out: *mut JitHelperResult, ctx: *mut JitRuntimeContext, HeapHandle, u64) -> (); writes value=i64_bits, status
     StructGet,
-    /// (ctx: *mut JitRuntimeContext, HeapHandle) -> JitHelperResult (value=tag, status)
+    /// (out: *mut JitHelperResult, ctx: *mut JitRuntimeContext, HeapHandle) -> (); writes value=tag, status
     EnumTag,
-    /// (ctx: *mut JitRuntimeContext, HeapHandle, expected_tag: u64, payload_index: u64) -> JitHelperResult (value=i64_bits, status)
+    /// (out: *mut JitHelperResult, ctx: *mut JitRuntimeContext, HeapHandle, expected_tag: u64, payload_index: u64) -> (); writes value=i64_bits, status
     EnumUnwrap,
-    /// (ctx: *mut JitRuntimeContext) -> JitHelperResult (value=handle, status)
+    /// (out: *mut JitHelperResult, ctx: *mut JitRuntimeContext) -> (); writes value=handle, status
     AllocStringEmpty,
-    /// (ctx: *mut JitRuntimeContext, HeapHandle, HeapHandle) -> JitHelperResult (value=handle, status)
+    /// (out: *mut JitHelperResult, ctx: *mut JitRuntimeContext, HeapHandle, HeapHandle) -> (); writes value=handle, status
     StringConcat,
-    /// (ctx: *mut JitRuntimeContext, HeapHandle, value: i64) -> JitHelperResult (value=handle, status)
+    /// (out: *mut JitHelperResult, ctx: *mut JitRuntimeContext, HeapHandle, value: i64) -> (); writes value=handle, status
     ArrayPushI64,
 }
 
@@ -53,7 +53,7 @@ impl JitHelperRegistry {
             JitHelperInfo {
                 name: "tmpr_jit_string_len",
                 signature: JitHelperSignature::StringLen,
-                ptr: tmpr_jit_string_len as *const (),
+                ptr: tmpr_jit_string_len_out as *const (),
             },
         );
 
@@ -62,7 +62,7 @@ impl JitHelperRegistry {
             JitHelperInfo {
                 name: "tmpr_jit_generic_len",
                 signature: JitHelperSignature::GenericLen,
-                ptr: tmpr_jit_generic_len as *const (),
+                ptr: tmpr_jit_generic_len_out as *const (),
             },
         );
 
@@ -71,7 +71,7 @@ impl JitHelperRegistry {
             JitHelperInfo {
                 name: "tmpr_jit_string_size",
                 signature: JitHelperSignature::StringSize,
-                ptr: tmpr_jit_string_size as *const (),
+                ptr: tmpr_jit_string_size_out as *const (),
             },
         );
 
@@ -80,7 +80,7 @@ impl JitHelperRegistry {
             JitHelperInfo {
                 name: "tmpr_jit_array_len",
                 signature: JitHelperSignature::ArrayLen,
-                ptr: tmpr_jit_array_len as *const (),
+                ptr: tmpr_jit_array_len_out as *const (),
             },
         );
 
@@ -89,7 +89,7 @@ impl JitHelperRegistry {
             JitHelperInfo {
                 name: "tmpr_jit_generic_size",
                 signature: JitHelperSignature::GenericSize,
-                ptr: tmpr_jit_generic_size as *const (),
+                ptr: tmpr_jit_generic_size_out as *const (),
             },
         );
 
@@ -98,7 +98,7 @@ impl JitHelperRegistry {
             JitHelperInfo {
                 name: "tmpr_jit_array_get_i64",
                 signature: JitHelperSignature::ArrayGet,
-                ptr: tmpr_jit_array_get_i64 as *const (),
+                ptr: tmpr_jit_array_get_i64_out as *const (),
             },
         );
 
@@ -107,7 +107,7 @@ impl JitHelperRegistry {
             JitHelperInfo {
                 name: "tmpr_jit_generic_get_i64",
                 signature: JitHelperSignature::GenericGetI64,
-                ptr: tmpr_jit_generic_get_i64 as *const (),
+                ptr: tmpr_jit_generic_get_i64_out as *const (),
             },
         );
 
@@ -116,7 +116,7 @@ impl JitHelperRegistry {
             JitHelperInfo {
                 name: "tmpr_jit_struct_get_i64",
                 signature: JitHelperSignature::StructGet,
-                ptr: tmpr_jit_struct_get_i64 as *const (),
+                ptr: tmpr_jit_struct_get_i64_out as *const (),
             },
         );
 
@@ -125,7 +125,7 @@ impl JitHelperRegistry {
             JitHelperInfo {
                 name: "tmpr_jit_enum_tag",
                 signature: JitHelperSignature::EnumTag,
-                ptr: tmpr_jit_enum_tag as *const (),
+                ptr: tmpr_jit_enum_tag_out as *const (),
             },
         );
 
@@ -134,7 +134,7 @@ impl JitHelperRegistry {
             JitHelperInfo {
                 name: "tmpr_jit_enum_unwrap_i64",
                 signature: JitHelperSignature::EnumUnwrap,
-                ptr: tmpr_jit_enum_unwrap_i64 as *const (),
+                ptr: tmpr_jit_enum_unwrap_i64_out as *const (),
             },
         );
 
@@ -143,7 +143,7 @@ impl JitHelperRegistry {
             JitHelperInfo {
                 name: "tmpr_jit_alloc_string_empty",
                 signature: JitHelperSignature::AllocStringEmpty,
-                ptr: tmpr_jit_alloc_string_empty as *const (),
+                ptr: tmpr_jit_alloc_string_empty_out as *const (),
             },
         );
 
@@ -152,7 +152,7 @@ impl JitHelperRegistry {
             JitHelperInfo {
                 name: "tmpr_jit_string_concat",
                 signature: JitHelperSignature::StringConcat,
-                ptr: tmpr_jit_string_concat as *const (),
+                ptr: tmpr_jit_string_concat_out as *const (),
             },
         );
 
@@ -161,7 +161,7 @@ impl JitHelperRegistry {
             JitHelperInfo {
                 name: "tmpr_jit_array_push_i64",
                 signature: JitHelperSignature::ArrayPushI64,
-                ptr: tmpr_jit_array_push_i64 as *const (),
+                ptr: tmpr_jit_array_push_i64_out as *const (),
             },
         );
 
@@ -216,6 +216,12 @@ pub enum JitHeapScalar {
     UInt8(u8),
     Bool(bool),
     Handle(HeapHandle),
+}
+
+impl Default for JitRuntimeContext {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl JitRuntimeContext {
@@ -605,7 +611,14 @@ pub extern "C" fn tmpr_jit_enum_unwrap_i64(
 /// Helper implementation for allocating an empty string.
 ///
 /// ABI: (ctx: *mut JitRuntimeContext) -> JitHelperResult
-pub extern "C" fn tmpr_jit_alloc_string_empty(ctx: *mut JitRuntimeContext) -> JitHelperResult {
+///
+/// # Safety
+///
+/// `ctx` must be null or point to a valid, properly aligned
+/// `JitRuntimeContext` with exclusive access for the duration of the call.
+pub unsafe extern "C" fn tmpr_jit_alloc_string_empty(
+    ctx: *mut JitRuntimeContext,
+) -> JitHelperResult {
     if ctx.is_null() {
         return JitHelperResult {
             value: 0,
@@ -624,7 +637,12 @@ pub extern "C" fn tmpr_jit_alloc_string_empty(ctx: *mut JitRuntimeContext) -> Ji
 /// Helper implementation for concatenating two strings.
 ///
 /// ABI: (ctx: *mut JitRuntimeContext, left_handle: u64, right_handle: u64) -> JitHelperResult
-pub extern "C" fn tmpr_jit_string_concat(
+///
+/// # Safety
+///
+/// `ctx` must be null or point to a valid, properly aligned
+/// `JitRuntimeContext` with exclusive access for the duration of the call.
+pub unsafe extern "C" fn tmpr_jit_string_concat(
     ctx: *mut JitRuntimeContext,
     left_handle: u64,
     right_handle: u64,
@@ -646,7 +664,12 @@ pub extern "C" fn tmpr_jit_string_concat(
 /// Helper implementation for array push with value semantics.
 ///
 /// ABI: (ctx: *mut JitRuntimeContext, array_handle: u64, value: i64) -> JitHelperResult
-pub extern "C" fn tmpr_jit_array_push_i64(
+///
+/// # Safety
+///
+/// `ctx` must be null or point to a valid, properly aligned
+/// `JitRuntimeContext` with exclusive access for the duration of the call.
+pub unsafe extern "C" fn tmpr_jit_array_push_i64(
     ctx: *mut JitRuntimeContext,
     array_handle: u64,
     value: i64,
@@ -660,4 +683,196 @@ pub extern "C" fn tmpr_jit_array_push_i64(
     let ctx = unsafe { &mut *ctx };
     ctx.helper_calls += 1;
     ctx.array_push_i64(crate::abi::HeapHandle(array_handle), value)
+}
+
+// ---------------------------------------------------------------------------
+// JIT boundary entry points
+// ---------------------------------------------------------------------------
+//
+// These are the addresses registered in `JitHelperRegistry` and called by
+// JIT-compiled code. Per the boundary convention documented on
+// `crate::abi::JitHelperResult`, each one writes its result through a
+// caller-provided pointer and returns unit, so the generated signature has no
+// aggregate return value. The functions above stay as the by-value Rust API.
+
+/// Boundary entry point for [`tmpr_jit_generic_len`].
+///
+/// # Safety
+///
+/// `out` must point to at least `JIT_RESULT_SIZE` writable, properly aligned bytes.
+pub unsafe extern "C" fn tmpr_jit_generic_len_out(
+    out: *mut JitHelperResult,
+    ctx: *mut JitRuntimeContext,
+    handle: u64,
+) {
+    unsafe { out.write(tmpr_jit_generic_len(ctx, handle)) };
+}
+
+/// Boundary entry point for [`tmpr_jit_string_len`].
+///
+/// # Safety
+///
+/// `out` must point to at least `JIT_RESULT_SIZE` writable, properly aligned bytes.
+pub unsafe extern "C" fn tmpr_jit_string_len_out(
+    out: *mut JitHelperResult,
+    ctx: *mut JitRuntimeContext,
+    handle: u64,
+) {
+    unsafe { out.write(tmpr_jit_string_len(ctx, handle)) };
+}
+
+/// Boundary entry point for [`tmpr_jit_string_size`].
+///
+/// # Safety
+///
+/// `out` must point to at least `JIT_RESULT_SIZE` writable, properly aligned bytes.
+pub unsafe extern "C" fn tmpr_jit_string_size_out(
+    out: *mut JitHelperResult,
+    ctx: *mut JitRuntimeContext,
+    handle: u64,
+) {
+    unsafe { out.write(tmpr_jit_string_size(ctx, handle)) };
+}
+
+/// Boundary entry point for [`tmpr_jit_generic_size`].
+///
+/// # Safety
+///
+/// `out` must point to at least `JIT_RESULT_SIZE` writable, properly aligned bytes.
+pub unsafe extern "C" fn tmpr_jit_generic_size_out(
+    out: *mut JitHelperResult,
+    ctx: *mut JitRuntimeContext,
+    handle: u64,
+) {
+    unsafe { out.write(tmpr_jit_generic_size(ctx, handle)) };
+}
+
+/// Boundary entry point for [`tmpr_jit_array_len`].
+///
+/// # Safety
+///
+/// `out` must point to at least `JIT_RESULT_SIZE` writable, properly aligned bytes.
+pub unsafe extern "C" fn tmpr_jit_array_len_out(
+    out: *mut JitHelperResult,
+    ctx: *mut JitRuntimeContext,
+    handle: u64,
+) {
+    unsafe { out.write(tmpr_jit_array_len(ctx, handle)) };
+}
+
+/// Boundary entry point for [`tmpr_jit_generic_get_i64`].
+///
+/// # Safety
+///
+/// `out` must point to at least `JIT_RESULT_SIZE` writable, properly aligned bytes.
+pub unsafe extern "C" fn tmpr_jit_generic_get_i64_out(
+    out: *mut JitHelperResult,
+    ctx: *mut JitRuntimeContext,
+    handle: u64,
+    index: i64,
+) {
+    unsafe { out.write(tmpr_jit_generic_get_i64(ctx, handle, index)) };
+}
+
+/// Boundary entry point for [`tmpr_jit_array_get_i64`].
+///
+/// # Safety
+///
+/// `out` must point to at least `JIT_RESULT_SIZE` writable, properly aligned bytes.
+pub unsafe extern "C" fn tmpr_jit_array_get_i64_out(
+    out: *mut JitHelperResult,
+    ctx: *mut JitRuntimeContext,
+    handle: u64,
+    index: i64,
+) {
+    unsafe { out.write(tmpr_jit_array_get_i64(ctx, handle, index)) };
+}
+
+/// Boundary entry point for [`tmpr_jit_struct_get_i64`].
+///
+/// # Safety
+///
+/// `out` must point to at least `JIT_RESULT_SIZE` writable, properly aligned bytes.
+pub unsafe extern "C" fn tmpr_jit_struct_get_i64_out(
+    out: *mut JitHelperResult,
+    ctx: *mut JitRuntimeContext,
+    handle: u64,
+    field_id: u64,
+) {
+    unsafe { out.write(tmpr_jit_struct_get_i64(ctx, handle, field_id)) };
+}
+
+/// Boundary entry point for [`tmpr_jit_enum_tag`].
+///
+/// # Safety
+///
+/// `out` must point to at least `JIT_RESULT_SIZE` writable, properly aligned bytes.
+pub unsafe extern "C" fn tmpr_jit_enum_tag_out(
+    out: *mut JitHelperResult,
+    ctx: *mut JitRuntimeContext,
+    handle: u64,
+) {
+    unsafe { out.write(tmpr_jit_enum_tag(ctx, handle)) };
+}
+
+/// Boundary entry point for [`tmpr_jit_enum_unwrap_i64`].
+///
+/// # Safety
+///
+/// `out` must point to at least `JIT_RESULT_SIZE` writable, properly aligned bytes.
+pub unsafe extern "C" fn tmpr_jit_enum_unwrap_i64_out(
+    out: *mut JitHelperResult,
+    ctx: *mut JitRuntimeContext,
+    handle: u64,
+    expected_tag: u64,
+    payload_index: u64,
+) {
+    unsafe {
+        out.write(tmpr_jit_enum_unwrap_i64(
+            ctx,
+            handle,
+            expected_tag,
+            payload_index,
+        ))
+    };
+}
+
+/// Boundary entry point for [`tmpr_jit_alloc_string_empty`].
+///
+/// # Safety
+///
+/// `out` must point to at least `JIT_RESULT_SIZE` writable, properly aligned bytes.
+pub unsafe extern "C" fn tmpr_jit_alloc_string_empty_out(
+    out: *mut JitHelperResult,
+    ctx: *mut JitRuntimeContext,
+) {
+    unsafe { out.write(tmpr_jit_alloc_string_empty(ctx)) };
+}
+
+/// Boundary entry point for [`tmpr_jit_string_concat`].
+///
+/// # Safety
+///
+/// `out` must point to at least `JIT_RESULT_SIZE` writable, properly aligned bytes.
+pub unsafe extern "C" fn tmpr_jit_string_concat_out(
+    out: *mut JitHelperResult,
+    ctx: *mut JitRuntimeContext,
+    left_handle: u64,
+    right_handle: u64,
+) {
+    unsafe { out.write(tmpr_jit_string_concat(ctx, left_handle, right_handle)) };
+}
+
+/// Boundary entry point for [`tmpr_jit_array_push_i64`].
+///
+/// # Safety
+///
+/// `out` must point to at least `JIT_RESULT_SIZE` writable, properly aligned bytes.
+pub unsafe extern "C" fn tmpr_jit_array_push_i64_out(
+    out: *mut JitHelperResult,
+    ctx: *mut JitRuntimeContext,
+    array_handle: u64,
+    value: i64,
+) {
+    unsafe { out.write(tmpr_jit_array_push_i64(ctx, array_handle, value)) };
 }

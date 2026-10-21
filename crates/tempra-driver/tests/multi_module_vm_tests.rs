@@ -1,10 +1,10 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::Path;
 use tempfile::tempdir;
 use tempra_driver::DriverError;
 use tempra_vm::value::VmValue;
 
-fn run_tempra_vm_file(entry: &PathBuf) -> Result<VmValue, DriverError> {
+fn run_tempra_vm_file(entry: &Path) -> Result<VmValue, DriverError> {
     let options = tempra_vm::profile::VmOptions::default();
     tempra_driver::run_file_with_experimental_vm_jit(entry, &[], options.jit_enabled)
 }
@@ -118,22 +118,23 @@ fn test_stdlib_path_join() {
     let dir = tempdir().unwrap();
     let main_path = dir.path().join("main.tmpr");
 
+    let expected = std::path::Path::new("a")
+        .join("b")
+        .to_string_lossy()
+        .into_owned();
+
     let main_src = r#"
 import std.path;
 
-pub fn main() -> Int64 {
-    let res = std.path.join("a", "b");
-    if res != "a/b" {
-        return 1;
-    }
-    return 0;
+pub fn main() -> String {
+    return std.path.join("a", "b");
 }
 "#;
 
     fs::write(&main_path, main_src).unwrap();
 
     let res = run_tempra_vm_file(&main_path).unwrap();
-    assert_eq!(res, VmValue::Int64(0));
+    assert_eq!(res, VmValue::String(expected));
 }
 
 #[test]

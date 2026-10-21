@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use tempra_driver::pipeline::{check_file, diagnose_file};
 
 fn setup_temp_dir(test_name: &str) -> PathBuf {
-    let mut dir = std::env::temp_dir()
+    let dir = std::env::temp_dir()
         .join("tempra_module_tests")
         .join(test_name);
     if dir.exists() {

@@ -1,3 +1,5 @@
+#![cfg(feature = "jit-cranelift")]
+
 use std::fs;
 use std::time::Instant;
 use tempra_driver::compile_to_bytecode;

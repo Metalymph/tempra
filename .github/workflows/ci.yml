@@ -1,0 +1,134 @@
+name: CI-1 Cross-Platform Compiler Validation
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Least privilege: CI only reads the repository.
+permissions:
+  contents: read
+
+# Cancel superseded pull-request runs, but let main runs finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # Pinned to the toolchain used for local development. rust-toolchain.toml
+  # currently tracks "stable"; RUSTUP_TOOLCHAIN makes the CI pin explicit and
+  # authoritative for every cargo invocation.
+  RUSTUP_TOOLCHAIN: "1.99.1"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  quality:
+    name: Quality (ubuntu-latest)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
+
+      - name: Show toolchain versions
+        run: |
+          rustc --version
+          cargo --version
+
+      - name: Cache Cargo registry and build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ env.RUSTUP_TOOLCHAIN }}-quality-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ env.RUSTUP_TOOLCHAIN }}-quality-cargo-
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      # Warnings are reported in the log but are not denied in CI-1.
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets
+
+  cross-platform:
+    name: Cross-platform (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
+
+      - name: Show toolchain versions
+        run: |
+          rustc --version
+          cargo --version
+
+      - name: Cache Cargo registry and build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ env.RUSTUP_TOOLCHAIN }}-cross-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ env.RUSTUP_TOOLCHAIN }}-cross-cargo-
+
+      - name: Build workspace
+        run: cargo build --workspace --locked
+
+      - name: Test workspace
+        run: cargo test --workspace --locked
+
+      # Uses cargo run so the executable suffix and path separators are handled
+      # by Cargo on every platform. Invocation is from README.md.
+      - name: CLI smoke test
+        run: cargo run --quiet --locked -p tempra-cli -- run examples/hello.tmpr
+
+  jit-cranelift:
+    name: JIT Cranelift (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      # Windows JIT support is intentionally out of scope for CI-1.
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
+
+      - name: Show toolchain versions
+        run: |
+          rustc --version
+          cargo --version
+
+      - name: Cache Cargo registry and build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ env.RUSTUP_TOOLCHAIN }}-jit-cranelift-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ env.RUSTUP_TOOLCHAIN }}-jit-cranelift-cargo-
+
+      - name: Build workspace with JIT feature
+        run: cargo build --workspace --features jit-cranelift --locked
+
+      - name: Test workspace with JIT feature
+        run: cargo test --workspace --features jit-cranelift --locked

@@ -948,7 +948,7 @@ impl<'a> Interpreter<'a> {
                                 target_func.name
                             ))
                         })?;
-                        let res = func_ptr(&args).map_err(|e| VmError::Native(e))?;
+                        let res = func_ptr(&args).map_err(VmError::Native)?;
 
                         if target_func.ret != BytecodeType::Unit {
                             self.push(res)?;

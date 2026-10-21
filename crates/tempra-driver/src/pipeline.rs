@@ -511,7 +511,9 @@ fn analyze_file_to_tir(
     ) {
         Ok(g) => g,
         Err(_) => {
-            let err_msgs: Vec<String> = diagnostics.iter().map(|d| format!("{:?}", d)).collect();
+            // Diagnostics are rendered with `Display`: the derived `Debug` form escapes
+            // path separators, which makes Windows paths unreadable and un-copyable.
+            let err_msgs: Vec<String> = diagnostics.iter().map(|d| d.to_string()).collect();
             return Err(DriverError::TypeError(err_msgs.join("\n")));
         }
     };
@@ -655,8 +657,10 @@ pub fn run_source_with_experimental_vm_jit(
     args: &[String],
     jit_enabled: bool,
 ) -> Result<(), DriverError> {
-    let mut options = tempra_vm::profile::VmOptions::default();
-    options.jit_enabled = jit_enabled;
+    let options = tempra_vm::profile::VmOptions {
+        jit_enabled,
+        ..Default::default()
+    };
     let value = run_source_vm_with_options(source, args, options)?;
     normalize_vm_entry_value(value)
 }
@@ -694,7 +698,7 @@ pub fn check_file_with_config(path: &Path, config: &CompilationConfig) -> Result
     ) {
         Ok(g) => g,
         Err(_) => {
-            let err_msgs: Vec<String> = diagnostics.iter().map(|d| format!("{:?}", d)).collect();
+            let err_msgs: Vec<String> = diagnostics.iter().map(|d| d.to_string()).collect();
             return Err(DriverError::TypeError(err_msgs.join("\n")));
         }
     };

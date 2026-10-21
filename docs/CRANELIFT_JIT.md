@@ -51,14 +51,19 @@ Any function using the following features is currently rejected by the JIT and w
 
 ## Checked Int64 status ABI (K3.2)
 
-Eligible pure and heap-aware native functions return a C-compatible
-`{ value, status }` pair. Checked add/sub/mul detect overflow, and division
-checks both zero and `Int64::MIN / -1` before Cranelift `sdiv`. Native callers
-propagate a callee's non-zero status through the complete native call chain.
-At the VM boundary the status becomes the same typed arithmetic error used by
-the interpreter; execution does not continue with a placeholder result and does
-not fall back after a semantic arithmetic failure. UInt and floating-point
-arithmetic remain outside this K3.2 contract.
+Eligible pure and heap-aware native functions report their result through a
+caller-provided out pointer rather than as an aggregate return value. The out
+pointer is the first parameter and points to a C-compatible `{ value, status }`
+slot (`JitHelperResult`); the function itself returns `Unit`. Returning the
+16-byte aggregate by value is not portable — SysV delivers it in registers while
+Windows x64 routes it through a hidden pointer that displaces the first
+parameter — so storage is always passed explicitly. Checked add/sub/mul detect
+overflow, and division checks both zero and `Int64::MIN / -1` before Cranelift
+`sdiv`. Native callers propagate a callee's non-zero status through the complete
+native call chain. At the VM boundary the status becomes the same typed
+arithmetic error used by the interpreter; execution does not continue with a
+placeholder result and does not fall back after a semantic arithmetic failure.
+UInt and floating-point arithmetic remain outside this K3.2 contract.
 
 ## Source-Level JIT Operation Status (v0.2)
 

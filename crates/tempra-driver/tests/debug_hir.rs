@@ -1,6 +1,3 @@
-use tempra_diagnostics::Diagnostic;
-use tempra_driver::module_graph::*;
-
 #[test]
 fn debug_hir_extern() {
     let source = "pub extern fn join(a: String, b: String) -> String";

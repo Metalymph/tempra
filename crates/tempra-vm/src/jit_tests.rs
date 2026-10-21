@@ -1,3 +1,5 @@
+#![cfg(feature = "jit-cranelift")]
+
 use crate::interpreter::Interpreter;
 use crate::profile::VmOptions;
 use crate::value::VmValue;

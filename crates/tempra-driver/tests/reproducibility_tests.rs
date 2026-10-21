@@ -186,7 +186,9 @@ fn write_stdlib_fixture(root: &Path) -> (PathBuf, PathBuf) {
         r#"
 import std.path;
 pub fn main() -> Int64 {
-    if std.path.join("a", "b") == "a/b" { return 41 }
+    if std.path.basename("example.txt") == "example.txt" {
+        return 41
+    }
     return 0
 }
 "#,

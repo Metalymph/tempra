@@ -172,6 +172,7 @@ fn print_table(results: &[PerfMetrics]) {
     println!();
 }
 
+#[cfg(feature = "jit-cranelift")]
 #[derive(Debug)]
 struct JitPerfRow {
     case: String,
@@ -185,6 +186,7 @@ struct JitPerfRow {
     bytecode_instr_count: usize,
 }
 
+#[cfg(feature = "jit-cranelift")]
 fn print_jit_table(rows: &[JitPerfRow]) {
     println!("\n| Case | Mode | Thresh | Duration (ns) | Compile (ns) | RT Calls | FB Calls | Reject | Instrs |");
     println!("|------|------|--------|---------------|--------------|----------|----------|--------|--------|");

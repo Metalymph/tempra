@@ -1,5 +1,4 @@
 use std::fs;
-use std::path::Path;
 use tempra_driver::{cache, run_source_vm};
 
 #[test]

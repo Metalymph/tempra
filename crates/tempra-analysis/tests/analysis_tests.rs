@@ -954,33 +954,34 @@ fn test_rename_validation_and_overlap_rejection() {
     use tempra_analysis::{LspRange, TextEdit, WorkspaceEdit};
     let uri = DocumentUri::new("file:///overlap.tmpr");
 
-    let mut edits = Vec::new();
-    edits.push(TextEdit {
-        range: LspRange {
-            start: LspPosition {
-                line: 1,
-                character: 5,
+    let edits = vec![
+        TextEdit {
+            range: LspRange {
+                start: LspPosition {
+                    line: 1,
+                    character: 5,
+                },
+                end: LspPosition {
+                    line: 1,
+                    character: 10,
+                },
             },
-            end: LspPosition {
-                line: 1,
-                character: 10,
-            },
+            new_text: "foo".to_string(),
         },
-        new_text: "foo".to_string(),
-    });
-    edits.push(TextEdit {
-        range: LspRange {
-            start: LspPosition {
-                line: 1,
-                character: 8,
+        TextEdit {
+            range: LspRange {
+                start: LspPosition {
+                    line: 1,
+                    character: 8,
+                },
+                end: LspPosition {
+                    line: 1,
+                    character: 15,
+                },
             },
-            end: LspPosition {
-                line: 1,
-                character: 15,
-            },
+            new_text: "bar".to_string(),
         },
-        new_text: "bar".to_string(),
-    });
+    ];
 
     let mut changes = std::collections::HashMap::new();
     changes.insert(uri, edits);
@@ -994,9 +995,17 @@ fn test_rename_validation_and_overlap_rejection() {
 
 #[test]
 fn test_cross_file_features() {
+    // These open, unsaved documents still need native file paths for module imports.
+    let directory = tempfile::tempdir().unwrap();
+    let file_uri = |name: &str| {
+        let path = directory.path().join(name);
+        let url = url::Url::from_file_path(&path).unwrap();
+        assert_eq!(url.to_file_path().unwrap(), path);
+        DocumentUri::new(url.as_str())
+    };
     let mut session = AnalysisSession::new();
-    let uri_main = DocumentUri::new("file:///main.tmpr");
-    let uri_math = DocumentUri::new("file:///math.tmpr");
+    let uri_main = file_uri("main.tmpr");
+    let uri_math = file_uri("math.tmpr");
 
     let source_math = r#"
         pub struct Point { x: Int64, y: Int64 }
@@ -1054,12 +1063,13 @@ fn test_cross_file_features() {
     assert!(!completions.iter().any(|c| c.label == "private_helper"));
 
     // 4. Module Graph Diagnostics
-    let uri_cycle1 = DocumentUri::new("file:///cycle1.tmpr");
-    let uri_cycle2 = DocumentUri::new("file:///cycle2.tmpr");
+    let uri_cycle1 = file_uri("cycle1.tmpr");
+    let uri_cycle2 = file_uri("cycle2.tmpr");
     session.open_document(uri_cycle1.clone(), "import cycle2\n".to_string(), 1);
     session.open_document(uri_cycle2.clone(), "import cycle1\n".to_string(), 1);
 
     let diags = session.diagnostics(&uri_cycle1).unwrap();
     assert!(!diags.is_empty(), "Expected cyclic import diagnostics");
     assert!(diags[0].message.contains("cyclic import"));
+    assert!(directory.path().read_dir().unwrap().next().is_none());
 }

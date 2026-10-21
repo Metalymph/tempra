@@ -27,10 +27,8 @@ pub fn optimize_function(
                     use_counts[b.0 as usize] += 1;
                 }
             }
-            BytecodeInstr::AddI64LC(a, _) => {
-                if a.0 < use_counts.len() as u32 {
-                    use_counts[a.0 as usize] += 1;
-                }
+            BytecodeInstr::AddI64LC(a, _) if a.0 < use_counts.len() as u32 => {
+                use_counts[a.0 as usize] += 1;
             }
             _ => {}
         }
@@ -149,17 +147,15 @@ pub fn optimize_function(
                     if s_id == l_id
                         && s_id.0 >= first_temp_local
                         && use_counts[s_id.0 as usize] == 2
+                        && !jump_targets.contains(&(i + 1))
+                        && !jump_targets.contains(&(i + 2))
+                        && !jump_targets.contains(&(i + 3))
+                        && !jump_targets.contains(&(i + 4))
                     {
-                        if !jump_targets.contains(&(i + 1))
-                            && !jump_targets.contains(&(i + 2))
-                            && !jump_targets.contains(&(i + 3))
-                            && !jump_targets.contains(&(i + 4))
-                        {
-                            func.code[i] = BytecodeInstr::AddI64LC(a, id);
-                            remove_at(func, i + 1, 4);
-                            changed = true;
-                            break;
-                        }
+                        func.code[i] = BytecodeInstr::AddI64LC(a, id);
+                        remove_at(func, i + 1, 4);
+                        changed = true;
+                        break;
                     }
                 }
             }
@@ -183,17 +179,15 @@ pub fn optimize_function(
                     if s_id == l_id
                         && s_id.0 >= first_temp_local
                         && use_counts[s_id.0 as usize] == 2
+                        && !jump_targets.contains(&(i + 1))
+                        && !jump_targets.contains(&(i + 2))
+                        && !jump_targets.contains(&(i + 3))
+                        && !jump_targets.contains(&(i + 4))
                     {
-                        if !jump_targets.contains(&(i + 1))
-                            && !jump_targets.contains(&(i + 2))
-                            && !jump_targets.contains(&(i + 3))
-                            && !jump_targets.contains(&(i + 4))
-                        {
-                            func.code[i] = BytecodeInstr::AddI64LC(a, id);
-                            remove_at(func, i + 1, 4);
-                            changed = true;
-                            break;
-                        }
+                        func.code[i] = BytecodeInstr::AddI64LC(a, id);
+                        remove_at(func, i + 1, 4);
+                        changed = true;
+                        break;
                     }
                 }
             }
@@ -205,7 +199,7 @@ pub fn optimize_function(
     recalculate_max_stack(func, module);
 
     // 5. Verify final result
-    if let Err(_) = tempra_bytecode::verify::verify_function_direct(module, func) {
+    if tempra_bytecode::verify::verify_function_direct(module, func).is_err() {
         // Fallback on failure
         func.code = original_code;
         func.max_stack = original_max_stack;
@@ -218,11 +212,11 @@ fn remove_at(func: &mut BytecodeFunction, index: usize, count: usize) {
     // Fixup all jump offsets
     for instr in &mut func.code {
         match instr {
-            BytecodeInstr::Jump(offset) | BytecodeInstr::JumpIfFalse(offset) => {
-                if offset.0 > index {
-                    // If the jump was pointing after the removed range, shift it back
-                    offset.0 -= count;
-                }
+            BytecodeInstr::Jump(offset) | BytecodeInstr::JumpIfFalse(offset)
+                if offset.0 > index =>
+            {
+                // If the jump was pointing after the removed range, shift it back
+                offset.0 -= count;
             }
             _ => {}
         }

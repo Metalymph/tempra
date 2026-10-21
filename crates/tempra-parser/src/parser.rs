@@ -509,8 +509,8 @@ impl<'src> Parser<'src> {
                     .unwrap_or(g_name.span.end);
                 generic_parameters.push(GenericParameter {
                     span: Span::new(p_start, g_end),
-                    name: g_name.clone(),
-                    constraint: constraint.clone(),
+                    name: g_name,
+                    constraint,
                 });
             } else {
                 let is_comptime = self.eat(TokenKind::Comptime);
@@ -980,7 +980,7 @@ impl<'src> Parser<'src> {
             let name = self.expect_identifier()?;
             let mut ty = TypeExpr::Named(NamedTypeExpr {
                 span: name.span,
-                name: name.clone(),
+                name,
             });
             loop {
                 if self.at(TokenKind::LeftParen) {
@@ -1419,10 +1419,8 @@ impl<'src> Parser<'src> {
 
                 // Check for simple struct literal: Ident {
                 let mut is_simple_struct = false;
-                if self.at(TokenKind::LeftBrace) {
-                    if self.looks_like_struct_literal_start() {
-                        is_simple_struct = true;
-                    }
+                if self.at(TokenKind::LeftBrace) && self.looks_like_struct_literal_start() {
+                    is_simple_struct = true;
                 }
 
                 if is_simple_struct {
@@ -1879,7 +1877,7 @@ impl<'src> Parser<'src> {
         self.tokens
             .get(self.position + offset)
             .copied()
-            .unwrap_or_else(|| Token {
+            .unwrap_or(Token {
                 kind: TokenKind::EndOfFile,
                 span: Span {
                     start: self.source.len() as u32,

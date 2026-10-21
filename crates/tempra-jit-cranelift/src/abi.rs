@@ -42,6 +42,20 @@ pub enum JitValueAbi {
 }
 
 /// A representation of a value passed across the JIT/VM boundary.
+///
+/// # Boundary convention
+///
+/// Every fallible boundary function writes this value through a caller-provided
+/// `*mut JitHelperResult` passed as the *first* argument and returns unit:
+///
+/// ```text
+/// extern "C" fn(out: *mut JitHelperResult, <parameters...>) -> ()
+/// ```
+///
+/// Returning the pair by value is not portable: SysV returns a 16-byte
+/// aggregate in registers, while Windows x64 returns it through a hidden
+/// pointer that displaces the first parameter. Passing storage explicitly keeps
+/// the generated code and the Rust callee in agreement on every target.
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct JitHelperResult {
@@ -50,6 +64,21 @@ pub struct JitHelperResult {
     /// The status of the operation (0 = OK).
     pub status: JitStatus,
 }
+
+/// Byte size of the out-parameter storage the JIT must provide for a
+/// [`JitHelperResult`].
+pub const JIT_RESULT_SIZE: u32 = 16;
+
+/// Byte offset of [`JitHelperResult::value`] inside that storage.
+pub const JIT_RESULT_VALUE_OFFSET: i32 = 0;
+
+/// Byte offset of [`JitHelperResult::status`] inside that storage.
+pub const JIT_RESULT_STATUS_OFFSET: i32 = 8;
+
+const _: () = assert!(
+    std::mem::size_of::<JitHelperResult>() == JIT_RESULT_SIZE as usize,
+    "the JitHelperResult layout is part of the JIT boundary ABI"
+);
 
 impl JitHelperResult {
     /// Converts a raw JIT helper result into an idiomatic Rust Result.

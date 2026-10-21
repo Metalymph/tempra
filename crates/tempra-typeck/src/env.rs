@@ -18,6 +18,12 @@ pub struct ScopeStack {
     boundaries: Vec<usize>,
 }
 
+impl Default for ScopeStack {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ScopeStack {
     pub fn mark_consumed(&mut self, name: &str) {
         for scope in self.scopes.iter_mut().rev() {

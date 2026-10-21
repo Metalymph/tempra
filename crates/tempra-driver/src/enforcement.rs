@@ -275,7 +275,7 @@ fn local_fact_order(fact: &LocalEffectFact) -> (usize, usize, usize, u8, u8) {
 mod tests {
     use super::*;
     use crate::contracts::{SpecializedDenyParameter, SpecializedDenyValue};
-    use crate::ContractSource;
+    use crate::{ContractSource, SpecializedDenyTarget};
     use tempra_effects::{
         CapabilitySet, EffectOperation, EffectParameter, ResourceKnowledge, TirLocation,
     };
@@ -302,7 +302,7 @@ mod tests {
         contract.explicit_denied = CapabilitySet::empty();
         contract.denied = CapabilitySet::empty();
         contract.specialized_denied = vec![SpecializedDenyClause {
-            operation: EffectOperation::FsWrite,
+            target: SpecializedDenyTarget::Operation(EffectOperation::FsWrite),
             parameters: vec![SpecializedDenyParameter {
                 parameter: EffectParameter::Destination,
                 value: SpecializedDenyValue::Any,

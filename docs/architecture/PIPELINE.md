@@ -178,6 +178,29 @@ revision-5 artifacts retaining unenforced specialized `@deny` clauses cannot be
 reused; specialized matching reuses the existing analysis and witness pipeline.
 Bytecode opcodes and serialization format remain unchanged.
 
+K4.9D requires `semantics-7` for v0.2 family/category enforcement. K4.9E confirms
+that source hash, fingerprint and bytecode verification remain the cache-hit
+boundary. Invalid call targets now produce a controlled stack-effect error
+during verification, allowing cache fallback instead of a host indexing panic.
+Valid trusted hits remain bytecode-only and do not re-enforce source contracts.
+Family/category predicates, broad-first precedence, conservative unknown facts
+and v0.1 resource-qualified operation matching use the existing analysis path.
+Single-source compilation binds supported extend methods; module/file
+compilation explicitly rejects annotated extend methods before their omitted
+lowering could discard contracts. HIR/REPL/source-TIR annotation guards and
+non-enforcing `check`/`emit-tir` boundaries remain unchanged. E6's specialized
+count-only error and missing specialized inspection fields remain documented
+tooling limits in [the tooling guide](../TOOLING.md).
+
+K4.10's [final gate](../K4_SPECIALIZED_EFFECTS_GATE.md) confirms these boundaries
+with ordinary/JIT workspace tests and existing differential subprocess coverage.
+Malformed nonempty bytecode functions with more parameters than local slots now
+fail the verifier's existing InvalidLocalId boundary instead of indexing outside
+local state; matching cache headers still lead to a verified fresh rebuild for
+that case. `semantics-7`, bytecode format, matching and valid runtime behavior are
+unchanged. Production-classified operations remain FsRead, FsWrite and IoWrite;
+the other taxonomy identities are not claimed as executable native coverage.
+
 `TirFunctionId` is a compilation-local identity rather than an index into the
 physical function vector. Bytecode lowering uses an explicit mapping for calls
 and emits functions in ascending identity order. Filtering specialization

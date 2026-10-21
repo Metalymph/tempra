@@ -15,8 +15,8 @@ use tempra_effects::{
 use tempra_vm::profile::VmOptions;
 use tempra_vm::VmValue;
 
-const SEMANTICS_SIX_FINGERPRINT: &str =
-    concat!("tempra-", env!("CARGO_PKG_VERSION"), "-semantics-6");
+const SEMANTICS_SEVEN_FINGERPRINT: &str =
+    concat!("tempra-", env!("CARGO_PKG_VERSION"), "-semantics-7");
 
 struct CacheGuard {
     path: PathBuf,
@@ -129,8 +129,8 @@ pub fn main() -> Int64 { return 42 }
     let (_, contract) = compilation.contracts().next().unwrap();
     assert_eq!(contract.specialized_denied.len(), 1);
     assert_eq!(
-        contract.specialized_denied[0].operation,
-        EffectOperation::FsWrite
+        contract.specialized_denied[0].target,
+        tempra_driver::SpecializedDenyTarget::Operation(EffectOperation::FsWrite)
     );
 }
 
@@ -196,8 +196,8 @@ pub fn main() -> Int64 { return helper.write_blocked() }
     let contract = compilation.contract(main.id).unwrap();
     assert_eq!(contract.specialized_denied.len(), 1);
     assert_eq!(
-        contract.specialized_denied[0].operation,
-        EffectOperation::FsWrite
+        contract.specialized_denied[0].target,
+        tempra_driver::SpecializedDenyTarget::Operation(EffectOperation::FsWrite)
     );
 }
 
@@ -358,7 +358,7 @@ pub fn main() -> Int64 { return 42 }
     let artifact = tempra_driver::cache::read_cache_artifact(&valid_path).unwrap();
     assert_eq!(
         artifact.header.compiler_fingerprint,
-        SEMANTICS_SIX_FINGERPRINT
+        SEMANTICS_SEVEN_FINGERPRINT
     );
     let bytes = fs::read(&valid_path).unwrap();
     let modified = fs::metadata(&valid_path).unwrap().modified().unwrap();
@@ -416,6 +416,41 @@ pub fn main() -> Int64 { return 10 / 2 }
         format!("tempra-{}-semantics-5", env!("CARGO_PKG_VERSION")),
         "a failed fresh compilation must not promote a stale artifact"
     );
+}
+
+#[test]
+fn v02_targets_reject_imported_origins_before_vm_or_jit_execution() {
+    let dir = tempfile::tempdir().unwrap();
+    let written = dir.path().join("must-not-exist.txt");
+    fs::write(
+        dir.path().join("helper.tmpr"),
+        format!(
+        "import std.fs; pub fn write() {{ let result = std.fs.write_text({:?}, \"blocked\"); }}",
+        written.to_string_lossy()
+    ),
+    )
+    .unwrap();
+    let path = dir.path().join("main.tmpr");
+    for target in ["fs", "io.write", "fs.write"] {
+        fs::write(
+            &path,
+            format!("import helper; @deny({target}) pub fn main() {{ helper.write() }}"),
+        )
+        .unwrap();
+        for jit in [false, true] {
+            let violations = expect_specialized_violations(
+                run_file_with_experimental_vm_jit(&path, &[], jit).unwrap_err(),
+            );
+            assert_eq!(violations.len(), 1);
+            assert_eq!(
+                violations[0].classification,
+                SpecializedMatch::DefiniteMatch
+            );
+            assert_eq!(violations[0].witness.calls.len(), 1);
+            assert_eq!(violations[0].witness.origin, violations[0].fact);
+            assert!(!written.exists());
+        }
+    }
 }
 
 #[test]

@@ -115,7 +115,7 @@ import std.fs;
 
 fn add(a: Int64, b: Int64) -> Int64 { return a + b }
 
-@deny(fs.write(destination: "jit-never.txt"))
+@deny(fs, net, io.read, io.write, net.send, net.receive)
 pub fn main() -> Int64 {
     let xs = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     var sum = 0
@@ -355,9 +355,14 @@ fn canonical_clause(clause: &SpecializedDenyClause) -> String {
             )
         })
         .collect();
+    let kind = match clause.target {
+        tempra_driver::SpecializedDenyTarget::Family(_) => "family:",
+        tempra_driver::SpecializedDenyTarget::Category(_) => "category:",
+        tempra_driver::SpecializedDenyTarget::Operation(_) => "",
+    };
     format!(
-        "{}({})",
-        clause.operation.canonical_name(),
+        "{kind}{}({})",
+        clause.target.canonical_name(),
         parameters.join(",")
     )
 }
@@ -502,8 +507,8 @@ fn source_and_file_paths_agree_on_broad_facts_witnesses_and_contracts() {
     assert_eq!(source_contracts.len(), 1);
     assert_eq!(source_contracts[0].0, "helper");
     assert_eq!(
-        source_contracts[0].1.specialized_denied[0].operation,
-        EffectOperation::FsWrite
+        source_contracts[0].1.specialized_denied[0].target,
+        tempra_driver::SpecializedDenyTarget::Operation(EffectOperation::FsWrite)
     );
     for summary in source_compilation.capabilities().summaries() {
         for capability in summary.required.iter() {
@@ -585,8 +590,8 @@ fn equivalent_file_paths_agree_on_specialized_facts_resources_and_provenance() {
         .find(|(_, contract)| !contract.specialized_denied.is_empty())
         .expect("valid specialized contract must retain provenance");
     assert_eq!(
-        contract.specialized_denied[0].operation,
-        EffectOperation::ProcessExec
+        contract.specialized_denied[0].target,
+        tempra_driver::SpecializedDenyTarget::Operation(EffectOperation::ProcessExec)
     );
     assert!(contract.specialized_denied[0].span.end > contract.specialized_denied[0].span.start);
 }
@@ -784,6 +789,59 @@ fn specialized_violations_are_deterministic_across_fresh_compilations() {
 }
 
 #[test]
+fn v02_overlapping_targets_preserve_recursive_and_diamond_witnesses() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_source(
+        dir.path(),
+        &rich_source("@deny(fs, io.write, fs.write, io.write(), fs)"),
+    );
+    let mut baseline = None;
+    for _ in 0..4 {
+        let CompilationOutcome::Specialized(found) =
+            compile_outcome(&path, &CompilationConfig::default())
+        else {
+            panic!("expected specialized violations");
+        };
+        assert_eq!(found.len(), 22);
+        for group in found[..21].chunks(7) {
+            assert_eq!(
+                group
+                    .iter()
+                    .filter(|v| v.classification == SpecializedMatch::DefiniteMatch)
+                    .count(),
+                6
+            );
+            assert_eq!(
+                group
+                    .iter()
+                    .filter(|v| v.classification == SpecializedMatch::PotentialMatch)
+                    .count(),
+                1
+            );
+            assert_eq!(
+                group
+                    .iter()
+                    .map(|v| v.fact.location())
+                    .collect::<HashSet<_>>()
+                    .len(),
+                7
+            );
+            assert!(group.iter().any(|v| v.witness.calls.len() == 2));
+        }
+        assert_eq!(found[21].classification, SpecializedMatch::PotentialMatch);
+        for violation in &found {
+            assert_eq!(violation.witness.origin, violation.fact);
+            assert_eq!(
+                violation.contract.specialized_denied.len(),
+                4,
+                "duplicate fs removed"
+            );
+        }
+        assert_eq!(baseline.get_or_insert_with(|| found.clone()), &found);
+    }
+}
+
+#[test]
 fn adding_specialized_classification_does_not_change_broad_facts_or_witnesses() {
     let annotated_source = rich_source("@deny(process.exec(executable: \"/never\"))");
     let plain_source = rich_source("");
@@ -866,6 +924,23 @@ fn specialized_reproducibility_subprocess_child() {
         canonical_violation_report(&violations, &names),
     )
     .unwrap();
+
+    fs::write(
+        &path,
+        rich_source("@deny(fs, io.write, fs.write, io.write(), fs)"),
+    )
+    .unwrap();
+    let CompilationOutcome::Specialized(violations) =
+        compile_outcome(&path, &CompilationConfig::default())
+    else {
+        panic!("expected v0.2 violations");
+    };
+    assert_eq!(violations.len(), 22);
+    fs::write(
+        root.join("v02-violations.txt"),
+        canonical_violation_report(&violations, &names),
+    )
+    .unwrap();
 }
 
 #[test]
@@ -881,6 +956,7 @@ fn independent_processes_have_one_canonical_specialized_violation_report() {
         .and_then(|value| value.parse().ok())
         .unwrap_or(8);
     let mut expected: Option<String> = None;
+    let mut expected_v02 = None;
 
     for run in 0..runs {
         let root = fixture.path().join(format!("process-{run}"));
@@ -951,6 +1027,11 @@ fn independent_processes_have_one_canonical_specialized_violation_report() {
             "child {run} report must be name-normalized and path-free"
         );
         assert_eq!(expected.get_or_insert_with(|| report.clone()), &report);
+        let report = fs::read_to_string(root.join("v02-violations.txt")).unwrap();
+        assert_eq!(report.lines().count(), 22);
+        assert!(report.contains("clause=family:fs()"));
+        assert!(report.contains("clause=category:io.write()"));
+        assert_eq!(expected_v02.get_or_insert_with(|| report.clone()), &report);
     }
 }
 
@@ -977,7 +1058,7 @@ pub fn main() -> Int64 {
             r#"
 import std.io;
 
-@deny(process.exec(executable: "/never"))
+@deny(fs, io.read)
 pub fn main() -> Int64 {
     std.io.println("jit-native-io-is-not-compiled")
     return 0

@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 
 use tempra_driver::{compile_to_bytecode_with_analysis, DriverError};
 use tempra_effects::{
-    known_externs, Capability, CapabilityAnalysisError, CapabilitySet, EffectOperation,
-    EffectParameter, KnownExtern,
+    known_externs, Capability, CapabilityAnalysisError, CapabilitySet, EffectCategory,
+    EffectFamily, EffectOperation, EffectParameter, KnownExtern,
 };
 use tempra_native::registry::{registered_natives, resolve};
 use tempra_vm::value::VmValue;
@@ -191,6 +191,111 @@ fn registry_classifier_and_declared_signatures_agree_exactly() {
     );
     assert_eq!(exists.operation, None);
     assert!(exists.resources.is_empty());
+}
+
+#[test]
+fn final_gate_distinguishes_production_operations_from_taxonomy_only_targets() {
+    let known: Vec<_> = known_externs().collect();
+    let reachable: Vec<_> = EffectOperation::ALL
+        .into_iter()
+        .filter(|operation| {
+            known
+                .iter()
+                .any(|external| external.operation == Some(*operation))
+        })
+        .collect();
+    assert_eq!(
+        reachable,
+        vec![
+            EffectOperation::FsRead,
+            EffectOperation::FsWrite,
+            EffectOperation::IoWrite
+        ]
+    );
+    assert_eq!(
+        known
+            .iter()
+            .filter(|external| external.operation.is_some())
+            .count(),
+        4
+    );
+    for (module, _) in registered_natives() {
+        assert!(!matches!(
+            module,
+            "std.net" | "std.process" | "std.spawn" | "std.task" | "std.actor"
+        ));
+    }
+    for (module, functions) in [
+        ("std.net", &["connect", "listen", "send", "receive"][..]),
+        ("std.process", &["exec", "exit"][..]),
+        ("std.spawn", &["task", "actor"][..]),
+    ] {
+        for function in functions {
+            assert!(resolve(module, function).is_none());
+        }
+    }
+}
+
+#[test]
+fn native_classifier_exposes_canonical_family_and_category_metadata() {
+    let classified = known_extern_names();
+    let expected = [
+        (
+            "std.fs.read_text",
+            EffectOperation::FsRead,
+            Some(EffectFamily::Fs),
+            &[EffectCategory::IoRead][..],
+        ),
+        (
+            "std.fs.write_text",
+            EffectOperation::FsWrite,
+            Some(EffectFamily::Fs),
+            &[EffectCategory::IoWrite][..],
+        ),
+        (
+            "std.io.print",
+            EffectOperation::IoWrite,
+            None,
+            &[EffectCategory::IoWrite][..],
+        ),
+        (
+            "std.io.println",
+            EffectOperation::IoWrite,
+            None,
+            &[EffectCategory::IoWrite][..],
+        ),
+    ];
+
+    for (name, operation, family, categories) in expected {
+        let classification = classified
+            .get(name)
+            .unwrap_or_else(|| panic!("missing classification for {name}"));
+        assert_eq!(classification.operation, Some(operation), "{name}");
+        assert!(
+            classification.capabilities.contains(operation.parent()),
+            "{name} must require the operation's broad parent capability"
+        );
+        assert_eq!(operation.family(), family, "{name}");
+        assert_eq!(operation.categories(), categories, "{name}");
+    }
+
+    // A known native without a specialized operation retains its broad Io
+    // classification and never receives a guessed fs/read categorization.
+    let exists = &classified["std.fs.exists"];
+    assert_eq!(
+        exists.capabilities,
+        CapabilitySet::singleton(Capability::Io)
+    );
+    assert_eq!(exists.operation, None);
+    assert!(exists.resources.is_empty());
+
+    // `net.send` and `net.receive` are taxonomy-only and must not acquire a
+    // native classifier mapping implicitly.
+    assert!(classified.values().all(|classification| {
+        classification.operation != Some(EffectOperation::NetSend)
+            && classification.operation != Some(EffectOperation::NetReceive)
+    }));
+    assert!(!classified.keys().any(|name| name.starts_with("std.net.")));
 }
 
 #[test]

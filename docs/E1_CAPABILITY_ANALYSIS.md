@@ -1,18 +1,18 @@
 # E1 Capability Analysis
 
 > [!NOTE]
-> **Status: E1–E6 implemented; K4.2–K4.7 specialized refinements implemented.**
+> **Status: E1–E6 and K4.9A–E specialized refinements implemented.**
 > E1 provides pure analysis; E2 retains facts; E3 acquires/enforces `@deny` and
 > prevents bypass; E4 adds `@pure`; E6 projects the existing facts for
 > diagnostics and inspection. K4.6 adds compiler-owned specialized operation
 > refinements and fail-closed resource matching over the same analysis. K4.7
 > establishes differential parity for supported source/file, cache, VM and JIT
-> paths and records the native-JIT limitation. K4.8 is a specification-only
-> extension for families, cross-family categories and network operations; it is
-> not implemented. See
-> [Specialized Effects v0.1](specs/specialized-effects-v0.1.md) for current
-> behavior and [Specialized Effects v0.2](specs/specialized-effects-v0.2.md) for
-> the proposal.
+> paths and records the native-JIT limitation. K4.8 specified families,
+> cross-family categories and network operations; K4.9A–E implement and review
+> them under `semantics-7`. See
+> [Specialized Effects v0.1](specs/specialized-effects-v0.1.md) for the historical
+> checkpoint and [Specialized Effects v0.2](specs/specialized-effects-v0.2.md) for
+> current behavior, compatibility and limits. K4.10 remains pending.
 
 ## Goal and boundary
 
@@ -405,11 +405,16 @@ may predate the `Int64` add/sub/mul `Panic` origins and could otherwise bypass
 new `@deny(panic)` enforcement on a bytecode-only hit. The bytecode format and
 capability-metadata policy remain unchanged.
 
-K4.5B raises current trust to `semantics-6`. Revision-5 artifacts may retain
+K4.5B raised trust to `semantics-6`. Revision-5 artifacts may retain
 specialized `@deny` clauses but predate their static enforcement, so a
 bytecode-only hit could otherwise bypass them. Specialized matching uses the
 existing capability analysis summaries and witnesses; the bytecode format, ABI
 and capability-metadata policy remain unchanged.
+
+K4.9D raises current trust to `semantics-7` as v0.2 family/category matching is
+enabled. K4.9E confirms source/fingerprint/bytecode compatibility without another
+semantic change or serializing effect facts. Resource-qualified `io.read` and
+`io.write` remain generic operation restrictions; bare names denote categories.
 
 The current analysis/LSP path remains frontend/typechecking-only. E6 converts to
 the existing general `Diagnostic` model but does not make the LSP compile through
@@ -473,10 +478,14 @@ established independent-process canonical violation parity. The K4.7 verdict is
 **PASS** for supported same-build, same-host/target paths. Native `std.*` calls
 are not JIT-eligible in JIT v1; the calling entry falls back to the interpreter,
 which is documented as unsupported native-JIT coverage rather than an
-enforcement bypass. K4.8 is the specification-only v0.2 family/operation
-extension and does not change this analysis. The K4.9 implementation sequence
-must add the new taxonomy and matching; K4.10 owns the full per-operation
-coverage-gap ledger.
+enforcement bypass. K4.8 originally specified the v0.2 extension. K4.9A–E now
+provide the taxonomy, canonical contracts, classification and conservative
+family/category enforcement, preserving this analysis and its witnesses. The
+typed violation retains complete structural/declaration provenance, while CLI
+specialized diagnostics remain count-only and successful CLI inspection omits
+specialized intent. Module/file compilation rejects annotated extend methods
+whose lowering is unsupported. K4.10 owns the full per-operation coverage-gap
+ledger and final gate.
 
 ## Post-E6 state and next compiler milestone
 

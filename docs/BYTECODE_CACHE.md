@@ -18,7 +18,7 @@ The header ensures that the cached bytecode is compatible with the current runti
 
 - **Magic (4 bytes)**: Always `TMBC` (Tempra Bytecode Cache).
 - **Format Version (u32)**: Version of the binary format (currently 2).
-- **Compiler Fingerprint (String)**: `tempra-{CARGO_PKG_VERSION}-semantics-6`, identifying the compiler and semantic guarantees required for reuse.
+- **Compiler Fingerprint (String)**: `tempra-{CARGO_PKG_VERSION}-semantics-7`, identifying the compiler and semantic guarantees required for reuse.
 - **Source Hash (32 bytes)**: A non-cryptographic `DefaultHasher` result, repeated to fill 32 bytes. This is a source identity hint, not SHA-256, an integrity check or a security primitive.
 - **Language Version (String)**: Minimum Tempra language version required.
 - **Stdlib ABI Version (String)**: Identifier for the standard library ABI.
@@ -51,7 +51,7 @@ The cache format is integrated into the Tempra CLI via the `--experimental-vm` f
 artifacts; it is independent of bytecode serialization format. The bytecode
 format version governs structural decoding, while the semantic revision governs
 the compiler guarantees that make decoded bytecode reusable. Their numeric values
-are unrelated; the bytecode format is currently 2 while the semantic revision is 6.
+are unrelated; the bytecode format is currently 2 while the semantic revision is 7.
 
 Revision `1` was introduced by E3.2 and required `@deny` enforcement before
 bytecode lowering and cache writing. K1.7 raises the current revision to `2` so
@@ -70,7 +70,7 @@ the shared host-safe arithmetic behavior across supported runtime backends.
 K4.5B raises current trust to revision `6` because revision-5 artifacts can
 retain specialized `@deny` clauses without their static enforcement.
 
-Pre-E3.2 fingerprints (`tempra-{version}`) and artifacts through `semantics-5` do
+Pre-E3.2 fingerprints (`tempra-{version}`) and artifacts through `semantics-6` do
 not match the current fingerprint and are ignored. Both
 ordinary and profiled source VM execution use one shared validity path. A hit
 requires a matching source hash and semantic fingerprint and verified bytecode.
@@ -99,6 +99,25 @@ raises trust to `semantics-3`, K2.4 raises it to `semantics-4`, K3.2 raises it
 to `semantics-5`, and K4.5B raises it to `semantics-6` so artifacts retaining
 unenforced specialized `@deny` clauses are not reused. These changes version
 compiler guarantees, not bytecode serialization.
+
+K4.9D raises trust to `semantics-7` atomically with enabling v0.2 specialized
+families, cross-family categories and all 13 operation targets. A valid,
+source-hash-matching `semantics-6` artifact is incompatible and must compile
+fresh before execution. Failed compilation preserves the old bytes without
+promoting them. Successful compilation writes `semantics-7`; a subsequent hit
+reuses verified bytecode without reconstructing TIR or effect facts or rewriting
+the artifact. No migration is performed. Bytecode format, artifact schema,
+source hashing and cache paths remain unchanged.
+
+K4.9E confirms these compatibility rules without another revision bump. The
+source hash and fingerprint must both match, and even matching `semantics-7`
+headers do not bypass bytecode verification: decodable but invalid bytecode is
+rebuilt from source. The review found that stack-effect calculation indexed a
+call target before the verifier could reject an invalid ID; it now returns the
+existing controlled error so that this malformed cache also rebuilds safely.
+Existing stale/malformed fallback, failed-write preservation
+and byte/mtime-stable hits remain covered. No contracts or effect facts are added
+to the artifact and no runtime re-enforcement is performed on trusted hits.
 
 ### Reproducibility contract (K2.5)
 

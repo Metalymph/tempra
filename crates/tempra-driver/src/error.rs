@@ -13,6 +13,8 @@ pub enum DriverError {
     CapabilityAnalysisError(tempra_effects::CapabilityAnalysisError),
     /// A user contract could not be bound unambiguously to a concrete TIR function.
     ContractBindingError(Box<crate::ContractBindingError>),
+    /// A specialized target is incompatible with its resource parameters.
+    SpecializedDenyBindingError(Box<crate::SpecializedDenyBindingError>),
     /// A parsed specialized target is not enforceable by this compiler milestone.
     UnsupportedSpecializedTarget(Box<crate::UnsupportedSpecializedTarget>),
     /// Denied requirements in ascending function ID, then capability order.
@@ -50,6 +52,9 @@ impl std::fmt::Display for DriverError {
                 write!(f, "Capability analysis error: {}", e)
             }
             DriverError::ContractBindingError(e) => write!(f, "Contract binding error: {}", e),
+            DriverError::SpecializedDenyBindingError(e) => {
+                write!(f, "Specialized contract binding error: {}", e)
+            }
             DriverError::UnsupportedSpecializedTarget(e) => {
                 write!(f, "Unsupported specialized contract: {}", e)
             }

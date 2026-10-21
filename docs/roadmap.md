@@ -134,13 +134,14 @@ K4.7B focused differential tests      DONE
 K4.7C final specialized parity gate   PASS
 K4.7 backend parity/reproducibility   DONE
 K4.8 family/operation semantics spec  DONE (specification only)
-K4.9A taxonomy/parser/AST targets     PLANNED
-K4.9B canonical contracts/driver      PLANNED
-K4.9C analysis/classifier metadata    PLANNED
-K4.9D family/category matcher         PLANNED
-K4.9E revision/cache/diagnostics      PLANNED
-K4.9 family/operation implementation  PLANNED
-K4.10 final effects gate              PLANNED
+K4.9A taxonomy/parser/AST targets     DONE
+K4.9B canonical contracts/driver      DONE
+K4.9C analysis/classifier metadata    DONE
+K4.9D family/category enforcement     DONE (semantics-7)
+K4.9E cache/diagnostic review         DONE
+K4.9 family/operation implementation  DONE
+K4.10 final effects gate              DONE (bounded PASS)
+K4 specialized-effect track           DONE
 ```
 
 K1.7 raises the cache trust fingerprint from `semantics-1` to `semantics-2`, so
@@ -219,15 +220,34 @@ cross-family categories, `net.send`/`net.receive`, and conservative
 future-operation matching in
 [Specialized Effects v0.2](specs/specialized-effects-v0.2.md). It does not
 modify the parser, AST, taxonomy, contracts, matcher, native classifier,
-runtime or cache. The current compiler remains v0.1 on `semantics-6`.
+runtime or cache. At that checkpoint the compiler remained v0.1 on `semantics-6`.
 
 K4.9 implements that specification in sequence: K4.9A taxonomy and parser/AST
 targets; K4.9B canonical contracts and driver binding; K4.9C analysis and
 classifier metadata; K4.9D family/category matching and enforcement; K4.9E
-semantic revision, cache migration and diagnostics. The implementation must
-bump the semantic revision before v0.2 artifacts are trusted. K4.10 then runs
-the final effects gate and publishes the full per-operation
-enforceable/deferred coverage ledger; K4.8 no longer owns that ledger.
+cache and diagnostic compatibility review. K4.9A–E are implemented: contracts
+retain targets without expansion, matching uses total canonical operation
+metadata and unclassified facts remain conservative. Broad enforcement stays
+first. K4.9D atomically raises trust to `semantics-7`, with no cache migration,
+format change, runtime guards or native network APIs. Module/file extend methods
+with contracts are explicitly rejected because that frontend does not lower
+them; source-compiler method binding remains supported. K4.9E confirms v0.1
+resource-qualified compatibility and `semantics-7` cache trust without another
+semantic change. Typed specialized violations retain target kinds, spans,
+classifications and witnesses, but CLI E6 still renders only a generic error
+count and omits specialized intent from successful inspection. This is a
+documented tooling limitation, not a complete specialized JSON/query surface.
+K4.10 completes the bounded final gate and publishes the full per-operation
+[coverage ledger](K4_SPECIALIZED_EFFECTS_GATE.md). The verdict is PASS for the
+supported static compiler surface: three production-classified operation
+identities (four bindings), no additional TIR-only producer and ten taxonomy-only
+operation identities. Synthetic matching coverage is not executable native
+coverage. The gate also closes a malformed-cache verifier panic for parameters
+without local slots using an existing controlled error. Rich specialized E6
+projection, module/file extend lowering, missing native APIs, connection identity,
+runtime guards, path confinement, broader FFI enforcement and actor integration
+remain explicit limits/follow-ups. This completes the K4 specialized-effect
+track, not all runtime/backend work or a sandbox guarantee.
 
 ### R — Result / Value-Use Hardening
 

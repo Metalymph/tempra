@@ -52,7 +52,10 @@ fn direct_exact_specialized_violation_retains_all_provenance() {
     assert_eq!(violations.len(), 1);
     let violation = &violations[0];
     assert_eq!(violation.classification, SpecializedMatch::DefiniteMatch);
-    assert_eq!(violation.clause.operation, EffectOperation::FsWrite);
+    assert_eq!(
+        violation.clause.target,
+        tempra_driver::SpecializedDenyTarget::Operation(EffectOperation::FsWrite)
+    );
     assert_eq!(
         &source[violation.clause.span.start as usize..violation.clause.span.end as usize],
         "fs.write(destination: \"blocked.txt\")"
@@ -118,8 +121,8 @@ fn exact_disjoint_resource_is_not_a_violation() {
     let contract = compilation.contract(main.id).unwrap();
     assert_eq!(contract.specialized_denied.len(), 1);
     assert_eq!(
-        contract.specialized_denied[0].operation,
-        EffectOperation::FsWrite
+        contract.specialized_denied[0].target,
+        tempra_driver::SpecializedDenyTarget::Operation(EffectOperation::FsWrite)
     );
 }
 
@@ -399,21 +402,24 @@ pub fn main() -> Int64 {
     return 42;
 }
 "#;
-    let violations = violations(source);
-    assert_eq!(violations.len(), 2);
-    assert_ne!(violations[0].function, violations[1].function);
-    assert_eq!(violations[0].clause, violations[1].clause);
-    assert_eq!(violations[0].contract, violations[1].contract);
-    assert_eq!(
-        violations[0].contract.declaration_span,
-        violations[1].contract.declaration_span
-    );
-    for violation in &violations {
+    for target in ["fs", "io.write", "fs.write(destination: \"blocked.txt\")"] {
+        let source = source.replace("fs.write(destination: \"blocked.txt\")", target);
+        let violations = violations(&source);
+        assert_eq!(violations.len(), 2);
+        assert_ne!(violations[0].function, violations[1].function);
+        assert_eq!(violations[0].clause, violations[1].clause);
+        assert_eq!(violations[0].contract, violations[1].contract);
         assert_eq!(
-            violation.contract.specialized_denied[0].span,
-            violation.clause.span
+            violations[0].contract.declaration_span,
+            violations[1].contract.declaration_span
         );
-        assert_eq!(violation.classification, SpecializedMatch::DefiniteMatch);
+        for violation in &violations {
+            assert_eq!(
+                violation.contract.specialized_denied[0].span,
+                violation.clause.span
+            );
+            assert_eq!(violation.classification, SpecializedMatch::DefiniteMatch);
+        }
     }
 }
 
@@ -432,4 +438,179 @@ fn effect_inspection_path_enforces_specialized_contracts() {
         }
         other => panic!("unexpected inspection error: {other:?}"),
     }
+}
+
+#[test]
+fn family_category_and_concrete_generic_io_remain_distinct() {
+    for target in ["fs", "io.write", "fs.write", "fs.write()"] {
+        let source = write_source(&format!("@deny({target})"), "blocked.txt");
+        let found = violations(&source);
+        assert_eq!(found.len(), 1, "{target}");
+        assert_eq!(found[0].classification, SpecializedMatch::DefiniteMatch);
+        assert_eq!(
+            found[0].contract.denied,
+            tempra_effects::CapabilitySet::empty()
+        );
+    }
+    for target in [
+        "net",
+        "io.read",
+        "io.read()",
+        "io.write()",
+        "fs.read",
+        "fs.remove",
+    ] {
+        compile(&write_source(&format!("@deny({target})"), "blocked.txt")).unwrap();
+    }
+    for target in ["fs", "net", "io.read", "io.write"] {
+        let source = format!(
+            "import std.fs; @deny({target}) pub fn main() {{ let found = std.fs.exists(\"x\"); }}"
+        );
+        let found = violations(&source);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].classification, SpecializedMatch::PotentialMatch);
+        assert!(
+            matches!(&found[0].fact, LocalEffectFact::UnclassifiedOperation(fact) if fact.capability == Capability::Io)
+        );
+    }
+}
+
+#[test]
+fn final_gate_covers_read_and_console_native_origins_and_transitive_witnesses() {
+    let cases = [
+        (
+            "std.fs.read_text",
+            EffectOperation::FsRead,
+            "fs",
+            "let result = std.fs.read_text(\"input.txt\");",
+            false,
+        ),
+        (
+            "std.fs.read_text",
+            EffectOperation::FsRead,
+            "io.read",
+            "let result = std.fs.read_text(\"input.txt\");",
+            true,
+        ),
+        (
+            "std.io.print",
+            EffectOperation::IoWrite,
+            "io.write()",
+            "std.io.print(\"x\");",
+            false,
+        ),
+        (
+            "std.io.print",
+            EffectOperation::IoWrite,
+            "io.write(stream: *)",
+            "std.io.print(\"x\");",
+            true,
+        ),
+        (
+            "std.io.println",
+            EffectOperation::IoWrite,
+            "io.write()",
+            "std.io.println(\"x\");",
+            true,
+        ),
+    ];
+    for (native, operation, target, body, transitive) in cases {
+        let functions = if transitive {
+            format!("fn helper() {{ {body} }} @deny({target}) pub fn main() {{ helper() }}")
+        } else {
+            format!("@deny({target}) pub fn main() {{ {body} }}")
+        };
+        let source = format!("import std.fs; import std.io; {functions}");
+        let found = violations(&source);
+        assert_eq!(found.len(), 1, "{native}");
+        let violation = &found[0];
+        assert_eq!(violation.classification, SpecializedMatch::DefiniteMatch);
+        assert_eq!(violation.witness.calls.len(), usize::from(transitive));
+        assert_eq!(violation.witness.origin, violation.fact);
+        assert_eq!(
+            &source[violation.clause.span.start as usize..violation.clause.span.end as usize],
+            target
+        );
+        assert!(matches!(&violation.fact, LocalEffectFact::Specialized(fact)
+            if fact.extern_name == native && fact.operation == operation));
+    }
+}
+
+#[test]
+fn resource_qualified_io_write_retains_v01_operation_identity() {
+    use tempra_driver::SpecializedDenyTarget;
+    for target in [
+        "io.write()",
+        "io.write(stream: *)",
+        "io.write(stream: \"stdout\")",
+    ] {
+        // Resource-qualified v0.1 syntax must not acquire category membership.
+        let compilation =
+            compile(&write_source(&format!("@deny({target})"), "blocked.txt")).unwrap();
+        let contract = compilation.contracts().next().unwrap().1;
+        assert_eq!(
+            contract.specialized_denied[0].target,
+            SpecializedDenyTarget::Operation(EffectOperation::IoWrite)
+        );
+
+        let source =
+            format!("import std.io; @deny({target}) pub fn main() {{ std.io.println(\"x\") }}");
+        let found = violations(&source);
+        assert_eq!(found.len(), 1);
+        let violation = &found[0];
+        assert_eq!(
+            violation.clause.target,
+            SpecializedDenyTarget::Operation(EffectOperation::IoWrite)
+        );
+        assert_eq!(
+            violation.classification,
+            if target.contains("\"stdout\"") {
+                SpecializedMatch::PotentialMatch
+            } else {
+                SpecializedMatch::DefiniteMatch
+            }
+        );
+        assert_eq!(
+            &source[violation.clause.span.start as usize..violation.clause.span.end as usize],
+            target
+        );
+        assert!(matches!(&violation.fact, LocalEffectFact::Specialized(fact)
+            if fact.operation == EffectOperation::IoWrite && fact.resources[0].knowledge == ResourceKnowledge::Unknown));
+    }
+}
+
+#[test]
+fn family_and_category_broad_first_authority_and_original_spans() {
+    for target in ["fs", "io.write", "fs.write"] {
+        let source = write_source(&format!("@deny(io, {target})"), "blocked.txt");
+        let DriverError::CapabilityContractViolations(found) = compile(&source).unwrap_err() else {
+            panic!("expected broad Io authority for {target}");
+        };
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].capability, Capability::Io);
+        let clause = &found[0].contract.specialized_denied[0];
+        assert_eq!(
+            &source[clause.span.start as usize..clause.span.end as usize],
+            target
+        );
+    }
+}
+
+#[test]
+fn unlowered_module_extend_contract_is_explicitly_rejected_even_when_not_called() {
+    let source = r#"
+import std.fs;
+extend Int64 {
+    @deny(fs)
+    fn write(self) -> Int64 {
+        let result = std.fs.write_text("blocked.txt", "data");
+        return self;
+    }
+}
+pub fn main() -> Int64 { return 0 }
+"#;
+    assert!(
+        matches!(compile(source), Err(DriverError::UnsupportedExperimentalVm(message))
+        if message.contains("extend methods"))
+    );
 }

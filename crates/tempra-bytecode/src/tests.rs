@@ -88,6 +88,34 @@ fn test_disassemble_simple_function() {
 }
 
 #[test]
+fn invalid_call_target_stack_effect_is_a_controlled_error() {
+    let module = BytecodeModule::new();
+    let caller = BytecodeFunction::new("main".into(), vec![], BytecodeType::Unit);
+    assert!(matches!(
+        stack_effect(&BytecodeInstr::Call(FunctionId(999), 0), &module, &caller),
+        Err(crate::error::BytecodeError::InvalidFunctionId(FunctionId(
+            999
+        )))
+    ));
+}
+
+#[test]
+fn malformed_parameter_local_layout_is_a_controlled_cache_error() {
+    let mut module = BytecodeModule::new();
+    let mut function =
+        BytecodeFunction::new("main".into(), vec![BytecodeType::Int64], BytecodeType::Unit);
+    function.code.push(BytecodeInstr::Return);
+    module.add_function(function);
+    let bytes = encode_module(&module).unwrap();
+    assert!(matches!(
+        decode_and_verify_artifact(&bytes),
+        Err(BytecodeSerializeError::VerifyError(
+            BytecodeVerifyError::InvalidLocalId(LocalId(0))
+        ))
+    ));
+}
+
+#[test]
 fn test_invalid_function_disassemble_error() {
     let module = BytecodeModule::new();
     let result = disassemble_function(&module, FunctionId(99));

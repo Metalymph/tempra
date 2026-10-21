@@ -5,8 +5,12 @@
 //! propagated [`LocalEffectFact`]. The driver uses the same classifier for direct
 //! and transitive facts so there is no second matching or call-graph path.
 
-use crate::contracts::{SpecializedDenyClause, SpecializedDenyParameter, SpecializedDenyValue};
-use tempra_effects::{EffectParameter, LocalEffectFact, ResourceFact, ResourceKnowledge};
+use crate::contracts::{
+    SpecializedDenyClause, SpecializedDenyParameter, SpecializedDenyTarget, SpecializedDenyValue,
+};
+use tempra_effects::{
+    Capability, EffectParameter, LocalEffectFact, ResourceFact, ResourceKnowledge,
+};
 
 /// Result of matching one specialized denial against one observed effect fact.
 ///
@@ -36,7 +40,8 @@ impl SpecializedMatch {
 ///
 /// Matching is conservative and side-effect free:
 ///
-/// - known operations are disjoint unless their identity is equal;
+/// - families and categories use the canonical operation classification;
+/// - concrete operations are disjoint unless their identity is equal;
 /// - a wildcard parameter matches every observation, including unknown ones;
 /// - an exact parameter matches equal known values and is disjoint from unequal
 ///   known values;
@@ -50,12 +55,32 @@ pub fn match_specialized_clause(
     clause: &SpecializedDenyClause,
     fact: &LocalEffectFact,
 ) -> SpecializedMatch {
+    let parent = match clause.target {
+        SpecializedDenyTarget::Family(_) | SpecializedDenyTarget::Category(_) => Capability::Io,
+        SpecializedDenyTarget::Operation(operation) => operation.parent(),
+    };
+    if fact.capability() != parent {
+        return SpecializedMatch::Disjoint;
+    }
+
+    // Known operation metadata is total: exhaustive taxonomy matches distinguish
+    // explicit non-membership from unknown unclassified facts. There is no
+    // optional classification lookup whose absence could silently mean false.
+    let membership = match clause.target {
+        SpecializedDenyTarget::Family(family) => fact.family_membership(family),
+        SpecializedDenyTarget::Category(category) => fact.category_membership(category),
+        SpecializedDenyTarget::Operation(operation) => {
+            fact.operation().map(|observed| observed == operation)
+        }
+    };
+    match membership {
+        Some(false) => return SpecializedMatch::Disjoint,
+        None => return SpecializedMatch::PotentialMatch,
+        Some(true) => {}
+    }
+
     match fact {
         LocalEffectFact::Specialized(observed) => {
-            if observed.operation != clause.operation {
-                return SpecializedMatch::Disjoint;
-            }
-
             let mut potential = false;
             for denied in &clause.parameters {
                 match match_parameter(denied, &observed.resources) {
@@ -70,16 +95,7 @@ pub fn match_specialized_clause(
                 SpecializedMatch::DefiniteMatch
             }
         }
-        LocalEffectFact::UnclassifiedOperation(observed) => {
-            if observed.capability == clause.operation.parent() {
-                // The operation is unknown. Even a parameterless denial cannot be
-                // proved disjoint because the unknown operation may be the denied
-                // one, so this remains a fail-closed potential match.
-                SpecializedMatch::PotentialMatch
-            } else {
-                SpecializedMatch::Disjoint
-            }
-        }
+        LocalEffectFact::UnclassifiedOperation(_) => SpecializedMatch::PotentialMatch,
     }
 }
 
@@ -149,6 +165,7 @@ fn resource_value_matches(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::SpecializedDenyTarget;
     use tempra_effects::{
         Capability, EffectOperation, EffectParameter, ResourceValue, SpecializedOperationFact,
         TirLocation, UnclassifiedOperationFact,
@@ -172,7 +189,7 @@ mod tests {
         parameters: Vec<SpecializedDenyParameter>,
     ) -> SpecializedDenyClause {
         SpecializedDenyClause {
-            operation,
+            target: SpecializedDenyTarget::Operation(operation),
             parameters,
             span: Span::new(0, 0),
         }
@@ -521,5 +538,130 @@ mod tests {
             match_specialized_clause(&denied, &observed),
             SpecializedMatch::DefiniteMatch
         );
+    }
+
+    #[test]
+    fn normative_v02_target_matrix_and_unclassified_parents() {
+        use tempra_effects::{EffectCategory as C, EffectFamily as F, EffectOperation as O};
+        use SpecializedDenyTarget::{Category, Family, Operation};
+        use SpecializedMatch::{DefiniteMatch as D, Disjoint as X, PotentialMatch as P};
+        let targets = [
+            Family(F::Fs),
+            Family(F::Net),
+            Category(C::IoRead),
+            Category(C::IoWrite),
+            Operation(O::FsWrite),
+            Operation(O::IoRead),
+        ];
+        // Section 7: explicit expectations, independent of taxonomy predicates.
+        let rows = [
+            (O::FsRead, [D, X, D, X, X, X]),
+            (O::FsWrite, [D, X, X, D, D, X]),
+            (O::FsRemove, [D, X, X, X, X, X]),
+            (O::NetConnect, [X, D, X, X, X, X]),
+            (O::NetListen, [X, D, X, X, X, X]),
+            (O::NetSend, [X, D, X, D, X, X]),
+            (O::NetReceive, [X, D, D, X, X, X]),
+            (O::IoRead, [X, X, D, X, X, D]),
+            (O::IoWrite, [X, X, X, D, X, X]),
+            (O::ProcessExec, [X; 6]),
+            (O::ProcessExit, [X; 6]),
+            (O::SpawnTask, [X; 6]),
+            (O::SpawnActor, [X; 6]),
+        ];
+        for (operation, expected) in rows {
+            for (target, expected) in targets.into_iter().zip(expected) {
+                let denied = SpecializedDenyClause {
+                    target,
+                    parameters: vec![],
+                    span: Span::new(1, 2),
+                };
+                assert_eq!(
+                    match_specialized_clause(&denied, &specialized(operation, vec![])),
+                    expected,
+                    "{target:?} against {operation:?}"
+                );
+            }
+        }
+        for target in targets.into_iter().chain(O::ALL.map(Operation)) {
+            let parent = match target {
+                Operation(operation) => operation.parent(),
+                _ => Capability::Io,
+            };
+            let denied = SpecializedDenyClause {
+                target,
+                parameters: vec![],
+                span: Span::new(1, 2),
+            };
+            for capability in [
+                Capability::Alloc,
+                Capability::Panic,
+                Capability::Io,
+                Capability::Process,
+                Capability::Spawn,
+                Capability::Nondeterminism,
+                Capability::Unsafe,
+            ] {
+                assert_eq!(
+                    match_specialized_clause(&denied, &unclassified(capability)),
+                    if capability == parent { P } else { X },
+                    "{target:?}/{capability:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_concrete_operation_matches_only_its_identity() {
+        for denied in EffectOperation::ALL {
+            for observed in EffectOperation::ALL {
+                assert_eq!(
+                    match_specialized_clause(
+                        &clause(denied, vec![]),
+                        &specialized(observed, vec![])
+                    ),
+                    if denied == observed {
+                        SpecializedMatch::DefiniteMatch
+                    } else {
+                        SpecializedMatch::Disjoint
+                    }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn resource_qualified_generic_io_read_and_write_keep_v01_matching() {
+        for operation in [EffectOperation::IoRead, EffectOperation::IoWrite] {
+            let exact = clause(
+                operation,
+                vec![parameter(EffectParameter::Stream, exact_text("console"))],
+            );
+            for (knowledge, expected) in [
+                (text("console"), SpecializedMatch::DefiniteMatch),
+                (text("other"), SpecializedMatch::Disjoint),
+                (ResourceKnowledge::Unknown, SpecializedMatch::PotentialMatch),
+            ] {
+                assert_eq!(
+                    match_specialized_clause(
+                        &exact,
+                        &specialized(
+                            operation,
+                            vec![resource(EffectParameter::Stream, knowledge)]
+                        )
+                    ),
+                    expected
+                );
+            }
+            let filesystem = if operation == EffectOperation::IoRead {
+                EffectOperation::FsRead
+            } else {
+                EffectOperation::FsWrite
+            };
+            assert_eq!(
+                match_specialized_clause(&exact, &specialized(filesystem, vec![])),
+                SpecializedMatch::Disjoint
+            );
+        }
     }
 }

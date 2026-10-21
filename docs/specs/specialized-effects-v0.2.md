@@ -1,23 +1,23 @@
 # Tempra Specialized Effect Families and Operation Semantics v0.2
 
 > [!NOTE]
-> **Status: normative specification only. Not implemented.**
+> **Status: K4.9A–E implemented and reviewed; K4.10 bounded final gate PASS.**
 >
-> This document defines the proposed v0.2 semantics for specialized effect
+> This document defines the normative v0.2 semantics for specialized effect
 > families, parameterless operation denials, cross-family read/write categories
 > and the missing network taxonomy. It is the K4.8 semantic-consolidation
 > specification.
 >
-> The current compiler still implements
-> [Specialized Effects v0.1](specialized-effects-v0.1.md) and cache trust
-> `semantics-6`. No production code, tests, parser, AST, taxonomy, matcher,
-> native classifier, cache revision or runtime behavior is changed by this
-> document. The requirements in section 11 are implementation work for later
-> milestones, not descriptions of current behavior.
+> K4.9D enables family/category and all 13 operation targets using canonical
+> classification metadata, preserving the broad authority and trust limits of
+> [Specialized Effects v0.1](specialized-effects-v0.1.md). It raises cache trust
+> atomically to `semantics-7`. The original v0.1/v0.2 comparison below records
+> the K4.8 design baseline; sections 12 and 16 record implementation status.
 >
 > The seven fundamental capabilities, static-only enforcement, the absence of
 > runtime guards, the native/FFI trust model and all current runtime and cache
-> limitations remain unchanged.
+> limitations remain unchanged. The final per-operation and execution-boundary
+> coverage is recorded in the [K4.10 ledger](../K4_SPECIALIZED_EFFECTS_GATE.md).
 
 ## 1. Purpose and scope
 
@@ -55,8 +55,10 @@ APIs.
 
 ## 2. Current implementation versus proposed semantics
 
-The distinction is normative. A future implementation must not describe current
-v0.1 behavior as if v0.2 were already implemented.
+The following table preserves the original K4.8 comparison with the pre-v0.2
+implementation. It is historical context; K4.9A–D now implement the target
+vocabulary and static matching, with the coverage limits noted below. K4.9E
+reviews compatibility against that baseline in section 12.1.
 
 | Area | Current v0.1 implementation | Proposed v0.2 semantics |
 |---|---|---|
@@ -72,8 +74,7 @@ v0.1 behavior as if v0.2 were already implemented.
 | Network operations | No production native bindings. `net.listen` is documented as accepting inbound connections. | `net.listen` is listener creation/binding. `net.connect` is connection establishment. `net.send` and `net.receive` are data transmission/reception. Endpoint/connection identity is explicitly deferred. |
 | Semantic revision | `semantics-6`. | The future implementation must use a new semantic revision (expected `semantics-7`). No revision change is made by this document. |
 
-The current implementation remains the authority for behavior until the
-implementation milestones in section 16 are complete.
+Section 16 distinguishes completed implementation from the remaining final gate.
 
 ## 3. Formal hierarchy and taxonomy
 
@@ -230,10 +231,10 @@ Targets resolve as follows:
 5. Any other dotted operation spelling is a concrete operation denial. It may be
    bare or parenthesized. `@deny(fs.write)` and `@deny(fs.write())` are
    semantically identical; both have an empty canonical parameter list.
-6. Family and category denials are parameterless. `@deny(fs(...))`,
-   `@deny(net(...))`, `@deny(io.read(...))` with parameters, and
-   `@deny(io.write(...))` with parameters are invalid. Resource restrictions
-   require a concrete operation target.
+6. Family and category denials are parameterless. `@deny(fs(...))` and
+   `@deny(net(...))` are invalid. Resource-qualified `io.read(stream: ...)`
+   and `io.write(stream: ...)` are concrete operation targets under rule 4,
+   not parameterized categories, and retain their v0.1 meaning.
 7. `@deny(fs.read)`, `@deny(fs.write)`, `@deny(fs.remove)`,
    `@deny(net.connect)`, `@deny(net.listen)`, `@deny(net.send)`,
    `@deny(net.receive)`, `@deny(io.read)`, `@deny(io.write)`,
@@ -659,11 +660,8 @@ made by this specification.
 
 ## 12. Semantic revision and cache compatibility
 
-The current compiler uses `semantics-6`. This specification does not change
-`SEMANTIC_REVISION`, the cache fingerprint or any cache artifact.
-
-The future implementation MUST bump the semantic revision before release
-(expected `semantics-7`). The reason is not merely new syntax:
+K4.9D raises `SEMANTIC_REVISION` from `6` to `7` in the same change that enables
+enforcement. The reason is not merely new syntax:
 
 - the taxonomy adds two operations;
 - denial targets gain family and category meanings;
@@ -688,8 +686,81 @@ implementation must therefore:
 - preserve the rule that a failed compilation does not create or replace a
   valid artifact.
 
-This is a deliberate compatibility change for the later implementation. It is
-not made by this document.
+Bytecode format, artifact schema, source hash and cache paths are unchanged.
+There is no migration or reuse of `semantics-6` artifacts under `semantics-7`.
+Compatible hits remain verified bytecode-only; fresh compilation retains facts.
+
+Known operation classification is total through exhaustive taxonomy matches:
+`None` family and empty category membership mean explicit non-membership.
+There is no missing metadata entry that can be interpreted as `Disjoint`.
+Unclassified facts instead expose unknown membership and match potentially
+under the relevant parent capability. Native network/spawn bindings remain
+absent; their matcher coverage uses synthetic facts, not fabricated natives.
+
+The source compiler lowers and binds supported extend methods. The module/file
+compiler currently does not lower extend methods: annotated methods are now
+explicitly rejected before producing a compilation, including unused methods,
+rather than silently losing their contracts. Extending that frontend remains
+separate compiler work. Existing HIR/REPL/source-TIR execution guards, raw IR
+API limits and non-enforcing `check`/`emit-tir` boundaries remain unchanged.
+
+### 12.1 K4.9E compatibility review
+
+**Verdict: PASS for the supported compiler-authoritative paths.** No further
+semantic or cache revision is introduced by this review; trust stays at
+`semantics-7`.
+
+Existing broad `@deny` and `@pure` contracts, concrete operation identity,
+exact/wildcard/unknown resource matching, generic contract inheritance,
+transitive propagation and fail-closed unknown externs retain their behavior.
+Resource-qualified clauses such as `io.write(stream: "stdout")` and
+`io.read(stream: *)` remain concrete generic I/O operations; they do not acquire
+filesystem or network category membership. On a classified `std.io.println`
+fact, an exact stream restriction remains potential because the stream is
+unknown, whereas a wildcard restriction is definite.
+
+The intentional syntax differences from v0.1 are acceptance of families, bare
+operation forms and the two network-transfer operations. Bare `io.read` and
+`io.write`, previously rejected without resource parentheses, now denote
+categories. Parenthesized empty forms still denote concrete generic operations.
+No previously accepted resource-qualified spelling is reinterpreted.
+
+Cache compatibility requires both the source hash and compiler fingerprint,
+after decoding and bytecode verification. Even a decodable artifact with the
+exact source hash and `semantics-7` header is a miss when its bytecode is invalid.
+K4.9E fixes the invalid-call-ID stack-effect lookup to return its existing error
+instead of panicking before verification can reject the artifact.
+Malformed/stale artifacts rebuild safely; failed fresh compilation preserves
+existing bytes and does not publish a new artifact. Compatible hits remain
+bytecode-only and do not rewrite bytes or modification time. This is the existing
+trusted local cache model, not authenticated verification of a hostile cache.
+
+Typed specialized violations retain target kind, parameters, original clause
+and declaration spans, observed operation or unclassified parent, match
+classification, original TIR origin and deterministic transitive witness. The
+existing canonical order and duplicate-removal rules remain unchanged. Broad
+violations take precedence. Independent-process tests compare identical v0.2
+violation sets/classifications/witness origins from different working directories;
+VM/JIT tests preserve native-call fallback where JIT support is absent.
+
+**Diagnostic projection gap (unchanged E6 contract):** specialized violations
+reach CLI human output as `Specialized capability contract violation(s): N`.
+JSON emits one generic error object with `code: null`, that count-only message,
+empty `labels`/`notes` and an empty `functions` array; it does not expose individual
+targets, operation identities, classifications, resource values, spans or witnesses.
+These facts remain available in the typed Rust error. Successful JSON inspection
+also omits specialized clauses/requirements, and human inspection can print
+`contract: none` for a specialized-only contract. Consequently current CLI
+inspection is not a complete specialized-contract query surface. A dedicated
+projection is tooling follow-up; K4.9E preserves the schema and output contract.
+
+Execution boundaries remain as in section 12: supported single-source extend
+methods bind contracts, annotated module/file extend methods fail explicitly,
+and unsupported HIR/REPL/source-TIR paths reject annotations. Raw TIR/bytecode
+APIs carry no source-level contracts. Native networking, actor creation,
+connection identity, runtime guards and sandbox guarantees remain unavailable or
+deferred. K4.10 must publish the final production-coverage ledger and final gate;
+synthetic taxonomy tests do not establish native runtime coverage.
 
 ## 13. Acceptance criteria
 
@@ -850,8 +921,8 @@ unstated rule.
    add a capability bit and cannot be used to selectively relax `@pure`.
 10. **Cache revision policy.** Section 12 requires bumping the semantic revision
     for the whole v0.2 implementation rather than trying to prove that every new
-    source form was previously rejected. K4.9E must implement that conservative
-    choice and document the resulting incompatibility.
+    source form was previously rejected. K4.9D implements that conservative
+    choice atomically with enabling enforcement.
 
 ## 16. Implementation sequence
 
@@ -859,13 +930,13 @@ The roadmap sequence is:
 
 ```text
 K4.8   family/operation semantics specification       DONE (this document)
-K4.9A  taxonomy metadata and parser/AST targets       PLANNED
-K4.9B  canonical contracts and driver binding         PLANNED
-K4.9C  effects analysis and classifier metadata       PLANNED
-K4.9D  family/category matcher and enforcement        PLANNED
-K4.9E  semantic revision, cache migration, diagnostics PLANNED
-K4.9   family/operation semantics implementation      PLANNED
-K4.10  final effects gate and coverage ledger         PLANNED
+K4.9A  taxonomy metadata and parser/AST targets       DONE
+K4.9B  canonical contracts and driver binding         DONE
+K4.9C  effects analysis and classifier metadata       DONE
+K4.9D  family/category enforcement + semantics-7      DONE
+K4.9E  cache/diagnostic compatibility review          DONE
+K4.9   family/operation semantics implementation      DONE
+K4.10  final effects gate and coverage ledger         DONE (bounded PASS)
 ```
 
 Ordering constraints:
@@ -877,16 +948,24 @@ Ordering constraints:
 - K4.9C must provide total operation metadata before family/category matching can
   claim future-operation safety.
 - K4.9D must implement the section 7 matrix and conservative unknown rules.
-- K4.9E must bump the semantic revision before any artifact from the new compiler
-  is trusted.
+- K4.9D bumps the semantic revision before any enforcement-enabled artifact is
+  trusted; K4.9E retains the remaining cache/diagnostic compatibility review.
 - K4.10 must publish the full per-operation enforceable/deferred coverage ledger
   and audit the final effects gate. It must not count unimplemented network
   APIs, actor semantics, endpoint tracking or runtime guards as passing.
 
+K4.10's [final ledger](../K4_SPECIALIZED_EFFECTS_GATE.md) records a PASS for the
+supported static surface after all required commands. Only FsRead, FsWrite and
+IoWrite have production-classified native origins today; the other ten operations
+have taxonomy/matcher coverage without an executable source-to-classified-TIR
+producer. The ledger keeps rejected/limited backends distinct from enforced
+paths and records the E6 projection and native/runtime trust limits. No new
+effect semantics, native bindings, runtime guards or semantic revision are added.
+
 ## 17. References
 
-- [Specialized Effects v0.1](specialized-effects-v0.1.md) — current implemented
-  behavior and trust limits.
+- [Specialized Effects v0.1](specialized-effects-v0.1.md) — historical K4.7
+  behavior and inherited trust limits.
 - [E1 Capability Analysis](../E1_CAPABILITY_ANALYSIS.md) — existing analysis and
   enforcement architecture.
 - [Architecture](../architecture/ARCHITECTURE.md) — pipeline and backend

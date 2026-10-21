@@ -1,7 +1,7 @@
 # Tempra Specialized Effects v0.1
 
 > [!NOTE]
-> **Status: K4.2–K4.7 implemented.**
+> **Status: historical K4.2–K4.7 implementation and `semantics-6` checkpoint.**
 >
 > K4.6A (boundary audit), K4.6B.1 (native registry/classifier/signature
 > integrity), K4.6B.2 (compilation-boundary regressions), K4.6C
@@ -10,16 +10,15 @@
 > The K4.7 verdict is **PASS** for the supported same-build, same-host/target
 > paths, with the unsupported and deferred paths listed in section 10.
 >
-> K4.8 adds a **specification-only** normative extension for families,
-> parameterless operation denials, cross-family categories and the missing
-> network taxonomy in
-> [Specialized Effects v0.2](specialized-effects-v0.2.md). It is not
-> implemented. This document remains the description of current behavior and
-> `semantics-6`; K4.10 owns the final coverage ledger after the K4.9
-> implementation sequence.
+> K4.8 originally specified the v0.2 extension. K4.9A–E now implement and review
+> families, parameterless operation denials, cross-family categories and the
+> network taxonomy under `semantics-7`. See
+> [Specialized Effects v0.2](specialized-effects-v0.2.md) for current behavior,
+> compatibility and limitations. The original v0.1 rules below are preserved
+> as historical documentation; K4.10 still owns the final coverage ledger.
 >
-> This document records the guarantees that the current compiler actually
-> provides, the trust assumptions behind them and the limits that must not be
+> This document records the guarantees at that checkpoint, the trust
+> assumptions behind them and the limits that must not be
 > overstated. It is no longer a proposal for future syntax. Syntax shown here
 > is implemented. A taxonomy operation without a production binding remains a
 > coverage gap, not an enforceable operation.

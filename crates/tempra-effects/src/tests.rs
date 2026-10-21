@@ -4,9 +4,9 @@ use crate::externs::{
     BindingError, ExternOperationBinding, ResourceBinding,
 };
 use crate::{
-    analyze, Capability, CapabilityAnalysisError, CapabilitySet, DirectCapabilitySource,
-    EffectCategory, EffectFamily, EffectOperation, EffectParameter, LocalEffectFact,
-    ResourceKnowledge, ResourceValue, SpecializedOperationFact, TirLocation,
+    analyze, known_externs, Capability, CapabilityAnalysisError, CapabilitySet,
+    DirectCapabilitySource, EffectCategory, EffectFamily, EffectOperation, EffectParameter,
+    LocalEffectFact, ResourceKnowledge, ResourceValue, SpecializedOperationFact, TirLocation,
 };
 use std::collections::HashMap;
 use tempra_tir::ir::{
@@ -86,6 +86,20 @@ fn specialized(fact: &LocalEffectFact) -> &SpecializedOperationFact {
         LocalEffectFact::UnclassifiedOperation(fact) => {
             panic!("expected specialized fact, got unclassified {fact:?}")
         }
+    }
+}
+
+fn synthetic_specialized(operation: EffectOperation) -> SpecializedOperationFact {
+    SpecializedOperationFact {
+        operation,
+        resources: Vec::new(),
+        location: TirLocation {
+            function: TirFunctionId(0),
+            block: TirBlockId(0),
+            instruction_index: 0,
+        },
+        extern_id: TirFunctionId(100),
+        extern_name: format!("synthetic.{}", operation.canonical_name()),
     }
 }
 
@@ -884,6 +898,71 @@ fn cross_family_categories_have_exact_membership() {
     assert!(!EffectOperation::NetConnect.is_in_category(EffectCategory::IoWrite));
     assert!(!EffectOperation::NetListen.is_in_category(EffectCategory::IoRead));
     assert!(!EffectOperation::NetListen.is_in_category(EffectCategory::IoWrite));
+}
+
+#[test]
+fn fact_classification_accessors_agree_with_taxonomy_for_every_operation() {
+    for operation in EffectOperation::ALL {
+        let specialized = synthetic_specialized(operation);
+
+        assert_eq!(specialized.capability(), operation.parent());
+        assert_eq!(specialized.family(), operation.family());
+        assert_eq!(specialized.categories(), operation.categories());
+        for category in EffectCategory::ALL {
+            assert_eq!(
+                specialized.is_in_category(category),
+                operation.is_in_category(category),
+                "{} / {}",
+                operation.canonical_name(),
+                category.canonical_name()
+            );
+        }
+
+        let fact = LocalEffectFact::Specialized(specialized);
+        assert_eq!(fact.operation(), Some(operation));
+        assert_eq!(fact.capability(), operation.parent());
+        for family in EffectFamily::ALL {
+            assert_eq!(
+                fact.family_membership(family),
+                Some(operation.family() == Some(family)),
+                "{} / {}",
+                operation.canonical_name(),
+                family.canonical_name()
+            );
+        }
+        for category in EffectCategory::ALL {
+            assert_eq!(
+                fact.category_membership(category),
+                Some(operation.is_in_category(category)),
+                "{} / {}",
+                operation.canonical_name(),
+                category.canonical_name()
+            );
+        }
+    }
+}
+
+#[test]
+fn unclassified_facts_keep_family_and_category_membership_unknown() {
+    let fact = LocalEffectFact::UnclassifiedOperation(crate::UnclassifiedOperationFact {
+        capability: Capability::Io,
+        location: TirLocation {
+            function: TirFunctionId(0),
+            block: TirBlockId(0),
+            instruction_index: 0,
+        },
+        extern_id: TirFunctionId(100),
+        extern_name: "std.fs.exists".to_owned(),
+    });
+
+    assert_eq!(fact.operation(), None);
+    assert_eq!(fact.capability(), Capability::Io);
+    for family in EffectFamily::ALL {
+        assert_eq!(fact.family_membership(family), None, "{family:?}");
+    }
+    for category in EffectCategory::ALL {
+        assert_eq!(fact.category_membership(category), None, "{category:?}");
+    }
 }
 
 #[test]
@@ -2081,6 +2160,220 @@ fn distinct_origins_with_equal_resources_are_not_merged() {
         assert_eq!(witness.calls[0].callee, callee);
         assert_eq!(&witness.origin, origin);
     }
+}
+
+#[test]
+fn analysis_exposes_canonical_classification_metadata_for_direct_facts() {
+    let input = module(vec![
+        function(
+            0,
+            "main",
+            vec![
+                string_const(0, "input.txt"),
+                call_with_args(1, 100, vec![TirValueId(0)]),
+                string_const(2, "output.txt"),
+                string_const(3, "contents"),
+                call_with_args(4, 101, vec![TirValueId(2), TirValueId(3)]),
+                string_const(5, "stdout"),
+                call_with_args(6, 102, vec![TirValueId(5)]),
+                string_const(7, "."),
+                call_with_args(8, 103, vec![TirValueId(7)]),
+            ],
+        ),
+        extern_function(100, "std.fs.read_text"),
+        extern_function(101, "std.fs.write_text"),
+        extern_function(102, "std.io.print"),
+        extern_function(103, "std.fs.exists"),
+    ]);
+    let analysis = analyze(&input).unwrap();
+    let facts = analysis.local_effect_facts();
+    assert_eq!(facts.len(), 4);
+
+    let read = facts
+        .iter()
+        .find(|fact| fact.operation() == Some(EffectOperation::FsRead))
+        .expect("read fact");
+    assert_eq!(read.capability(), Capability::Io);
+    assert_eq!(read.family_membership(EffectFamily::Fs), Some(true));
+    assert_eq!(read.family_membership(EffectFamily::Net), Some(false));
+    assert_eq!(read.category_membership(EffectCategory::IoRead), Some(true));
+    assert_eq!(
+        read.category_membership(EffectCategory::IoWrite),
+        Some(false)
+    );
+    assert_eq!(
+        resource_knowledge(specialized(read), EffectParameter::Source),
+        &ResourceKnowledge::Exact(ResourceValue::Text("input.txt".to_owned()))
+    );
+
+    let write = facts
+        .iter()
+        .find(|fact| fact.operation() == Some(EffectOperation::FsWrite))
+        .expect("write fact");
+    assert_eq!(write.capability(), Capability::Io);
+    assert_eq!(write.family_membership(EffectFamily::Fs), Some(true));
+    assert_eq!(write.family_membership(EffectFamily::Net), Some(false));
+    assert_eq!(
+        write.category_membership(EffectCategory::IoRead),
+        Some(false)
+    );
+    assert_eq!(
+        write.category_membership(EffectCategory::IoWrite),
+        Some(true)
+    );
+    assert_eq!(
+        resource_knowledge(specialized(write), EffectParameter::Destination),
+        &ResourceKnowledge::Exact(ResourceValue::Text("output.txt".to_owned()))
+    );
+
+    let print = facts
+        .iter()
+        .find(|fact| fact.operation() == Some(EffectOperation::IoWrite))
+        .expect("print fact");
+    assert_eq!(print.capability(), Capability::Io);
+    assert_eq!(print.family_membership(EffectFamily::Fs), Some(false));
+    assert_eq!(print.family_membership(EffectFamily::Net), Some(false));
+    assert_eq!(
+        print.category_membership(EffectCategory::IoRead),
+        Some(false)
+    );
+    assert_eq!(
+        print.category_membership(EffectCategory::IoWrite),
+        Some(true)
+    );
+    assert_eq!(
+        resource_knowledge(specialized(print), EffectParameter::Stream),
+        &ResourceKnowledge::Unknown
+    );
+
+    let exists = facts
+        .iter()
+        .find(|fact| {
+            matches!(
+                fact,
+                LocalEffectFact::UnclassifiedOperation(fact)
+                    if fact.extern_name == "std.fs.exists"
+            )
+        })
+        .expect("exists fact");
+    assert_eq!(exists.operation(), None);
+    assert_eq!(exists.capability(), Capability::Io);
+    for family in EffectFamily::ALL {
+        assert_eq!(exists.family_membership(family), None, "{family:?}");
+    }
+    for category in EffectCategory::ALL {
+        assert_eq!(exists.category_membership(category), None, "{category:?}");
+    }
+
+    let summary = analysis.summary(TirFunctionId(0)).unwrap();
+    assert_eq!(
+        summary.required,
+        capabilities(&[Capability::Alloc, Capability::Io])
+    );
+}
+
+#[test]
+fn propagated_diamond_and_recursive_facts_preserve_classification_metadata() {
+    let analysis = analyze(&module(vec![
+        function(0, "root", vec![call(0, 1), call(1, 2)]),
+        function(1, "left", vec![call(0, 3)]),
+        function(2, "right", vec![call(0, 3)]),
+        function(
+            3,
+            "leaf",
+            vec![
+                string_const(0, "leaf.txt"),
+                call_with_args(1, 100, vec![TirValueId(0)]),
+                call(2, 3),
+            ],
+        ),
+        extern_function(100, "std.fs.read_text"),
+    ]))
+    .unwrap();
+
+    let leaf = analysis.specialized_summary(TirFunctionId(3)).unwrap();
+    assert_eq!(leaf.direct.len(), 1);
+    assert_eq!(leaf.transitive, Vec::new());
+
+    let root = analysis.specialized_summary(TirFunctionId(0)).unwrap();
+    assert_eq!(root.transitive.len(), 1);
+    let origin = &root.transitive[0];
+    assert_eq!(origin, &leaf.direct[0]);
+    assert_eq!(origin.operation(), Some(EffectOperation::FsRead));
+    assert_eq!(origin.capability(), Capability::Io);
+    assert_eq!(origin.family_membership(EffectFamily::Fs), Some(true));
+    assert_eq!(origin.family_membership(EffectFamily::Net), Some(false));
+    assert_eq!(
+        origin.category_membership(EffectCategory::IoRead),
+        Some(true)
+    );
+    assert_eq!(
+        origin.category_membership(EffectCategory::IoWrite),
+        Some(false)
+    );
+    let fact = specialized(origin);
+    assert_eq!(fact.extern_id, TirFunctionId(100));
+    assert_eq!(fact.extern_name, "std.fs.read_text");
+    assert_eq!(
+        resource_knowledge(fact, EffectParameter::Source),
+        &ResourceKnowledge::Exact(ResourceValue::Text("leaf.txt".to_owned()))
+    );
+
+    let witness = analysis
+        .specialized_witness(TirFunctionId(0), origin)
+        .expect("diamond witness");
+    assert_eq!(witness.calls.len(), 2);
+    assert_eq!(witness.calls[0].callee, TirFunctionId(1));
+    assert_eq!(witness.calls[1].callee, TirFunctionId(3));
+    assert_eq!(&witness.origin, origin);
+    assert_eq!(
+        witness.origin.family_membership(EffectFamily::Fs),
+        Some(true)
+    );
+
+    assert_eq!(
+        analysis.summary(TirFunctionId(0)).unwrap().required,
+        capabilities(&[Capability::Alloc, Capability::Io])
+    );
+}
+
+#[test]
+fn net_transfer_operations_remain_taxonomy_only() {
+    for (operation, family, category) in [
+        (
+            EffectOperation::NetSend,
+            EffectFamily::Net,
+            EffectCategory::IoWrite,
+        ),
+        (
+            EffectOperation::NetReceive,
+            EffectFamily::Net,
+            EffectCategory::IoRead,
+        ),
+    ] {
+        assert_eq!(operation.parent(), Capability::Io);
+        assert_eq!(operation.family(), Some(family));
+        assert_eq!(operation.categories(), &[category]);
+        assert!(operation.valid_parameter_keys().is_empty());
+    }
+
+    assert!(known_externs().all(|extern_definition| {
+        extern_definition.operation != Some(EffectOperation::NetSend)
+            && extern_definition.operation != Some(EffectOperation::NetReceive)
+    }));
+    assert!(
+        known_externs().all(|extern_definition| !extern_definition.name.starts_with("std.net."))
+    );
+
+    let called = module(vec![
+        function(0, "main", vec![call(0, 100)]),
+        extern_function(100, "std.net.send"),
+    ]);
+    assert!(matches!(
+        analyze(&called),
+        Err(CapabilityAnalysisError::UnclassifiedExtern { name, .. })
+            if name == "std.net.send"
+    ));
 }
 
 #[test]

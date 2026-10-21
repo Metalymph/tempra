@@ -113,8 +113,10 @@ revisions are independent of bytecode format version.
 
 K3.2 raises current trust to `semantics-5` because checked `Int64` add/sub/mul
 now contribute `Panic` and revision-4 hits could bypass that enforcement.
-K4.5B raises current trust to `semantics-6` because revision-5 hits could bypass
-static specialized `@deny` enforcement. The shared `tempra-runtime` arithmetic
+K4.5B raised trust to `semantics-6` because revision-5 hits could bypass
+static specialized `@deny` enforcement. K4.9D raises current trust to `semantics-7`
+for v0.2 family/category enforcement; K4.9E confirms compatibility without a
+further revision. The shared `tempra-runtime` arithmetic
 contract is consumed by the HIR interpreter, TIR interpreter and VM. Eligible JIT functions implement equivalent checked
 Cranelift operations and propagate a C-compatible `{ value, status }` result
 through pure and heap-aware native calls. A non-zero status from native code is
@@ -206,11 +208,23 @@ runtime guard or JIT architecture change was introduced.
 K4.8 is documentation-only. It specifies the proposed v0.2 `fs`/`net` families,
 parameterless operation denials, cross-family `io.read`/`io.write` categories,
 `net.send`/`net.receive` and conservative future-operation matching in
-[Specialized Effects v0.2](../specs/specialized-effects-v0.2.md). The parser,
-AST, taxonomy, contracts, matcher, native classifier and cache remain at v0.1
-and `semantics-6`. K4.9 implements the proposal in the documented sequence; the
-implementation must bump the semantic revision before its artifacts are
-trusted. K4.10 owns the final per-operation coverage-gap ledger.
+[Specialized Effects v0.2](../specs/specialized-effects-v0.2.md). K4.9A–E now
+implement and review that vocabulary and enforcement under `semantics-7`.
+Family/category predicates use canonical classification without expanding to
+operation lists; unknown membership under the relevant parent is potential.
+Resource-qualified generic I/O remains operation-scoped. The typed specialized
+error retains targets, resources, spans, classifications and witnesses, but E6
+still reports a generic count and omits specialized intent from successful CLI
+inspection. Module/file compilation explicitly rejects annotated extend methods
+because it does not lower those methods; source compilation binds supported
+methods normally. No runtime guard, sandbox or connection identity is added.
+K4.10's [final gate and ledger](../K4_SPECIALIZED_EFFECTS_GATE.md) is PASS for
+this bounded static surface: three production-classified operation identities,
+ten taxonomy-only identities, with rejected and limited execution paths stated
+separately. The gate adds one missing verifier precondition for malformed
+parameter/local layouts, returning the existing error before indexing. This
+completes the specialized-effects track while retaining all documented native,
+source-provenance, tooling, runtime-guard and sandbox limitations.
 
 ```text
 tempra-tir

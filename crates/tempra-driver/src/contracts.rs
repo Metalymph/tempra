@@ -3,7 +3,10 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use tempra_effects::{Capability, CapabilitySet, EffectOperation, EffectParameter, ResourceValue};
+use tempra_effects::{
+    Capability, CapabilitySet, EffectCategory, EffectFamily, EffectOperation, EffectParameter,
+    ResourceValue,
+};
 use tempra_hir::HirFunction;
 use tempra_span::Span;
 use tempra_tir::ir::TirFunctionId;
@@ -35,6 +38,39 @@ pub enum SpecializedDenyValue {
     Exact(ResourceValue),
 }
 
+/// Canonical target of one specialized deny clause.
+///
+/// Family and category targets remain distinct from operation targets. They are
+/// never expanded into operation lists. Matching uses canonical fact metadata.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SpecializedDenyTarget {
+    /// A whole specialized-effect family, such as `fs` or `net`.
+    Family(EffectFamily),
+    /// A cross-family category, such as `io.read` or `io.write`.
+    Category(EffectCategory),
+    /// One concrete operation, such as `fs.read` or `io.read()`.
+    Operation(EffectOperation),
+}
+
+impl SpecializedDenyTarget {
+    /// Returns the stable canonical spelling of the target.
+    pub const fn canonical_name(self) -> &'static str {
+        match self {
+            Self::Family(family) => family.canonical_name(),
+            Self::Category(category) => category.canonical_name(),
+            Self::Operation(operation) => operation.canonical_name(),
+        }
+    }
+
+    /// Returns the concrete operation target, if this clause is operation-scoped.
+    pub const fn operation(self) -> Option<EffectOperation> {
+        match self {
+            Self::Operation(operation) => Some(operation),
+            Self::Family(_) | Self::Category(_) => None,
+        }
+    }
+}
+
 /// One canonical `parameter: value` restriction.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpecializedDenyParameter {
@@ -48,14 +84,17 @@ pub struct SpecializedDenyParameter {
 
 /// One canonical specialized deny clause.
 ///
-/// Clauses are sorted by operation taxonomy order and then by canonical
-/// parameter order. Duplicate clauses are removed while retaining the first
-/// source occurrence.
+/// Clauses are sorted by target kind and taxonomy order, then by canonical
+/// parameter order and values. Duplicate target-plus-parameter clauses are
+/// removed while retaining the first source occurrence. Family and category
+/// clauses remain distinct canonical entries even when their current operation
+/// membership overlaps.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpecializedDenyClause {
-    /// Canonical operation from `tempra-effects`.
-    pub operation: EffectOperation,
-    /// Parameters in canonical taxonomy order.
+    /// Canonical family, category or operation target.
+    pub target: SpecializedDenyTarget,
+    /// Parameters in canonical taxonomy order. Family and category targets are
+    /// always parameterless.
     pub parameters: Vec<SpecializedDenyParameter>,
     /// Source span of the original clause.
     pub span: Span,
@@ -112,15 +151,95 @@ impl std::fmt::Display for ContractBindingError {
 
 impl std::error::Error for ContractBindingError {}
 
-/// A parsed specialized target that this milestone does not yet enforce.
+/// A target/parameter combination that cannot form a canonical specialized
+/// contract.
 ///
-/// K4.9A adds family, category and new network targets to the syntax and
-/// taxonomy. Driver binding, matching and enforcement remain at v0.1 until
-/// K4.9B–K4.9D. This error prevents newly parsed contracts from being silently
-/// treated as enforced.
+/// Parser validation normally makes these unreachable. Driver binding still
+/// checks them so a programmatically constructed AST cannot silently produce an
+/// ambiguous or malformed contract.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SpecializedDenyBindingError {
+    /// A family or category target was given resource parameters.
+    ParametersNotAllowed {
+        /// The parameterized family or category target.
+        target: SpecializedDenyTarget,
+        /// Span of the first disallowed parameter.
+        span: Span,
+    },
+    /// A concrete operation was given a parameter key it does not declare.
+    ParameterNotAccepted {
+        /// The operation target.
+        target: SpecializedDenyTarget,
+        /// The rejected parameter key.
+        parameter: EffectParameter,
+        /// Span of the rejected parameter.
+        span: Span,
+    },
+    /// An operation clause repeated the same parameter key.
+    DuplicateParameter {
+        /// The operation target.
+        target: SpecializedDenyTarget,
+        /// The repeated parameter key.
+        parameter: EffectParameter,
+        /// Span of the repeated parameter.
+        span: Span,
+    },
+    /// A parameter value's kind does not match its parameter key.
+    InvalidParameterValue {
+        /// The operation target.
+        target: SpecializedDenyTarget,
+        /// The parameter whose value has the wrong kind.
+        parameter: EffectParameter,
+        /// Span of the invalid value.
+        span: Span,
+    },
+}
+
+impl std::fmt::Display for SpecializedDenyBindingError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ParametersNotAllowed { target, .. } => write!(
+                f,
+                "specialized deny target '{}' does not accept resource parameters",
+                target.canonical_name()
+            ),
+            Self::ParameterNotAccepted {
+                target, parameter, ..
+            } => write!(
+                f,
+                "specialized deny target '{}' does not accept parameter '{}'",
+                target.canonical_name(),
+                parameter.canonical_name()
+            ),
+            Self::DuplicateParameter {
+                target, parameter, ..
+            } => write!(
+                f,
+                "specialized deny target '{}' repeats parameter '{}'",
+                target.canonical_name(),
+                parameter.canonical_name()
+            ),
+            Self::InvalidParameterValue {
+                target, parameter, ..
+            } => write!(
+                f,
+                "specialized deny target '{}' has an invalid value for parameter '{}'",
+                target.canonical_name(),
+                parameter.canonical_name()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SpecializedDenyBindingError {}
+
+/// A recognized specialized target unsupported by an executable compilation.
+///
+/// Retained for API compatibility. K4.9D enforces every valid v0.2 target, so
+/// binding no longer produces this error for families, categories or operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnsupportedSpecializedTarget {
-    /// Canonical target spelling from the AST.
+    /// Canonical target spelling from the bound clause.
     pub target: String,
     /// Source span of the original clause.
     pub span: Span,
@@ -157,28 +276,50 @@ fn canonical_capability(name: tempra_ast::DenyCapability) -> Capability {
     }
 }
 
-/// Maps only the v0.1 operation targets that the current matcher can enforce.
-///
-/// `net.send` and `net.receive` exist in the K4.9A taxonomy and syntax but are
-/// deliberately rejected at this boundary until K4.9B–K4.9D bind and enforce
-/// them.
-fn canonical_enforceable_operation(
-    name: tempra_ast::SpecializedOperation,
-) -> Option<EffectOperation> {
+fn canonical_operation(name: tempra_ast::SpecializedOperation) -> EffectOperation {
     use tempra_ast::SpecializedOperation;
     match name {
-        SpecializedOperation::FsRead => Some(EffectOperation::FsRead),
-        SpecializedOperation::FsWrite => Some(EffectOperation::FsWrite),
-        SpecializedOperation::FsRemove => Some(EffectOperation::FsRemove),
-        SpecializedOperation::NetConnect => Some(EffectOperation::NetConnect),
-        SpecializedOperation::NetListen => Some(EffectOperation::NetListen),
-        SpecializedOperation::IoRead => Some(EffectOperation::IoRead),
-        SpecializedOperation::IoWrite => Some(EffectOperation::IoWrite),
-        SpecializedOperation::ProcessExec => Some(EffectOperation::ProcessExec),
-        SpecializedOperation::ProcessExit => Some(EffectOperation::ProcessExit),
-        SpecializedOperation::SpawnTask => Some(EffectOperation::SpawnTask),
-        SpecializedOperation::SpawnActor => Some(EffectOperation::SpawnActor),
-        SpecializedOperation::NetSend | SpecializedOperation::NetReceive => None,
+        SpecializedOperation::FsRead => EffectOperation::FsRead,
+        SpecializedOperation::FsWrite => EffectOperation::FsWrite,
+        SpecializedOperation::FsRemove => EffectOperation::FsRemove,
+        SpecializedOperation::NetConnect => EffectOperation::NetConnect,
+        SpecializedOperation::NetListen => EffectOperation::NetListen,
+        SpecializedOperation::NetSend => EffectOperation::NetSend,
+        SpecializedOperation::NetReceive => EffectOperation::NetReceive,
+        SpecializedOperation::IoRead => EffectOperation::IoRead,
+        SpecializedOperation::IoWrite => EffectOperation::IoWrite,
+        SpecializedOperation::ProcessExec => EffectOperation::ProcessExec,
+        SpecializedOperation::ProcessExit => EffectOperation::ProcessExit,
+        SpecializedOperation::SpawnTask => EffectOperation::SpawnTask,
+        SpecializedOperation::SpawnActor => EffectOperation::SpawnActor,
+    }
+}
+
+fn canonical_family(family: tempra_ast::SpecializedFamily) -> EffectFamily {
+    match family {
+        tempra_ast::SpecializedFamily::Fs => EffectFamily::Fs,
+        tempra_ast::SpecializedFamily::Net => EffectFamily::Net,
+    }
+}
+
+fn canonical_category(category: tempra_ast::SpecializedCategory) -> EffectCategory {
+    match category {
+        tempra_ast::SpecializedCategory::IoRead => EffectCategory::IoRead,
+        tempra_ast::SpecializedCategory::IoWrite => EffectCategory::IoWrite,
+    }
+}
+
+fn canonical_target(target: tempra_ast::SpecializedDenyTarget) -> SpecializedDenyTarget {
+    match target {
+        tempra_ast::SpecializedDenyTarget::Family(family) => {
+            SpecializedDenyTarget::Family(canonical_family(family))
+        }
+        tempra_ast::SpecializedDenyTarget::Category(category) => {
+            SpecializedDenyTarget::Category(canonical_category(category))
+        }
+        tempra_ast::SpecializedDenyTarget::Operation(operation) => {
+            SpecializedDenyTarget::Operation(canonical_operation(operation))
+        }
     }
 }
 
@@ -208,11 +349,33 @@ fn canonical_specialized_value(value: &tempra_ast::SpecializedValue) -> Speciali
     }
 }
 
+fn family_order(family: EffectFamily) -> usize {
+    EffectFamily::ALL
+        .iter()
+        .position(|candidate| *candidate == family)
+        .expect("EffectFamily::ALL is exhaustive")
+}
+
+fn category_order(category: EffectCategory) -> usize {
+    EffectCategory::ALL
+        .iter()
+        .position(|candidate| *candidate == category)
+        .expect("EffectCategory::ALL is exhaustive")
+}
+
 fn operation_order(operation: EffectOperation) -> usize {
     EffectOperation::ALL
         .iter()
         .position(|candidate| *candidate == operation)
         .expect("EffectOperation::ALL is exhaustive")
+}
+
+fn target_order(target: SpecializedDenyTarget) -> (u8, usize) {
+    match target {
+        SpecializedDenyTarget::Family(family) => (0, family_order(family)),
+        SpecializedDenyTarget::Category(category) => (1, category_order(category)),
+        SpecializedDenyTarget::Operation(operation) => (2, operation_order(operation)),
+    }
 }
 
 fn parameter_order(parameter: EffectParameter) -> usize {
@@ -257,49 +420,100 @@ fn compare_specialized_clauses(
     left: &SpecializedDenyClause,
     right: &SpecializedDenyClause,
 ) -> Ordering {
-    operation_order(left.operation)
-        .cmp(&operation_order(right.operation))
+    target_order(left.target)
+        .cmp(&target_order(right.target))
         .then_with(|| compare_specialized_parameters(&left.parameters, &right.parameters))
 }
 
-fn canonicalize_specialized_denied(
+fn specialized_parameters_equal(
+    left: &[SpecializedDenyParameter],
+    right: &[SpecializedDenyParameter],
+) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(right)
+            .all(|(left, right)| left.parameter == right.parameter && left.value == right.value)
+}
+
+fn parameter_value_kind_matches(parameter: EffectParameter, value: &SpecializedDenyValue) -> bool {
+    match value {
+        SpecializedDenyValue::Any => true,
+        SpecializedDenyValue::Exact(ResourceValue::Text(_)) => parameter != EffectParameter::Port,
+        SpecializedDenyValue::Exact(ResourceValue::Port(_)) => parameter == EffectParameter::Port,
+    }
+}
+
+fn validate_specialized_parameters(
+    target: SpecializedDenyTarget,
+    parameters: &[SpecializedDenyParameter],
+) -> Result<(), SpecializedDenyBindingError> {
+    let SpecializedDenyTarget::Operation(operation) = target else {
+        if let Some(parameter) = parameters.first() {
+            return Err(SpecializedDenyBindingError::ParametersNotAllowed {
+                target,
+                span: parameter.span,
+            });
+        }
+        return Ok(());
+    };
+
+    for (index, parameter) in parameters.iter().enumerate() {
+        if !operation.accepts_parameter(parameter.parameter) {
+            return Err(SpecializedDenyBindingError::ParameterNotAccepted {
+                target,
+                parameter: parameter.parameter,
+                span: parameter.span,
+            });
+        }
+        if parameters[..index]
+            .iter()
+            .any(|previous| previous.parameter == parameter.parameter)
+        {
+            return Err(SpecializedDenyBindingError::DuplicateParameter {
+                target,
+                parameter: parameter.parameter,
+                span: parameter.span,
+            });
+        }
+        if !parameter_value_kind_matches(parameter.parameter, &parameter.value) {
+            return Err(SpecializedDenyBindingError::InvalidParameterValue {
+                target,
+                parameter: parameter.parameter,
+                span: parameter.span,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn bind_specialized_denied(
     clauses: &[tempra_ast::SpecializedDenyClause],
-) -> Result<Vec<SpecializedDenyClause>, UnsupportedSpecializedTarget> {
+) -> Result<Vec<SpecializedDenyClause>, SpecializedDenyBindingError> {
     let mut canonical = Vec::with_capacity(clauses.len());
     for clause in clauses {
-        let operation = match clause.target {
-            tempra_ast::SpecializedDenyTarget::Operation(operation) => {
-                canonical_enforceable_operation(operation).ok_or_else(|| {
-                    UnsupportedSpecializedTarget {
-                        target: clause.target.canonical_name().to_owned(),
-                        span: clause.span,
-                    }
-                })?
-            }
-            tempra_ast::SpecializedDenyTarget::Family(_)
-            | tempra_ast::SpecializedDenyTarget::Category(_) => {
-                return Err(UnsupportedSpecializedTarget {
-                    target: clause.target.canonical_name().to_owned(),
-                    span: clause.span,
-                });
-            }
-        };
+        let target = canonical_target(clause.target);
+        let parameters: Vec<_> = clause
+            .parameters
+            .iter()
+            .map(|parameter| SpecializedDenyParameter {
+                parameter: canonical_parameter(parameter.parameter),
+                value: canonical_specialized_value(&parameter.value),
+                span: parameter.span,
+            })
+            .collect();
+        validate_specialized_parameters(target, &parameters)?;
         canonical.push(SpecializedDenyClause {
-            operation,
-            parameters: clause
-                .parameters
-                .iter()
-                .map(|parameter| SpecializedDenyParameter {
-                    parameter: canonical_parameter(parameter.parameter),
-                    value: canonical_specialized_value(&parameter.value),
-                    span: parameter.span,
-                })
-                .collect(),
+            target,
+            parameters,
             span: clause.span,
         });
     }
+    Ok(canonical)
+}
 
-    for clause in &mut canonical {
+fn finalize_specialized_denied(canonical: &mut Vec<SpecializedDenyClause>) {
+    for clause in &mut *canonical {
         clause
             .parameters
             .sort_by_key(|parameter| parameter_order(parameter.parameter));
@@ -308,14 +522,23 @@ fn canonicalize_specialized_denied(
     // Stable sorting keeps the first source occurrence of an identical clause.
     canonical.sort_by(compare_specialized_clauses);
     canonical.dedup_by(|left, right| {
-        left.operation == right.operation
-            && left.parameters.len() == right.parameters.len()
-            && left
-                .parameters
-                .iter()
-                .zip(&right.parameters)
-                .all(|(left, right)| left.parameter == right.parameter && left.value == right.value)
+        left.target == right.target
+            && specialized_parameters_equal(&left.parameters, &right.parameters)
     });
+}
+
+/// Binds and canonicalizes specialized deny syntax without deciding whether the
+/// current compiler milestone can enforce it.
+///
+/// The result retains family and category targets as distinct canonical clauses
+/// and never expands them into operations. It is suitable for tooling and tests
+/// that need to inspect the complete v0.2 contract vocabulary. Executable
+/// compilation enforces these same canonical targets against analyzed facts.
+pub fn canonicalize_specialized_denied(
+    clauses: &[tempra_ast::SpecializedDenyClause],
+) -> Result<Vec<SpecializedDenyClause>, SpecializedDenyBindingError> {
+    let mut canonical = bind_specialized_denied(clauses)?;
+    finalize_specialized_denied(&mut canonical);
     Ok(canonical)
 }
 
@@ -347,10 +570,12 @@ impl ContractBindings {
                 for name in &syntax.denied {
                     explicit_denied.insert(canonical_capability(*name));
                 }
-                specialized_denied = canonicalize_specialized_denied(&syntax.specialized_denied)
-                    .map_err(|error| {
-                        crate::DriverError::UnsupportedSpecializedTarget(Box::new(error))
+                let mut bound =
+                    bind_specialized_denied(&syntax.specialized_denied).map_err(|error| {
+                        crate::DriverError::SpecializedDenyBindingError(Box::new(error))
                     })?;
+                finalize_specialized_denied(&mut bound);
+                specialized_denied = bound;
                 attribute_spans.clone_from(&syntax.attribute_spans);
             }
             let denied = if declaration.pure_span.is_some() {
@@ -493,8 +718,8 @@ mod tests {
         assert_eq!(contract.denied, CapabilitySet::empty());
         assert_eq!(contract.specialized_denied.len(), 1);
         assert_eq!(
-            contract.specialized_denied[0].operation,
-            EffectOperation::FsWrite
+            contract.specialized_denied[0].target,
+            SpecializedDenyTarget::Operation(EffectOperation::FsWrite)
         );
         assert_eq!(
             contract.specialized_denied[0].parameters[0].value,
@@ -506,6 +731,48 @@ mod tests {
             &source[contract.specialized_denied[0].span.start as usize
                 ..contract.specialized_denied[0].span.end as usize],
             "fs.write(destination: \"/private\")"
+        );
+    }
+
+    #[test]
+    fn family_target_is_inherited_by_distinct_generic_specializations() {
+        let source = "@deny(fs) fn work(type T, value: T) -> T { return value }";
+        let ast = tempra_parser::parse_source(source).unwrap();
+        let mut hir = tempra_hir::lower_file(source, &ast);
+        let context = tempra_typeck::check_file_with_context(&mut hir).unwrap();
+        let tempra_hir::HirItem::Function(function) = &hir.items[0] else {
+            panic!()
+        };
+        let origin = ContractSource::Module {
+            name: "a".into(),
+            path: PathBuf::from("a.tmpr"),
+        };
+        let mut module = ModuleBuilder::new();
+        let mut bindings = ContractBindings::default();
+        for ty in [tempra_hir::Type::Int, tempra_hir::Type::String] {
+            let concrete = tempra_tir_lower::lower::lower_function_specialization(
+                function,
+                &context,
+                &mut module,
+                None,
+                Some("a"),
+                &[ty],
+            )
+            .unwrap();
+            bindings.register(concrete.id, function, &origin).unwrap();
+        }
+        let contracts = bindings.finish();
+        assert_eq!(contracts.len(), 2);
+        assert_ne!(contracts[0].0, contracts[1].0);
+        assert_eq!(contracts[0].1, contracts[1].1);
+        let clause = &contracts[0].1.specialized_denied[0];
+        assert_eq!(
+            clause.target,
+            SpecializedDenyTarget::Family(EffectFamily::Fs)
+        );
+        assert_eq!(
+            &source[clause.span.start as usize..clause.span.end as usize],
+            "fs"
         );
     }
 
@@ -531,7 +798,7 @@ mod tests {
             contract
                 .specialized_denied
                 .iter()
-                .map(|clause| clause.operation)
+                .map(|clause| clause.target.operation().unwrap())
                 .collect::<Vec<_>>(),
             vec![EffectOperation::FsWrite, EffectOperation::NetConnect]
         );

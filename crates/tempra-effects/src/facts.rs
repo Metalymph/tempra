@@ -8,7 +8,9 @@
 //! a known operation with an unknown resource is never collapsed into a generic
 //! broad capability.
 
-use crate::{Capability, EffectOperation, EffectParameter, TirLocation};
+use crate::{
+    Capability, EffectCategory, EffectFamily, EffectOperation, EffectParameter, TirLocation,
+};
 use std::collections::HashMap;
 use tempra_tir::ir::{TirBlockId, TirConst, TirFunction, TirFunctionId, TirInstr, TirValueId};
 
@@ -71,6 +73,34 @@ pub struct SpecializedOperationFact {
     pub extern_name: String,
 }
 
+impl SpecializedOperationFact {
+    /// Returns the broad capability refined by the classified operation.
+    pub const fn capability(&self) -> Capability {
+        self.operation.parent()
+    }
+
+    /// Returns the optional specialized family of the classified operation.
+    ///
+    /// `None` means the operation has no family, not that its family is
+    /// unknown: classified operation metadata is closed and complete.
+    pub const fn family(&self) -> Option<EffectFamily> {
+        self.operation.family()
+    }
+
+    /// Returns the classified operation's category memberships in canonical
+    /// taxonomy order.
+    ///
+    /// An empty slice is explicit non-membership, not missing metadata.
+    pub const fn categories(&self) -> &'static [EffectCategory] {
+        self.operation.categories()
+    }
+
+    /// Returns whether the classified operation belongs to `category`.
+    pub fn is_in_category(&self, category: EffectCategory) -> bool {
+        self.operation.is_in_category(category)
+    }
+}
+
 /// A known extern capability requirement with no specialized operation.
 ///
 /// This is the explicit "unknown operation under a known parent capability"
@@ -89,6 +119,33 @@ pub struct UnclassifiedOperationFact {
     pub extern_name: String,
 }
 
+impl UnclassifiedOperationFact {
+    /// Returns the broad capability refined by the unclassified operation.
+    pub const fn capability(&self) -> Capability {
+        self.capability
+    }
+
+    /// Returns whether the unclassified operation is known to belong to
+    /// `family`.
+    ///
+    /// The v0.2 classifier does not guess a family for an unclassified
+    /// operation, so this is always `None` (unknown). `None` is fail-closed and
+    /// must remain a potential match, never a disjoint result.
+    pub const fn family_membership(&self, _family: EffectFamily) -> Option<bool> {
+        None
+    }
+
+    /// Returns whether the unclassified operation is known to belong to
+    /// `category`.
+    ///
+    /// The v0.2 classifier does not guess a category for an unclassified
+    /// operation, so this is always `None` (unknown). `None` is fail-closed and
+    /// must remain a potential match, never a disjoint result.
+    pub const fn category_membership(&self, _category: EffectCategory) -> Option<bool> {
+        None
+    }
+}
+
 /// One local specialized-effect fact.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum LocalEffectFact {
@@ -104,6 +161,46 @@ impl LocalEffectFact {
         match self {
             Self::Specialized(fact) => fact.location,
             Self::UnclassifiedOperation(fact) => fact.location,
+        }
+    }
+
+    /// Returns the classified operation, or `None` for an unclassified fact.
+    pub const fn operation(&self) -> Option<EffectOperation> {
+        match self {
+            Self::Specialized(fact) => Some(fact.operation),
+            Self::UnclassifiedOperation(_) => None,
+        }
+    }
+
+    /// Returns the broad capability refined by this fact.
+    pub const fn capability(&self) -> Capability {
+        match self {
+            Self::Specialized(fact) => fact.operation.parent(),
+            Self::UnclassifiedOperation(fact) => fact.capability,
+        }
+    }
+
+    /// Returns whether this fact is known to belong to `family`.
+    ///
+    /// Classified operations provide a definite answer. Unclassified
+    /// operations return `None`, which means unknown and must remain a
+    /// potential match rather than a disjoint result.
+    pub fn family_membership(&self, family: EffectFamily) -> Option<bool> {
+        match self {
+            Self::Specialized(fact) => Some(fact.operation.family() == Some(family)),
+            Self::UnclassifiedOperation(fact) => fact.family_membership(family),
+        }
+    }
+
+    /// Returns whether this fact is known to belong to `category`.
+    ///
+    /// Classified operations provide a definite answer. Unclassified
+    /// operations return `None`, which means unknown and must remain a
+    /// potential match rather than a disjoint result.
+    pub fn category_membership(&self, category: EffectCategory) -> Option<bool> {
+        match self {
+            Self::Specialized(fact) => Some(fact.operation.is_in_category(category)),
+            Self::UnclassifiedOperation(fact) => fact.category_membership(category),
         }
     }
 }

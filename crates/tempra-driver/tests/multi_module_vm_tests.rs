@@ -123,24 +123,18 @@ fn test_stdlib_path_join() {
         .to_string_lossy()
         .into_owned();
 
-    let main_src = format!(
-        r#"
+    let main_src = r#"
 import std.path;
 
-pub fn main() -> Int64 {{
-    let res = std.path.join("a", "b");
-    if res != {expected:?} {{
-        return 1;
-    }}
-    return 0;
-}}
-"#
-    );
+pub fn main() -> String {
+    return std.path.join("a", "b");
+}
+"#;
 
     fs::write(&main_path, main_src).unwrap();
 
     let res = run_tempra_vm_file(&main_path).unwrap();
-    assert_eq!(res, VmValue::Int64(0));
+    assert_eq!(res, VmValue::String(expected));
 }
 
 #[test]

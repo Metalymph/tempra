@@ -60,22 +60,28 @@ impl JitFunctionI64 {
             )));
         }
 
-        let result = unsafe {
+        let mut out = crate::abi::JitHelperResult {
+            value: 0,
+            status: crate::abi::JIT_STATUS_SUCCESS,
+        };
+        let out_ptr: *mut crate::abi::JitHelperResult = &mut out;
+
+        unsafe {
             match self.arity {
                 0 => {
-                    let func: extern "C" fn() -> crate::abi::JitHelperResult =
+                    let func: extern "C" fn(*mut crate::abi::JitHelperResult) =
                         std::mem::transmute(self.ptr);
-                    func()
+                    func(out_ptr)
                 }
                 1 => {
-                    let func: extern "C" fn(i64) -> crate::abi::JitHelperResult =
+                    let func: extern "C" fn(*mut crate::abi::JitHelperResult, i64) =
                         std::mem::transmute(self.ptr);
-                    func(args[0])
+                    func(out_ptr, args[0])
                 }
                 2 => {
-                    let func: extern "C" fn(i64, i64) -> crate::abi::JitHelperResult =
+                    let func: extern "C" fn(*mut crate::abi::JitHelperResult, i64, i64) =
                         std::mem::transmute(self.ptr);
-                    func(args[0], args[1])
+                    func(out_ptr, args[0], args[1])
                 }
                 _ => {
                     return Err(JitRuntimeError::Message(format!(
@@ -84,9 +90,9 @@ impl JitFunctionI64 {
                     )))
                 }
             }
-        };
+        }
 
-        result.to_i64_result()
+        out.to_i64_result()
     }
 }
 
@@ -114,37 +120,47 @@ impl JitFunctionI64HeapAware {
             )));
         }
 
-        let res = unsafe {
+        let mut out = crate::abi::JitHelperResult {
+            value: 0,
+            status: crate::abi::JIT_STATUS_SUCCESS,
+        };
+        let out_ptr: *mut crate::abi::JitHelperResult = &mut out;
+
+        unsafe {
             match self.arity {
                 0 => {
-                    let func: fn(
+                    let func: extern "C" fn(
+                        *mut crate::abi::JitHelperResult,
                         *mut crate::helpers::JitRuntimeContext,
-                    ) -> crate::abi::JitHelperResult = std::mem::transmute(self.ptr);
-                    func(ctx_ptr)
+                    ) = std::mem::transmute(self.ptr);
+                    func(out_ptr, ctx_ptr)
                 }
                 1 => {
-                    let func: fn(
+                    let func: extern "C" fn(
+                        *mut crate::abi::JitHelperResult,
                         *mut crate::helpers::JitRuntimeContext,
                         i64,
-                    ) -> crate::abi::JitHelperResult = std::mem::transmute(self.ptr);
-                    func(ctx_ptr, args[0])
+                    ) = std::mem::transmute(self.ptr);
+                    func(out_ptr, ctx_ptr, args[0])
                 }
                 2 => {
-                    let func: fn(
+                    let func: extern "C" fn(
+                        *mut crate::abi::JitHelperResult,
                         *mut crate::helpers::JitRuntimeContext,
                         i64,
                         i64,
-                    ) -> crate::abi::JitHelperResult = std::mem::transmute(self.ptr);
-                    func(ctx_ptr, args[0], args[1])
+                    ) = std::mem::transmute(self.ptr);
+                    func(out_ptr, ctx_ptr, args[0], args[1])
                 }
                 3 => {
-                    let func: fn(
+                    let func: extern "C" fn(
+                        *mut crate::abi::JitHelperResult,
                         *mut crate::helpers::JitRuntimeContext,
                         i64,
                         i64,
                         i64,
-                    ) -> crate::abi::JitHelperResult = std::mem::transmute(self.ptr);
-                    func(ctx_ptr, args[0], args[1], args[2])
+                    ) = std::mem::transmute(self.ptr);
+                    func(out_ptr, ctx_ptr, args[0], args[1], args[2])
                 }
                 _ => {
                     return Err(JitRuntimeError::Message(format!(
@@ -153,9 +169,9 @@ impl JitFunctionI64HeapAware {
                     )))
                 }
             }
-        };
+        }
 
-        res.to_i64_result()
+        out.to_i64_result()
     }
 }
 

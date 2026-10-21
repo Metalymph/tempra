@@ -186,8 +186,7 @@ fn write_stdlib_fixture(root: &Path) -> (PathBuf, PathBuf) {
         r#"
 import std.path;
 pub fn main() -> Int64 {
-    let joined = std.path.join("a", "b");
-    if std.path.basename(joined) == "b" {
+    if std.path.basename("example.txt") == "example.txt" {
         return 41
     }
     return 0

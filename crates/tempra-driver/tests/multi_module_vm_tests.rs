@@ -118,17 +118,24 @@ fn test_stdlib_path_join() {
     let dir = tempdir().unwrap();
     let main_path = dir.path().join("main.tmpr");
 
-    let main_src = r#"
+    let expected = std::path::Path::new("a")
+        .join("b")
+        .to_string_lossy()
+        .into_owned();
+
+    let main_src = format!(
+        r#"
 import std.path;
 
-pub fn main() -> Int64 {
+pub fn main() -> Int64 {{
     let res = std.path.join("a", "b");
-    if res != "a/b" {
+    if res != {expected:?} {{
         return 1;
-    }
+    }}
     return 0;
-}
-"#;
+}}
+"#
+    );
 
     fs::write(&main_path, main_src).unwrap();
 

@@ -93,10 +93,12 @@ runtime and effect-analysis revision: checked `Int64` add/sub/mul/div now have o
 host-safe contract and conservative `Panic` facts. It does not change comptime's
 canonical HIR authority or the bytecode format.
 
-K4.5B raises current trust to `tempra-{CARGO_PKG_VERSION}-semantics-6` because
-revision-5 artifacts may contain specialized `@deny` clauses that were retained
-without static enforcement. Comptime's HIR authority and the bytecode format are
-unchanged.
+K4.5B historically raised trust to `tempra-{CARGO_PKG_VERSION}-semantics-6`
+because revision-5 artifacts may contain specialized `@deny` clauses that were
+retained without static enforcement. K4.9D subsequently established
+`tempra-{CARGO_PKG_VERSION}-semantics-7` for v0.2 family/category enforcement;
+K4.9E confirmed compatibility without another semantic revision. Comptime's HIR
+authority and the bytecode format are unchanged.
 
 ```text
 K1 audit/spec        DONE
@@ -114,10 +116,12 @@ K2.1's audit, K2.2's deterministic first-request specialization order, K2.3's
 explicit stdlib discovery and K2.4's deterministic interface/field iteration are
 complete. K2.5 proves cross-process byte-for-byte equality for comptime and the
 other currently supported bytecode fixtures under the bounded same-build,
-same-host/target reproducibility contract. K2 is complete; runtime
-VM/JIT/Wasm parity continues in K3; timings, latency baselines and budgets continue
-in K4–K6. Analysis/LSP/REPL integration remains a tooling follow-up, and full
-comptime specialization remains separate compiler feature/debt.
+same-host/target reproducibility contract. K2 is complete. K3 runtime parity
+remains IN PROGRESS for the currently executable HIR/TIR/VM/JIT surfaces; Wasm
+and future AOT join when those backends exist. K4 is DONE. Timings, latency
+baselines and budgets are planned in K5/K6. Analysis/LSP/REPL integration remains
+a tooling follow-up, and full comptime specialization remains separate compiler
+feature/debt.
 
 ---
 

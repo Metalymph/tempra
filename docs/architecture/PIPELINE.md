@@ -106,7 +106,8 @@ E1 witness per violation. Errors are ordered by function ID then capability.
 Cache hits remain analysis/contract-free. E3.2 originally introduced the
 `tempra-{CARGO_PKG_VERSION}-semantics-1` fingerprint; K1.7 raised it to revision
 2, K2.2 raised current trust to revision 3, K2.4 raised it to revision 4, K3.2
-raised it to revision 5, and K4.5B requires revision 6.
+raised it to revision 5, K4.5B raised it to revision 6, and K4.9D requires
+revision 7.
 Older artifacts miss;
 fresh failures never populate or replace cache entries. The semantic revision
 versions reuse guarantees, not bytecode format. See [cache policy](../BYTECODE_CACHE.md).
@@ -231,32 +232,38 @@ does not imply Level 4 reproducibility across machines or targets.
 
 MIR, general Tempra IR, native AOT, and dedicated Wasm output remain incomplete. The intended long-term direction is that verified TIR and stable per-function semantic facts feed backend-independent later analyses before target-specific lowering.
 
-Cranelift remains native-only. Dedicated Wasm generation must not depend on Cranelift. Wasm hosting and Wasm code generation remain separate concerns.
+Native AOT is first-class milestone A in the [roadmap](../roadmap.md); the existing Cranelift backend scaffold is its initial direction. A may progress incrementally and does not wait for O, NR or P. NR is standalone experimental RC-free research and never blocks baseline AOT. Dedicated Wasm/WASI remains a separate track and must not depend on Cranelift. Wasm hosting and Wasm code generation remain separate concerns.
 
 ## Language analysis order
 
+The [roadmap](../roadmap.md) is authoritative for sequencing, statuses,
+dependencies and acceptance gates. The layered model is:
+
 ```text
-E capability analysis
-  → R Result / value-use hardening
-  → M acyclic ownership
-  → C pluggable actor concurrency boundaries
-  → V verified functions
-  → O deeper memory optimizations
+Semantic: E → R → M → M5 → C → V
+Backend:  A (native AOT, first-class; Cranelift initial)
+Optimization: O after M ownership facts; P after K5/K6 measurements
+Research: NR (standalone experimental RC-free; never blocks A)
+Conditional: U
 ```
 
-This ordering separates memory correctness from memory optimization. R is a
-future value-use obligation, not a capability or an implemented pass.
+C (pluggable actor concurrency) implementation requires the M5 memory
+stabilization gate. A does not wait for O, NR or P. This ordering separates
+memory correctness from memory optimization. R is a future value-use obligation,
+not a capability or an implemented pass.
 
 E1–E6 complete the currently meaningful semantic and tooling surface; TIR
 coverage gaps remain. `tempra effects` projects existing analysis, contracts,
 violations, witnesses and provenance without a second analyzer. A richer TIR
 Graph requires later ownership/actor facts. The K1 audit selected the HIR
 interpreter kernel as the backend-independent comptime authority, and K1.1 now
-provides its canonical evaluation facade. K1 and K2 are complete. Runtime parity
-and phase-timing/latency measures continue in K3–K6 before K can close. Deep compilation
-optimization and incremental builds belong to P.
+provides its canonical evaluation facade. K1 and K2 are complete; K3 runtime
+parity is IN PROGRESS for the currently executable HIR/TIR/VM/JIT surfaces,
+K4 is DONE, and K5/K6 timings and budgets are PLANNED. Wasm and AOT join
+runtime parity when those backends exist. Deep compilation optimization and
+incremental builds belong to P.
 
-U — Unsafe Boundary is standalone DEFERRED / CONDITIONAL work at the end of the roadmap,
-in the roadmap and triggered only by a real source operation requiring explicit
-memory/type-safety authorization. No current E1 origin emits Unsafe, and no
+U — Unsafe Boundary is standalone DEFERRED / CONDITIONAL work in the
+[roadmap](../roadmap.md), triggered only by a real source operation requiring
+explicit memory/type-safety authorization. No current E1 origin emits Unsafe, and no
 unsafe pass or syntax is inserted into this pipeline.

@@ -8,9 +8,12 @@ Tempra's current capability-contract surface is small rather than a user-facing 
 - `@deny(...)`
 - `@pure`
 
-K1 comptime authority/evaluator audit is the next compiler milestone: one
-backend-independent semantics, parity across VM/JIT/Wasm/future AOT,
-determinism, reproducibility, future parity tests and initial phase timings.
+K1 has completed the canonical HIR comptime authority, and K2 completed
+deterministic ordering and reproducibility. K3 runtime parity remains IN
+PROGRESS for the currently executable HIR/TIR/VM/JIT surfaces; K4 is DONE and
+K5/K6 responsiveness work is PLANNED. Wasm and future AOT join runtime parity
+when those backends exist. The [roadmap](../roadmap.md) is authoritative for
+sequencing, statuses, dependencies and gates.
 `@unsafe` is a separate conditional future boundary under U, not a Phase E requirement.
 
 There is no public `effect`, `handle`, `perform`, `allow`, `@no_alloc`, `@no_panic`, `@deterministic`, or family of aliases.
@@ -254,13 +257,19 @@ E1 need not implement this presentation or source-span mapping. It must preserve
 5. **E6 (implemented):** immutable diagnostics and inspection projections plus
    `tempra effects [--json]`, reusing existing analysis and witnesses.
 
-The immediate roadmap continues with K → R → M → C → V → O → P, with U
-conditional. R adds future Result/value-use obligations, not capabilities. K does
-not yet choose an HIR interpreter, VM or other evaluator as canonical. Compile
-latency is monitored during development; P is the later deep optimization
-milestone for cold latency, incremental invalidation/cache, specialization
-control, fact reuse, interning/arenas, data structures and profiled
-parallelization, including agent/IDE edit-to-compile responsiveness. The
+The [roadmap](../roadmap.md) is authoritative for sequencing, statuses,
+dependencies and acceptance gates. The semantic path is E → R → M → M5 → C → V;
+C (pluggable actor concurrency) implementation requires the M5 memory
+stabilization gate. Native AOT is first-class milestone A with Cranelift as the
+initial backend and may progress incrementally; O, standalone experimental
+RC-free research (NR) and P are need-based work, not prerequisites for C or A.
+NR never blocks baseline AOT, and U remains conditional. R adds future Result/value-use obligations, not
+capabilities. K1 selected the HIR interpreter as canonical; K3 runtime parity is
+IN PROGRESS for currently executable surfaces, K4 is DONE, and K5/K6 are
+PLANNED. Compile latency is monitored during development; P is the later deep
+optimization milestone for cold latency, incremental invalidation/cache,
+specialization control, fact reuse, interning/arenas, data structures and
+profiled parallelization, including agent/IDE edit-to-compile responsiveness. The
 [post-E4 state and audit record](../E1_CAPABILITY_ANALYSIS.md) tracks native
 signature integrity, comptime extern handling and JIT API correctness debts;
 none is a justification for blanket `extern == unsafe`.

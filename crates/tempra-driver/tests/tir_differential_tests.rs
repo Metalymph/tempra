@@ -192,6 +192,52 @@ fn bool_expressions_match() {
 }
 
 #[test]
+fn logical_short_circuit_skips_rhs_in_tir() {
+    assert_eq!(
+        assert_supported_parity("fn main() -> Bool { return false && (1 / 0 == 0) }"),
+        SupportedValue::Bool(false)
+    );
+    assert_eq!(
+        assert_supported_parity("fn main() -> Bool { return true || (1 / 0 == 0) }"),
+        SupportedValue::Bool(true)
+    );
+}
+
+#[test]
+fn logical_short_circuit_requires_rhs_in_tir() {
+    assert_int64_failure_parity(
+        "fn main() -> Bool { return true && (1 / 0 == 0) }",
+        Int64Failure::DivisionByZero,
+    );
+    assert_int64_failure_parity(
+        "fn main() -> Bool { return false || (1 / 0 == 0) }",
+        Int64Failure::DivisionByZero,
+    );
+}
+
+#[test]
+fn nested_logical_short_circuit_matches_in_tir() {
+    assert_eq!(
+        assert_supported_parity(
+            "fn main() -> Bool { return (false && (1 / 0 == 0)) || (true && (2 > 1)) }"
+        ),
+        SupportedValue::Bool(true)
+    );
+    assert_eq!(
+        assert_supported_parity("fn main() -> Bool { return false && (true || (1 / 0 == 0)) }"),
+        SupportedValue::Bool(false)
+    );
+}
+
+#[test]
+fn left_operand_is_evaluated_before_rhs_in_tir() {
+    assert_int64_failure_parity(
+        "fn main() -> Bool { return (1 / 0 == 0) && false }",
+        Int64Failure::DivisionByZero,
+    );
+}
+
+#[test]
 fn unit_results_match() {
     assert_eq!(
         assert_supported_parity("fn main() {}"),

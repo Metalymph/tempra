@@ -222,6 +222,43 @@ fn test_diff_bool() {
 }
 
 #[test]
+fn test_diff_logical_short_circuit_skips_rhs() {
+    assert_differential("fn main() -> Bool { return false && (1 / 0 == 0) }");
+    assert_differential("fn main() -> Bool { return true || (1 / 0 == 0) }");
+}
+
+#[test]
+fn test_diff_logical_short_circuit_requires_rhs() {
+    assert_differential_int64_error(
+        "fn main() -> Bool { return true && (1 / 0 == 0) }",
+        "integer division by zero",
+        "Int64Arithmetic(DivisionByZero)",
+    );
+    assert_differential_int64_error(
+        "fn main() -> Bool { return false || (1 / 0 == 0) }",
+        "integer division by zero",
+        "Int64Arithmetic(DivisionByZero)",
+    );
+}
+
+#[test]
+fn test_diff_nested_logical_short_circuit() {
+    assert_differential(
+        "fn main() -> Bool { return (false && (1 / 0 == 0)) || (true && (2 > 1)) }",
+    );
+    assert_differential("fn main() -> Bool { return false && (true || (1 / 0 == 0)) }");
+}
+
+#[test]
+fn test_diff_logical_left_operand_is_evaluated_first() {
+    assert_differential_int64_error(
+        "fn main() -> Bool { return (1 / 0 == 0) && false }",
+        "integer division by zero",
+        "Int64Arithmetic(DivisionByZero)",
+    );
+}
+
+#[test]
 fn test_diff_if_else() {
     let source = r#"
         fn main() -> Int64 {

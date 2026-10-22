@@ -1,4 +1,4 @@
-//! K3.3A source-level HIR <-> TIR interpreter differential tests.
+//! K3.3A/K3.3B source-level HIR <-> TIR interpreter differential tests.
 //!
 //! TIR execution goes through `interpret_tir_source`, which lowers, verifies
 //! and interprets TIR directly. These tests intentionally do not use
@@ -66,8 +66,9 @@ fn assert_supported_parity(source: &str) -> SupportedValue {
     hir_value
 }
 
-/// HIR and TIR expose different error representations. K3.3A compares only the
-/// semantic category, never the exact diagnostic text.
+/// HIR exposes arithmetic failures only as runtime text, so message
+/// classification is confined to `DriverError::RuntimeError`. TIR failures are
+/// gated on their typed `TirInterpError` variants below.
 fn classify_int64_message(message: &str) -> Option<Int64Failure> {
     if message.contains("overflow") {
         Some(Int64Failure::Overflow)
@@ -78,16 +79,54 @@ fn classify_int64_message(message: &str) -> Option<Int64Failure> {
     }
 }
 
+fn classify_tir_int64_failure(error: &TirInterpError) -> Option<Int64Failure> {
+    match error {
+        TirInterpError::Int64Arithmetic(error) => {
+            // `tempra-driver` does not depend directly on `tempra-runtime`, so
+            // the inner enum is not nameable here. The typed TIR variant is the
+            // gate; exact inner variants are asserted by tempra-tir-interp unit
+            // tests. The message only distinguishes the arithmetic
+            // subcategory, it is never compared as a diagnostic string.
+            classify_int64_message(&error.to_string())
+        }
+        TirInterpError::DivisionByZero => Some(Int64Failure::DivisionByZero),
+        _ => None,
+    }
+}
+
 fn classify_int64_failure(error: &DriverError) -> Option<Int64Failure> {
     match error {
         DriverError::RuntimeError(message) => classify_int64_message(message),
-        DriverError::TirInterpError(TirInterpError::Int64Arithmetic(error)) => {
-            classify_int64_message(&error.to_string())
-        }
-        DriverError::TirInterpError(TirInterpError::DivisionByZero) => {
-            Some(Int64Failure::DivisionByZero)
-        }
+        DriverError::TirInterpError(error) => classify_tir_int64_failure(error),
         _ => None,
+    }
+}
+
+fn is_typed_tir_arithmetic_error(error: &DriverError) -> bool {
+    matches!(
+        error,
+        DriverError::TirInterpError(
+            TirInterpError::Int64Arithmetic(_) | TirInterpError::DivisionByZero
+        )
+    )
+}
+
+fn expect_non_semantic_tir_error(
+    result: Result<TirRuntimeValue, DriverError>,
+    context: &str,
+) -> DriverError {
+    match result {
+        Ok(value) => panic!(
+            "{context} unexpectedly produced a value that could be normalized as parity: {value:?}"
+        ),
+        Err(error) => {
+            assert_eq!(
+                classify_int64_failure(&error),
+                None,
+                "{context} was incorrectly classified as a semantic Int64 failure: {error:?}"
+            );
+            error
+        }
     }
 }
 
@@ -99,6 +138,11 @@ fn assert_int64_failure_parity(source: &str, expected: Int64Failure) {
         .expect_err(&format!(
             "TIR unexpectedly succeeded for source:\n{source}\nExpected: {expected:?}"
         ));
+
+    assert!(
+        is_typed_tir_arithmetic_error(&tir_error),
+        "TIR must report arithmetic failure through a typed TirInterpError variant, got {tir_error:?}"
+    );
 
     let hir_failure = classify_int64_failure(&hir_error).unwrap_or_else(|| {
         panic!(
@@ -265,14 +309,84 @@ fn main() -> Array(Int) {
         "unexpected HIR value for coverage probe: {hir_value:?}"
     );
 
-    let error = tempra_driver::pipeline::interpret_tir_source(SOURCE, "main", vec![])
-        .expect_err("unsupported aggregate results must not silently pass differential parity");
-    assert!(
-        matches!(
-            &error,
-            DriverError::TirLowerError(_)
-                | DriverError::TirInterpError(TirInterpError::UnsupportedInstr(_))
-        ),
-        "expected an explicit TIR coverage limitation, got {error:?}"
+    let error = expect_non_semantic_tir_error(
+        tempra_driver::pipeline::interpret_tir_source(SOURCE, "main", vec![]),
+        "unsupported aggregate result",
     );
+    match error {
+        DriverError::TirInterpError(TirInterpError::UnsupportedInstr(message)) => {
+            assert!(
+                !message.is_empty(),
+                "unsupported instruction error must identify the boundary"
+            );
+        }
+        other => panic!("expected UnsupportedInstr, got {other:?}"),
+    }
+}
+
+#[test]
+fn unknown_function_is_distinct_from_unsupported_instruction() {
+    let error = expect_non_semantic_tir_error(
+        tempra_driver::pipeline::interpret_tir_source(
+            "fn main() -> Int64 { return 1 }",
+            "missing",
+            vec![],
+        ),
+        "unknown function",
+    );
+
+    match error {
+        DriverError::TirInterpError(TirInterpError::UnknownFunction(name)) => {
+            assert_eq!(name, "missing");
+        }
+        other => panic!("expected UnknownFunction, got {other:?}"),
+    }
+}
+
+#[test]
+fn wrong_arity_is_distinct_from_unsupported_instruction() {
+    let source = "fn main(value: Int64) -> Int64 { return value }";
+    let error = expect_non_semantic_tir_error(
+        tempra_driver::pipeline::interpret_tir_source(source, "main", vec![]),
+        "wrong function arity",
+    );
+
+    match error {
+        DriverError::TirInterpError(TirInterpError::WrongArity {
+            name,
+            expected,
+            found,
+        }) => {
+            assert_eq!(name, "main");
+            assert_eq!(expected, 1);
+            assert_eq!(found, 0);
+        }
+        other => panic!("expected WrongArity, got {other:?}"),
+    }
+}
+
+#[test]
+fn invalid_and_internal_errors_are_not_semantic_failures() {
+    // Source-level interpretation cannot inject an invalid TIR module; the
+    // verifier-before-execution assertion lives in tempra-tir-interp unit
+    // tests. These cases gate the driver-side classifier so structural and
+    // internal errors can never be treated as Int64 semantic parity.
+    for (context, error) in [
+        (
+            "invalid TIR",
+            DriverError::TirInterpError(TirInterpError::VerifierFailed(
+                "MissingReturn(^block0)".to_string(),
+            )),
+        ),
+        (
+            "internal TIR",
+            DriverError::TirInterpError(TirInterpError::UnreachableExecuted),
+        ),
+    ] {
+        assert_eq!(
+            classify_int64_failure(&error),
+            None,
+            "{context} must not be normalized as semantic Int64 parity: {error:?}"
+        );
+    }
 }

@@ -221,6 +221,28 @@ fn interpret_unsupported_make_error() {
 }
 
 #[test]
+fn interpret_invalid_tir_is_rejected_by_verifier_before_execution() {
+    let module = build_simple_module("test", TirType::Unit, |fb| {
+        // If execution happened first, this unsupported Make would report
+        // UnsupportedInstr. The missing terminator makes the module invalid, so
+        // verification must reject it first.
+        let _ = fb
+            .build_make(TirType::Struct("Foo".into()), None, vec![])
+            .unwrap();
+    });
+
+    match interpret_function(&module, "test", vec![]) {
+        Err(TirInterpError::VerifierFailed(errors)) => {
+            assert!(
+                errors.contains("MissingReturn"),
+                "expected a missing-return verifier error, got: {errors}"
+            );
+        }
+        other => panic!("expected VerifierFailed before execution, got {other:?}"),
+    }
+}
+
+#[test]
 fn interpret_unreachable_error() {
     let module = build_simple_module("test", TirType::Unit, |fb| {
         fb.build_unreachable().unwrap();

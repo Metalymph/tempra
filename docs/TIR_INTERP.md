@@ -68,16 +68,21 @@ TirRuntimeValue::Float64(f64)
 TirRuntimeValue::String(String)
 ```
 
-`Int64` arithmetic delegates to the shared checked runtime kernel: overflow and
-division by zero are controlled `TirInterpError::Int64Arithmetic` failures.
-Unsigned and floating-point behavior is unchanged by K3.2.
+`Int64` and `UInt64` arithmetic delegates to the shared checked runtime kernel:
+overflow, unsigned underflow and integer division by zero are controlled
+`TirInterpError::Int64Arithmetic` / `TirInterpError::UInt64Arithmetic` failures.
+`Float64` arithmetic follows IEEE 754, so division by `+0.0`/`-0.0` yields signed
+infinity (or NaN for `0.0 / 0.0`) instead of an interpreter error.
 
 ## Error Handling
 
 All errors are represented as `TirInterpError`. The interpreter never panics
 on user input. Notable error cases:
 
-- **DivisionByZero** — checked before executing `div`
+- **Int64Arithmetic / UInt64Arithmetic** — checked integer failures reported by
+  the shared runtime kernel
+- **DivisionByZero** — retained for API compatibility; numeric division now
+  reports the typed arithmetic variants above
 - **UnreachableExecuted** — deterministic error on `unreachable` terminator
 - **UnsupportedInstr** — clean error for `make`/`get`/`set`/`tag`/`unwrap`
 - **WrongArity** / **UnknownFunction** — checked at call sites

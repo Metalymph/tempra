@@ -25,8 +25,10 @@ We have expanded the TIR lowerer to handle Result propagation and basic ADT oper
 
 
 ### Expressions
-- **Literals**: Integer, Bool, String.
-- **Arithmetic**: `+`, `-`, `*`, `/`, including unary `-`.
+- **Literals**: Integer, Float64, Bool, String.
+- **Arithmetic**: `+`, `-`, `*`, `/`, including unary `-`. Integer arithmetic is
+  checked; Float64 follows IEEE 754, and unary Float64 negation lowers to
+  multiplication by `-1.0` so signed zero and infinity are preserved.
 - **Comparisons**: `==`, `!=`, `<`, `>`, `<=`, `>=`.
 - **Logic**: `and`, `or`, `not`.
 - **Variables**: Load from local slots.

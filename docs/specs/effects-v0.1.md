@@ -208,10 +208,10 @@ Later consumers include acyclic ownership analysis, concurrency-boundary verific
 E1 classifies operations conservatively according to current runtime semantics:
 
 - `Alloc` applies only when the current representation semantically requires runtime allocation. A TIR constant or construction is not automatically allocating; string constants and composite construction must be confirmed against the runtime and lowering.
-- `Panic` is an initial may-fail classification. Checked `Int64` add, sub, mul
-  and div, unwraps, indexed accesses, and slices may require it even when later
-  proof could establish safety. It is a capability, not a general runtime-error
-  or recovery hierarchy.
+- `Panic` is an initial may-fail classification. Checked `Int64` and `UInt64`
+  add, sub and mul, every numeric `div`, unwraps, indexed accesses, and slices
+  may require it even when later proof could establish safety. It is a
+  capability, not a general runtime-error or recovery hierarchy.
 - known filesystem and console externs introduce `IO`;
 - `Process`, `Spawn`, `Nondeterminism`, and `Unsafe` currently have no complete TIR mapping.
 
@@ -220,9 +220,11 @@ Phase V may prove that a specific division or bounds access cannot fail. That fu
 K3.2 makes the current runtime contract explicit: supported backends implement
 checked `Int64` arithmetic through one host-safe semantic kernel or equivalent
 native checks. Addition, subtraction, multiplication, division and lowered
-negation can fail deterministically; Float and UInt capability mappings are
-unchanged. This rule is current runtime authority and is not inferred
-retroactively from the future `@verified` design.
+negation can fail deterministically. K3.3 extends the same checked contract to
+`UInt64` add/sub/mul/div and keeps `Float64` under IEEE 754, where division does
+not panic but every `Div` remains conservatively classified as `Panic` by E1.
+This rule is current runtime authority and is not inferred retroactively from
+the future `@verified` design.
 
 An unknown extern declaration does not fail analysis by itself. `UnclassifiedExtern` is reported only when a TIR call actually targets an extern without a capability classification. E1 analyzes every TIR function, so calls from non-entry functions are still checked; entirely unused extern declarations are ignored.
 

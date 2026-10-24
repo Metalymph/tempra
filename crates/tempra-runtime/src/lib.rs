@@ -7,7 +7,10 @@
 
 pub mod arithmetic;
 
-pub use arithmetic::{add_i64, div_i64, mul_i64, neg_i64, sub_i64, Int64ArithmeticError};
+pub use arithmetic::{
+    add_i64, add_u64, div_i64, div_u64, mul_i64, mul_u64, neg_i64, sub_i64, sub_u64,
+    Int64ArithmeticError, UInt64ArithmeticError,
+};
 
 /// A dynamically-typed Tempra value.
 #[derive(Debug, Clone, PartialEq)]

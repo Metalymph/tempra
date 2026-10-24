@@ -230,6 +230,7 @@ K2.5 cross-process reproducibility gate DONE
 K2 implementation   DONE
 K3.1 runtime parity audit DONE
 K3.2 Int64 parity    DONE
+K3.3 numeric backend parity DONE
 K3 implementation   IN PROGRESS
 
 K4 specialized-effect track
@@ -303,6 +304,31 @@ add/sub/mul/div as conservative `Panic` origins. K4.5B raises cache trust to
 `semantics-6` while adding static specialized-effect enforcement; the bytecode
 format is unchanged. K3 remains in progress.
 
+K3.3 establishes numeric backend parity for `Int64`, `UInt64`, `Float64` and the
+existing `UInt8` surface without changing the bytecode format. The TIR verifier
+records operand/result types and rejects arithmetic on unsupported numeric
+types, so invalid TIR cannot reach bytecode. HIR-to-TIR and TIR-to-bytecode
+lowering select `AddI64`/`AddU64`/`AddF64` and the matching subtraction,
+multiplication, division and ordering opcodes from verified types; `UInt64` and
+`Float64` operations are never silently lowered to `Int64`. `UInt64`
+add/sub/mul/div use the shared checked runtime kernel (overflow, underflow and
+division by zero are controlled failures). `Float64` keeps IEEE 754 behavior,
+including division by signed zero, NaN, infinities, signed zero, ordered
+comparisons and lowered unary negation. The TIR interpreter, bytecode VM and
+source-level HIR/TIR/VM differential tests agree for the reachable numeric
+surface. `UInt64` remains source-unreachable because integer literals are
+`Int64` and no numeric conversion constructor is implemented, so its checked
+contract is established at the TIR/bytecode/VM boundaries rather than claimed
+as source-level parity. The native JIT intentionally
+still supports only eligible `Int64` functions: `UInt64` and `Float64`
+signatures are rejected as unsupported types and execute interpreted, with no
+native execution and no semantic fallback after native failure. Effect analysis
+adds checked `UInt64` add/sub/mul to the existing conservative `Panic` origins;
+every `Div` remains conservatively `Panic` per E1. K3.3 raises cache trust to
+`semantics-8` because revision-7 artifacts may contain untyped numeric lowering
+or predate Float64 literal support. K3 implementation remains in progress for
+runtime surfaces outside this numeric scope.
+
 K4.6 is complete. K4.6A found no contract-enforcement bypass while auditing the
 compilation, runtime and FFI boundaries. K4.6B.1 added native
 registry/classifier/signature integrity regressions; K4.6B.2 added fresh
@@ -349,7 +375,8 @@ format change, runtime guards or native network APIs. Module/file extend methods
 with contracts are explicitly rejected because that frontend does not lower
 them; source-compiler method binding remains supported. K4.9E confirms v0.1
 resource-qualified compatibility and `semantics-7` cache trust without another
-semantic change. Typed specialized violations retain target kinds, spans,
+semantic change. K3.3 later raises current trust to `semantics-8` for numeric
+backend parity; the historical `semantics-7` guarantee remains as described. Typed specialized violations retain target kinds, spans,
 classifications and witnesses, but CLI E6 still renders only a generic error
 count and omits specialized intent from successful inspection. This is a
 documented tooling limitation, not a complete specialized JSON/query surface.

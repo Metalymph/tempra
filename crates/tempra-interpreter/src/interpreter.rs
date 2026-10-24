@@ -22,6 +22,7 @@ pub enum EvalMode {
 pub(crate) enum InterpreterEvalError {
     Message(String),
     Int64Arithmetic(tempra_runtime::Int64ArithmeticError),
+    UInt64Arithmetic(tempra_runtime::UInt64ArithmeticError),
     FuelExhausted,
     CallDepthExceeded,
 }
@@ -49,6 +50,7 @@ impl fmt::Display for InterpreterEvalError {
         match self {
             Self::Message(message) => formatter.write_str(message),
             Self::Int64Arithmetic(error) => error.fmt(formatter),
+            Self::UInt64Arithmetic(error) => error.fmt(formatter),
             Self::FuelExhausted => formatter.write_str(crate::comptime::FUEL_EXHAUSTED_MESSAGE),
             Self::CallDepthExceeded => {
                 formatter.write_str(crate::comptime::CALL_DEPTH_EXCEEDED_MESSAGE)

@@ -15,8 +15,8 @@ use tempra_effects::{
 use tempra_vm::profile::VmOptions;
 use tempra_vm::VmValue;
 
-const SEMANTICS_SEVEN_FINGERPRINT: &str =
-    concat!("tempra-", env!("CARGO_PKG_VERSION"), "-semantics-7");
+const CURRENT_SEMANTICS_FINGERPRINT: &str =
+    concat!("tempra-", env!("CARGO_PKG_VERSION"), "-semantics-8");
 
 struct CacheGuard {
     path: PathBuf,
@@ -360,7 +360,7 @@ pub fn main() -> Int64 { return 42 }
     let artifact = tempra_driver::cache::read_cache_artifact(&valid_path).unwrap();
     assert_eq!(
         artifact.header.compiler_fingerprint,
-        SEMANTICS_SEVEN_FINGERPRINT
+        CURRENT_SEMANTICS_FINGERPRINT
     );
     let bytes = fs::read(&valid_path).unwrap();
     let modified = fs::metadata(&valid_path).unwrap().modified().unwrap();
@@ -418,6 +418,44 @@ pub fn main() -> Int64 { return 10 / 2 }
         format!("tempra-{}-semantics-5", env!("CARGO_PKG_VERSION")),
         "a failed fresh compilation must not promote a stale artifact"
     );
+}
+
+#[test]
+fn semantics_7_artifact_cannot_certify_numeric_backend_parity() {
+    let source = "fn main() -> Float64 { return 1.5 + 2.5 }";
+    let _guard = CacheGuard::for_source(source);
+    let source_hash = tempra_driver::cache::compute_source_hash(source);
+    let cache_path = tempra_driver::cache::get_cache_path(&source_hash);
+
+    let seed_dir = tempfile::tempdir().unwrap();
+    let seed = compile_to_bytecode_with_analysis(
+        "fn main() -> Int64 { return 7 }",
+        &seed_dir.path().join("seed.tbc"),
+    )
+    .unwrap();
+    let stale = tempra_bytecode::BytecodeCacheArtifact {
+        header: tempra_bytecode::BytecodeCacheHeader {
+            compiler_fingerprint: format!("tempra-{}-semantics-7", env!("CARGO_PKG_VERSION")),
+            source_hash,
+            ..Default::default()
+        },
+        module: seed.bytecode().clone(),
+    };
+    tempra_driver::cache::write_cache_artifact(&cache_path, &stale).unwrap();
+    let stale_bytes = fs::read(&cache_path).unwrap();
+
+    assert_eq!(
+        run_source_vm(source, &[]).unwrap(),
+        VmValue::Float64(4.0),
+        "a semantics-7 artifact must not execute Float64 bytecode under current semantics"
+    );
+
+    let promoted = tempra_driver::cache::read_cache_artifact(&cache_path).unwrap();
+    assert_eq!(
+        promoted.header.compiler_fingerprint, CURRENT_SEMANTICS_FINGERPRINT,
+        "fresh compilation must replace the incompatible artifact"
+    );
+    assert_ne!(fs::read(&cache_path).unwrap(), stale_bytes);
 }
 
 #[test]

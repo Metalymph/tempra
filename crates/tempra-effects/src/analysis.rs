@@ -822,17 +822,36 @@ fn classify_instruction(
         }
         TirInstr::Get(_, _, TirKey::Field(_)) | TirInstr::Set(_, _, _, _) => return None,
         TirInstr::Unwrap(_, _, _, _) => (Capability::Panic, DirectCapabilitySource::Unwrap),
-        TirInstr::Add(_, operand, _) if value_types.get(operand) == Some(&TirType::Int64) => {
+        TirInstr::Add(_, operand, _)
+            if matches!(
+                value_types.get(operand),
+                Some(TirType::Int64 | TirType::UInt64)
+            ) =>
+        {
             (Capability::Panic, DirectCapabilitySource::IntegerAddition)
         }
-        TirInstr::Sub(_, operand, _) if value_types.get(operand) == Some(&TirType::Int64) => (
-            Capability::Panic,
-            DirectCapabilitySource::IntegerSubtraction,
-        ),
-        TirInstr::Mul(_, operand, _) if value_types.get(operand) == Some(&TirType::Int64) => (
-            Capability::Panic,
-            DirectCapabilitySource::IntegerMultiplication,
-        ),
+        TirInstr::Sub(_, operand, _)
+            if matches!(
+                value_types.get(operand),
+                Some(TirType::Int64 | TirType::UInt64)
+            ) =>
+        {
+            (
+                Capability::Panic,
+                DirectCapabilitySource::IntegerSubtraction,
+            )
+        }
+        TirInstr::Mul(_, operand, _)
+            if matches!(
+                value_types.get(operand),
+                Some(TirType::Int64 | TirType::UInt64)
+            ) =>
+        {
+            (
+                Capability::Panic,
+                DirectCapabilitySource::IntegerMultiplication,
+            )
+        }
         TirInstr::Div(_, _, _) => (Capability::Panic, DirectCapabilitySource::Division),
         TirInstr::GetIndex(_, _, _) => (Capability::Panic, DirectCapabilitySource::DynamicIndexGet),
         TirInstr::Slice(_, _, _, _) => (Capability::Panic, DirectCapabilitySource::Slice),

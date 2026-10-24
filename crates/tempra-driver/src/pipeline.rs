@@ -42,6 +42,7 @@ fn hir_entry_value_type(value: &Value) -> &'static str {
         Value::Unit => "Unit",
         Value::Bool(_) => "Bool",
         Value::Int64(_) => "Int64",
+        Value::UInt64(_) => "UInt64",
         Value::UInt8(_) => "UInt8",
         Value::Float64(_) => "Float64",
         Value::String(_) => "String",
@@ -1376,7 +1377,7 @@ mod enforcement_cache_tests {
         let header = crate::cache::read_cache_artifact(&path).unwrap().header;
         assert_eq!(
             header.compiler_fingerprint,
-            format!("tempra-{}-semantics-7", env!("CARGO_PKG_VERSION"))
+            format!("tempra-{}-semantics-8", env!("CARGO_PKG_VERSION"))
         );
         assert_eq!(header.source_hash, pure_hash);
         let bytes = fs::read(&path).unwrap();
@@ -1880,7 +1881,7 @@ fn main() -> Int64 { return select[Both](Both {}) }
         let current_artifact = crate::cache::read_cache_artifact(&path).unwrap();
         assert_eq!(
             current_artifact.header.compiler_fingerprint,
-            format!("tempra-{}-semantics-7", env!("CARGO_PKG_VERSION"))
+            format!("tempra-{}-semantics-8", env!("CARGO_PKG_VERSION"))
         );
         let current_bytes = fs::read(&path).unwrap();
         assert_ne!(current_bytes, stale_bytes);
@@ -1952,7 +1953,7 @@ fn main() -> Int64 { return select[Both](Both {}) }
         let current_artifact = crate::cache::read_cache_artifact(&current_path).unwrap();
         assert_eq!(
             current_artifact.header.compiler_fingerprint,
-            format!("tempra-{}-semantics-7", env!("CARGO_PKG_VERSION"))
+            format!("tempra-{}-semantics-8", env!("CARGO_PKG_VERSION"))
         );
 
         std::thread::sleep(std::time::Duration::from_millis(100));
@@ -2031,7 +2032,7 @@ fn main() -> Int64 { return select[Both](Both {}) }
                 .unwrap()
                 .header
                 .compiler_fingerprint,
-            format!("tempra-{}-semantics-7", env!("CARGO_PKG_VERSION"))
+            format!("tempra-{}-semantics-8", env!("CARGO_PKG_VERSION"))
         );
 
         std::thread::sleep(std::time::Duration::from_millis(100));
@@ -2085,7 +2086,7 @@ fn main() -> Int64 { return select[Both](Both {}) }
         let current = crate::cache::read_cache_artifact(&path).unwrap();
         assert_eq!(
             current.header.compiler_fingerprint,
-            format!("tempra-{}-semantics-7", env!("CARGO_PKG_VERSION"))
+            format!("tempra-{}-semantics-8", env!("CARGO_PKG_VERSION"))
         );
         assert_eq!(current.header.source_hash, source_hash);
     }
@@ -2098,7 +2099,7 @@ fn main() -> Int64 { return select[Both](Both {}) }
         let artifact = crate::cache::read_cache_artifact(&path).unwrap();
         assert_eq!(
             artifact.header.compiler_fingerprint,
-            format!("tempra-{}-semantics-7", env!("CARGO_PKG_VERSION"))
+            format!("tempra-{}-semantics-8", env!("CARGO_PKG_VERSION"))
         );
         let before = fs::read(&path).unwrap();
         let modified = fs::metadata(&path).unwrap().modified().unwrap();
@@ -2155,7 +2156,7 @@ fn main() -> Int64 { return select[Both](Both {}) }
         let canonical_artifact = crate::cache::read_cache_artifact(&cold_path).unwrap();
         assert_eq!(
             canonical_artifact.header.compiler_fingerprint,
-            format!("tempra-{}-semantics-7", env!("CARGO_PKG_VERSION"))
+            format!("tempra-{}-semantics-8", env!("CARGO_PKG_VERSION"))
         );
 
         let modified = fs::metadata(&cold_path).unwrap().modified().unwrap();

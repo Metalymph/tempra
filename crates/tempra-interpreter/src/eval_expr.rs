@@ -5,7 +5,10 @@ use crate::interpreter::Interpreter;
 use crate::value::{OptionValue, RegexValue, StructInstance, Value};
 use std::collections::HashMap;
 use tempra_hir::*;
-use tempra_runtime::{add_i64, div_i64, mul_i64, neg_i64, sub_i64, Int64ArithmeticError};
+use tempra_runtime::{
+    add_i64, add_u64, div_i64, div_u64, mul_i64, mul_u64, neg_i64, sub_i64, sub_u64,
+    Int64ArithmeticError, UInt64ArithmeticError,
+};
 
 fn integer_value<T>(
     result: Result<T, Int64ArithmeticError>,
@@ -15,6 +18,16 @@ fn integer_value<T>(
         .map(into_value)
         .map(ControlFlow::Value)
         .map_err(crate::interpreter::InterpreterEvalError::Int64Arithmetic)
+}
+
+fn unsigned_value<T>(
+    result: Result<T, UInt64ArithmeticError>,
+    into_value: impl FnOnce(T) -> Value,
+) -> Result<ControlFlow, crate::interpreter::InterpreterEvalError> {
+    result
+        .map(into_value)
+        .map(ControlFlow::Value)
+        .map_err(crate::interpreter::InterpreterEvalError::UInt64Arithmetic)
 }
 
 fn run_command(
@@ -97,6 +110,7 @@ fn value_to_string(value: &Value) -> String {
         Value::String(s) => s.clone(),
         Value::Bool(b) => b.to_string(),
         Value::Int64(i) => i.to_string(),
+        Value::UInt64(i) => i.to_string(),
         Value::UInt8(i) => i.to_string(),
         Value::Float64(f) => f.to_string(),
         // For other types, we use their Display implementation if they have one,
@@ -162,6 +176,7 @@ impl Interpreter {
                 "Bool" => matches!(value, Value::Bool(_)),
                 "String" => matches!(value, Value::String(_)),
                 "Int" | "Int64" => matches!(value, Value::Int64(_)),
+                "UInt64" => matches!(value, Value::UInt64(_)),
                 "UInt8" => matches!(value, Value::UInt8(_)),
                 "Float64" => matches!(value, Value::Float64(_)),
                 "Error" => matches!(value, Value::Error(_)),
@@ -328,7 +343,12 @@ impl Interpreter {
                     HirUnaryOp::Negate => match val {
                         Value::Int64(i) => integer_value(neg_i64(i), Value::Int64),
                         Value::Float64(f) => Ok(ControlFlow::Value(Value::Float64(-f))),
-                        _ => Err("- requires a numeric type".into()),
+                        Value::UInt64(_) => Err("unary '-' is not supported for UInt64".into()),
+                        other => Err(format!(
+                            "unary '-' expects Int64 or Float64, found {}",
+                            other.type_name()
+                        )
+                        .into()),
                     },
                 }
             }
@@ -698,6 +718,9 @@ impl Interpreter {
                         (Value::Int64(a), Value::Int64(b)) => {
                             integer_value(add_i64(a, b), Value::Int64)
                         }
+                        (Value::UInt64(a), Value::UInt64(b)) => {
+                            unsigned_value(add_u64(a, b), Value::UInt64)
+                        }
                         (Value::UInt8(a), Value::UInt8(b)) => {
                             Ok(ControlFlow::Value(Value::UInt8(a.wrapping_add(b))))
                         }
@@ -713,6 +736,9 @@ impl Interpreter {
                         (Value::Int64(a), Value::Int64(b)) => {
                             integer_value(sub_i64(a, b), Value::Int64)
                         }
+                        (Value::UInt64(a), Value::UInt64(b)) => {
+                            unsigned_value(sub_u64(a, b), Value::UInt64)
+                        }
                         (Value::UInt8(a), Value::UInt8(b)) => {
                             Ok(ControlFlow::Value(Value::UInt8(a.wrapping_sub(b))))
                         }
@@ -725,6 +751,9 @@ impl Interpreter {
                         (Value::Int64(a), Value::Int64(b)) => {
                             integer_value(mul_i64(a, b), Value::Int64)
                         }
+                        (Value::UInt64(a), Value::UInt64(b)) => {
+                            unsigned_value(mul_u64(a, b), Value::UInt64)
+                        }
                         (Value::UInt8(a), Value::UInt8(b)) => {
                             Ok(ControlFlow::Value(Value::UInt8(a.wrapping_mul(b))))
                         }
@@ -736,6 +765,9 @@ impl Interpreter {
                     HirBinaryOp::Div => match (left, right) {
                         (Value::Int64(a), Value::Int64(b)) => {
                             integer_value(div_i64(a, b), Value::Int64)
+                        }
+                        (Value::UInt64(a), Value::UInt64(b)) => {
+                            unsigned_value(div_u64(a, b), Value::UInt64)
                         }
                         (Value::UInt8(a), Value::UInt8(b)) => {
                             integer_value(div_u8(a, b), Value::UInt8)
@@ -751,6 +783,9 @@ impl Interpreter {
                         (Value::Int64(a), Value::Int64(b)) => {
                             Ok(ControlFlow::Value(Value::Bool(a < b)))
                         }
+                        (Value::UInt64(a), Value::UInt64(b)) => {
+                            Ok(ControlFlow::Value(Value::Bool(a < b)))
+                        }
                         (Value::UInt8(a), Value::UInt8(b)) => {
                             Ok(ControlFlow::Value(Value::Bool(a < b)))
                         }
@@ -761,6 +796,9 @@ impl Interpreter {
                     },
                     HirBinaryOp::LessEq => match (left, right) {
                         (Value::Int64(a), Value::Int64(b)) => {
+                            Ok(ControlFlow::Value(Value::Bool(a <= b)))
+                        }
+                        (Value::UInt64(a), Value::UInt64(b)) => {
                             Ok(ControlFlow::Value(Value::Bool(a <= b)))
                         }
                         (Value::UInt8(a), Value::UInt8(b)) => {
@@ -775,6 +813,9 @@ impl Interpreter {
                         (Value::Int64(a), Value::Int64(b)) => {
                             Ok(ControlFlow::Value(Value::Bool(a > b)))
                         }
+                        (Value::UInt64(a), Value::UInt64(b)) => {
+                            Ok(ControlFlow::Value(Value::Bool(a > b)))
+                        }
                         (Value::UInt8(a), Value::UInt8(b)) => {
                             Ok(ControlFlow::Value(Value::Bool(a > b)))
                         }
@@ -785,6 +826,9 @@ impl Interpreter {
                     },
                     HirBinaryOp::GreaterEq => match (left, right) {
                         (Value::Int64(a), Value::Int64(b)) => {
+                            Ok(ControlFlow::Value(Value::Bool(a >= b)))
+                        }
+                        (Value::UInt64(a), Value::UInt64(b)) => {
                             Ok(ControlFlow::Value(Value::Bool(a >= b)))
                         }
                         (Value::UInt8(a), Value::UInt8(b)) => {
@@ -2214,6 +2258,7 @@ impl Interpreter {
                                     | ("Bool", Value::Bool(_))
                                     | ("String", Value::String(_))
                                     | ("Int" | "Int64", Value::Int64(_))
+                                    | ("UInt64", Value::UInt64(_))
                                     | ("UInt8", Value::UInt8(_))
                                     | ("Float32" | "Float64", Value::Float64(_))
                                     | ("Error", Value::Error(_))

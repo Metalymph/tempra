@@ -232,7 +232,7 @@ fn discovers_every_initial_tir_capability_mapping() {
 }
 
 #[test]
-fn int64_add_sub_mul_are_panic_origins_without_widening_other_numeric_types() {
+fn signed_and_unsigned_add_sub_mul_are_panic_origins_without_widening_float64() {
     let instructions = vec![
         TirInstr::Const(TirValueId(0), TirConst::Int64(1)),
         TirInstr::Const(TirValueId(1), TirConst::Int64(2)),
@@ -263,6 +263,9 @@ fn int64_add_sub_mul_are_panic_origins_without_widening_other_numeric_types() {
             (&DirectCapabilitySource::IntegerAddition, 2),
             (&DirectCapabilitySource::IntegerSubtraction, 3),
             (&DirectCapabilitySource::IntegerMultiplication, 4),
+            (&DirectCapabilitySource::IntegerAddition, 7),
+            (&DirectCapabilitySource::IntegerSubtraction, 8),
+            (&DirectCapabilitySource::IntegerMultiplication, 9),
         ]
     );
     assert_eq!(

@@ -1024,9 +1024,10 @@ K3.2 raises current trust to `semantics-5` after establishing checked,
 host-safe `Int64` arithmetic and its conservative `Panic` origins across the
 supported runtime paths. K4.5B historically raised current trust to
 `semantics-6` because revision-5 artifacts may retain specialized `@deny`
-clauses without their static enforcement. K4.9D subsequently raises current
-trust to `semantics-7` for v0.2 family/category enforcement; K4.9E confirms
-compatibility without another semantic change. These semantic revisions still
+clauses without their static enforcement. K4.9D subsequently raises trust to
+`semantics-7` for v0.2 family/category enforcement; K4.9E confirms
+compatibility without another semantic change. K3.3 later raises current trust to
+`semantics-8` for numeric backend parity. These semantic revisions still
 do not change the bytecode format or serialize capability metadata.
 
 K2.5 does not change compiler semantics or the fingerprint. It establishes a

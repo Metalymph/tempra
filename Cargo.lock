@@ -1399,6 +1399,7 @@ dependencies = [
  "tempra-parser",
  "tempra-runtime",
  "tempra-tir",
+ "tempra-tir-interp",
  "tempra-tir-lower",
  "tempra-typeck",
 ]

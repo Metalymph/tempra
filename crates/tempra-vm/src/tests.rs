@@ -628,3 +628,209 @@ fn opcode_ids_are_unique_and_within_bounds() {
         "HashSet size mismatch with BYTECODE_OPCODE_COUNT"
     );
 }
+
+fn binary_module(
+    name: &str,
+    operand_type: BytecodeType,
+    result_type: BytecodeType,
+    op: BytecodeInstr,
+) -> BytecodeModule {
+    let mut module = BytecodeModule::new();
+    let mut func = BytecodeFunction::new(
+        name.into(),
+        vec![operand_type.clone(), operand_type.clone()],
+        result_type,
+    );
+    func.locals = vec![operand_type.clone(), operand_type];
+    func.code.push(BytecodeInstr::LoadLocal(LocalId(0)));
+    func.code.push(BytecodeInstr::LoadLocal(LocalId(1)));
+    func.code.push(op);
+    func.code.push(BytecodeInstr::Return);
+    func.max_stack = 2;
+    module.add_function(func);
+    module
+}
+
+fn run_binary(
+    module: &BytecodeModule,
+    name: &str,
+    left: VmValue,
+    right: VmValue,
+) -> Result<VmValue, VmError> {
+    run_function(module, name, vec![left, right])
+}
+
+#[test]
+fn vm_uint64_arithmetic_uses_checked_runtime_kernel() {
+    let cases = [
+        (BytecodeInstr::AddU64, 10u64, 20u64, 30u64),
+        (BytecodeInstr::SubU64, 30, 20, 10),
+        (BytecodeInstr::MulU64, 6, 7, 42),
+        (BytecodeInstr::DivU64, 21, 7, 3),
+    ];
+
+    for (op, left, right, expected) in cases {
+        let module = binary_module("op", BytecodeType::UInt64, BytecodeType::UInt64, op);
+        let result =
+            run_binary(&module, "op", VmValue::UInt64(left), VmValue::UInt64(right)).unwrap();
+        assert_eq!(result, VmValue::UInt64(expected), "opcode {op:?}");
+    }
+}
+
+#[test]
+fn vm_uint64_arithmetic_reports_controlled_failures() {
+    let add = binary_module(
+        "add",
+        BytecodeType::UInt64,
+        BytecodeType::UInt64,
+        BytecodeInstr::AddU64,
+    );
+    assert_eq!(
+        run_binary(&add, "add", VmValue::UInt64(u64::MAX), VmValue::UInt64(1)),
+        Err(VmError::UInt64Arithmetic(
+            tempra_runtime::UInt64ArithmeticError::Overflow
+        ))
+    );
+
+    let sub = binary_module(
+        "sub",
+        BytecodeType::UInt64,
+        BytecodeType::UInt64,
+        BytecodeInstr::SubU64,
+    );
+    assert_eq!(
+        run_binary(&sub, "sub", VmValue::UInt64(0), VmValue::UInt64(1)),
+        Err(VmError::UInt64Arithmetic(
+            tempra_runtime::UInt64ArithmeticError::Underflow
+        ))
+    );
+
+    let mul = binary_module(
+        "mul",
+        BytecodeType::UInt64,
+        BytecodeType::UInt64,
+        BytecodeInstr::MulU64,
+    );
+    assert_eq!(
+        run_binary(&mul, "mul", VmValue::UInt64(u64::MAX), VmValue::UInt64(2)),
+        Err(VmError::UInt64Arithmetic(
+            tempra_runtime::UInt64ArithmeticError::Overflow
+        ))
+    );
+
+    let div = binary_module(
+        "div",
+        BytecodeType::UInt64,
+        BytecodeType::UInt64,
+        BytecodeInstr::DivU64,
+    );
+    assert_eq!(
+        run_binary(&div, "div", VmValue::UInt64(1), VmValue::UInt64(0)),
+        Err(VmError::UInt64Arithmetic(
+            tempra_runtime::UInt64ArithmeticError::DivisionByZero
+        ))
+    );
+}
+
+#[test]
+fn vm_uint64_comparisons_are_unsigned() {
+    let lt = binary_module(
+        "lt",
+        BytecodeType::UInt64,
+        BytecodeType::Bool,
+        BytecodeInstr::LtU64,
+    );
+    // `1` must compare below `u64::MAX`, unlike the signed reinterpretation.
+    assert_eq!(
+        run_binary(&lt, "lt", VmValue::UInt64(1), VmValue::UInt64(u64::MAX)).unwrap(),
+        VmValue::Bool(true)
+    );
+
+    let gt = binary_module(
+        "gt",
+        BytecodeType::UInt64,
+        BytecodeType::Bool,
+        BytecodeInstr::GtU64,
+    );
+    assert_eq!(
+        run_binary(&gt, "gt", VmValue::UInt64(u64::MAX), VmValue::UInt64(1)).unwrap(),
+        VmValue::Bool(true)
+    );
+}
+
+#[test]
+fn vm_float64_division_follows_ieee_754() {
+    let div = binary_module(
+        "div",
+        BytecodeType::Float64,
+        BytecodeType::Float64,
+        BytecodeInstr::DivF64,
+    );
+
+    assert_eq!(
+        run_binary(&div, "div", VmValue::Float64(1.0), VmValue::Float64(0.0)).unwrap(),
+        VmValue::Float64(f64::INFINITY)
+    );
+    assert_eq!(
+        run_binary(&div, "div", VmValue::Float64(-1.0), VmValue::Float64(0.0)).unwrap(),
+        VmValue::Float64(f64::NEG_INFINITY)
+    );
+    assert_eq!(
+        run_binary(&div, "div", VmValue::Float64(1.0), VmValue::Float64(-0.0)).unwrap(),
+        VmValue::Float64(f64::NEG_INFINITY)
+    );
+
+    match run_binary(&div, "div", VmValue::Float64(0.0), VmValue::Float64(0.0)).unwrap() {
+        VmValue::Float64(value) => assert!(value.is_nan(), "0.0 / 0.0 must be NaN, got {value}"),
+        other => panic!("expected Float64 NaN, got {other:?}"),
+    }
+}
+
+#[test]
+fn vm_float64_comparisons_and_negation_preserve_ieee_754() {
+    let lt = binary_module(
+        "lt",
+        BytecodeType::Float64,
+        BytecodeType::Bool,
+        BytecodeInstr::LtF64,
+    );
+    let gt = binary_module(
+        "gt",
+        BytecodeType::Float64,
+        BytecodeType::Bool,
+        BytecodeInstr::GtF64,
+    );
+
+    // NaN is unordered: neither `<` nor `>` may hold.
+    assert_eq!(
+        run_binary(&lt, "lt", VmValue::Float64(f64::NAN), VmValue::Float64(1.0)).unwrap(),
+        VmValue::Bool(false)
+    );
+    assert_eq!(
+        run_binary(&gt, "gt", VmValue::Float64(f64::NAN), VmValue::Float64(1.0)).unwrap(),
+        VmValue::Bool(false)
+    );
+    assert_eq!(
+        run_binary(&lt, "lt", VmValue::Float64(0.0), VmValue::Float64(-0.0)).unwrap(),
+        VmValue::Bool(false)
+    );
+
+    // Guideline lowering expresses unary negation as multiplication by -1.0.
+    let neg = binary_module(
+        "neg",
+        BytecodeType::Float64,
+        BytecodeType::Float64,
+        BytecodeInstr::MulF64,
+    );
+    let negated = run_binary(&neg, "neg", VmValue::Float64(0.0), VmValue::Float64(-1.0)).unwrap();
+    match negated {
+        VmValue::Float64(value) => {
+            assert_eq!(value, 0.0);
+            assert!(
+                value.is_sign_negative(),
+                "negation must preserve signed -0.0"
+            );
+        }
+        other => panic!("expected Float64, got {other:?}"),
+    }
+}

@@ -13,6 +13,17 @@ enum SupportedValue {
     Unit,
     Bool(bool),
     Int64(i64),
+    /// Canonicalized IEEE 754 bit pattern so `NaN` compares as one value and
+    /// signed zero (`+0.0` vs `-0.0`) is observable across backends.
+    FloatBits(u64),
+}
+
+fn canonical_float_bits(value: f64) -> u64 {
+    if value.is_nan() {
+        f64::NAN.to_bits()
+    } else {
+        value.to_bits()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,6 +37,7 @@ fn normalize_hir(value: Value) -> Result<SupportedValue, String> {
         Value::Unit => Ok(SupportedValue::Unit),
         Value::Bool(value) => Ok(SupportedValue::Bool(value)),
         Value::Int64(value) => Ok(SupportedValue::Int64(value)),
+        Value::Float64(value) => Ok(SupportedValue::FloatBits(canonical_float_bits(value))),
         other => Err(format!(
             "HIR result is outside the K3.3A supported subset: {other:?}"
         )),
@@ -37,6 +49,9 @@ fn normalize_tir(value: TirRuntimeValue) -> Result<SupportedValue, String> {
         TirRuntimeValue::Unit => Ok(SupportedValue::Unit),
         TirRuntimeValue::Bool(value) => Ok(SupportedValue::Bool(value)),
         TirRuntimeValue::Int64(value) => Ok(SupportedValue::Int64(value)),
+        TirRuntimeValue::Float64(value) => {
+            Ok(SupportedValue::FloatBits(canonical_float_bits(value)))
+        }
         other => Err(format!(
             "TIR result is outside the K3.3A supported subset: {other:?}"
         )),
@@ -278,6 +293,135 @@ fn main() -> Int64 {
 }
 
 #[test]
+fn call_arguments_are_evaluated_in_source_order_in_tir() {
+    let first_fails = r#"
+fn combine(a: Int64, b: Int64) -> Int64 {
+    return a + b
+}
+
+fn main() -> Int64 {
+    return combine(9223372036854775807 + 1, 1 / 0)
+}
+"#;
+    assert_int64_failure_parity(first_fails, Int64Failure::Overflow);
+
+    let second_fails = r#"
+fn combine(a: Int64, b: Int64) -> Int64 {
+    return a + b
+}
+
+fn main() -> Int64 {
+    return combine(1 + 1, 1 / 0)
+}
+"#;
+    assert_int64_failure_parity(second_fails, Int64Failure::DivisionByZero);
+}
+
+#[test]
+fn binary_lhs_is_evaluated_before_rhs_in_tir() {
+    assert_int64_failure_parity(
+        "fn main() -> Int64 { return (9223372036854775807 + 1) + (1 / 0) }",
+        Int64Failure::Overflow,
+    );
+}
+
+#[test]
+fn unselected_if_branch_is_not_executed_in_tir() {
+    let source = r#"
+fn selected_true(flag: Bool) -> Int64 {
+    if flag {
+        return 7
+    } else {
+        return 1 / 0
+    }
+}
+
+fn selected_false(flag: Bool) -> Int64 {
+    if flag {
+        return 1 / 0
+    } else {
+        return 9
+    }
+}
+
+fn main() -> Int64 {
+    return selected_true(true) + selected_false(false)
+}
+"#;
+    assert_eq!(assert_supported_parity(source), SupportedValue::Int64(16));
+}
+
+#[test]
+fn nested_calls_preserve_first_failure_order_in_tir() {
+    let inner_first = r#"
+fn nested_add(a: Int64, b: Int64) -> Int64 {
+    return a + b
+}
+
+fn main() -> Int64 {
+    return nested_add(nested_add(9223372036854775807, 1), 1 / 0)
+}
+"#;
+    assert_int64_failure_parity(inner_first, Int64Failure::Overflow);
+
+    let outer_first = r#"
+fn nested_add(a: Int64, b: Int64) -> Int64 {
+    return a + b
+}
+
+fn main() -> Int64 {
+    return nested_add(1 / 0, nested_add(9223372036854775807, 1))
+}
+"#;
+    assert_int64_failure_parity(outer_first, Int64Failure::DivisionByZero);
+}
+
+#[test]
+fn unreachable_continuation_after_terminating_if_is_not_executed_in_tir() {
+    let source = r#"
+fn choose(flag: Bool) -> Int64 {
+    if flag {
+        return 11
+    } else {
+        return 22
+    }
+    return 1 / 0
+}
+
+fn main() -> Int64 {
+    return choose(true) + choose(false)
+}
+"#;
+    assert_eq!(assert_supported_parity(source), SupportedValue::Int64(33));
+}
+
+#[test]
+fn nested_terminating_branches_preserve_expected_values_in_tir() {
+    let source = r#"
+fn classify(n: Int64) -> Int64 {
+    if n < 0 {
+        return -1
+    } else {
+        if n == 0 {
+            return 0
+        } else {
+            if n > 100 {
+                return 2
+            } else {
+                return 1
+            }
+        }
+    }
+}
+
+fn main() -> Int64 {
+    return classify(-10) + classify(0) + classify(5) + classify(150)
+}
+"#;
+    assert_eq!(assert_supported_parity(source), SupportedValue::Int64(2));
+}
+
+#[test]
 fn if_else_match() {
     let source = r#"
 fn choose(flag: Bool) -> Int64 {
@@ -433,6 +577,63 @@ fn invalid_and_internal_errors_are_not_semantic_failures() {
             classify_int64_failure(&error),
             None,
             "{context} must not be normalized as semantic Int64 parity: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn float64_ieee_arithmetic_matches_hir_and_tir() {
+    let cases = [
+        ("fn main() -> Float64 { return 1.5 + 2.5 }", 4.0_f64),
+        ("fn main() -> Float64 { return 5.0 - 8.0 }", -3.0_f64),
+        ("fn main() -> Float64 { return 1.5 * 2.0 }", 3.0_f64),
+        ("fn main() -> Float64 { return 7.0 / 2.0 }", 3.5_f64),
+        ("fn main() -> Float64 { return 1.0 / 0.0 }", f64::INFINITY),
+        (
+            "fn main() -> Float64 { return (0.0 - 1.0) / 0.0 }",
+            f64::NEG_INFINITY,
+        ),
+        ("fn main() -> Float64 { return 0.0 / 0.0 }", f64::NAN),
+        (
+            "fn main() -> Float64 { return (0.0 - 1.0) * 0.0 }",
+            -0.0_f64,
+        ),
+        ("fn main() -> Float64 { return -1.5 }", -1.5_f64),
+        ("fn main() -> Float64 { return -0.0 }", -0.0_f64),
+        (
+            "fn main() -> Float64 { return -(1.0 / 0.0) }",
+            f64::NEG_INFINITY,
+        ),
+    ];
+
+    for (source, expected) in cases {
+        assert_eq!(
+            assert_supported_parity(source),
+            SupportedValue::FloatBits(canonical_float_bits(expected)),
+            "unexpected Float64 parity result for source:\n{source}"
+        );
+    }
+}
+
+#[test]
+fn float64_nan_ordering_and_signed_zero_match_hir_and_tir() {
+    let cases = [
+        ("fn main() -> Bool { return 0.0 / 0.0 < 1.0 }", false),
+        ("fn main() -> Bool { return 0.0 / 0.0 > 1.0 }", false),
+        ("fn main() -> Bool { return 0.0 / 0.0 <= 1.0 }", false),
+        ("fn main() -> Bool { return 0.0 / 0.0 >= 1.0 }", false),
+        ("fn main() -> Bool { return 0.0 / 0.0 == 0.0 / 0.0 }", false),
+        ("fn main() -> Bool { return 0.0 / 0.0 != 0.0 / 0.0 }", true),
+        ("fn main() -> Bool { return 1.0 / 0.0 > 1.0 }", true),
+        ("fn main() -> Bool { return (0.0 - 1.0) / 0.0 < 0.0 }", true),
+        ("fn main() -> Bool { return 0.0 == (0.0 - 0.0) }", true),
+    ];
+
+    for (source, expected) in cases {
+        assert_eq!(
+            assert_supported_parity(source),
+            SupportedValue::Bool(expected),
+            "unexpected Float64 parity result for source:\n{source}"
         );
     }
 }

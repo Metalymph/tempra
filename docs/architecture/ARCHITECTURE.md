@@ -116,14 +116,20 @@ revisions are independent of bytecode format version.
 K3.2 raises current trust to `semantics-5` because checked `Int64` add/sub/mul
 now contribute `Panic` and revision-4 hits could bypass that enforcement.
 K4.5B raised trust to `semantics-6` because revision-5 hits could bypass
-static specialized `@deny` enforcement. K4.9D raises current trust to `semantics-7`
-for v0.2 family/category enforcement; K4.9E confirms compatibility without a
-further revision. The shared `tempra-runtime` arithmetic
+static specialized `@deny` enforcement. K4.9D raised trust to `semantics-7` for
+v0.2 family/category enforcement; K4.9E confirms compatibility without a
+further revision. K3.3 raises current trust to `semantics-8` for numeric backend
+parity: verified TIR types drive `Int64`/`UInt64`/`Float64` bytecode opcode
+selection, `UInt64` uses the shared checked kernel, and `Float64` keeps IEEE 754
+semantics. Revision-7 artifacts may contain the former untyped numeric lowering
+or predate Float64 literal support, so they miss. The shared `tempra-runtime` arithmetic
 contract is consumed by the HIR interpreter, TIR interpreter and VM. Eligible JIT functions implement equivalent checked
 Cranelift operations and propagate a C-compatible `{ value, status }` result
 through pure and heap-aware native calls. A non-zero status from native code is
 returned to the VM as a typed runtime failure and is never reclassified as
-fallback or re-executed in the interpreter.
+fallback or re-executed in the interpreter. `UInt64` and `Float64` functions are
+not native-JIT eligible today: they are rejected as unsupported types and run
+interpreted.
 
 ## Capability analysis insertion point
 

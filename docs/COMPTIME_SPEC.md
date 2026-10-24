@@ -97,8 +97,10 @@ K4.5B historically raised trust to `tempra-{CARGO_PKG_VERSION}-semantics-6`
 because revision-5 artifacts may contain specialized `@deny` clauses that were
 retained without static enforcement. K4.9D subsequently established
 `tempra-{CARGO_PKG_VERSION}-semantics-7` for v0.2 family/category enforcement;
-K4.9E confirmed compatibility without another semantic revision. Comptime's HIR
-authority and the bytecode format are unchanged.
+K4.9E confirmed compatibility without another semantic revision. K3.3 later
+raises current trust to `tempra-{CARGO_PKG_VERSION}-semantics-8` for numeric
+backend parity; it does not alter comptime's canonical HIR authority. Comptime's
+HIR authority and the bytecode format are unchanged.
 
 ```text
 K1 audit/spec        DONE

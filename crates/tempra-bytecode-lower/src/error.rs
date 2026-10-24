@@ -9,6 +9,23 @@ pub enum BytecodeLowerError {
     #[error("unsupported type: {0}")]
     UnsupportedType(String),
 
+    #[error("unsupported numeric type {actual:?} for {operation}")]
+    UnsupportedNumericType {
+        operation: &'static str,
+        actual: tempra_bytecode::function::BytecodeType,
+    },
+
+    #[error("numeric operands for {operation} have mismatched types: {left:?} and {right:?}")]
+    NumericTypeMismatch {
+        operation: &'static str,
+        left: tempra_bytecode::function::BytecodeType,
+        right: tempra_bytecode::function::BytecodeType,
+    },
+
+    /// TIR failed verification before backend lowering began.
+    #[error("TIR verification failed: {0}")]
+    TirVerification(String),
+
     #[error("invalid block: {0}")]
     InvalidBlock(String),
 

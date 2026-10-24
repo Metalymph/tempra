@@ -360,6 +360,7 @@ impl<'a> LowerContext<'a> {
     fn infer_expr_type(&mut self, expr: &HirExpression) -> Result<Type, TirLowerError> {
         match expr {
             HirExpression::Integer(_, _) => Ok(Type::Int64),
+            HirExpression::Float(_, _) => Ok(Type::Float64),
             HirExpression::Bool(_, _) => Ok(Type::Bool),
             HirExpression::String(_, _) => Ok(Type::String),
             HirExpression::Name(span, name) => {
@@ -2158,6 +2159,14 @@ impl<'a> LowerContext<'a> {
                     .build_const(TirConst::Int64(val))
                     .map_err(|e| e.into())
             }
+            HirExpression::Float(span, s) => {
+                let val = s.parse::<f64>().map_err(|_| {
+                    TirLowerError::UnsupportedExpr("Invalid Float64 literal".into(), *span)
+                })?;
+                self.builder
+                    .build_const(TirConst::Float64(val))
+                    .map_err(|e| e.into())
+            }
             HirExpression::Bool(_, b) => self
                 .builder
                 .build_const(TirConst::Bool(*b))
@@ -2286,12 +2295,17 @@ impl<'a> LowerContext<'a> {
                                 self.builder.build_gt(left, right).map_err(|e| e.into())
                             }
                             HirBinaryOp::LessEq => {
-                                let gt = self.builder.build_gt(left, right)?;
-                                self.builder.build_not(gt).map_err(|e| e.into())
+                                // `!(a > b)` is wrong for IEEE-754 NaN. Use
+                                // `a < b || a == b`, which is false when either
+                                // operand is NaN and true for signed-zero pairs.
+                                let lt = self.builder.build_lt(left, right)?;
+                                let eq = self.builder.build_eq(left, right)?;
+                                self.builder.build_or(lt, eq).map_err(|e| e.into())
                             }
                             HirBinaryOp::GreaterEq => {
-                                let lt = self.builder.build_lt(left, right)?;
-                                self.builder.build_not(lt).map_err(|e| e.into())
+                                let gt = self.builder.build_gt(left, right)?;
+                                let eq = self.builder.build_eq(left, right)?;
+                                self.builder.build_or(gt, eq).map_err(|e| e.into())
                             }
                             _ => Err(TirLowerError::UnsupportedExpr(
                                 format!("Binary {:?}", b.op),
@@ -2302,12 +2316,38 @@ impl<'a> LowerContext<'a> {
                 }
             }
             HirExpression::Unary(u) => {
-                let inner = self.lower_expression(&u.expr)?;
                 match u.op {
-                    HirUnaryOp::Not => self.builder.build_not(inner).map_err(|e| e.into()),
+                    HirUnaryOp::Not => {
+                        let inner = self.lower_expression(&u.expr)?;
+                        self.builder.build_not(inner).map_err(|e| e.into())
+                    }
                     HirUnaryOp::Negate => {
-                        let zero = self.builder.build_const(TirConst::Int64(0))?;
-                        self.builder.build_sub(zero, inner).map_err(|e| e.into())
+                        let operand_ty = self.infer_expr_type(&u.expr)?;
+                        let inner = self.lower_expression(&u.expr)?;
+                        match map_type(&operand_ty)? {
+                            TirType::Int64 => {
+                                let zero = self.builder.build_const(TirConst::Int64(0))?;
+                                self.builder.build_sub(zero, inner).map_err(|e| e.into())
+                            }
+                            TirType::Float64 => {
+                                // Multiplying by -1.0 preserves IEEE-754 signed
+                                // zero and infinity. Subtracting from 0.0 would
+                                // not preserve the sign of +0.0.
+                                let minus_one =
+                                    self.builder.build_const(TirConst::Float64(-1.0))?;
+                                self.builder
+                                    .build_mul(minus_one, inner)
+                                    .map_err(|e| e.into())
+                            }
+                            TirType::UInt64 => Err(TirLowerError::UnsupportedExpr(
+                                "unary '-' is not supported for UInt64".into(),
+                                u.span,
+                            )),
+                            other => Err(TirLowerError::UnsupportedExpr(
+                                format!("unary '-' does not support {:?}", other),
+                                u.span,
+                            )),
+                        }
                     }
                 }
             }

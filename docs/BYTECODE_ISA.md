@@ -114,7 +114,8 @@ The VM handles the following primitive types directly:
 
 These opcodes use checked Tempra `Int64` semantics. Addition, subtraction and
 multiplication overflow fail with `Int64ArithmeticError::Overflow`; division by
-zero fails with `DivisionByZero`, and `Int64::MIN / -1` is overflow. The VM and
+zero fails with `Int64ArithmeticError::DivisionByZero`, and `Int64::MIN / -1` is
+overflow. The VM and
 native JIT must return the same controlled failure. The bytecode encoding is
 unchanged by this contract.
 
@@ -126,6 +127,13 @@ unchanged by this contract.
 | `MulU64` | - | `[u64, u64] -> [u64]` | Unsigned multiplication. |
 | `DivU64` | - | `[u64, u64] -> [u64]` | Unsigned division. |
 
+These opcodes use checked Tempra `UInt64` semantics through the shared
+`tempra-runtime` kernel. Addition and multiplication overflow fail with
+`UInt64ArithmeticError::Overflow`, subtraction underflow fails with
+`UInt64ArithmeticError::Underflow`, and division by zero fails with
+`UInt64ArithmeticError::DivisionByZero`. They must never wrap or panic in any
+supported backend.
+
 ### Arithmetic (Float64)
 | Opcode | Operands | Stack Effect | Description |
 |---|---|---|---|
@@ -134,12 +142,20 @@ unchanged by this contract.
 | `MulF64` | - | `[f64, f64] -> [f64]` | Floating point multiplication. |
 | `DivF64` | - | `[f64, f64] -> [f64]` | Floating point division. |
 
+These opcodes preserve IEEE 754 behavior: division by `+0.0`/`-0.0` yields
+signed infinity (or NaN for `0.0 / 0.0`), NaN propagates, and signed zero is
+observable. They must not be lowered from or to integer opcodes.
+
 ### Comparison & Logic
 | Opcode | Operands | Stack Effect | Description |
 |---|---|---|---|
 | `Eq` | - | `[T, T] -> [bool]` | Structural equality check. |
 | `LtI64` | - | `[i64, i64] -> [bool]` | Signed less-than. |
 | `GtI64` | - | `[i64, i64] -> [bool]` | Signed greater-than. |
+| `LtU64` | - | `[u64, u64] -> [bool]` | Unsigned less-than. |
+| `GtU64` | - | `[u64, u64] -> [bool]` | Unsigned greater-than. |
+| `LtF64` | - | `[f64, f64] -> [bool]` | IEEE-ordered less-than; false for NaN. |
+| `GtF64` | - | `[f64, f64] -> [bool]` | IEEE-ordered greater-than; false for NaN. |
 | `Not` | - | `[bool] -> [bool]` | Boolean negation. |
 | `And` | - | `[bool, bool] -> [bool]` | Boolean AND. |
 | `Or` | - | `[bool, bool] -> [bool]` | Boolean OR. |

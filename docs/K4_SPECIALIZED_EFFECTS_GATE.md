@@ -134,9 +134,11 @@ implementation and compiler-owned cache assumptions.
 
 ## 5. Cache and failure invariants
 
-The current fingerprint is `tempra-{CARGO_PKG_VERSION}-semantics-7`; bytecode
-format remains 2. These revisions are independent. Hits require exact source
-hash and fingerprint plus successful decoding and bytecode verification.
+The fingerprint at this K4.10 checkpoint is
+`tempra-{CARGO_PKG_VERSION}-semantics-7`; bytecode format remains 2. K3.3 later
+raises current trust to `semantics-8` for numeric backend parity. These
+revisions are independent. Hits require exact source hash and fingerprint plus
+successful decoding and bytecode verification.
 
 Existing permanent regressions prove:
 

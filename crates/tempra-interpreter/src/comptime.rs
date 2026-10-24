@@ -205,6 +205,9 @@ impl Interpreter {
             Err(InterpreterEvalError::Int64Arithmetic(error)) => {
                 Err(ComptimeEvalError::Evaluation(error.to_string()))
             }
+            Err(InterpreterEvalError::UInt64Arithmetic(error)) => {
+                Err(ComptimeEvalError::Evaluation(error.to_string()))
+            }
             Err(InterpreterEvalError::Message(message)) => {
                 Err(ComptimeEvalError::Evaluation(message))
             }

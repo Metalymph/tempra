@@ -411,10 +411,13 @@ bytecode-only hit could otherwise bypass them. Specialized matching uses the
 existing capability analysis summaries and witnesses; the bytecode format, ABI
 and capability-metadata policy remain unchanged.
 
-K4.9D raises current trust to `semantics-7` as v0.2 family/category matching is
+K4.9D raises trust to `semantics-7` as v0.2 family/category matching is
 enabled. K4.9E confirms source/fingerprint/bytecode compatibility without another
 semantic change or serializing effect facts. Resource-qualified `io.read` and
 `io.write` remain generic operation restrictions; bare names denote categories.
+K3.3 later raises current trust to `semantics-8` for numeric backend parity;
+checked `UInt64` add/sub/mul join the conservative `Panic` origins, and every
+`Div` remains `Panic`.
 
 The current analysis/LSP path remains frontend/typechecking-only. E6 converts to
 the existing general `Diagnostic` model but does not make the LSP compile through

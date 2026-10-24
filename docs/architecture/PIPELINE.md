@@ -107,8 +107,7 @@ Cache hits remain analysis/contract-free. E3.2 originally introduced the
 `tempra-{CARGO_PKG_VERSION}-semantics-1` fingerprint; K1.7 raised it to revision
 2, K2.2 raised current trust to revision 3, K2.4 raised it to revision 4, K3.2
 raised it to revision 5, K4.5B raised it to revision 6, and K4.9D requires
-revision 7.
-Older artifacts miss;
+revision 7; K3.3 requires revision 8. Older artifacts miss;
 fresh failures never populate or replace cache entries. The semantic revision
 versions reuse guarantees, not bytecode format. See [cache policy](../BYTECODE_CACHE.md).
 
@@ -192,6 +191,19 @@ lowering could discard contracts. HIR/REPL/source-TIR annotation guards and
 non-enforcing `check`/`emit-tir` boundaries remain unchanged. E6's specialized
 count-only error and missing specialized inspection fields remain documented
 tooling limits in [the tooling guide](../TOOLING.md).
+
+K3.3 requires `semantics-8` for numeric backend parity. Verified TIR types are
+retained for bytecode lowering so `Int64`, `UInt64` and `Float64` arithmetic and
+ordering select their matching opcodes instead of defaulting to `Int64`. The
+verifier rejects arithmetic on unsupported or unresolved numeric types before
+emission. `UInt64` add/sub/mul/div use the shared checked runtime kernel and
+`Float64` preserves IEEE 754 division, NaN, infinities, signed zero and ordered
+comparisons. HIR, TIR interpretation, bytecode VM and source-level differential
+tests agree. Native JIT support remains limited to eligible `Int64` functions;
+`UInt64`/`Float64` signatures are rejected and interpreted, without native
+execution. Effect analysis adds checked `UInt64` add/sub/mul to the conservative
+`Panic` origins, while every `Div` remains `Panic`. TIR/bytecode formats are
+unchanged.
 
 K4.10's [final gate](../K4_SPECIALIZED_EFFECTS_GATE.md) confirms these boundaries
 with ordinary/JIT workspace tests and existing differential subprocess coverage.

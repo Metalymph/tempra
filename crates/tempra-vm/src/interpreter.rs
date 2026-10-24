@@ -666,25 +666,22 @@ impl<'a> Interpreter<'a> {
                 BytecodeInstr::AddU64 => {
                     let b = self.pop_u64()?;
                     let a = self.pop_u64()?;
-                    self.push(VmValue::UInt64(a + b))?;
+                    self.push(VmValue::UInt64(tempra_runtime::add_u64(a, b)?))?;
                 }
                 BytecodeInstr::SubU64 => {
                     let b = self.pop_u64()?;
                     let a = self.pop_u64()?;
-                    self.push(VmValue::UInt64(a - b))?;
+                    self.push(VmValue::UInt64(tempra_runtime::sub_u64(a, b)?))?;
                 }
                 BytecodeInstr::MulU64 => {
                     let b = self.pop_u64()?;
                     let a = self.pop_u64()?;
-                    self.push(VmValue::UInt64(a * b))?;
+                    self.push(VmValue::UInt64(tempra_runtime::mul_u64(a, b)?))?;
                 }
                 BytecodeInstr::DivU64 => {
                     let b = self.pop_u64()?;
                     let a = self.pop_u64()?;
-                    if b == 0 {
-                        return Err(VmError::DivisionByZero);
-                    }
-                    self.push(VmValue::UInt64(a / b))?;
+                    self.push(VmValue::UInt64(tempra_runtime::div_u64(a, b)?))?;
                 }
 
                 BytecodeInstr::AddF64 => {

@@ -75,6 +75,8 @@ not make `CompilationConfig` a new frontend authority.
 
 The `tempra-mir`, `tempra-ir`, `tempra-opt`, native AOT, Wasm backend, linker, and build crates contain varying levels of scaffold or prototype code. They are not a single production pipeline today. Historical design documents that describe them as complete do not override this status.
 
+Native AOT is first-class milestone A in the [roadmap](../roadmap.md); the existing Cranelift backend scaffold is its initial direction. Dedicated Wasm/WASI output remains a separate track. NR is standalone experimental RC-free research and never blocks baseline AOT.
+
 ## Canonical comptime authority
 
 The K1 audit selected the existing HIR interpreter as the semantic kernel for
@@ -114,14 +116,20 @@ revisions are independent of bytecode format version.
 K3.2 raises current trust to `semantics-5` because checked `Int64` add/sub/mul
 now contribute `Panic` and revision-4 hits could bypass that enforcement.
 K4.5B raised trust to `semantics-6` because revision-5 hits could bypass
-static specialized `@deny` enforcement. K4.9D raises current trust to `semantics-7`
-for v0.2 family/category enforcement; K4.9E confirms compatibility without a
-further revision. The shared `tempra-runtime` arithmetic
+static specialized `@deny` enforcement. K4.9D raised trust to `semantics-7` for
+v0.2 family/category enforcement; K4.9E confirms compatibility without a
+further revision. K3.3 raises current trust to `semantics-8` for numeric backend
+parity: verified TIR types drive `Int64`/`UInt64`/`Float64` bytecode opcode
+selection, `UInt64` uses the shared checked kernel, and `Float64` keeps IEEE 754
+semantics. Revision-7 artifacts may contain the former untyped numeric lowering
+or predate Float64 literal support, so they miss. The shared `tempra-runtime` arithmetic
 contract is consumed by the HIR interpreter, TIR interpreter and VM. Eligible JIT functions implement equivalent checked
 Cranelift operations and propagate a C-compatible `{ value, status }` result
 through pure and heap-aware native calls. A non-zero status from native code is
 returned to the VM as a typed runtime failure and is never reclassified as
-fallback or re-executed in the interpreter.
+fallback or re-executed in the interpreter. `UInt64` and `Float64` functions are
+not native-JIT eligible today: they are rejected as unsupported types and run
+interpreted.
 
 ## Capability analysis insertion point
 
@@ -190,7 +198,8 @@ enforces, but specialized violations currently surface as a generic compiler
 error rather than an E6 structured diagnostic; the E6 schema is unchanged.
 
 K4.5B raised cache trust to `semantics-6`, so revision-5 artifacts retaining
-unenforced specialized clauses cannot be reused. Hits remain trusted
+unenforced specialized clauses cannot be reused; K4.9D later raised current trust
+to `semantics-7` for v0.2 family/category enforcement. Hits remain trusted
 bytecode-only artifacts with no reconstructed facts. Filesystem parameters are
 opaque source spellings: no canonicalization, symlink/hard-link confinement,
 mount-alias protection or TOCTOU guarantee is claimed. K4.6A found no bypass;
@@ -244,21 +253,21 @@ cache-hit facts and unresolved E1 native/cloning mappings remain coverage gaps.
 
 ## Semantic analysis order
 
-The language-level dependency order is:
+The [roadmap](../roadmap.md) is authoritative for sequencing, statuses,
+dependencies and acceptance gates. The layered model is:
 
 ```text
-E — Capability / Effect Analysis
-        ↓
-M — Acyclic Ownership / Memory Model
-        ↓
-C — Concurrency
-        ↓
-V — Verified Functions
-        ↓
-O — Deeper Memory Optimizations
+Semantic: E → R → M → M5 → C → V
+Backend:  A (native AOT, first-class; Cranelift initial)
+Optimization: O after M ownership facts; P after K5/K6 measurements
+Research: NR (standalone experimental RC-free; never blocks A)
+Conditional: U
 ```
 
-Capability summaries become reusable inputs for ownership checks, concurrency-boundary checks, verified functions, diagnostics, and tooling.
+C (pluggable actor concurrency) implementation requires the M5 memory
+stabilization gate. A may progress incrementally and does not wait for O, NR or
+P. Capability summaries become reusable inputs for ownership checks,
+concurrency-boundary checks, verified functions, diagnostics, and tooling.
 
 ## Capability summary architecture
 
@@ -279,16 +288,21 @@ Unknown extern declarations are harmless until called. A call to an extern witho
 
 The current HIR runtime uses reference-counted and interior-mutable Rust representations for arrays, slices, closures, and captured cells. In particular, recursive closure `self` currently uses a strong cell-to-closure link. The runtime implementation therefore must not be cited as proof that safe Tempra already prevents ownership cycles.
 
-The immediate order is K → R → M → C → V → O → P, after completed E6, with U
-conditional. K keeps comptime semantics canonical and backend-independent. Its
-audit selected the existing HIR interpreter kernel, and K1.1 provides the
-canonical session facade without making a runtime backend authoritative. R is
-future Result/value-use hardening, not an effect. Phase M follows R and will define which ownership
-graphs are legal across value semantics, `let`, `var`, `ref`, `inout`, `consume`,
-closure captures, recursive `self`, structs, enums, and escaping values. It
-precedes pluggable actor concurrency.
+The roadmap's layered dependency model applies. E is implemented for the
+current surface; K3 runtime parity remains IN PROGRESS for currently executable
+surfaces, K4 is DONE, and K5/K6 are PLANNED. K keeps comptime semantics canonical
+and backend-independent. Its audit selected the existing HIR interpreter kernel,
+and K1.1 provides the canonical session facade without making a runtime backend
+authoritative. R is future Result/value-use hardening, not an effect. Phase M
+follows R and will define which ownership graphs are legal across value
+semantics, `let`, `var`, `ref`, `inout`, `consume`, closure captures, recursive
+`self`, structs, enums, and escaping values. M ends at the M5 stabilization gate,
+which actor concurrency (C) implementation must pass. Native AOT is first-class
+milestone A, with Cranelift as the initial backend, and may progress
+incrementally; O, NR and P are need-based work, not prerequisites for C or A. U
+remains conditional.
 
-ARC optimization is a separate later concern. Escape analysis, stack promotion, uniqueness, reuse, and retain/release elimination belong to O and are not prerequisites for C.
+ARC optimization is a separate later concern. Escape analysis, stack promotion, uniqueness, reuse, and retain/release elimination belong to O and are not prerequisites for C or A. Preparatory ownership and escape analyses may begin during M.
 
 E1–E6 complete the currently meaningful capability-contract and tooling core
 while retaining known coverage gaps. E6 projects existing facts through
@@ -299,12 +313,13 @@ guarantees. K2.1's audit, K2.2's specialization ordering/function-ID integrity,
 K2.3's explicit standard-library discovery input, K2.4's deterministic
 interface/field iteration and K2.5's cross-process byte-for-byte gate are complete.
 Level 3 applies to the supported same-build, same-host/target bytecode surface;
-cross-machine Level 4 reproducibility is not claimed.
-Runtime
-parity follows in K3, and responsiveness
-measurements in K4–K6. Compile latency is monitored during development; deep
-latency and incremental-build optimization belongs to P. The richer future TIR Graph still
-requires later ownership and actor facts.
+cross-machine Level 4 reproducibility is not claimed. Runtime parity remains in
+K3 for the currently executable HIR, TIR, VM and JIT surfaces; Wasm and AOT join
+runtime parity when those backends exist.
+Responsiveness measurements are planned in K5–K6; K4 is DONE. Compile
+latency is monitored during development; deep latency and incremental-build
+optimization belongs to P. The richer future TIR Graph still requires later
+ownership and actor facts.
 
 U — Unsafe Boundary is DEFERRED / CONDITIONAL standalone work at the end of the roadmap.
 The trigger is the first real source operation requiring authorization to preserve

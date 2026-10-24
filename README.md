@@ -361,19 +361,37 @@ today.
 
 ## Roadmap Overview
 
-The current focus is comptime consistency and runtime parity across execution
-paths. The remaining language work follows a deliberate dependency order:
+K3 runtime parity is **in progress**, the K4 specialized-effect track is
+complete, and K5/K6 responsiveness measurement and budgets are planned. The
+semantic dependency order is:
 
-1. Result and value-use hardening.
-2. Acyclic ownership and complete memory-model guarantees.
-3. Pluggable actor concurrency.
-4. Verified functions (`@verified`).
-5. Deeper memory optimization.
-6. Faster compilation and incremental builds.
-7. A conditional unsafe boundary, only if a real low-level primitive requires it.
+- **E** — capability/effect core (implemented for the current surface).
+- **R** — Result/value-use hardening (Result only).
+- **M** — memory model and acyclic ownership, ending in the mandatory M5
+  stabilization gate.
+- **C** — pluggable actor concurrency, blocked on M5 implementation.
+- **V** — verified functions (`@verified`), separate from effects and ordinary
+  safety.
 
-Native AOT, Wasm output, package management, and a richer TIR graph are parallel
-engineering tracks. See the [roadmap](docs/roadmap.md) for details.
+Optimization and backend work follows actual prerequisites rather than one
+global sequence:
+
+- **A** — native AOT, a first-class milestone and core product goal, with
+  native ABI, ownership-aware code generation, Cranelift-based AOT, linking,
+  standalone executables, parity, performance, and binary-size gates.
+- **O** — advanced memory optimization. It is not a prerequisite for C or A.
+- **NR** — standalone experimental RC-free research with fallback ARC. It never
+  blocks native AOT.
+- **P** — compiler performance, including cold/incremental builds, cache
+  invalidation, specialization control, footprint, artifact size, and latency
+  budgets.
+- **U** — a conditional unsafe boundary, only if a real low-level primitive
+  requires it.
+
+Wasm/WASI, VM, JIT, type-system hardening, comptime specialization, the standard
+library, REPL/LSP/tooling, the TIR Graph, package management, and release
+hardening remain explicit engineering tracks. See the
+[roadmap](docs/roadmap.md) for dependencies, statuses, and acceptance gates.
 
 ---
 

@@ -72,7 +72,10 @@ The VM uses the `VmValue` enum for all runtime values:
 
 The VM implements strictly controlled error handling via `VmError`. It never panics on valid bytecode. 
 Errors include:
-- `DivisionByZero`: Integer division by zero.
+- `Int64Arithmetic` / `UInt64Arithmetic`: checked integer arithmetic failures,
+  including division by zero.
+- `DivisionByZero`: retained for API compatibility; numeric division now reports
+  the typed arithmetic variants above.
 - `StackUnderflow`: Attempt to pop from an empty stack (should be caught by verifier).
 - `TypeMismatch`: Runtime type error (should be caught by verifier).
 - `UnreachableExecuted`: Execution reached an `Unreachable` instruction.
@@ -174,17 +177,25 @@ run_function_with_options(module, "main", args, options);
 4. **Execution**: Subsequent calls to the function use the native entry point.
 
 Both interpreted and native `Int64` add/sub/mul/div use the shared checked
-runtime contract. Arithmetic failures are typed VM errors. Native code returns
-`{ value, status }` through pure and heap-aware call chains; any non-zero
-status from already-running native code is propagated to the VM boundary as a
-runtime failure and is not treated as a JIT fallback opportunity.
+runtime contract. `UInt64` add/sub/mul/div are checked in the interpreter through
+the same shared kernel (overflow, underflow and division by zero are typed
+failures). `Float64` arithmetic follows IEEE 754, including signed-zero division,
+NaN and infinities; `LtF64`/`GtF64` are IEEE-ordered and false for NaN, while
+`LtU64`/`GtU64` are unsigned. Arithmetic failures are typed VM errors. Native
+code returns `{ value, status }` through pure and heap-aware call chains; any
+non-zero status from already-running native code is propagated to the VM boundary
+as a runtime failure and is not treated as a JIT fallback opportunity.
 
 ### Fallback Policy
 The JIT maintains a strict fallback policy. If a function uses unsupported
-features (Strings, Structs, Heap access), if compilation fails, or if a VM value
-cannot be marshalled across the native boundary, the VM transparently continues
-execution via the interpreter. Once native execution has started, any runtime
-failure is returned to the caller rather than re-executed in the interpreter.
+features (Strings, Structs, Heap access, `UInt64` or `Float64` signatures), if
+compilation fails, or if a VM value cannot be marshalled across the native
+boundary, the VM transparently continues execution via the interpreter. In
+particular, `UInt64` and `Float64` functions are rejected with an unsupported-type
+reason and execute interpreted with identical semantics; they are never
+reinterpreted as `Int64` native code. Once native execution has started, any
+runtime failure is returned to the caller rather than re-executed in the
+interpreter.
 
 ### Observability and Guardrails
 The VM profile includes a `JIT Summary` detailing:

@@ -1429,3 +1429,78 @@ fn test_jit_vm_unsupported_array_marshalling_falls_back_without_error() {
     assert_eq!(stats.jit_heap_handle_cache_hits, 0);
     assert_eq!(stats.jit_heap_handle_cache_misses, 0);
 }
+
+#[test]
+#[cfg(feature = "jit-cranelift")]
+fn test_jit_rejects_uint64_and_float64_without_native_execution() {
+    let mut module = BytecodeModule::new();
+
+    let mut uint_add = BytecodeFunction::new(
+        "uint_add".into(),
+        vec![BytecodeType::UInt64, BytecodeType::UInt64],
+        BytecodeType::UInt64,
+    );
+    uint_add.locals = vec![BytecodeType::UInt64, BytecodeType::UInt64];
+    uint_add.code.push(BytecodeInstr::LoadLocal(LocalId(0)));
+    uint_add.code.push(BytecodeInstr::LoadLocal(LocalId(1)));
+    uint_add.code.push(BytecodeInstr::AddU64);
+    uint_add.code.push(BytecodeInstr::Return);
+    uint_add.max_stack = 2;
+    let uint_id = module.add_function(uint_add);
+
+    let mut float_div = BytecodeFunction::new(
+        "float_div".into(),
+        vec![BytecodeType::Float64, BytecodeType::Float64],
+        BytecodeType::Float64,
+    );
+    float_div.locals = vec![BytecodeType::Float64, BytecodeType::Float64];
+    float_div.code.push(BytecodeInstr::LoadLocal(LocalId(0)));
+    float_div.code.push(BytecodeInstr::LoadLocal(LocalId(1)));
+    float_div.code.push(BytecodeInstr::DivF64);
+    float_div.code.push(BytecodeInstr::Return);
+    float_div.max_stack = 2;
+    let float_id = module.add_function(float_div);
+
+    let mut options = VmOptions::default();
+    options.jit_enabled = true;
+    options.profiling = true;
+    options.hot_call_threshold = 1;
+    options.jit_min_instruction_count = 0;
+
+    let mut interp = Interpreter::with_options(&module, options);
+
+    // Repeated calls keep executing interpreted: rejection must not fall back
+    // to a wrong native path, and IEEE/checked semantics still hold.
+    for _ in 0..3 {
+        assert_eq!(
+            interp
+                .run_function_id(uint_id, vec![VmValue::UInt64(7), VmValue::UInt64(5)])
+                .unwrap(),
+            VmValue::UInt64(12)
+        );
+        assert_eq!(
+            interp
+                .run_function_id(float_id, vec![VmValue::Float64(1.0), VmValue::Float64(0.0)])
+                .unwrap(),
+            VmValue::Float64(f64::INFINITY)
+        );
+    }
+
+    assert!(!interp.jit_cache.contains_key(&uint_id));
+    assert!(!interp.jit_cache.contains_key(&float_id));
+
+    let profile = interp.build_profile();
+    for id in [uint_id, float_id] {
+        let stats = &profile.function_stats[id.0 as usize];
+        assert_eq!(stats.jit_compile_successes, 0);
+        assert_eq!(stats.jit_runtime_calls, 0);
+        let reason = stats
+            .jit_rejection_reason
+            .as_ref()
+            .expect("numeric rejection reason should be recorded");
+        assert!(
+            reason.contains("Unsupported type"),
+            "expected unsupported-type rejection, got {reason}"
+        );
+    }
+}

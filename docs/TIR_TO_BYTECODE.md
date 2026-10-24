@@ -16,10 +16,29 @@ This approach ensures that values are always available, regardless of stack dept
 
 ### 2. Stack Machine Mapping
 TIR instructions map directly to their bytecode counterparts:
-- `Const` -> `ConstI64`, `ConstBool`, etc.
-- `Add`, `Sub`, `Mul`, `Div` -> `AddI64`, etc.
-- `Eq`, `Lt`, `Gt` -> `Eq`, `LtI64`, `GtI64`.
+- `Const` -> `ConstI64`, `ConstU64`, `ConstF64`, `ConstBool`, etc.
+- `Add`, `Sub`, `Mul`, `Div` -> the opcode matching the verified numeric type:
+  `AddI64`/`AddU64`/`AddF64`, and likewise for the other arithmetic operations.
+- `Eq` -> `Eq` for comparable values.
+- `Lt`, `Gt` -> `LtI64`/`GtI64`, `LtU64`/`GtU64` or `LtF64`/`GtF64` according
+  to the verified operand type.
 - `Call` -> `Call`.
+
+### Numeric opcode selection
+
+Lowering consumes `verify_module_with_types`; verified TIR types are
+authoritative. This prevents `UInt64` or `Float64` arithmetic from being emitted
+with `Int64` opcodes when source literals or inferred types do not carry enough
+information. The verifier rejects arithmetic with unsupported or unresolved
+numeric types before any bytecode is emitted. `UInt8` arithmetic is not expanded
+in TIR lowering; it is rejected rather than silently reinterpreted as `Int64`.
+The bytecode format and generic `Eq` opcode are unchanged.
+
+`UInt64` has no reachable source construction path today: integer literals are
+typed as `Int64` and there is no implemented numeric conversion constructor.
+Its checked contract is therefore validated at the TIR, bytecode and VM
+boundaries rather than claimed as source-level parity. `Float64` literals and
+unary negation are reachable from source.
 
 ### 3. Control Flow & Jump Patching
 Lowering is performed block-by-block. 

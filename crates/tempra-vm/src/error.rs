@@ -23,6 +23,7 @@ pub enum VmError {
     },
     PayloadOutOfBounds(u16),
     Int64Arithmetic(tempra_runtime::Int64ArithmeticError),
+    UInt64Arithmetic(tempra_runtime::UInt64ArithmeticError),
     DivisionByZero,
     Native(String),
     UnreachableExecuted,
@@ -61,6 +62,7 @@ impl fmt::Display for VmError {
             }
             VmError::PayloadOutOfBounds(i) => write!(f, "Payload out of bounds: {}", i),
             VmError::Int64Arithmetic(error) => error.fmt(f),
+            VmError::UInt64Arithmetic(error) => error.fmt(f),
             VmError::DivisionByZero => write!(f, "division by zero"),
             VmError::Native(msg) => write!(f, "native error: {}", msg),
             VmError::UnreachableExecuted => write!(f, "executed unreachable instruction"),
@@ -94,5 +96,11 @@ impl From<BytecodeVerifyError> for VmError {
 impl From<tempra_runtime::Int64ArithmeticError> for VmError {
     fn from(error: tempra_runtime::Int64ArithmeticError) -> Self {
         Self::Int64Arithmetic(error)
+    }
+}
+
+impl From<tempra_runtime::UInt64ArithmeticError> for VmError {
+    fn from(error: tempra_runtime::UInt64ArithmeticError) -> Self {
+        Self::UInt64Arithmetic(error)
     }
 }

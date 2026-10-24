@@ -5,7 +5,7 @@ This index points to current source-of-truth files. A crate's presence in the wo
 ## Project documentation
 
 - `README.md`: project overview and current high-level status.
-- `docs/roadmap.md`: semantic dependencies, immediate K → R → M → C → V → O → P sequence, completed E6 tooling, compiler-responsiveness K, fast-builds P, and conditional U.
+- `docs/roadmap.md`: authoritative milestone sequencing, statuses, dependencies and acceptance gates. It records E and K1–K4 history with K3 IN PROGRESS, K4 DONE and K5/K6 PLANNED; semantic E → R → M → M5 (gate for C) → C → V; first-class milestone A (native AOT) with Cranelift as the initial backend; O, standalone experimental RC-free research (NR, never blocks A) and P as need-based work; and conditional U.
 - `docs/TEMPRA_SURFACE_SPEC_v0.1.md`: current surface-language reference.
 - `docs/GRAMMAR.md`: parser-oriented grammar for implemented syntax.
 - `docs/specs/effects-v0.1.md`: implemented E1–E6 capability contracts/tooling, current enforcement and conditional U boundary.
@@ -80,10 +80,10 @@ This index points to current source-of-truth files. A crate's presence in the wo
 
 - `crates/tempra-mir/`: MIR scaffold; lowering is not implemented.
 - `crates/tempra-ir/`: small generic IR scaffold, separate from the active TIR path.
-- `crates/tempra-opt/`: optimization scaffold; ARC and escape work are not implemented language guarantees.
+- `crates/tempra-opt/`: optimization scaffold for O and preparatory NR analyses; ARC and escape work are not implemented language guarantees.
 - `crates/tempra-runtime/src/arithmetic.rs`: public shared checked `Int64` contract and typed arithmetic failures used across runtime backends.
 - `crates/tempra-runtime/`: shared runtime contracts and support.
-- `crates/tempra-backend-cranelift/`: native AOT scaffold, distinct from the experimental JIT.
+- `crates/tempra-backend-cranelift/`: native AOT scaffold and initial backend direction for milestone A, distinct from the experimental JIT.
 - `crates/tempra-backend-wasm/`: dedicated Wasm backend scaffold.
 - `crates/tempra-wasm-host/`, `crates/tempra-component-host/`: Wasm hosting scaffolds, not compiler backends.
 - `crates/tempra-linker/`: linker scaffold.
@@ -103,9 +103,10 @@ and pure detection in that same scan; E3.2 enforcement and the cache fingerprint
 are unchanged. E6 adds immutable driver projections and `tempra effects` without
 changing analysis or enforcement. E1–E6 complete the currently meaningful
 surface, not all TIR coverage; instruction-level source mapping remains absent.
-The K1 audit selected the HIR interpreter kernel and K1.1 adds its canonical
-comptime facade. Remaining K1 integration, hardening, parity and initial
-responsiveness work follows. Unsafe belongs
-to standalone conditional U, not the immediate E sequence. Frontend-only `check`
-does not certify contracts. The historical E5 audit and its three correctness
-debts are recorded in `docs/E1_CAPABILITY_ANALYSIS.md`.
+The K1 audit selected the HIR interpreter kernel and added its canonical
+comptime facade; K1 and K2 are complete, K3 runtime parity is IN PROGRESS for
+currently executable surfaces, K4 specialized effects are DONE, and K5/K6
+responsiveness is PLANNED. Unsafe belongs to standalone conditional U, not the
+immediate E sequence.
+Frontend-only `check` does not certify contracts. The historical E5 audit and
+its three correctness debts are recorded in `docs/E1_CAPABILITY_ANALYSIS.md`.

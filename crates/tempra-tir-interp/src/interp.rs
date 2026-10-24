@@ -152,7 +152,7 @@ impl<'a> Frame<'a> {
                     *b,
                     "add",
                     tempra_runtime::add_i64,
-                    |l, r| l + r,
+                    tempra_runtime::add_u64,
                     |l, r| l + r,
                 )?;
                 self.values.insert(*res, result);
@@ -163,7 +163,7 @@ impl<'a> Frame<'a> {
                     *b,
                     "sub",
                     tempra_runtime::sub_i64,
-                    |l, r| l - r,
+                    tempra_runtime::sub_u64,
                     |l, r| l - r,
                 )?;
                 self.values.insert(*res, result);
@@ -174,29 +174,18 @@ impl<'a> Frame<'a> {
                     *b,
                     "mul",
                     tempra_runtime::mul_i64,
-                    |l, r| l * r,
+                    tempra_runtime::mul_u64,
                     |l, r| l * r,
                 )?;
                 self.values.insert(*res, result);
             }
             TirInstr::Div(res, a, b) => {
-                // Check for division by zero
-                let b_val = self.get_value(*b)?;
-                match &b_val {
-                    TirRuntimeValue::UInt64(0) => {
-                        return Err(TirInterpError::DivisionByZero);
-                    }
-                    TirRuntimeValue::Float64(f) if *f == 0.0 => {
-                        return Err(TirInterpError::DivisionByZero);
-                    }
-                    _ => {}
-                }
                 let result = self.arith_op(
                     *a,
                     *b,
                     "div",
                     tempra_runtime::div_i64,
-                    |l, r| l / r,
+                    tempra_runtime::div_u64,
                     |l, r| l / r,
                 )?;
                 self.values.insert(*res, result);
@@ -310,7 +299,7 @@ impl<'a> Frame<'a> {
         b: TirValueId,
         name: &str,
         i64_op: impl Fn(i64, i64) -> Result<i64, tempra_runtime::Int64ArithmeticError>,
-        u64_op: impl Fn(u64, u64) -> u64,
+        u64_op: impl Fn(u64, u64) -> Result<u64, tempra_runtime::UInt64ArithmeticError>,
         f64_op: impl Fn(f64, f64) -> f64,
     ) -> Result<TirRuntimeValue, TirInterpError> {
         let lhs = self.get_value(a)?;
@@ -320,7 +309,7 @@ impl<'a> Frame<'a> {
                 Ok(TirRuntimeValue::Int64(i64_op(*l, *r)?))
             }
             (TirRuntimeValue::UInt64(l), TirRuntimeValue::UInt64(r)) => {
-                Ok(TirRuntimeValue::UInt64(u64_op(*l, *r)))
+                Ok(TirRuntimeValue::UInt64(u64_op(*l, *r)?))
             }
             (TirRuntimeValue::Float64(l), TirRuntimeValue::Float64(r)) => {
                 Ok(TirRuntimeValue::Float64(f64_op(*l, *r)))

@@ -391,16 +391,302 @@ fn duplicate_tir_function_id_is_rejected() {
 }
 
 #[test]
-fn missing_tir_function_mapping_is_rejected() {
+fn missing_tir_function_mapping_is_rejected_before_emission() {
     let module = TirModule {
         functions: vec![calling_function(3, "caller", 99)],
     };
 
-    assert!(matches!(
-        lower_tir_module(&module),
-        Err(crate::error::BytecodeLowerError::MissingFunctionMapping {
-            caller: TirFunctionId(3),
-            target: TirFunctionId(99)
-        })
-    ));
+    match lower_tir_module(&module) {
+        Err(crate::error::BytecodeLowerError::TirVerification(message)) => {
+            assert!(
+                message.contains("FunctionNotFound"),
+                "expected verifier function error, got {message}"
+            );
+        }
+        other => panic!("expected TIR verification failure, got {other:?}"),
+    }
+}
+
+fn lower_numeric_binary(
+    operand_type: TirType,
+    result_type: TirType,
+    instruction: fn(TirValueId, TirValueId, TirValueId) -> TirInstr,
+) -> tempra_bytecode::bytecode::BytecodeModule {
+    let module = TirModule {
+        functions: vec![TirFunction {
+            id: TirFunctionId(0),
+            name: "numeric".into(),
+            params: vec![
+                (TirValueId(0), operand_type.clone()),
+                (TirValueId(1), operand_type),
+            ],
+            return_type: result_type,
+            blocks: vec![TirBlock {
+                id: TirBlockId(0),
+                instrs: vec![instruction(TirValueId(2), TirValueId(0), TirValueId(1))],
+                terminator: Some(TirTerminator::Ret(Some(TirValueId(2)))),
+            }],
+            next_value_id: 3,
+            next_block_id: 1,
+            next_slot_id: 0,
+            debug_slots: Default::default(),
+            is_extern: false,
+        }],
+    };
+    let bytecode = lower_tir_module(&module).unwrap();
+    verify_module(&bytecode).unwrap();
+    bytecode
+}
+
+fn assert_numeric_opcode(
+    operand_type: TirType,
+    result_type: TirType,
+    instruction: fn(TirValueId, TirValueId, TirValueId) -> TirInstr,
+    expected: tempra_bytecode::opcode::BytecodeInstr,
+    forbidden: &[tempra_bytecode::opcode::BytecodeInstr],
+) {
+    let bytecode = lower_numeric_binary(operand_type, result_type, instruction);
+    let code = &bytecode.functions[0].code;
+    // The peephole pass may fuse `LoadLocal a; LoadLocal b; AddI64` into the
+    // `AddI64LL` superinstruction, which still proves the Int64 opcode was
+    // selected. No fused variants exist for the other numeric opcodes.
+    let present = code.iter().any(|instr| match (instr, &expected) {
+        (
+            tempra_bytecode::opcode::BytecodeInstr::AddI64LL(..),
+            tempra_bytecode::opcode::BytecodeInstr::AddI64,
+        ) => true,
+        (instr, expected) => instr == expected,
+    });
+    assert!(
+        present,
+        "expected {expected:?} in lowered code, got {code:?}"
+    );
+    for instr in forbidden {
+        assert!(
+            !code.contains(instr),
+            "numeric lowering must not contain {instr:?}: {code:?}"
+        );
+    }
+}
+
+#[test]
+fn numeric_bytecode_opcodes_are_selected_from_verified_operand_types() {
+    use tempra_bytecode::opcode::BytecodeInstr;
+
+    for (operand_type, result_type, add, sub, mul, div) in [
+        (
+            TirType::Int64,
+            TirType::Int64,
+            BytecodeInstr::AddI64,
+            BytecodeInstr::SubI64,
+            BytecodeInstr::MulI64,
+            BytecodeInstr::DivI64,
+        ),
+        (
+            TirType::UInt64,
+            TirType::UInt64,
+            BytecodeInstr::AddU64,
+            BytecodeInstr::SubU64,
+            BytecodeInstr::MulU64,
+            BytecodeInstr::DivU64,
+        ),
+        (
+            TirType::Float64,
+            TirType::Float64,
+            BytecodeInstr::AddF64,
+            BytecodeInstr::SubF64,
+            BytecodeInstr::MulF64,
+            BytecodeInstr::DivF64,
+        ),
+    ] {
+        let arithmetic: [(
+            fn(TirValueId, TirValueId, TirValueId) -> TirInstr,
+            BytecodeInstr,
+            BytecodeInstr,
+        ); 4] = [
+            (TirInstr::Add, add, BytecodeInstr::AddI64),
+            (TirInstr::Sub, sub, BytecodeInstr::SubI64),
+            (TirInstr::Mul, mul, BytecodeInstr::MulI64),
+            (TirInstr::Div, div, BytecodeInstr::DivI64),
+        ];
+        for (instruction, expected, int64_opcode) in arithmetic {
+            let forbidden: &[BytecodeInstr] = if expected == int64_opcode {
+                &[]
+            } else {
+                std::slice::from_ref(&int64_opcode)
+            };
+            assert_numeric_opcode(
+                operand_type.clone(),
+                result_type.clone(),
+                instruction,
+                expected,
+                forbidden,
+            );
+        }
+    }
+
+    for (operand_type, lt, gt) in [
+        (TirType::Int64, BytecodeInstr::LtI64, BytecodeInstr::GtI64),
+        (TirType::UInt64, BytecodeInstr::LtU64, BytecodeInstr::GtU64),
+        (TirType::Float64, BytecodeInstr::LtF64, BytecodeInstr::GtF64),
+    ] {
+        let comparisons: [(
+            fn(TirValueId, TirValueId, TirValueId) -> TirInstr,
+            BytecodeInstr,
+            BytecodeInstr,
+        ); 2] = [
+            (TirInstr::Lt, lt, BytecodeInstr::LtI64),
+            (TirInstr::Gt, gt, BytecodeInstr::GtI64),
+        ];
+        for (instruction, expected, int64_opcode) in comparisons {
+            let forbidden: &[BytecodeInstr] = if expected == int64_opcode {
+                &[]
+            } else {
+                std::slice::from_ref(&int64_opcode)
+            };
+            assert_numeric_opcode(
+                operand_type.clone(),
+                TirType::Bool,
+                instruction,
+                expected,
+                forbidden,
+            );
+        }
+        assert_numeric_opcode(
+            operand_type,
+            TirType::Bool,
+            TirInstr::Eq,
+            BytecodeInstr::Eq,
+            &[
+                BytecodeInstr::LtI64,
+                BytecodeInstr::GtI64,
+                BytecodeInstr::LtU64,
+                BytecodeInstr::GtU64,
+                BytecodeInstr::LtF64,
+                BytecodeInstr::GtF64,
+            ],
+        );
+    }
+}
+
+#[test]
+fn invalid_numeric_tir_is_rejected_before_bytecode_emission() {
+    let module = TirModule {
+        functions: vec![TirFunction {
+            id: TirFunctionId(0),
+            name: "invalid_add".into(),
+            params: vec![
+                (TirValueId(0), TirType::String),
+                (TirValueId(1), TirType::String),
+            ],
+            return_type: TirType::String,
+            blocks: vec![TirBlock {
+                id: TirBlockId(0),
+                instrs: vec![TirInstr::Add(TirValueId(2), TirValueId(0), TirValueId(1))],
+                terminator: Some(TirTerminator::Ret(Some(TirValueId(2)))),
+            }],
+            next_value_id: 3,
+            next_block_id: 1,
+            next_slot_id: 0,
+            debug_slots: Default::default(),
+            is_extern: false,
+        }],
+    };
+
+    match lower_tir_module(&module) {
+        Err(crate::error::BytecodeLowerError::TirVerification(message)) => {
+            assert!(
+                message.contains("InvalidArithmeticType"),
+                "expected typed TIR rejection, got {message}"
+            );
+        }
+        other => panic!("expected TIR verification failure, got {other:?}"),
+    }
+}
+
+#[test]
+fn conflicting_struct_field_types_are_rejected_before_bytecode_emission() {
+    // Two constructions disagree on Counter.value. The numeric use is written
+    // against Float64, which is the last construction's type. Before the fix
+    // the verifier retained Float64, accepted the module, and emitted AddF64.
+    let module = TirModule {
+        functions: vec![
+            TirFunction {
+                id: TirFunctionId(0),
+                name: "make_i64".into(),
+                params: vec![],
+                return_type: TirType::Struct("Counter".into()),
+                blocks: vec![TirBlock {
+                    id: TirBlockId(0),
+                    instrs: vec![
+                        TirInstr::Const(TirValueId(0), TirConst::Int64(7)),
+                        TirInstr::MakeStruct(
+                            TirValueId(1),
+                            "Counter".into(),
+                            vec![("value".into(), TirValueId(0))],
+                        ),
+                    ],
+                    terminator: Some(TirTerminator::Ret(Some(TirValueId(1)))),
+                }],
+                next_value_id: 2,
+                next_block_id: 1,
+                next_slot_id: 0,
+                debug_slots: Default::default(),
+                is_extern: false,
+            },
+            TirFunction {
+                id: TirFunctionId(1),
+                name: "make_f64".into(),
+                params: vec![],
+                return_type: TirType::Struct("Counter".into()),
+                blocks: vec![TirBlock {
+                    id: TirBlockId(0),
+                    instrs: vec![
+                        TirInstr::Const(TirValueId(0), TirConst::Float64(1.5)),
+                        TirInstr::MakeStruct(
+                            TirValueId(1),
+                            "Counter".into(),
+                            vec![("value".into(), TirValueId(0))],
+                        ),
+                    ],
+                    terminator: Some(TirTerminator::Ret(Some(TirValueId(1)))),
+                }],
+                next_value_id: 2,
+                next_block_id: 1,
+                next_slot_id: 0,
+                debug_slots: Default::default(),
+                is_extern: false,
+            },
+            TirFunction {
+                id: TirFunctionId(2),
+                name: "use".into(),
+                params: vec![(TirValueId(0), TirType::Struct("Counter".into()))],
+                return_type: TirType::Float64,
+                blocks: vec![TirBlock {
+                    id: TirBlockId(0),
+                    instrs: vec![
+                        TirInstr::Get(TirValueId(1), TirValueId(0), TirKey::Field("value".into())),
+                        TirInstr::Const(TirValueId(2), TirConst::Float64(2.5)),
+                        TirInstr::Add(TirValueId(3), TirValueId(1), TirValueId(2)),
+                    ],
+                    terminator: Some(TirTerminator::Ret(Some(TirValueId(3)))),
+                }],
+                next_value_id: 4,
+                next_block_id: 1,
+                next_slot_id: 0,
+                debug_slots: Default::default(),
+                is_extern: false,
+            },
+        ],
+    };
+
+    match lower_tir_module(&module) {
+        Err(crate::error::BytecodeLowerError::TirVerification(message)) => {
+            assert!(
+                message.contains("StructFieldTypeConflict"),
+                "expected struct field conflict rejection, got {message}"
+            );
+        }
+        other => panic!("expected TIR verification failure, got {other:?}"),
+    }
 }

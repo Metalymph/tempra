@@ -31,6 +31,9 @@ pub enum TirInterpError {
     #[error(transparent)]
     Int64Arithmetic(#[from] tempra_runtime::Int64ArithmeticError),
 
+    #[error(transparent)]
+    UInt64Arithmetic(#[from] tempra_runtime::UInt64ArithmeticError),
+
     #[error("unsupported instruction: {0}")]
     UnsupportedInstr(String),
 

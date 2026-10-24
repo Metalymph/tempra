@@ -55,8 +55,13 @@ Variables in TIR are managed explicitly through memory slots:
 - `tag` / `unwrap`: Support for algebraic data type destructuring. `tag` produces
   `String` in the current TIR/bytecode/VM representation, not the reserved `Tag`
   type. Comparisons require the same operand type, including tag/string comparisons.
-- `add`, `sub`, `mul`, `div`: Numeric arithmetic operations.
-- `eq`, `lt`, `gt`: Numeric comparison, producing boolean results.
+- `add`, `sub`, `mul`, `div`: Typed numeric arithmetic. Verified operand and
+  result types determine the backend opcode; `Int64` and `UInt64` integer
+  arithmetic is checked, `Float64` follows IEEE 754, and unsupported numeric
+  type combinations are rejected before execution.
+- `eq`, `lt`, `gt`: Typed numeric comparison, producing boolean results.
+  Ordering is signed for `Int64`, unsigned for `UInt64`, and IEEE-ordered for
+  `Float64` (NaN compares false with `<`, `>`, `<=` and `>=`).
 - `and`, `or`, `not`: Boolean logic operations.
 - `call`: Invokes a TIR function.
 
@@ -73,28 +78,48 @@ The verifier ensures the structural and type soundness of a TIR module:
 - All branched-to block IDs must exist within the function.
 - Condition branches (`condbr`) must act on `Bool` type.
 - `ret` instructions must return a value compatible with the function's return type.
-- Arithmetic operations are strictly typed.
+- Arithmetic operations are strictly typed. For `add`, `sub`, `mul`, `div`,
+  `lt`, `gt` and `eq`, the verifier requires consistent operand types and
+  accepts the supported numeric set `Int64`, `UInt64` and `Float64` for the
+  relevant operation; unsupported or unresolved numeric types are rejected
+  before bytecode lowering. Verified type information is retained for backend
+  opcode selection.
 - `load` and `store` must operate on declared slots, matching their type.
+- Struct field types are inferred from non-internal `make struct` instructions
+  and propagated across functions until stable. Every construction of the same
+  nominal struct must agree on a field's resolved type; a conflicting
+  assignment is rejected with `StructFieldTypeConflict` before bytecode
+  lowering. Fields discovered earlier in the same inference pass are retained.
+  Internal `$`-prefixed structs are excluded because iterator state is
+  polymorphic over the element type.
 - `get`, `set`, `tag`, and `unwrap` have smoke validation but defer strict structural layout type checking until fully implemented.
 
 ## Analysis Roadmap
 
-TIR evolution follows the project-wide dependency order rather than assigning concurrency instructions to the next TIR version:
+TIR evolution follows the [roadmap](roadmap.md)'s layered dependency model
+rather than assigning concurrency instructions to the next TIR version. The
+roadmap is authoritative for sequencing, statuses, dependencies and gates.
 
-1. **E — Capability/effect semantic core (E1–E4 done):** stable summaries and provenance.
-2. **E6 — Structured diagnostics and inspect tooling (done):** projections over existing facts.
-3. **K — Comptime consistency and compiler responsiveness:** K1's canonical evaluator and semantic-cache trust boundary are complete. K2.1–K2.5 complete the audited deterministic ordering, explicit stdlib input and same-build cross-process reproducibility gate; runtime parity, phase timings and latency gates continue in K3–K6.
-4. **R — Result / value-use hardening:** future obligations against silent Result discard, not a capability/effect.
-5. **M — Acyclic ownership:** formalize legal strong-reference graphs and complete ARC-cycle prevention before concurrent transfer.
-6. **C — Pluggable actor concurrency:** add task, actor, channel, and selection operations only after the preceding foundations define their boundaries.
-7. **V — `@verified`:** consume prior facts for stronger proof obligations.
-8. **O — Deeper memory optimization:** uniqueness, escape, stack promotion, reuse, and retain/release elimination.
-9. **P — Fast compilation and incremental builds:** deep latency, invalidation, specialization-control and data-structure optimization work.
+- **Semantic:** E (implemented for the current surface) → R (Result/value-use
+  hardening, not a capability/effect) → M (acyclic ownership and ARC-cycle
+  prevention; M5 stabilization gate) → C (pluggable actor concurrency: task,
+  actor, channel and selection) → V (`@verified`, consuming prior facts). Actor
+  concurrency implementation requires M5.
+- **Native AOT:** First-class milestone A, with Cranelift as the initial backend.
+  It may progress incrementally and does not wait for O, NR or P.
+- **Optimization:** O covers uniqueness, escape, stack promotion, reuse and
+  retain/release elimination after M ownership facts; P covers deep latency,
+  invalidation, specialization control and data-structure work after K5/K6
+  measurements. O is not a prerequisite for C or A.
+- **Research:** NR is standalone experimental RC-free research with fallback ARC
+  and never blocks baseline AOT.
+- **Conditional:** U — Unsafe Boundary is DEFERRED / CONDITIONAL and activates
+  only when a real source operation requires memory/type-safety authorization.
 
-E1–E6 are implemented for the currently meaningful surface. E6 reuses current
-facts and is not a complete TIR Graph. U — Unsafe Boundary is standalone
-DEFERRED / CONDITIONAL work, activated only by a real source operation requiring
-memory/type-safety authorization. No current TIR capability origin emits Unsafe.
+E1–E6 are implemented for the currently meaningful surface; K3 runtime parity is
+IN PROGRESS for currently executable surfaces, K4 is DONE, and K5/K6 are
+PLANNED. E6 reuses current facts and is not a complete TIR Graph. No current TIR
+capability origin emits Unsafe.
 
 K1.7 historically changes cache trust to `semantics-2`. K2.2 changes current
 trust to `semantics-3` so artifacts that may contain the former specialization
@@ -115,10 +140,22 @@ zero from signed overflow, and lowered negation inherits checked `sub` behavior.
 All supported runtime consumers use the shared contract; host panics, native
 traps and profile-dependent wrapping are not semantic outcomes.
 
-K4.5B raises cache trust to `semantics-6` without changing TIR or bytecode
-formats. Revision-5 artifacts can retain specialized `@deny` clauses that were
-not statically enforced; current compilation matches those clauses against the
-existing specialized-effect summaries and witnesses.
+K4.5B historically raised cache trust to `semantics-6` without changing TIR or
+bytecode formats. Revision-5 artifacts can retain specialized `@deny` clauses
+that were not statically enforced. K4.9D subsequently raises trust to
+`semantics-7` for v0.2 family/category enforcement, and K4.9E confirms
+compatibility without another semantic change. Current compilation matches the
+retained clauses against the existing specialized-effect summaries and
+witnesses. These revisions do not change TIR or bytecode formats.
+
+K3.3 raises current trust to `semantics-8` and types numeric TIR more strictly.
+Revision-7 artifacts may contain `UInt64`/`Float64` arithmetic lowered to
+`Int64` bytecode or may lack Float64 literal support. The verifier now validates
+numeric operand types and exposes verified types to bytecode lowering so each
+numeric operation selects its matching opcode. `UInt64` arithmetic is checked
+through the shared runtime kernel, `Float64` preserves IEEE 754 semantics, and
+unsupported numeric operations fail verification rather than silently using
+`Int64`. The TIR instruction set and bytecode format are unchanged.
 
 This section does not define future TIR opcodes. Their exact representation belongs to the corresponding phase specifications.
 

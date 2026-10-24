@@ -18,3 +18,4 @@ tempra-tir = { path = "../tempra-tir" }
 tempra-tir-lower = { path = "../tempra-tir-lower" }
 tempra-bytecode-lower = { path = "../tempra-bytecode-lower" }
 tempra-typeck = { path = "../tempra-typeck" }
+tempra-tir-interp = { path = "../tempra-tir-interp" }

@@ -63,7 +63,11 @@ overflow, and division checks both zero and `Int64::MIN / -1` before Cranelift
 native call chain. At the VM boundary the status becomes the same typed
 arithmetic error used by the interpreter; execution does not continue with a
 placeholder result and does not fall back after a semantic arithmetic failure.
-UInt and floating-point arithmetic remain outside this K3.2 contract.
+UInt and floating-point arithmetic remain outside this K3.2 contract. K3.3
+defines their interpreted bytecode semantics (`UInt64` checked, `Float64` IEEE
+754), but they remain non-JIT-eligible: `UInt64`/`Float64` signatures are
+rejected as unsupported types and execute in the VM without native expansion or
+post-failure fallback.
 
 ## Source-Level JIT Operation Status (v0.2)
 

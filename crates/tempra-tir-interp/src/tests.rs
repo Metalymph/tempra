@@ -221,6 +221,28 @@ fn interpret_unsupported_make_error() {
 }
 
 #[test]
+fn interpret_invalid_tir_is_rejected_by_verifier_before_execution() {
+    let module = build_simple_module("test", TirType::Unit, |fb| {
+        // If execution happened first, this unsupported Make would report
+        // UnsupportedInstr. The missing terminator makes the module invalid, so
+        // verification must reject it first.
+        let _ = fb
+            .build_make(TirType::Struct("Foo".into()), None, vec![])
+            .unwrap();
+    });
+
+    match interpret_function(&module, "test", vec![]) {
+        Err(TirInterpError::VerifierFailed(errors)) => {
+            assert!(
+                errors.contains("MissingReturn"),
+                "expected a missing-return verifier error, got: {errors}"
+            );
+        }
+        other => panic!("expected VerifierFailed before execution, got {other:?}"),
+    }
+}
+
+#[test]
 fn interpret_unreachable_error() {
     let module = build_simple_module("test", TirType::Unit, |fb| {
         fb.build_unreachable().unwrap();
@@ -231,4 +253,179 @@ fn interpret_unreachable_error() {
         result.unwrap_err(),
         TirInterpError::UnreachableExecuted
     ));
+}
+
+#[test]
+fn interpret_uint64_arithmetic_is_checked() {
+    for (operation, left, right, expected) in [
+        ("add", 20u64, 22u64, 42u64),
+        ("sub", 50, 8, 42),
+        ("mul", 21, 2, 42),
+        ("div", 84, 2, 42),
+    ] {
+        let module = build_simple_module("test", TirType::UInt64, |fb| {
+            let left = fb.build_const(TirConst::UInt64(left)).unwrap();
+            let right = fb.build_const(TirConst::UInt64(right)).unwrap();
+            let result = match operation {
+                "add" => fb.build_add(left, right),
+                "sub" => fb.build_sub(left, right),
+                "mul" => fb.build_mul(left, right),
+                "div" => fb.build_div(left, right),
+                _ => unreachable!(),
+            }
+            .unwrap();
+            fb.build_ret(Some(result)).unwrap();
+        });
+        assert_eq!(
+            interpret_function(&module, "test", vec![]).unwrap(),
+            TirRuntimeValue::UInt64(expected)
+        );
+    }
+
+    for (operation, left, right, expected) in [
+        (
+            "add",
+            u64::MAX,
+            1,
+            tempra_runtime::UInt64ArithmeticError::Overflow,
+        ),
+        (
+            "mul",
+            u64::MAX,
+            2,
+            tempra_runtime::UInt64ArithmeticError::Overflow,
+        ),
+        (
+            "sub",
+            0,
+            1,
+            tempra_runtime::UInt64ArithmeticError::Underflow,
+        ),
+        (
+            "div",
+            1,
+            0,
+            tempra_runtime::UInt64ArithmeticError::DivisionByZero,
+        ),
+    ] {
+        let module = build_simple_module("test", TirType::UInt64, |fb| {
+            let left = fb.build_const(TirConst::UInt64(left)).unwrap();
+            let right = fb.build_const(TirConst::UInt64(right)).unwrap();
+            let result = match operation {
+                "add" => fb.build_add(left, right),
+                "sub" => fb.build_sub(left, right),
+                "mul" => fb.build_mul(left, right),
+                "div" => fb.build_div(left, right),
+                _ => unreachable!(),
+            }
+            .unwrap();
+            fb.build_ret(Some(result)).unwrap();
+        });
+        assert!(matches!(
+            interpret_function(&module, "test", vec![]),
+            Err(TirInterpError::UInt64Arithmetic(error)) if error == expected
+        ));
+    }
+}
+
+#[test]
+fn interpret_uint64_comparisons_use_unsigned_ordering() {
+    let module = build_simple_module("test", TirType::Bool, |fb| {
+        let large = fb.build_const(TirConst::UInt64(u64::MAX)).unwrap();
+        let one = fb.build_const(TirConst::UInt64(1)).unwrap();
+        let gt = fb.build_gt(large, one).unwrap();
+        let lt = fb.build_lt(one, large).unwrap();
+        let ordered = fb.build_and(gt, lt).unwrap();
+        fb.build_ret(Some(ordered)).unwrap();
+    });
+    assert_eq!(
+        interpret_function(&module, "test", vec![]).unwrap(),
+        TirRuntimeValue::Bool(true)
+    );
+}
+
+#[test]
+fn interpret_float64_preserves_ieee754_semantics() {
+    // +0 and -0 divide differently.
+    let positive = build_simple_module("positive", TirType::Float64, |fb| {
+        let one = fb.build_const(TirConst::Float64(1.0)).unwrap();
+        let zero = fb.build_const(TirConst::Float64(0.0)).unwrap();
+        let result = fb.build_div(one, zero).unwrap();
+        fb.build_ret(Some(result)).unwrap();
+    });
+    assert_eq!(
+        interpret_function(&positive, "positive", vec![]).unwrap(),
+        TirRuntimeValue::Float64(f64::INFINITY)
+    );
+
+    let negative = build_simple_module("negative", TirType::Float64, |fb| {
+        let one = fb.build_const(TirConst::Float64(1.0)).unwrap();
+        let zero = fb.build_const(TirConst::Float64(-0.0)).unwrap();
+        let result = fb.build_div(one, zero).unwrap();
+        fb.build_ret(Some(result)).unwrap();
+    });
+    assert_eq!(
+        interpret_function(&negative, "negative", vec![]).unwrap(),
+        TirRuntimeValue::Float64(f64::NEG_INFINITY)
+    );
+
+    // NaN from 0/0 is not equal to itself and neither ordering comparison holds.
+    let nan = build_simple_module("nan", TirType::Bool, |fb| {
+        let zero = fb.build_const(TirConst::Float64(0.0)).unwrap();
+        let nan = fb.build_div(zero, zero).unwrap();
+        let eq = fb.build_eq(nan, nan).unwrap();
+        let lt = fb.build_lt(nan, zero).unwrap();
+        let gt = fb.build_gt(nan, zero).unwrap();
+        let neither = fb.build_not(eq).unwrap();
+        let lt_false = fb.build_not(lt).unwrap();
+        let both = fb.build_and(neither, lt_false).unwrap();
+        let gt_false = fb.build_not(gt).unwrap();
+        let all = fb.build_and(both, gt_false).unwrap();
+        fb.build_ret(Some(all)).unwrap();
+    });
+    assert_eq!(
+        interpret_function(&nan, "nan", vec![]).unwrap(),
+        TirRuntimeValue::Bool(true)
+    );
+
+    // Equality distinguishes NaN but not signed zero.
+    let equality = build_simple_module("equality", TirType::Bool, |fb| {
+        let zero = fb.build_const(TirConst::Float64(0.0)).unwrap();
+        let negative_zero = fb.build_const(TirConst::Float64(-0.0)).unwrap();
+        let zero_eq = fb.build_eq(zero, negative_zero).unwrap();
+        let nan = fb.build_div(zero, zero).unwrap();
+        let nan_eq = fb.build_eq(nan, nan).unwrap();
+        let neq = fb.build_not(nan_eq).unwrap();
+        let result = fb.build_and(zero_eq, neq).unwrap();
+        fb.build_ret(Some(result)).unwrap();
+    });
+    assert_eq!(
+        interpret_function(&equality, "equality", vec![]).unwrap(),
+        TirRuntimeValue::Bool(true)
+    );
+}
+
+#[test]
+fn interpret_float64_negation_by_minus_one_preserves_signed_zero_and_infinity() {
+    let module = build_simple_module("negate", TirType::Bool, |fb| {
+        let minus_one = fb.build_const(TirConst::Float64(-1.0)).unwrap();
+        let zero = fb.build_const(TirConst::Float64(0.0)).unwrap();
+        let negative_zero = fb.build_mul(minus_one, zero).unwrap();
+        let infinity = fb.build_const(TirConst::Float64(f64::INFINITY)).unwrap();
+        let negative_infinity = fb.build_mul(minus_one, infinity).unwrap();
+        let one = fb.build_const(TirConst::Float64(1.0)).unwrap();
+        let signed_zero_division = fb.build_div(one, negative_zero).unwrap();
+        let neg_inf_is_neg_inf = fb
+            .build_eq(negative_infinity, signed_zero_division)
+            .unwrap();
+        let positive_zero = fb.build_const(TirConst::Float64(0.0)).unwrap();
+        let zero_is_negative = fb.build_lt(negative_zero, positive_zero).unwrap();
+        let zero_not_negative = fb.build_not(zero_is_negative).unwrap();
+        let result = fb.build_and(neg_inf_is_neg_inf, zero_not_negative).unwrap();
+        fb.build_ret(Some(result)).unwrap();
+    });
+    assert_eq!(
+        interpret_function(&module, "negate", vec![]).unwrap(),
+        TirRuntimeValue::Bool(true)
+    );
 }

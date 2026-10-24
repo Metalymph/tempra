@@ -360,6 +360,7 @@ impl<'a> LowerContext<'a> {
     fn infer_expr_type(&mut self, expr: &HirExpression) -> Result<Type, TirLowerError> {
         match expr {
             HirExpression::Integer(_, _) => Ok(Type::Int64),
+            HirExpression::Float(_, _) => Ok(Type::Float64),
             HirExpression::Bool(_, _) => Ok(Type::Bool),
             HirExpression::String(_, _) => Ok(Type::String),
             HirExpression::Name(span, name) => {
@@ -2111,6 +2112,43 @@ impl<'a> LowerContext<'a> {
         self.lower_expression(expr)
     }
 
+    /// Lowers `&&` and `||` without evaluating the RHS when the LHS decides
+    /// the result. The temporary slot carries the selected Bool result across
+    /// the merge block; no new instruction forms are introduced.
+    fn lower_logical_binary(
+        &mut self,
+        left: TirValueId,
+        right: &HirExpression,
+        short_on_true: bool,
+    ) -> Result<TirValueId, TirLowerError> {
+        let slot = self.builder.build_slot(
+            TirType::Bool,
+            Some(if short_on_true { "$or_tmp" } else { "$and_tmp" }),
+        )?;
+        self.builder.build_store(slot, left)?;
+
+        let rhs_block = self.builder.new_block();
+        let short_block = self.builder.new_block();
+        let end_block = self.builder.new_block();
+
+        if short_on_true {
+            self.builder.build_condbr(left, short_block, rhs_block)?;
+        } else {
+            self.builder.build_condbr(left, rhs_block, short_block)?;
+        }
+
+        self.builder.set_current_block(short_block);
+        self.builder.build_br(end_block)?;
+
+        self.builder.set_current_block(rhs_block);
+        let right = self.lower_expression(right)?;
+        self.builder.build_store(slot, right)?;
+        self.builder.build_br(end_block)?;
+
+        self.builder.set_current_block(end_block);
+        self.builder.build_load(slot).map_err(Into::into)
+    }
+
     pub fn lower_expression(&mut self, expr: &HirExpression) -> Result<TirValueId, TirLowerError> {
         match expr {
             HirExpression::Integer(span, s) => {
@@ -2119,6 +2157,14 @@ impl<'a> LowerContext<'a> {
                 })?;
                 self.builder
                     .build_const(TirConst::Int64(val))
+                    .map_err(|e| e.into())
+            }
+            HirExpression::Float(span, s) => {
+                let val = s.parse::<f64>().map_err(|_| {
+                    TirLowerError::UnsupportedExpr("Invalid Float64 literal".into(), *span)
+                })?;
+                self.builder
+                    .build_const(TirConst::Float64(val))
                     .map_err(|e| e.into())
             }
             HirExpression::Bool(_, b) => self
@@ -2216,45 +2262,92 @@ impl<'a> LowerContext<'a> {
                 }
 
                 let left = self.lower_expression(&b.left)?;
-                let right = self.lower_expression(&b.right)?;
 
                 match b.op {
-                    HirBinaryOp::Add => self.builder.build_add(left, right).map_err(|e| e.into()),
-                    HirBinaryOp::Sub => self.builder.build_sub(left, right).map_err(|e| e.into()),
-                    HirBinaryOp::Mul => self.builder.build_mul(left, right).map_err(|e| e.into()),
-                    HirBinaryOp::Div => self.builder.build_div(left, right).map_err(|e| e.into()),
-                    HirBinaryOp::Eq => self.builder.build_eq(left, right).map_err(|e| e.into()),
-                    HirBinaryOp::NotEq => {
-                        let eq = self.builder.build_eq(left, right)?;
-                        self.builder.build_not(eq).map_err(|e| e.into())
+                    HirBinaryOp::And => self.lower_logical_binary(left, &b.right, false),
+                    HirBinaryOp::Or => self.lower_logical_binary(left, &b.right, true),
+                    _ => {
+                        let right = self.lower_expression(&b.right)?;
+                        match b.op {
+                            HirBinaryOp::Add => {
+                                self.builder.build_add(left, right).map_err(|e| e.into())
+                            }
+                            HirBinaryOp::Sub => {
+                                self.builder.build_sub(left, right).map_err(|e| e.into())
+                            }
+                            HirBinaryOp::Mul => {
+                                self.builder.build_mul(left, right).map_err(|e| e.into())
+                            }
+                            HirBinaryOp::Div => {
+                                self.builder.build_div(left, right).map_err(|e| e.into())
+                            }
+                            HirBinaryOp::Eq => {
+                                self.builder.build_eq(left, right).map_err(|e| e.into())
+                            }
+                            HirBinaryOp::NotEq => {
+                                let eq = self.builder.build_eq(left, right)?;
+                                self.builder.build_not(eq).map_err(|e| e.into())
+                            }
+                            HirBinaryOp::Less => {
+                                self.builder.build_lt(left, right).map_err(|e| e.into())
+                            }
+                            HirBinaryOp::Greater => {
+                                self.builder.build_gt(left, right).map_err(|e| e.into())
+                            }
+                            HirBinaryOp::LessEq => {
+                                // `!(a > b)` is wrong for IEEE-754 NaN. Use
+                                // `a < b || a == b`, which is false when either
+                                // operand is NaN and true for signed-zero pairs.
+                                let lt = self.builder.build_lt(left, right)?;
+                                let eq = self.builder.build_eq(left, right)?;
+                                self.builder.build_or(lt, eq).map_err(|e| e.into())
+                            }
+                            HirBinaryOp::GreaterEq => {
+                                let gt = self.builder.build_gt(left, right)?;
+                                let eq = self.builder.build_eq(left, right)?;
+                                self.builder.build_or(gt, eq).map_err(|e| e.into())
+                            }
+                            _ => Err(TirLowerError::UnsupportedExpr(
+                                format!("Binary {:?}", b.op),
+                                b.span,
+                            )),
+                        }
                     }
-                    HirBinaryOp::Less => self.builder.build_lt(left, right).map_err(|e| e.into()),
-                    HirBinaryOp::Greater => {
-                        self.builder.build_gt(left, right).map_err(|e| e.into())
-                    }
-                    HirBinaryOp::LessEq => {
-                        let gt = self.builder.build_gt(left, right)?;
-                        self.builder.build_not(gt).map_err(|e| e.into())
-                    }
-                    HirBinaryOp::GreaterEq => {
-                        let lt = self.builder.build_lt(left, right)?;
-                        self.builder.build_not(lt).map_err(|e| e.into())
-                    }
-                    HirBinaryOp::And => self.builder.build_and(left, right).map_err(|e| e.into()),
-                    HirBinaryOp::Or => self.builder.build_or(left, right).map_err(|e| e.into()),
-                    _ => Err(TirLowerError::UnsupportedExpr(
-                        format!("Binary {:?}", b.op),
-                        b.span,
-                    )),
                 }
             }
             HirExpression::Unary(u) => {
-                let inner = self.lower_expression(&u.expr)?;
                 match u.op {
-                    HirUnaryOp::Not => self.builder.build_not(inner).map_err(|e| e.into()),
+                    HirUnaryOp::Not => {
+                        let inner = self.lower_expression(&u.expr)?;
+                        self.builder.build_not(inner).map_err(|e| e.into())
+                    }
                     HirUnaryOp::Negate => {
-                        let zero = self.builder.build_const(TirConst::Int64(0))?;
-                        self.builder.build_sub(zero, inner).map_err(|e| e.into())
+                        let operand_ty = self.infer_expr_type(&u.expr)?;
+                        let inner = self.lower_expression(&u.expr)?;
+                        match map_type(&operand_ty)? {
+                            TirType::Int64 => {
+                                let zero = self.builder.build_const(TirConst::Int64(0))?;
+                                self.builder.build_sub(zero, inner).map_err(|e| e.into())
+                            }
+                            TirType::Float64 => {
+                                // Multiplying by -1.0 preserves IEEE-754 signed
+                                // zero and infinity. Subtracting from 0.0 would
+                                // not preserve the sign of +0.0.
+                                let minus_one =
+                                    self.builder.build_const(TirConst::Float64(-1.0))?;
+                                self.builder
+                                    .build_mul(minus_one, inner)
+                                    .map_err(|e| e.into())
+                            }
+                            TirType::UInt64 => Err(TirLowerError::UnsupportedExpr(
+                                "unary '-' is not supported for UInt64".into(),
+                                u.span,
+                            )),
+                            other => Err(TirLowerError::UnsupportedExpr(
+                                format!("unary '-' does not support {:?}", other),
+                                u.span,
+                            )),
+                        }
                     }
                 }
             }

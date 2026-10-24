@@ -6,6 +6,10 @@ pub enum VerifierError {
     MissingEntryBlock,
     InvalidBlockId(TirBlockId),
     UndeclaredValue(TirValueId),
+    UnresolvedValueType(TirValueId),
+    InvalidArithmeticType(TirType),
+    InvalidComparisonType(TirType),
+    StructFieldTypeConflict { struct_name: String, field: String },
     TypeMismatch { expected: TirType, actual: TirType },
     MissingReturn(TirBlockId),
     UndeclaredSlot(TirSlotId),
@@ -15,36 +19,115 @@ pub enum VerifierError {
     GenericError(String),
 }
 
+pub struct VerifiedTypes {
+    pub functions: HashMap<TirFunctionId, HashMap<TirValueId, TirType>>,
+}
+
 pub fn verify_module(module: &TirModule) -> Result<(), Vec<VerifierError>> {
-    let mut errors = Vec::new();
+    verify_module_with_types(module).map(|_| ())
+}
+
+pub fn verify_module_with_types(module: &TirModule) -> Result<VerifiedTypes, Vec<VerifierError>> {
     let mut functions = HashMap::new();
 
     for func in &module.functions {
         functions.insert(func.id, func);
     }
 
-    for func in &module.functions {
-        if let Err(mut errs) = verify_function(func, &functions) {
-            errors.append(&mut errs);
+    // Struct field types are not carried explicitly by TIR. Infer them from
+    // typed constructions and propagate until stable so field access in a
+    // different function (for example an `extend` method) is still typed.
+    let mut struct_fields: StructFieldTypes = HashMap::new();
+    let max_passes = 128;
+    for pass in 0..max_passes {
+        let known_fields = struct_fields.clone();
+        let mut discovered = known_fields.clone();
+        let mut errors = Vec::new();
+        let mut function_types = HashMap::new();
+
+        for func in &module.functions {
+            match verify_function_inner(func, &functions, &known_fields, &mut discovered) {
+                Ok(value_types) => {
+                    let known_types = value_types
+                        .into_iter()
+                        .filter_map(|(value, ty)| ty.map(|ty| (value, ty)))
+                        .collect();
+                    function_types.insert(func.id, known_types);
+                }
+                Err(mut errs) => errors.append(&mut errs),
+            }
+        }
+
+        if discovered == struct_fields {
+            return if errors.is_empty() {
+                Ok(VerifiedTypes {
+                    functions: function_types,
+                })
+            } else {
+                Err(errors)
+            };
+        }
+        struct_fields = discovered;
+
+        if pass + 1 == max_passes {
+            return Err(vec![VerifierError::GenericError(
+                "struct field type inference did not converge".into(),
+            )]);
         }
     }
 
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(errors)
-    }
+    unreachable!("bounded struct field inference loop always returns")
 }
 
 pub fn verify_function(
     func: &TirFunction,
     functions: &HashMap<TirFunctionId, &TirFunction>,
 ) -> Result<(), Vec<VerifierError>> {
+    let mut discovered = HashMap::new();
+    verify_function_inner(func, functions, &HashMap::new(), &mut discovered).map(|_| ())
+}
+
+type StructFieldTypes = HashMap<String, HashMap<String, TirType>>;
+
+fn resolve_get_type(
+    target: Option<&TirType>,
+    key: &TirKey,
+    struct_fields: &StructFieldTypes,
+) -> Option<TirType> {
+    let target = target?;
+    match (target, key) {
+        (TirType::Struct(name), TirKey::Field(field))
+            if name == "$ArrayIter" || name == "$SliceIter" =>
+        {
+            // Compiler-internal iterator structs are instantiated at several
+            // element types inside one function. Only `idx` has a stable type;
+            // `data` remains intentionally unresolved rather than being
+            // collapsed onto one instantiation.
+            (field == "idx").then_some(TirType::Int64)
+        }
+        (TirType::Struct(name), TirKey::Field(field)) => {
+            struct_fields.get(name)?.get(field).cloned()
+        }
+        (TirType::Array(inner), TirKey::Index(_)) | (TirType::Slice(inner), TirKey::Index(_)) => {
+            Some((**inner).clone())
+        }
+        (TirType::String, TirKey::Index(_)) => Some(TirType::UInt8),
+        (TirType::Tuple(elements), TirKey::Index(index)) => elements.get(*index).cloned(),
+        _ => None,
+    }
+}
+
+fn verify_function_inner(
+    func: &TirFunction,
+    functions: &HashMap<TirFunctionId, &TirFunction>,
+    struct_fields: &StructFieldTypes,
+    discovered_struct_fields: &mut StructFieldTypes,
+) -> Result<HashMap<TirValueId, Option<TirType>>, Vec<VerifierError>> {
     let mut errors = Vec::new();
 
     if func.blocks.is_empty() {
         // Declaration only, nothing more to verify here
-        return Ok(());
+        return Ok(HashMap::new());
     }
 
     let mut declared_blocks = HashSet::new();
@@ -81,20 +164,70 @@ pub fn verify_function(
                     }
                     value_types.insert(*res, Some(ty.clone()));
                 }
-                TirInstr::MakeStruct(res, _name, fields) => {
-                    for (_name, val) in fields {
+                TirInstr::MakeStruct(res, name, fields) => {
+                    let internal = name.starts_with('$');
+                    // Start from the current pass's accumulated layout so a
+                    // later construction cannot discard fields discovered by
+                    // an earlier construction in the same pass. `discovered`
+                    // is seeded with the previous pass's map, so this also
+                    // preserves cross-pass propagation.
+                    let mut inferred_fields = if internal {
+                        HashMap::new()
+                    } else {
+                        discovered_struct_fields
+                            .get(name)
+                            .cloned()
+                            .unwrap_or_default()
+                    };
+
+                    for (field_name, val) in fields {
                         if !value_types.contains_key(val) {
                             errors.push(VerifierError::UndeclaredValue(*val));
+                            continue;
+                        }
+                        if internal {
+                            continue;
+                        }
+                        let Some(Some(field_ty)) = value_types.get(val) else {
+                            // An unresolved value provides no layout
+                            // information. It must not create a conflict; the
+                            // value is reported separately if it is used in a
+                            // context that requires a type.
+                            continue;
+                        };
+
+                        match inferred_fields.get(field_name) {
+                            None => {
+                                inferred_fields.insert(field_name.clone(), field_ty.clone());
+                            }
+                            Some(existing) if existing == field_ty => {}
+                            Some(_) => {
+                                // Keep the established type so the inferred
+                                // layout cannot flip between passes. The
+                                // conflict is re-detected on every pass, so it
+                                // is still present in the converging pass.
+                                errors.push(VerifierError::StructFieldTypeConflict {
+                                    struct_name: name.clone(),
+                                    field: field_name.clone(),
+                                });
+                            }
                         }
                     }
-                    value_types.insert(*res, None); // TODO: Track actual struct type
+
+                    // Internal iterator structs are polymorphic over the
+                    // element type, so their field layouts cannot be merged
+                    // into one nominal shape.
+                    if !internal {
+                        discovered_struct_fields.insert(name.clone(), inferred_fields);
+                    }
+                    value_types.insert(*res, Some(TirType::Struct(name.clone())));
                 }
-                TirInstr::Get(res, target, _key) => {
+                TirInstr::Get(res, target, key) => {
                     if !value_types.contains_key(target) {
                         errors.push(VerifierError::UndeclaredValue(*target));
                     }
-                    // Type is unknown without full layout
-                    value_types.insert(*res, None);
+                    let target_ty = value_types.get(target).and_then(|ty| ty.as_ref());
+                    value_types.insert(*res, resolve_get_type(target_ty, key, struct_fields));
                 }
                 TirInstr::Set(res, target, _key, val) => {
                     if !value_types.contains_key(target) {
@@ -103,7 +236,7 @@ pub fn verify_function(
                     if !value_types.contains_key(val) {
                         errors.push(VerifierError::UndeclaredValue(*val));
                     }
-                    value_types.insert(*res, None);
+                    value_types.insert(*res, value_types.get(target).cloned().flatten());
                 }
                 TirInstr::Tag(res, target) => {
                     if !value_types.contains_key(target) {
@@ -114,11 +247,25 @@ pub fn verify_function(
                     // require identical operand types; there is no tag coercion.
                     value_types.insert(*res, Some(TirType::String));
                 }
-                TirInstr::Unwrap(res, target, _variant, _index) => {
+                TirInstr::Unwrap(res, target, variant, index) => {
                     if !value_types.contains_key(target) {
                         errors.push(VerifierError::UndeclaredValue(*target));
                     }
-                    value_types.insert(*res, None); // Type unknown
+                    let target_ty = value_types.get(target).cloned().flatten();
+                    let unwrapped_ty = match target_ty {
+                        Some(TirType::Option(inner)) => Some(*inner),
+                        Some(TirType::Result(ok, err)) => match variant.as_str() {
+                            "Ok" => Some(*ok),
+                            "Err" => Some(*err),
+                            _ => match *index {
+                                0 => Some(*ok),
+                                1 => Some(*err),
+                                _ => None,
+                            },
+                        },
+                        _ => None,
+                    };
+                    value_types.insert(*res, unwrapped_ty);
                 }
                 TirInstr::Slot(slot, ty) => {
                     slot_types.insert(*slot, ty.clone());
@@ -192,6 +339,12 @@ pub fn verify_function(
                     if b_ty.is_none() {
                         errors.push(VerifierError::UndeclaredValue(*b));
                     }
+                    if matches!(a_ty, Some(None)) {
+                        errors.push(VerifierError::UnresolvedValueType(*a));
+                    }
+                    if matches!(b_ty, Some(None)) {
+                        errors.push(VerifierError::UnresolvedValueType(*b));
+                    }
 
                     let mut res_ty = None;
                     if let (Some(Some(at)), Some(Some(bt))) = (a_ty, b_ty) {
@@ -200,25 +353,18 @@ pub fn verify_function(
                                 expected: at.clone(),
                                 actual: bt.clone(),
                             });
-                        }
-                        if *at == TirType::Int64
-                            || *at == TirType::UInt64
-                            || *at == TirType::Float64
+                        } else if matches!(at, TirType::Int64 | TirType::UInt64 | TirType::Float64)
                         {
                             res_ty = Some(at.clone());
                         } else {
-                            errors.push(VerifierError::GenericError(format!(
-                                "Invalid type for arithmetic: {:?}",
-                                at
-                            )));
-                            res_ty = Some(at.clone());
+                            errors.push(VerifierError::InvalidArithmeticType(at.clone()));
                         }
-                    } else if let Some(Some(at)) = a_ty {
-                        res_ty = Some(at.clone());
                     }
                     value_types.insert(*res, res_ty);
                 }
                 TirInstr::Eq(res, a, b) | TirInstr::Lt(res, a, b) | TirInstr::Gt(res, a, b) => {
+                    let requires_ordering =
+                        matches!(instr, TirInstr::Lt(_, _, _) | TirInstr::Gt(_, _, _));
                     let a_ty = value_types.get(a);
                     let b_ty = value_types.get(b);
                     if a_ty.is_none() {
@@ -227,6 +373,12 @@ pub fn verify_function(
                     if b_ty.is_none() {
                         errors.push(VerifierError::UndeclaredValue(*b));
                     }
+                    if matches!(a_ty, Some(None)) {
+                        errors.push(VerifierError::UnresolvedValueType(*a));
+                    }
+                    if matches!(b_ty, Some(None)) {
+                        errors.push(VerifierError::UnresolvedValueType(*b));
+                    }
 
                     if let (Some(Some(at)), Some(Some(bt))) = (a_ty, b_ty) {
                         if at != bt {
@@ -234,6 +386,10 @@ pub fn verify_function(
                                 expected: at.clone(),
                                 actual: bt.clone(),
                             });
+                        } else if requires_ordering
+                            && !matches!(at, TirType::Int64 | TirType::UInt64 | TirType::Float64)
+                        {
+                            errors.push(VerifierError::InvalidComparisonType(at.clone()));
                         }
                     }
                     value_types.insert(*res, Some(TirType::Bool));
@@ -288,7 +444,18 @@ pub fn verify_function(
                     if !value_types.contains_key(index) {
                         errors.push(VerifierError::UndeclaredValue(*index));
                     }
-                    value_types.insert(*res, None);
+                    let object_ty = value_types.get(object).cloned().flatten();
+                    let result_ty = match object_ty {
+                        Some(TirType::Array(inner)) | Some(TirType::Slice(inner)) => Some(*inner),
+                        Some(TirType::String) => Some(TirType::UInt8),
+                        Some(TirType::Tuple(elements)) => {
+                            // A dynamic tuple index cannot select a single static type.
+                            let _ = elements;
+                            None
+                        }
+                        _ => None,
+                    };
+                    value_types.insert(*res, result_ty);
                 }
                 TirInstr::Slice(res, object, start, end) => {
                     if !value_types.contains_key(object) {
@@ -300,7 +467,15 @@ pub fn verify_function(
                     if !value_types.contains_key(end) {
                         errors.push(VerifierError::UndeclaredValue(*end));
                     }
-                    value_types.insert(*res, None);
+                    let object_ty = value_types.get(object).cloned().flatten();
+                    let result_ty = match object_ty {
+                        Some(TirType::Array(inner)) | Some(TirType::Slice(inner)) => {
+                            Some(TirType::Slice(inner))
+                        }
+                        Some(TirType::String) => Some(TirType::Slice(Box::new(TirType::UInt8))),
+                        _ => None,
+                    };
+                    value_types.insert(*res, result_ty);
                 }
                 TirInstr::Len(res, object) => {
                     if !value_types.contains_key(object) {
@@ -388,7 +563,7 @@ pub fn verify_function(
     }
 
     if errors.is_empty() {
-        Ok(())
+        Ok(value_types)
     } else {
         Err(errors)
     }

@@ -8,9 +8,12 @@ Tempra's current capability-contract surface is small rather than a user-facing 
 - `@deny(...)`
 - `@pure`
 
-K1 comptime authority/evaluator audit is the next compiler milestone: one
-backend-independent semantics, parity across VM/JIT/Wasm/future AOT,
-determinism, reproducibility, future parity tests and initial phase timings.
+K1 has completed the canonical HIR comptime authority, and K2 completed
+deterministic ordering and reproducibility. K3 runtime parity remains IN
+PROGRESS for the currently executable HIR/TIR/VM/JIT surfaces; K4 is DONE and
+K5/K6 responsiveness work is PLANNED. Wasm and future AOT join runtime parity
+when those backends exist. The [roadmap](../roadmap.md) is authoritative for
+sequencing, statuses, dependencies and gates.
 `@unsafe` is a separate conditional future boundary under U, not a Phase E requirement.
 
 There is no public `effect`, `handle`, `perform`, `allow`, `@no_alloc`, `@no_panic`, `@deterministic`, or family of aliases.
@@ -205,10 +208,10 @@ Later consumers include acyclic ownership analysis, concurrency-boundary verific
 E1 classifies operations conservatively according to current runtime semantics:
 
 - `Alloc` applies only when the current representation semantically requires runtime allocation. A TIR constant or construction is not automatically allocating; string constants and composite construction must be confirmed against the runtime and lowering.
-- `Panic` is an initial may-fail classification. Checked `Int64` add, sub, mul
-  and div, unwraps, indexed accesses, and slices may require it even when later
-  proof could establish safety. It is a capability, not a general runtime-error
-  or recovery hierarchy.
+- `Panic` is an initial may-fail classification. Checked `Int64` and `UInt64`
+  add, sub and mul, every numeric `div`, unwraps, indexed accesses, and slices
+  may require it even when later proof could establish safety. It is a
+  capability, not a general runtime-error or recovery hierarchy.
 - known filesystem and console externs introduce `IO`;
 - `Process`, `Spawn`, `Nondeterminism`, and `Unsafe` currently have no complete TIR mapping.
 
@@ -217,9 +220,11 @@ Phase V may prove that a specific division or bounds access cannot fail. That fu
 K3.2 makes the current runtime contract explicit: supported backends implement
 checked `Int64` arithmetic through one host-safe semantic kernel or equivalent
 native checks. Addition, subtraction, multiplication, division and lowered
-negation can fail deterministically; Float and UInt capability mappings are
-unchanged. This rule is current runtime authority and is not inferred
-retroactively from the future `@verified` design.
+negation can fail deterministically. K3.3 extends the same checked contract to
+`UInt64` add/sub/mul/div and keeps `Float64` under IEEE 754, where division does
+not panic but every `Div` remains conservatively classified as `Panic` by E1.
+This rule is current runtime authority and is not inferred retroactively from
+the future `@verified` design.
 
 An unknown extern declaration does not fail analysis by itself. `UnclassifiedExtern` is reported only when a TIR call actually targets an extern without a capability classification. E1 analyzes every TIR function, so calls from non-entry functions are still checked; entirely unused extern declarations are ignored.
 
@@ -254,13 +259,19 @@ E1 need not implement this presentation or source-span mapping. It must preserve
 5. **E6 (implemented):** immutable diagnostics and inspection projections plus
    `tempra effects [--json]`, reusing existing analysis and witnesses.
 
-The immediate roadmap continues with K → R → M → C → V → O → P, with U
-conditional. R adds future Result/value-use obligations, not capabilities. K does
-not yet choose an HIR interpreter, VM or other evaluator as canonical. Compile
-latency is monitored during development; P is the later deep optimization
-milestone for cold latency, incremental invalidation/cache, specialization
-control, fact reuse, interning/arenas, data structures and profiled
-parallelization, including agent/IDE edit-to-compile responsiveness. The
+The [roadmap](../roadmap.md) is authoritative for sequencing, statuses,
+dependencies and acceptance gates. The semantic path is E → R → M → M5 → C → V;
+C (pluggable actor concurrency) implementation requires the M5 memory
+stabilization gate. Native AOT is first-class milestone A with Cranelift as the
+initial backend and may progress incrementally; O, standalone experimental
+RC-free research (NR) and P are need-based work, not prerequisites for C or A.
+NR never blocks baseline AOT, and U remains conditional. R adds future Result/value-use obligations, not
+capabilities. K1 selected the HIR interpreter as canonical; K3 runtime parity is
+IN PROGRESS for currently executable surfaces, K4 is DONE, and K5/K6 are
+PLANNED. Compile latency is monitored during development; P is the later deep
+optimization milestone for cold latency, incremental invalidation/cache,
+specialization control, fact reuse, interning/arenas, data structures and
+profiled parallelization, including agent/IDE edit-to-compile responsiveness. The
 [post-E4 state and audit record](../E1_CAPABILITY_ANALYSIS.md) tracks native
 signature integrity, comptime extern handling and JIT API correctness debts;
 none is a justification for blanket `extern == unsafe`.

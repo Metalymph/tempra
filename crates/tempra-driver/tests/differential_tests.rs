@@ -222,6 +222,43 @@ fn test_diff_bool() {
 }
 
 #[test]
+fn test_diff_logical_short_circuit_skips_rhs() {
+    assert_differential("fn main() -> Bool { return false && (1 / 0 == 0) }");
+    assert_differential("fn main() -> Bool { return true || (1 / 0 == 0) }");
+}
+
+#[test]
+fn test_diff_logical_short_circuit_requires_rhs() {
+    assert_differential_int64_error(
+        "fn main() -> Bool { return true && (1 / 0 == 0) }",
+        "integer division by zero",
+        "Int64Arithmetic(DivisionByZero)",
+    );
+    assert_differential_int64_error(
+        "fn main() -> Bool { return false || (1 / 0 == 0) }",
+        "integer division by zero",
+        "Int64Arithmetic(DivisionByZero)",
+    );
+}
+
+#[test]
+fn test_diff_nested_logical_short_circuit() {
+    assert_differential(
+        "fn main() -> Bool { return (false && (1 / 0 == 0)) || (true && (2 > 1)) }",
+    );
+    assert_differential("fn main() -> Bool { return false && (true || (1 / 0 == 0)) }");
+}
+
+#[test]
+fn test_diff_logical_left_operand_is_evaluated_first() {
+    assert_differential_int64_error(
+        "fn main() -> Bool { return (1 / 0 == 0) && false }",
+        "integer division by zero",
+        "Int64Arithmetic(DivisionByZero)",
+    );
+}
+
+#[test]
 fn test_diff_if_else() {
     let source = r#"
         fn main() -> Int64 {
@@ -241,6 +278,124 @@ fn test_diff_function_call() {
     let source = r#"
         fn add(a: Int64, b: Int64) -> Int64 { return a + b }
         fn main() -> Int64 { return add(10, 20) }
+    "#;
+    assert_differential(source);
+}
+
+#[test]
+fn test_diff_call_arguments_are_evaluated_in_source_order() {
+    let first_fails = r#"
+        fn combine(a: Int64, b: Int64) -> Int64 { return a + b }
+        fn main() -> Int64 {
+            return combine(9223372036854775807 + 1, 1 / 0)
+        }
+    "#;
+    assert_differential_int64_error(first_fails, "integer overflow", "Int64Arithmetic(Overflow)");
+
+    let second_fails = r#"
+        fn combine(a: Int64, b: Int64) -> Int64 { return a + b }
+        fn main() -> Int64 {
+            return combine(1 + 1, 1 / 0)
+        }
+    "#;
+    assert_differential_int64_error(
+        second_fails,
+        "integer division by zero",
+        "Int64Arithmetic(DivisionByZero)",
+    );
+}
+
+#[test]
+fn test_diff_binary_lhs_is_evaluated_before_rhs() {
+    assert_differential_int64_error(
+        "fn main() -> Int64 { return (9223372036854775807 + 1) + (1 / 0) }",
+        "integer overflow",
+        "Int64Arithmetic(Overflow)",
+    );
+}
+
+#[test]
+fn test_diff_unselected_if_branch_is_not_executed() {
+    let source = r#"
+        fn selected_true(flag: Bool) -> Int64 {
+            if flag {
+                return 7
+            } else {
+                return 1 / 0
+            }
+        }
+
+        fn selected_false(flag: Bool) -> Int64 {
+            if flag {
+                return 1 / 0
+            } else {
+                return 9
+            }
+        }
+
+        fn main() -> Int64 {
+            return selected_true(true) + selected_false(false)
+        }
+    "#;
+    assert_differential(source);
+}
+
+#[test]
+fn test_diff_nested_calls_preserve_first_failure_order() {
+    let inner_first = r#"
+        fn nested_add(a: Int64, b: Int64) -> Int64 { return a + b }
+        fn main() -> Int64 {
+            return nested_add(nested_add(9223372036854775807, 1), 1 / 0)
+        }
+    "#;
+    assert_differential_int64_error(inner_first, "integer overflow", "Int64Arithmetic(Overflow)");
+
+    let outer_first = r#"
+        fn nested_add(a: Int64, b: Int64) -> Int64 { return a + b }
+        fn main() -> Int64 {
+            return nested_add(1 / 0, nested_add(9223372036854775807, 1))
+        }
+    "#;
+    assert_differential_int64_error(
+        outer_first,
+        "integer division by zero",
+        "Int64Arithmetic(DivisionByZero)",
+    );
+}
+
+#[test]
+fn test_diff_unreachable_continuation_after_terminating_if() {
+    let source = r#"
+        fn choose(flag: Bool) -> Int64 {
+            if flag {
+                return 11
+            } else {
+                return 22
+            }
+            return 1 / 0
+        }
+
+        fn main() -> Int64 {
+            return choose(true) + choose(false)
+        }
+    "#;
+    assert_differential(source);
+}
+
+#[test]
+fn test_diff_nested_terminating_branch_values() {
+    let source = r#"
+        fn bucket(n: Int64) -> Int64 {
+            if n < 10 {
+                if n < 0 { return 0 } else { return 1 }
+            } else {
+                if n < 100 { return 2 } else { return 3 }
+            }
+        }
+
+        fn main() -> Int64 {
+            return bucket(-1) + bucket(5) + bucket(50) + bucket(500)
+        }
     "#;
     assert_differential(source);
 }
@@ -537,4 +692,107 @@ fn test_unsupported_nested_pattern() {
         "Unexpected error: {}",
         err
     );
+}
+
+fn canonical_float_bits(value: f64) -> u64 {
+    if value.is_nan() {
+        f64::NAN.to_bits()
+    } else {
+        value.to_bits()
+    }
+}
+
+/// Float64 parity is asserted on canonicalized IEEE 754 bits so `NaN` is a
+/// stable value and signed zero is observable (unlike `f64 ==`).
+fn assert_differential_float(source: &str, expected: f64) {
+    let hir_result = run_source_hir(source, &[])
+        .unwrap_or_else(|error| panic!("HIR execution failed for source:\n{source}\n{error:?}"));
+    let vm_result = run_source_vm(source, &[])
+        .unwrap_or_else(|error| panic!("VM execution failed for source:\n{source}\n{error:?}"));
+
+    let expected = canonical_float_bits(expected);
+    match (normalize_hir(hir_result), normalize_vm(vm_result)) {
+        (NormalizedValue::Float(hir), NormalizedValue::Float(vm)) => {
+            assert_eq!(
+                canonical_float_bits(hir),
+                expected,
+                "HIR Float64 result mismatch for source:\n{source}"
+            );
+            assert_eq!(
+                canonical_float_bits(vm),
+                expected,
+                "VM Float64 result mismatch for source:\n{source}"
+            );
+        }
+        (hir, vm) => {
+            panic!("expected Float64 results for source:\n{source}\nHIR: {hir:?}\nVM: {vm:?}")
+        }
+    }
+}
+
+fn assert_differential_bool(source: &str, expected: bool) {
+    let hir_result = run_source_hir(source, &[])
+        .unwrap_or_else(|error| panic!("HIR execution failed for source:\n{source}\n{error:?}"));
+    let vm_result = run_source_vm(source, &[])
+        .unwrap_or_else(|error| panic!("VM execution failed for source:\n{source}\n{error:?}"));
+
+    assert_eq!(
+        normalize_hir(hir_result),
+        NormalizedValue::Bool(expected),
+        "HIR Bool result mismatch for source:\n{source}"
+    );
+    assert_eq!(
+        normalize_vm(vm_result),
+        NormalizedValue::Bool(expected),
+        "VM Bool result mismatch for source:\n{source}"
+    );
+}
+
+#[test]
+fn test_diff_float64_ieee_arithmetic() {
+    let cases = [
+        ("fn main() -> Float64 { return 1.5 + 2.5 }", 4.0_f64),
+        ("fn main() -> Float64 { return 5.0 - 8.0 }", -3.0_f64),
+        ("fn main() -> Float64 { return 1.5 * 2.0 }", 3.0_f64),
+        ("fn main() -> Float64 { return 7.0 / 2.0 }", 3.5_f64),
+        ("fn main() -> Float64 { return 1.0 / 0.0 }", f64::INFINITY),
+        (
+            "fn main() -> Float64 { return (0.0 - 1.0) / 0.0 }",
+            f64::NEG_INFINITY,
+        ),
+        ("fn main() -> Float64 { return 0.0 / 0.0 }", f64::NAN),
+        (
+            "fn main() -> Float64 { return (0.0 - 1.0) * 0.0 }",
+            -0.0_f64,
+        ),
+        ("fn main() -> Float64 { return -1.5 }", -1.5_f64),
+        ("fn main() -> Float64 { return -0.0 }", -0.0_f64),
+        (
+            "fn main() -> Float64 { return -(1.0 / 0.0) }",
+            f64::NEG_INFINITY,
+        ),
+    ];
+
+    for (source, expected) in cases {
+        assert_differential_float(source, expected);
+    }
+}
+
+#[test]
+fn test_diff_float64_nan_ordering_and_signed_zero() {
+    let cases = [
+        ("fn main() -> Bool { return 0.0 / 0.0 < 1.0 }", false),
+        ("fn main() -> Bool { return 0.0 / 0.0 > 1.0 }", false),
+        ("fn main() -> Bool { return 0.0 / 0.0 <= 1.0 }", false),
+        ("fn main() -> Bool { return 0.0 / 0.0 >= 1.0 }", false),
+        ("fn main() -> Bool { return 0.0 / 0.0 == 0.0 / 0.0 }", false),
+        ("fn main() -> Bool { return 0.0 / 0.0 != 0.0 / 0.0 }", true),
+        ("fn main() -> Bool { return 1.0 / 0.0 > 1.0 }", true),
+        ("fn main() -> Bool { return (0.0 - 1.0) / 0.0 < 0.0 }", true),
+        ("fn main() -> Bool { return 0.0 == (0.0 - 0.0) }", true),
+    ];
+
+    for (source, expected) in cases {
+        assert_differential_bool(source, expected);
+    }
 }

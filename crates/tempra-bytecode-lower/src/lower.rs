@@ -6,6 +6,9 @@ use tempra_bytecode::*;
 use tempra_tir::ir::*;
 
 pub fn lower_tir_module(module: &TirModule) -> Result<BytecodeModule, BytecodeLowerError> {
+    let verified = tempra_tir::verifier::verify_module_with_types(module)
+        .map_err(|errors| BytecodeLowerError::TirVerification(format!("{:?}", errors)))?;
+
     let mut bc_module = BytecodeModule::new();
     let mut ordered_functions: Vec<_> = module.functions.iter().collect();
     ordered_functions.sort_by_key(|function| function.id.0);
@@ -37,7 +40,7 @@ pub fn lower_tir_module(module: &TirModule) -> Result<BytecodeModule, BytecodeLo
                 target: tir_func.id,
             },
         )?;
-        let bc_func = lower_function(tir_func, &mut bc_module, &function_ids)?;
+        let bc_func = lower_function(tir_func, &mut bc_module, &function_ids, &verified)?;
         let target = bc_module.functions.get_mut(bytecode_id.0 as usize).ok_or(
             BytecodeLowerError::MissingFunctionMapping {
                 caller: tir_func.id,
@@ -54,6 +57,7 @@ fn lower_function(
     tir_func: &TirFunction,
     bc_module: &mut BytecodeModule,
     function_ids: &HashMap<TirFunctionId, FunctionId>,
+    verified: &tempra_tir::verifier::VerifiedTypes,
 ) -> Result<BytecodeFunction, BytecodeLowerError> {
     let params = tir_func
         .params
@@ -72,6 +76,8 @@ fn lower_function(
         value_to_local: HashMap::new(),
         slot_to_local: HashMap::new(),
         slot_types: HashMap::new(),
+        value_types: HashMap::new(),
+        verified_value_types: verified.functions.get(&tir_func.id),
         block_to_offset: HashMap::new(),
         jump_fixups: Vec::new(),
         current_stack: 0,
@@ -97,6 +103,8 @@ struct FunctionLowerer<'a> {
     value_to_local: HashMap<TirValueId, LocalId>,
     slot_to_local: HashMap<TirSlotId, LocalId>,
     slot_types: HashMap<TirSlotId, BytecodeType>,
+    value_types: HashMap<TirValueId, BytecodeType>,
+    verified_value_types: Option<&'a HashMap<TirValueId, TirType>>,
     block_to_offset: HashMap<TirBlockId, usize>,
     jump_fixups: Vec<(usize, TirBlockId)>,
     current_stack: u32,
@@ -108,8 +116,9 @@ struct FunctionLowerer<'a> {
 impl<'a> FunctionLowerer<'a> {
     fn lower(&mut self) -> Result<(), BytecodeLowerError> {
         // 1. Map parameters to locals (0..N)
-        for (i, (val_id, _ty)) in self.tir_func.params.iter().enumerate() {
+        for (i, (val_id, ty)) in self.tir_func.params.iter().enumerate() {
             self.value_to_local.insert(*val_id, LocalId(i as u32));
+            self.value_types.insert(*val_id, map_type(ty)?);
         }
         let mut next_local = self.tir_func.params.len() as u32;
 
@@ -156,12 +165,21 @@ impl<'a> FunctionLowerer<'a> {
             local_types[local.0 as usize] = *ty;
         }
 
-        // Map SSA values types
+        // Map SSA values types. The verifier's typed result is authoritative;
+        // lowering only falls back to local inference for constructs whose
+        // static type is intentionally absent (for example a dynamic tuple
+        // index).
         for block in &self.tir_func.blocks {
             for instr in &block.instrs {
                 if let Some(id) = get_instr_res_id(instr) {
+                    let inferred = match self.verified_value_types.and_then(|types| types.get(&id))
+                    {
+                        Some(ty) => map_type(ty)?,
+                        None => self.infer_instr_res_type(instr)?,
+                    };
+                    self.value_types.insert(id, inferred);
                     if let Some(local) = self.value_to_local.get(&id) {
-                        local_types[local.0 as usize] = self.infer_instr_res_type(instr)?;
+                        local_types[local.0 as usize] = inferred;
                     }
                 }
             }
@@ -244,27 +262,51 @@ impl<'a> FunctionLowerer<'a> {
                 self.emit(BytecodeInstr::StoreLocal(*local));
             }
             TirInstr::Add(res, a, b) => {
+                let ty = self.numeric_operand_type(*a, *b, "add")?;
                 self.load_val(*a)?;
                 self.load_val(*b)?;
-                self.emit(BytecodeInstr::AddI64);
+                self.emit(match ty {
+                    BytecodeType::Int64 => BytecodeInstr::AddI64,
+                    BytecodeType::UInt64 => BytecodeInstr::AddU64,
+                    BytecodeType::Float64 => BytecodeInstr::AddF64,
+                    _ => unreachable!("numeric_operand_type only returns numeric types"),
+                });
                 self.store_res(*res)?;
             }
             TirInstr::Sub(res, a, b) => {
+                let ty = self.numeric_operand_type(*a, *b, "sub")?;
                 self.load_val(*a)?;
                 self.load_val(*b)?;
-                self.emit(BytecodeInstr::SubI64);
+                self.emit(match ty {
+                    BytecodeType::Int64 => BytecodeInstr::SubI64,
+                    BytecodeType::UInt64 => BytecodeInstr::SubU64,
+                    BytecodeType::Float64 => BytecodeInstr::SubF64,
+                    _ => unreachable!("numeric_operand_type only returns numeric types"),
+                });
                 self.store_res(*res)?;
             }
             TirInstr::Mul(res, a, b) => {
+                let ty = self.numeric_operand_type(*a, *b, "mul")?;
                 self.load_val(*a)?;
                 self.load_val(*b)?;
-                self.emit(BytecodeInstr::MulI64);
+                self.emit(match ty {
+                    BytecodeType::Int64 => BytecodeInstr::MulI64,
+                    BytecodeType::UInt64 => BytecodeInstr::MulU64,
+                    BytecodeType::Float64 => BytecodeInstr::MulF64,
+                    _ => unreachable!("numeric_operand_type only returns numeric types"),
+                });
                 self.store_res(*res)?;
             }
             TirInstr::Div(res, a, b) => {
+                let ty = self.numeric_operand_type(*a, *b, "div")?;
                 self.load_val(*a)?;
                 self.load_val(*b)?;
-                self.emit(BytecodeInstr::DivI64);
+                self.emit(match ty {
+                    BytecodeType::Int64 => BytecodeInstr::DivI64,
+                    BytecodeType::UInt64 => BytecodeInstr::DivU64,
+                    BytecodeType::Float64 => BytecodeInstr::DivF64,
+                    _ => unreachable!("numeric_operand_type only returns numeric types"),
+                });
                 self.store_res(*res)?;
             }
             TirInstr::Eq(res, a, b) => {
@@ -274,15 +316,27 @@ impl<'a> FunctionLowerer<'a> {
                 self.store_res(*res)?;
             }
             TirInstr::Lt(res, a, b) => {
+                let ty = self.numeric_operand_type(*a, *b, "lt")?;
                 self.load_val(*a)?;
                 self.load_val(*b)?;
-                self.emit(BytecodeInstr::LtI64);
+                self.emit(match ty {
+                    BytecodeType::Int64 => BytecodeInstr::LtI64,
+                    BytecodeType::UInt64 => BytecodeInstr::LtU64,
+                    BytecodeType::Float64 => BytecodeInstr::LtF64,
+                    _ => unreachable!("numeric_operand_type only returns numeric types"),
+                });
                 self.store_res(*res)?;
             }
             TirInstr::Gt(res, a, b) => {
+                let ty = self.numeric_operand_type(*a, *b, "gt")?;
                 self.load_val(*a)?;
                 self.load_val(*b)?;
-                self.emit(BytecodeInstr::GtI64);
+                self.emit(match ty {
+                    BytecodeType::Int64 => BytecodeInstr::GtI64,
+                    BytecodeType::UInt64 => BytecodeInstr::GtU64,
+                    BytecodeType::Float64 => BytecodeInstr::GtF64,
+                    _ => unreachable!("numeric_operand_type only returns numeric types"),
+                });
                 self.store_res(*res)?;
             }
             TirInstr::And(res, a, b) => {
@@ -530,6 +584,38 @@ impl<'a> FunctionLowerer<'a> {
         self.bc_func.code.push(instr);
     }
 
+    fn numeric_operand_type(
+        &self,
+        left: TirValueId,
+        right: TirValueId,
+        operation: &'static str,
+    ) -> Result<BytecodeType, BytecodeLowerError> {
+        let left_ty = self
+            .value_types
+            .get(&left)
+            .copied()
+            .ok_or_else(|| BytecodeLowerError::UnknownValue(format!("%{}", left.0)))?;
+        let right_ty = self
+            .value_types
+            .get(&right)
+            .copied()
+            .ok_or_else(|| BytecodeLowerError::UnknownValue(format!("%{}", right.0)))?;
+        if left_ty != right_ty {
+            return Err(BytecodeLowerError::NumericTypeMismatch {
+                operation,
+                left: left_ty,
+                right: right_ty,
+            });
+        }
+        match left_ty {
+            BytecodeType::Int64 | BytecodeType::UInt64 | BytecodeType::Float64 => Ok(left_ty),
+            other => Err(BytecodeLowerError::UnsupportedNumericType {
+                operation,
+                actual: other,
+            }),
+        }
+    }
+
     fn infer_instr_res_type(&self, instr: &TirInstr) -> Result<BytecodeType, BytecodeLowerError> {
         match instr {
             TirInstr::Const(_, val) => match val {
@@ -545,10 +631,12 @@ impl<'a> FunctionLowerer<'a> {
                 .get(slot_id)
                 .cloned()
                 .ok_or_else(|| BytecodeLowerError::UnknownSlot(format!("${}", slot_id.0))),
-            TirInstr::Add(_, _, _)
-            | TirInstr::Sub(_, _, _)
-            | TirInstr::Mul(_, _, _)
-            | TirInstr::Div(_, _, _) => Ok(BytecodeType::Int64),
+            TirInstr::Add(_, left, right)
+            | TirInstr::Sub(_, left, right)
+            | TirInstr::Mul(_, left, right)
+            | TirInstr::Div(_, left, right) => {
+                self.numeric_operand_type(*left, *right, "arithmetic")
+            }
             TirInstr::Eq(_, _, _)
             | TirInstr::Lt(_, _, _)
             | TirInstr::Gt(_, _, _)

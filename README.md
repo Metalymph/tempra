@@ -416,6 +416,19 @@ collections, errors, and experimental JIT cases.
 
 ---
 
+## Repositories and Contributions
+
+[GitHub](https://github.com/Metalymph/tempra) is Tempra's canonical repository.
+Issues, pull requests, releases, CI, and all development discussions happen
+there.
+
+[Codeberg](https://codeberg.org/Metalymph/tempra) is a public, read-only
+contribution mirror. It automatically tracks `main` and Git tags, has issues and
+pull requests disabled, and does not accept contributions. Open issues, pull
+requests, releases, and development discussions on GitHub.
+
+---
+
 ## Contributing and License
 
 Contributions, bug reports, and language-design discussions are welcome. Tempra

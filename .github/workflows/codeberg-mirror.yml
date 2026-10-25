@@ -1,0 +1,93 @@
+name: Codeberg mirror
+
+on:
+  push:
+    branches: [main]
+    tags: ["**"]
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codeberg-mirror
+  cancel-in-progress: false
+
+env:
+  CODEBERG_REPOSITORY: git@codeberg.org:Metalymph/tempra.git
+
+jobs:
+  mirror:
+    name: Mirror main and tags to Codeberg
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out full history and tags
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Pin Codeberg SSH host keys
+        run: |
+          set -euo pipefail
+
+          install -d -m 700 "$HOME/.ssh"
+          known_hosts="$HOME/.ssh/codeberg_known_hosts"
+
+          # Authoritative keys published in the Codeberg imprint:
+          # https://codeberg.org/codeberg/org/src/branch/main/Imprint.md#user-content-ssh-fingerprints
+          cat > "$known_hosts" <<'EOF'
+          # Codeberg SSH host keys (authoritative imprint).
+          codeberg.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIVIC02vnjFyL+I4RHfvIGNtOgJMe769VTF1VR4EB3ZB
+          codeberg.org ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBL2pDxWr18SoiDJCGZ5LmxPygTlPu+cCKSkpqkvCyQzl5xmIMeKNdfdBpfbCGDPoZQghePzFZkKJNR/v9Win3Sc=
+          codeberg.org ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC8hZi7K1/2E2uBX8gwPRJAHvRAob+3Sn+y2hxiEhN0buv1igjYFTgFO2qQD8vLfU/HT/P/rqvEeTvaDfY1y/vcvQ8+YuUYyTwE2UaVU5aJv89y6PEZBYycaJCPdGIfZlLMmjilh/Sk8IWSEK6dQr+g686lu5cSWrFW60ixWpHpEVB26eRWin3lKYWSQGMwwKv4LwmW3ouqqs4Z4vsqRFqXJ/eCi3yhpT+nOjljXvZKiYTpYajqUC48IHAxTWugrKe1vXWOPxVXXMQEPsaIRc2hpK+v1LmfB7GnEGvF1UAKnEZbUuiD9PBEeD5a1MZQIzcoPWCrTxipEpuXQ5Tni4mN
+          EOF
+          chmod 600 "$known_hosts"
+
+          test "$(grep -c '^codeberg\.org ' "$known_hosts")" -eq 3
+          ssh-keygen -E sha256 -lf "$known_hosts" | tee "$RUNNER_TEMP/codeberg-host-keys.txt"
+          grep -Fq 'SHA256:mIlxA9k46MmM6qdJOdMnAQpzGxF4WIVVL+fj+wZbw0g' "$RUNNER_TEMP/codeberg-host-keys.txt"
+          grep -Fq 'SHA256:T9FYDEHELhVkulEKKwge5aVhVTbqCW0MIRwAfpARs/E' "$RUNNER_TEMP/codeberg-host-keys.txt"
+          grep -Fq 'SHA256:6QQmYi4ppFS4/+zSZ5S4IU+4sa6rwvQ4PbhCtPEBekQ' "$RUNNER_TEMP/codeberg-host-keys.txt"
+
+      - name: Load Codeberg deploy key
+        env:
+          CODEBERG_SSH_KEY: ${{ secrets.CODEBERG_SSH_KEY }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${CODEBERG_SSH_KEY:-}" ]]; then
+            echo "::error::CODEBERG_SSH_KEY is not configured"
+            exit 1
+          fi
+
+          key="$HOME/.ssh/codeberg_deploy_key"
+          printf '%s\n' "$CODEBERG_SSH_KEY" > "$key"
+          chmod 600 "$key"
+
+          # Fail before pushing if the stored secret is not a usable private key.
+          ssh-keygen -y -f "$key" >/dev/null
+
+      - name: Push main and tags
+        env:
+          GIT_SSH_COMMAND: >-
+            ssh
+            -i $HOME/.ssh/codeberg_deploy_key
+            -o IdentitiesOnly=yes
+            -o BatchMode=yes
+            -o StrictHostKeyChecking=yes
+            -o UserKnownHostsFile=$HOME/.ssh/codeberg_known_hosts
+            -o GlobalKnownHostsFile=/dev/null
+        run: |
+          set -euo pipefail
+
+          # Tag pushes check out a detached HEAD, so never mirror HEAD. Update a
+          # real local main ref from GitHub's current main and push explicit refs.
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          git update-ref refs/heads/main refs/remotes/origin/main
+
+          git push --porcelain "$CODEBERG_REPOSITORY" \
+            refs/heads/main:refs/heads/main \
+            'refs/tags/*:refs/tags/*'

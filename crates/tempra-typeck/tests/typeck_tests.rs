@@ -1,6 +1,7 @@
 use tempra_hir::lower_file;
 use tempra_parser::parse_source;
 use tempra_typeck::check_file;
+use tempra_typeck::check_stmt::RESULT_DISCARD_DIAGNOSTIC;
 
 fn expect_ok(source: &str) {
     let ast = parse_source(source).expect("Failed to parse source");
@@ -2043,4 +2044,318 @@ fn test_match_bool_false_binding_catchall() {
         }
     "#,
     );
+}
+
+fn check_errors(source: &str) -> Vec<tempra_typeck::TypeError> {
+    let ast = parse_source(source).expect("source must parse");
+    let mut hir = lower_file(source, &ast);
+    match check_file(&mut hir) {
+        Ok(()) => Vec::new(),
+        Err(errors) => errors,
+    }
+}
+
+fn expect_result_discards(source: &str, expected: usize) {
+    let errors = check_errors(source);
+    let matching: Vec<_> = errors
+        .iter()
+        .filter(|error| error.message == RESULT_DISCARD_DIAGNOSTIC)
+        .collect();
+    assert_eq!(
+        matching.len(),
+        expected,
+        "expected {expected} Result discard diagnostic(s) for source:\n{source}\nErrors: {errors:?}"
+    );
+}
+
+fn expect_result_discard(source: &str) {
+    expect_result_discards(source, 1);
+}
+
+fn expect_no_result_discard(source: &str) {
+    let errors = check_errors(source);
+    assert!(
+        errors
+            .iter()
+            .all(|error| error.message != RESULT_DISCARD_DIAGNOSTIC),
+        "unexpected Result discard diagnostic for source:\n{source}\nErrors: {errors:?}"
+    );
+}
+
+#[test]
+fn r1_rejects_direct_result_discard_in_statement_position() {
+    expect_result_discard(
+        r#"
+        fn load() -> String! {
+            Ok("x")
+        }
+
+        fn main() {
+            load()
+            print("done")
+        }
+    "#,
+    );
+}
+
+#[test]
+fn r1_reports_block_value_discard_at_the_outer_statement_only() {
+    expect_result_discard(
+        r#"
+        fn load() -> String! {
+            Ok("x")
+        }
+
+        fn main() {
+            { load() }
+            print("done")
+        }
+    "#,
+    );
+}
+
+#[test]
+fn r1_reports_if_branch_result_discard_at_the_outer_statement_only() {
+    expect_result_discard(
+        r#"
+        fn load() -> String! {
+            Ok("x")
+        }
+
+        fn main() {
+            if true { load() } else { load() }
+            print("done")
+        }
+    "#,
+    );
+}
+
+#[test]
+fn r1_reports_nested_discard_inside_if_branch_at_the_inner_statement() {
+    expect_result_discard(
+        r#"
+        fn load() -> String! {
+            Ok("x")
+        }
+
+        fn main() {
+            if true {
+                load()
+                print("branch done")
+            }
+            print("done")
+        }
+    "#,
+    );
+}
+
+#[test]
+fn r1_reports_distinct_discards_at_distinct_boundaries() {
+    expect_result_discards(
+        r#"
+        fn load() -> String! {
+            Ok("x")
+        }
+
+        fn main() {
+            {
+                load()
+                load()
+            }
+            print("done")
+        }
+    "#,
+        2,
+    );
+}
+
+#[test]
+fn r1_rejects_non_tail_result_discard_inside_result_function() {
+    expect_result_discard(
+        r#"
+        fn load() -> String! {
+            Ok("x")
+        }
+
+        fn main() -> String! {
+            load()
+            Ok("done")
+        }
+    "#,
+    );
+}
+
+#[test]
+fn r1_rejects_result_discard_in_for_statement_body() {
+    expect_result_discard(
+        r#"
+        fn load() -> String! {
+            Ok("x")
+        }
+
+        fn main() {
+            for value in [1, 2] {
+                load()
+            }
+        }
+    "#,
+    );
+}
+
+#[test]
+fn r1_rejects_result_discard_in_script_statements() {
+    expect_result_discard(
+        r#"
+        fn load() -> String! {
+            Ok("x")
+        }
+
+        load()
+        print("done")
+    "#,
+    );
+}
+
+#[test]
+fn r1_rejects_script_tail_result_without_a_guaranteed_consumer() {
+    expect_result_discard(
+        r#"
+        fn load() -> String! {
+            Ok("x")
+        }
+
+        load()
+    "#,
+    );
+}
+
+#[test]
+fn r1_allows_tail_result_as_function_result() {
+    expect_ok(
+        r#"
+        fn load() -> String! {
+            Ok("x")
+        }
+
+        fn main() -> String! {
+            load()
+        }
+    "#,
+    );
+}
+
+#[test]
+fn r1_allows_tail_result_as_closure_result() {
+    expect_ok(
+        r#"
+        fn load() -> String! {
+            Ok("x")
+        }
+
+        fn main() {
+            let f = fn() -> String! {
+                load()
+            }
+        }
+    "#,
+    );
+}
+
+#[test]
+fn r1_allows_result_storage_in_binding_for_r2() {
+    expect_ok(
+        r#"
+        fn load() -> String! {
+            Ok("x")
+        }
+
+        fn main() {
+            let result = load()
+        }
+    "#,
+    );
+}
+
+#[test]
+fn r1_allows_result_as_block_expression_value() {
+    expect_ok(
+        r#"
+        fn load() -> String! {
+            Ok("x")
+        }
+
+        fn main() -> String! {
+            let result = { load() }
+            result
+        }
+    "#,
+    );
+}
+
+#[test]
+fn r1_allows_result_as_if_branch_value() {
+    expect_ok(
+        r#"
+        fn load() -> String! {
+            Ok("x")
+        }
+
+        fn main() -> String! {
+            let result = if true { load() } else { load() }
+            result
+        }
+    "#,
+    );
+}
+
+#[test]
+fn r1_allows_result_as_for_expression_element() {
+    expect_ok(
+        r#"
+        fn load() -> String! {
+            Ok("x")
+        }
+
+        fn main() {
+            let values = [1, 2]
+            let results = for value in values {
+                load()
+            }
+        }
+    "#,
+    );
+}
+
+#[test]
+fn r1_allows_question_mark_and_explicit_return() {
+    expect_ok(
+        r#"
+        fn load() -> String! {
+            Ok("x")
+        }
+
+        fn main() -> String! {
+            let value = load()?
+            return Ok(value)
+        }
+    "#,
+    );
+}
+
+#[test]
+fn r1_does_not_duplicate_error_typed_diagnostics() {
+    let source = r#"
+        fn main() {
+            missing()
+            print("done")
+        }
+    "#;
+    let errors = check_errors(source);
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.message.contains("undefined variable 'missing'")),
+        "expected the original undefined-variable error for source:\n{source}\nErrors: {errors:?}"
+    );
+    expect_no_result_discard(source);
 }

@@ -63,9 +63,11 @@ pub fn check_modules(
             ctx.current_is_fallible = true;
             ctx.current_return_type = None;
             ctx.scopes.push_scope();
-            for stmt in &mut m.file.top_level_statements {
-                crate::check_stmt::check_statement(&mut ctx, stmt, None);
-            }
+            crate::check_stmt::check_statement_list(
+                &mut ctx,
+                &mut m.file.top_level_statements,
+                false,
+            );
             ctx.scopes.pop_scope();
             ctx.current_is_fallible = false;
         }
@@ -163,9 +165,11 @@ fn check_modules_always_impl(
             ctx.current_is_fallible = true;
             ctx.current_return_type = None;
             ctx.scopes.push_scope();
-            for stmt in &mut m.file.top_level_statements {
-                crate::check_stmt::check_statement(&mut ctx, stmt, None);
-            }
+            crate::check_stmt::check_statement_list(
+                &mut ctx,
+                &mut m.file.top_level_statements,
+                false,
+            );
             ctx.scopes.pop_scope();
             ctx.current_is_fallible = false;
         }
@@ -196,9 +200,7 @@ pub fn check_file(file: &mut HirFile) -> Result<(), Vec<TypeError>> {
         ctx.current_is_fallible = true;
         ctx.current_return_type = None; // Returns unit, but let's just leave it None to prevent explicit return
         ctx.scopes.push_scope();
-        for stmt in &mut file.top_level_statements {
-            crate::check_stmt::check_statement(&mut ctx, stmt, None);
-        }
+        crate::check_stmt::check_statement_list(&mut ctx, &mut file.top_level_statements, false);
         ctx.scopes.pop_scope();
         ctx.current_is_fallible = false;
     }
@@ -229,9 +231,7 @@ pub fn check_file_with_context(file: &mut HirFile) -> Result<TypeContext, Vec<Ty
         ctx.current_is_fallible = true;
         ctx.current_return_type = None;
         ctx.scopes.push_scope();
-        for stmt in &mut file.top_level_statements {
-            crate::check_stmt::check_statement(&mut ctx, stmt, None);
-        }
+        crate::check_stmt::check_statement_list(&mut ctx, &mut file.top_level_statements, false);
         ctx.scopes.pop_scope();
         ctx.current_is_fallible = false;
     }
@@ -260,9 +260,7 @@ pub fn check_file_with_context_always(file: &mut HirFile, source: Option<String>
         ctx.current_is_fallible = true;
         ctx.current_return_type = None;
         ctx.scopes.push_scope();
-        for stmt in &mut file.top_level_statements {
-            crate::check_stmt::check_statement(&mut ctx, stmt, None);
-        }
+        crate::check_stmt::check_statement_list(&mut ctx, &mut file.top_level_statements, false);
         ctx.scopes.pop_scope();
         ctx.current_is_fallible = false;
     }

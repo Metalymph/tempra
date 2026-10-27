@@ -2359,3 +2359,453 @@ fn r1_does_not_duplicate_error_typed_diagnostics() {
     );
     expect_no_result_discard(source);
 }
+
+// R2.1c — Result provenance contract tests.
+//
+// These tests intentionally precede the implementation.
+// Result values retain value semantics: tracking an obligation
+// must never introduce moves or invalidate copied bindings.
+mod r2_result_provenance_tests {
+    use super::check_errors;
+
+    const UNHANDLED: &str = "Result is not handled or propagated";
+
+    fn assert_unhandled(source: &str, expected: usize) {
+        let errors = check_errors(source);
+
+        let actual = errors
+            .iter()
+            .filter(|error| format!("{error:?}").contains(UNHANDLED))
+            .count();
+
+        assert_eq!(
+            actual, expected,
+            "Unexpected Result obligation diagnostics: {errors:#?}"
+        );
+    }
+
+    const LOAD: &str = r#"
+        fn load() -> String! {
+            Ok("data")
+        }
+    "#;
+
+    #[test]
+    fn r2_t01_unused_let_result() {
+        assert_unhandled(&format!("{LOAD} fn main() {{ let result = load() }}"), 1);
+    }
+
+    #[test]
+    fn r2_t02_unused_var_result() {
+        assert_unhandled(&format!("{LOAD} fn main() {{ var result = load() }}"), 1);
+    }
+
+    #[test]
+    fn r2_t03_copy_does_not_duplicate_obligation() {
+        assert_unhandled(
+            &format!(
+                "{LOAD} fn main() {{
+                    let original = load()
+                    let copy = original
+                }}"
+            ),
+            1,
+        );
+    }
+
+    #[test]
+    fn r2_t04_returned_copy_propagates_obligation() {
+        assert_unhandled(
+            &format!(
+                "{LOAD} fn main() -> String! {{
+                    let original = load()
+                    let copy = original
+                    copy
+                }}"
+            ),
+            0,
+        );
+    }
+
+    #[test]
+    fn r2_t05_matched_copy_handles_obligation() {
+        assert_unhandled(
+            &format!(
+                "{LOAD} fn main() {{
+                    let original = load()
+                    let copy = original
+
+                    match copy {{
+                        Ok(value) => print(value)
+                        Err(error) => print(error)
+                    }}
+                }}"
+            ),
+            0,
+        );
+    }
+
+    #[test]
+    fn r2_t06_independent_operations() {
+        assert_unhandled(
+            &format!(
+                "{LOAD} fn main() {{
+                    let first = load()
+                    let second = load()
+                    match first {{
+                        Ok(value) => print(value)
+                        Err(error) => print(error)
+                    }}
+                }}"
+            ),
+            1,
+        );
+    }
+
+    #[test]
+    fn r2_t07_shadowing_does_not_erase_obligation() {
+        assert_unhandled(
+            &format!(
+                "{LOAD} fn main() {{
+                    let result = load()
+                    let result = 42
+                }}"
+            ),
+            1,
+        );
+    }
+
+    #[test]
+    fn r2_t08_overwrite_does_not_erase_obligation() {
+        assert_unhandled(
+            &format!(
+                "{LOAD} fn main() {{
+                    var result = load()
+                    result = load()
+                }}"
+            ),
+            2,
+        );
+    }
+
+    #[test]
+    fn r2_t09_question_mark_propagates_obligation() {
+        assert_unhandled(
+            &format!(
+                "{LOAD} fn main() -> String! {{
+                    let value = load()?
+                    Ok(value)
+                }}"
+            ),
+            0,
+        );
+    }
+
+    #[test]
+    fn r2_t10_reading_does_not_handle_obligation() {
+        assert_unhandled(
+            &format!(
+                "{LOAD} fn main() {{
+                    let result = load()
+                    print(result)
+                }}"
+            ),
+            1,
+        );
+    }
+
+    #[test]
+    fn r2_t11_explicit_return_propagates_obligation() {
+        assert_unhandled(
+            &format!(
+                "{LOAD} fn main() -> String! {{
+                    let result = load()
+                    return result
+                }}"
+            ),
+            0,
+        );
+    }
+
+    #[test]
+    fn r2_t13_discarded_result_expression() {
+        let source = format!("{LOAD}\nfn main() {{\n    load()\n    print(\"done\")\n}}");
+        assert_discarded_result_diagnostics(&source, 1);
+    }
+
+    #[test]
+    fn r2_t14_two_discarded_result_expressions() {
+        let source =
+            format!("{LOAD}\nfn main() {{\n    load()\n    load()\n    print(\"done\")\n}}");
+        assert_discarded_result_diagnostics(&source, 2);
+    }
+
+    fn assert_discarded_result_diagnostics(source: &str, expected: usize) {
+        let errors = super::check_errors(source);
+        let actual = errors
+            .iter()
+            .filter(|error| error.message.starts_with("Result value is discarded;"))
+            .count();
+
+        assert_eq!(
+            actual, expected,
+            "Unexpected discarded Result diagnostics: {errors:#?}"
+        );
+    }
+
+    #[test]
+    fn r2_t15_result_passed_as_argument() {
+        let source = format!("{LOAD}\nfn main() {{\n    print(load())\n}}");
+        assert_unhandled(&source, 1);
+    }
+
+    #[test]
+    fn r2_t17_identity_preserves_result_origin() {
+        let source = r#"
+            fn identity(type T, x: T) -> T {
+                return x
+            }
+
+            fn main() {
+                let result = identity[Int!](Ok(1))
+            }
+        "#;
+
+        assert_unhandled(source, 1);
+    }
+
+    #[test]
+    fn r2_t19_forward_second_parameter_preserves_origin() {
+        let source = r#"
+            fn forward_second(type T, first: Int, second: T) -> T {
+                return second
+            }
+
+            fn main() {
+                let result = forward_second[Int!](42, Ok(1))
+            }
+        "#;
+
+        assert_unhandled(source, 1);
+    }
+
+    #[test]
+    fn r2_t20_fresh_result_remains_independent() {
+        let source = r#"
+            fn fresh(type T, x: T) -> Int! {
+                return Ok(42)
+            }
+
+            fn main() {
+                let result = fresh[Int!](Ok(1))
+            }
+        "#;
+
+        assert_unhandled(source, 2);
+    }
+
+    #[test]
+    fn r2_t21_local_closure_shadows_forwarding_function() {
+        let source = r#"
+            fn identity(type T, x: T) -> T {
+                return x
+            }
+
+            fn main() {
+                let identity = fn(x: Int!) -> Int! {
+                    return Ok(42)
+                }
+
+                let result = identity(Ok(1))
+            }
+        "#;
+
+        assert_unhandled(source, 2);
+    }
+
+    #[test]
+    fn r2_t27_transitive_named_forwarding_preserves_origin() {
+        let source = r#"
+            fn identity(type T, x: T) -> T {
+                return x
+            }
+
+            fn forward(type T, x: T) -> T {
+                return identity[T](x = x)
+            }
+
+            fn main() {
+                let result = forward[Int!](x = Ok(1))
+            }
+        "#;
+
+        assert_unhandled(source, 1);
+    }
+
+    #[test]
+    fn r2_t29_non_forwarding_call_keeps_distinct_origins() {
+        let source = r#"
+            fn replace(type T, x: T) -> Int! {
+                return Ok(42)
+            }
+
+            fn main() {
+                let result = replace[Int!](Ok(1))
+            }
+        "#;
+
+        assert_unhandled(source, 2);
+    }
+
+    #[test]
+    fn r2_t28_reverse_declaration_order_preserves_origin() {
+        let source = r#"
+            fn outer(type T, x: T) -> T {
+                return middle[T](x)
+            }
+
+            fn middle(type T, x: T) -> T {
+                return identity[T](x)
+            }
+
+            fn identity(type T, x: T) -> T {
+                return x
+            }
+
+            fn main() {
+                let result = outer[Int!](Ok(1))
+            }
+        "#;
+
+        assert_unhandled(source, 1);
+    }
+
+    #[test]
+    fn r2_t26_transitive_forwarding_reports_original_span() {
+        let source = r#"
+            fn identity(type T, x: T) -> T {
+                return x
+            }
+
+            fn forward(type T, x: T) -> T {
+                return identity[T](x)
+            }
+
+            fn main() {
+                let result = forward[Int!](Ok(1))
+            }
+        "#;
+
+        let errors = check_errors(source);
+        let unhandled: Vec<_> = errors
+            .iter()
+            .filter(|error| error.message.contains(UNHANDLED))
+            .collect();
+
+        assert_eq!(unhandled.len(), 1, "Unexpected diagnostics: {errors:#?}");
+
+        let expected_start = source.find("Ok(1)").unwrap();
+        let expected_end = expected_start + "Ok(1)".len();
+
+        assert_eq!(unhandled[0].span.start as usize, expected_start);
+        assert_eq!(unhandled[0].span.end as usize, expected_end);
+    }
+
+    #[test]
+    fn r2_t25_transitive_forwarding_preserves_single_origin() {
+        let source = r#"
+            fn identity(type T, x: T) -> T {
+                return x
+            }
+
+            fn forward(type T, x: T) -> T {
+                return identity[T](x)
+            }
+
+            fn main() {
+                let result = forward[Int!](Ok(1))
+            }
+        "#;
+
+        assert_unhandled(source, 1);
+    }
+
+    #[test]
+    fn r2_t22_named_argument_preserves_result_origin() {
+        let source = r#"
+            fn identity(type T, x: T) -> T {
+                return x
+            }
+
+            fn main() {
+                let result = identity[Int!](x = Ok(1))
+            }
+        "#;
+
+        assert_unhandled(source, 1);
+    }
+
+    #[test]
+    fn r2_t23_named_second_parameter_preserves_origin() {
+        let source = r#"
+            fn forward_second(type T, first: Int, second: T) -> T {
+                return second
+            }
+
+            fn main() {
+                let result = forward_second[Int!](
+                    first = 42,
+                    second = Ok(1)
+                )
+            }
+        "#;
+
+        assert_unhandled(source, 1);
+    }
+
+    #[test]
+    fn r2_t24_mixed_arguments_preserve_origin() {
+        let source = r#"
+            fn forward_second(type T, first: Int, second: T) -> T {
+                return second
+            }
+
+            fn main() {
+                let result = forward_second[Int!](42, second = Ok(1))
+            }
+        "#;
+
+        assert_unhandled(source, 1);
+    }
+
+    #[test]
+    fn r2_t18_handling_identity_result_handles_original_origin() {
+        let source = r#"
+            fn identity(type T, x: T) -> T {
+                return x
+            }
+
+            fn main() {
+                let result = identity[Int!](Ok(1))
+
+                match result {
+                    Ok(value) => print(value)
+                    Err(error) => print(error)
+                }
+            }
+        "#;
+
+        assert_unhandled(source, 0);
+    }
+
+    #[test]
+    fn r2_t16_question_mark_propagates_discarded_result() {
+        let source = format!("{LOAD}\nfn main() -> String! {{\n    load()?\n    Ok(\"done\")\n}}");
+        assert_unhandled(&source, 0);
+    }
+
+    #[test]
+    fn r2_t12_non_result_binding_has_no_obligation() {
+        assert_unhandled("fn main() { let value = 42 }", 0);
+    }
+}

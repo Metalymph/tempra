@@ -179,31 +179,57 @@ fn check_modules_always_impl(
     ctx
 }
 
-/// Type-check a complete HIR file.
+/// Shared structural typechecking pipeline for a single HIR file.
 ///
-/// Returns `Ok(())` if the file is well-typed, or a list of type errors.
-pub fn check_file(file: &mut HirFile) -> Result<(), Vec<TypeError>> {
+/// All public single-file entry points use this implementation to ensure
+/// identical semantic checks and diagnostic ordering.
+fn check_file_internal(file: &mut HirFile, source: Option<String>) -> TypeContext {
     let mut ctx = TypeContext::new();
+
     ctx.is_single_file_fallback = true;
+    ctx.source_text = source;
     ctx.interpreter = Some(tempra_interpreter::interpreter::Interpreter::new(file));
 
-    // Pass 1: register all top-level items (functions, structs, enums)
+    // Pass 1: register top-level declarations.
     register_items(&mut ctx, &file.items);
 
-    // Pass 2: check item bodies
+    // Pass 2: check item bodies.
     for item in &mut file.items {
         check_item(&mut ctx, item);
     }
 
-    // Pass 3: check top-level statements (Script mode)
+    // Pass 3: check script statements.
     if !file.top_level_statements.is_empty() {
         ctx.current_is_fallible = true;
-        ctx.current_return_type = None; // Returns unit, but let's just leave it None to prevent explicit return
+        ctx.current_return_type = None;
+
         ctx.scopes.push_scope();
+
         crate::check_stmt::check_statement_list(&mut ctx, &mut file.top_level_statements, false);
+
         ctx.scopes.pop_scope();
         ctx.current_is_fallible = false;
     }
+
+    // R2.2d: Result provenance analysis after successful typechecking.
+    if ctx.errors.is_empty() {
+        let diagnostics = crate::result_obligations::analyze_linear_result_obligations(
+            file,
+            &ctx.facts,
+            &ctx.function_spans,
+            &ctx.current_module,
+        );
+        ctx.errors.extend(diagnostics);
+    }
+
+    ctx
+}
+
+/// Type-check a complete HIR file.
+///
+/// Returns Ok(()) if the file is well-typed.
+pub fn check_file(file: &mut HirFile) -> Result<(), Vec<TypeError>> {
+    let ctx = check_file_internal(file, None);
 
     if ctx.errors.is_empty() {
         Ok(())
@@ -213,28 +239,8 @@ pub fn check_file(file: &mut HirFile) -> Result<(), Vec<TypeError>> {
 }
 
 /// Type-check a complete HIR file and return the populated TypeContext.
-///
-/// This is used by downstream passes (e.g. TIR lowering) that need
-/// the type information gathered during checking.
 pub fn check_file_with_context(file: &mut HirFile) -> Result<TypeContext, Vec<TypeError>> {
-    let mut ctx = TypeContext::new();
-    ctx.is_single_file_fallback = true;
-    ctx.interpreter = Some(tempra_interpreter::interpreter::Interpreter::new(file));
-
-    register_items(&mut ctx, &file.items);
-
-    for item in &mut file.items {
-        check_item(&mut ctx, item);
-    }
-
-    if !file.top_level_statements.is_empty() {
-        ctx.current_is_fallible = true;
-        ctx.current_return_type = None;
-        ctx.scopes.push_scope();
-        crate::check_stmt::check_statement_list(&mut ctx, &mut file.top_level_statements, false);
-        ctx.scopes.pop_scope();
-        ctx.current_is_fallible = false;
-    }
+    let ctx = check_file_internal(file, None);
 
     if ctx.errors.is_empty() {
         Ok(ctx)
@@ -243,29 +249,10 @@ pub fn check_file_with_context(file: &mut HirFile) -> Result<TypeContext, Vec<Ty
     }
 }
 
-/// Type-check a complete HIR file and return the populated TypeContext, even if there are type errors.
+/// Type-check a complete HIR file and return the context,
+/// including any diagnostics.
 pub fn check_file_with_context_always(file: &mut HirFile, source: Option<String>) -> TypeContext {
-    let mut ctx = TypeContext::new();
-    ctx.is_single_file_fallback = true;
-    ctx.source_text = source;
-    ctx.interpreter = Some(tempra_interpreter::interpreter::Interpreter::new(file));
-
-    register_items(&mut ctx, &file.items);
-
-    for item in &mut file.items {
-        check_item(&mut ctx, item);
-    }
-
-    if !file.top_level_statements.is_empty() {
-        ctx.current_is_fallible = true;
-        ctx.current_return_type = None;
-        ctx.scopes.push_scope();
-        crate::check_stmt::check_statement_list(&mut ctx, &mut file.top_level_statements, false);
-        ctx.scopes.pop_scope();
-        ctx.current_is_fallible = false;
-    }
-
-    ctx
+    check_file_internal(file, source)
 }
 
 #[cfg(test)]
@@ -314,6 +301,89 @@ mod declaration_order_tests {
                 "beta.Beta",
                 "main.Entry",
             ]
+        );
+    }
+}
+
+#[cfg(test)]
+mod r2_api_parity_tests {
+    use super::{check_file, check_file_with_context, check_file_with_context_always};
+
+    fn lower(source: &str) -> tempra_hir::HirFile {
+        let ast = tempra_parser::parse_source(source).expect("test source must parse");
+
+        tempra_hir::lower_file(source, &ast)
+    }
+
+    fn assert_api_parity(source: &str) {
+        let mut first = lower(source);
+        let mut second = lower(source);
+        let mut third = lower(source);
+
+        let basic = check_file(&mut first);
+        let with_context = check_file_with_context(&mut second);
+        let always = check_file_with_context_always(&mut third, Some(source.to_string()));
+
+        let basic_errors = basic.err().unwrap_or_default();
+
+        let context_errors = match with_context {
+            Ok(ctx) => ctx.errors,
+            Err(errors) => errors,
+        };
+
+        let always_errors = always.errors;
+
+        let basic_debug = format!("{basic_errors:?}");
+        let context_debug = format!("{context_errors:?}");
+        let always_debug = format!("{always_errors:?}");
+
+        assert_eq!(
+            basic_debug, context_debug,
+            "check_file and check_file_with_context diverged"
+        );
+
+        assert_eq!(
+            basic_debug, always_debug,
+            "check_file and check_file_with_context_always diverged"
+        );
+    }
+
+    #[test]
+    fn parity_valid_program() {
+        assert_api_parity("fn main() { let value = 42 }");
+    }
+
+    #[test]
+    fn parity_direct_result_discard() {
+        assert_api_parity(
+            r#"
+            fn load() -> String! {
+                Ok("data")
+            }
+
+            fn main() {
+                load()
+                let value = 42
+            }
+            "#,
+        );
+    }
+
+    #[test]
+    fn parity_multiple_errors() {
+        assert_api_parity(
+            r#"
+            fn load() -> String! {
+                Ok("data")
+            }
+
+            fn main() {
+                load()
+                let first: Int = "wrong"
+                load()
+                let second: Int = "wrong"
+            }
+            "#,
         );
     }
 }

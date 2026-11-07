@@ -1,0 +1,39 @@
+schema_version = 1
+# States: DRAFT | SPECIFIED | MODEL_PROVEN | IMPLEMENTATION_LINKED | COMPLETE.
+# This is a declaration of work, NOT a proof certificate.
+
+[[obligations]]
+id = "R.PROOF"
+phase = "R"
+status = "DRAFT"
+model_scope = "Result obligation semantics and bounded control-flow core"
+implementation_scope = "tempra-typeck Result provenance analyzer"
+verifier = "UNDECIDED"
+evidence = ["formal/obligations/result.md"]
+
+[[obligations]]
+id = "M.PROOF"
+phase = "M"
+status = "DRAFT"
+model_scope = "acyclic ownership, ref/inout and memory safety"
+implementation_scope = "not yet scoped"
+verifier = "UNDECIDED"
+evidence = []
+
+[[obligations]]
+id = "E.PROOF"
+phase = "E"
+status = "DRAFT"
+model_scope = "capability/effect enforcement for a selected subset"
+implementation_scope = "not yet scoped"
+verifier = "UNDECIDED"
+evidence = []
+
+[[obligations]]
+id = "VM.PROOF"
+phase = "VM"
+status = "DRAFT"
+model_scope = "verified bytecode and VM preservation"
+implementation_scope = "not yet scoped"
+verifier = "UNDECIDED"
+evidence = []

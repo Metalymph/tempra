@@ -11,6 +11,45 @@ work and states what must be proven before a milestone is complete. It does not
 define new source syntax and does not convert a scaffold into an implemented
 feature.
 
+## Scripting-first execution order (decision overlay, 2026-11-07)
+
+This section governs **forward-looking product sequencing** while retaining
+the historical E/K/R/M/C/A milestone records below. Historical milestones
+remain referenced by their original canonical IDs. See
+[milestone migration](roadmap/migration.md), [status](roadmap/status.md)
+and [Ergal plan](roadmap/ergal.md).
+
+**Product gates:** S1 **Ergal scripting achievement** (stack VM runtime,
+language, stdlib, CLI, cache, distribution foundation) → S2 **Astro Tone
+website/documentation** → S3 **formatter/linter/LSP/MCP and agent support**
+→ S4 **Ergal v1.0-alpha/beta**. S2 and S3 may overlap S1, but S3 and the
+[release gates](roadmap/release-gates.md) **must** pass before alpha.
+Comparisons include **Python, JavaScript and TypeScript**, using pinned
+CPython/Node.js/Bun versions and transparent TypeScript build accounting.
+
+**After scripting maturity:** LLVM-backed Nimonic AOT, then self-hosting.
+The experimental Cranelift JIT is frozen after Result implementation work.
+No embedded Wasm engine is part of the Ergal deliverable. The historical
+default HIR interpreter remains the actual current path until stack VM
+parity justifies promotion; future comptime authority changes also require
+an explicit parity gate.
+
+**Implementation closure:** local R1–R3 Result/provenance tests are reported
+green for the supported scope, including path-sensitive and loop regressions.
+This is **not** the closure of canonical R4/R5 or a formal verification
+claim. The first draft obligation is R.PROOF. The phrase "K4 Result"
+used in discussions maps to canonical R;
+canonical K4 continues to denote the specialized-effects track.
+
+**Proofs:** add meaningful `<canonical milestone>.PROOF` sub-milestones
+with explicit properties, scopes, assumptions, proof artifacts and Rust
+correspondence. See [proof policy](roadmap/formal-verification.md) and
+`formal/manifest.toml`. Proofs progress alongside the product but do not
+substitute for tooling, scripting or distribution gates.
+
+**Immediate technical milestone:** canonical **K5 Phase Timings and Latency
+Baseline**, followed by K6 regression budgets. K5 is empirical measurement,
+not a mathematical proof; see [K5 protocol](roadmap/k5.md).
 ## Current implementation baseline
 
 Tempra has a working lexer, parser, AST-to-HIR lowering, typechecker, HIR

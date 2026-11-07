@@ -525,7 +525,10 @@ fn test_read_line_success() {
         r#"
         fn main() {
             let name = read_line()
-            print(name)
+            match name {
+                Ok(value) => print(value)
+                Err(error) => print(error)
+            }
         }
     "#,
     );
@@ -581,7 +584,11 @@ fn test_run_method_success() {
     expect_ok(
         r#"
         fn main() {
-            let r = cmd("echo", "hello").run();
+            let r = cmd("echo", "hello").run()
+            match r {
+                Ok(value) => print("ok")
+                Err(error) => print("error")
+            }
         }
     "#,
     );
@@ -1283,7 +1290,11 @@ fn test_option_result_distinction_typeck() {
 
         fn main() {
             print(maybe())
-            print(load())
+            let result = load()
+            match result {
+                Ok(value) => print(value)
+                Err(error) => print(error)
+            }
         }
     "#,
     );
@@ -1321,6 +1332,10 @@ fn test_is_operator_result_typeck() {
         fn main() {
             let x: String! = Ok("hello")
             expect(x is String!)
+            match x {
+                Ok(value) => print(value)
+                Err(error) => print(error)
+            }
         }
     "#,
     );
@@ -2271,6 +2286,10 @@ fn r1_allows_result_storage_in_binding_for_r2() {
 
         fn main() {
             let result = load()
+            match result {
+                Ok(value) => print(value)
+                Err(error) => print(error)
+            }
         }
     "#,
     );
@@ -2807,5 +2826,1390 @@ mod r2_result_provenance_tests {
     #[test]
     fn r2_t12_non_result_binding_has_no_obligation() {
         assert_unhandled("fn main() { let value = 42 }", 0);
+    }
+
+    #[test]
+    fn r25_t30_direct_handle_resultr_handles_result() {
+        let source = r#"
+            fn handle_result(result: Int!) {
+                match result {
+                    Ok(value) => print(value)
+                    Err(error) => print(error)
+                }
+            }
+
+            fn main() {
+                let input: Int! = Ok(42)
+                handle_result(input)
+            }
+        "#;
+
+        assert_unhandled(source, 0);
+    }
+
+    #[test]
+    fn r25_t31_observer_does_not_handle_result() {
+        let source = r#"
+            fn observe(result: Int!) {
+                print(result)
+            }
+
+            fn main() {
+                let input: Int! = Ok(42)
+                observe(input)
+            }
+        "#;
+
+        assert_unhandled(source, 1);
+    }
+
+    #[test]
+    fn r25_t32_handle_resultr_handles_forwarded_origin() {
+        let source = r#"
+            fn identity(type T, x: T) -> T {
+                return x
+            }
+
+            fn handle_result(result: Int!) {
+                match result {
+                    Ok(value) => print(value)
+                    Err(error) => print(error)
+                }
+            }
+
+            fn main() {
+                let input: Int! = Ok(42)
+                handle_result(identity[Int!](input))
+            }
+        "#;
+
+        assert_unhandled(source, 0);
+    }
+
+    #[test]
+    fn r25_t33_named_argument_is_handle_resultd() {
+        let source = r#"
+            fn handle_result(result: Int!) {
+                match result {
+                    Ok(value) => print(value)
+                    Err(error) => print(error)
+                }
+            }
+
+            fn main() {
+                let input: Int! = Ok(42)
+                handle_result(result = input)
+            }
+        "#;
+
+        assert_unhandled(source, 0);
+    }
+
+    #[test]
+    fn r25_t34_direct_wrapper_consumes_result() {
+        let source = r#"
+            fn handle_result(result: Int!) {
+                match result {
+                    Ok(value) => print(value)
+                    Err(error) => print(error)
+                }
+            }
+            fn relay(result: Int!) {
+                handle_result(result)
+            }
+            fn main() {
+                let input: Int! = Ok(42)
+                relay(input)
+            }
+        "#;
+        assert_unhandled(source, 0);
+    }
+
+    #[test]
+    fn r25_t35_reverse_order_transitive_consumption() {
+        let source = r#"
+            fn outer(result: Int!) {
+                middle(result)
+            }
+            fn middle(result: Int!) {
+                handle_result(result)
+            }
+            fn handle_result(result: Int!) {
+                match result {
+                    Ok(value) => print(value)
+                    Err(error) => print(error)
+                }
+            }
+            fn main() {
+                let input: Int! = Ok(42)
+                outer(input)
+            }
+        "#;
+        assert_unhandled(source, 0);
+    }
+
+    #[test]
+    fn r25_t36_observer_wrapper_does_not_consume() {
+        let source = r#"
+            fn observe(result: Int!) {
+                print(result)
+            }
+            fn relay(result: Int!) {
+                observe(result)
+            }
+            fn main() {
+                let input: Int! = Ok(42)
+                relay(input)
+            }
+        "#;
+
+        let first = super::check_errors(source);
+        let second = super::check_errors(source);
+
+        let unhandled: Vec<_> = first.iter().filter(|e| e.message == UNHANDLED).collect();
+
+        assert_eq!(unhandled.len(), 1, "{first:#?}");
+
+        let start = source.find("Ok(42)").unwrap();
+        assert_eq!(unhandled[0].span.start as usize, start);
+        assert_eq!(unhandled[0].span.end as usize, start + 6);
+
+        assert_eq!(first.len(), second.len());
+        for (a, b) in first.iter().zip(second.iter()) {
+            assert_eq!(a.message, b.message);
+            assert_eq!(a.span.start, b.span.start);
+            assert_eq!(a.span.end, b.span.end);
+        }
+    }
+
+    #[test]
+    fn r25_t37_named_arguments_transfer_consumption() {
+        let source = r#"
+            fn handle_result(result: Int!) {
+                match result {
+                    Ok(value) => print(value)
+                    Err(error) => print(error)
+                }
+            }
+            fn relay(result: Int!) {
+                handle_result(result = result)
+            }
+            fn main() {
+                let input: Int! = Ok(42)
+                relay(result = input)
+            }
+        "#;
+        assert_unhandled(source, 0);
+    }
+
+    #[test]
+    fn r25_t38_only_consumed_parameter_is_handled() {
+        let source = r#"
+            fn handle_result(result: Int!) {
+                match result {
+                    Ok(value) => print(value)
+                    Err(error) => print(error)
+                }
+            }
+            fn relay(first: Int!, second: Int!) {
+                handle_result(first)
+            }
+            fn main() {
+                let first: Int! = Ok(1)
+                let second: Int! = Ok(2)
+                relay(first, second)
+            }
+        "#;
+
+        let errors = super::check_errors(source);
+        let unhandled: Vec<_> = errors.iter().filter(|e| e.message == UNHANDLED).collect();
+
+        assert_eq!(unhandled.len(), 1, "{errors:#?}");
+
+        let start = source.find("Ok(2)").unwrap();
+        assert_eq!(unhandled[0].span.start as usize, start);
+        assert_eq!(unhandled[0].span.end as usize, start + 5);
+    }
+
+    #[test]
+    fn r25_t39_two_parameters_handled_directly() {
+        let source = r#"
+            fn handle_both(first: Int!, second: Int!) {
+                match first {
+                    Ok(value) => print(value)
+                    Err(error) => print(error)
+                }
+                match second {
+                    Ok(value) => print(value)
+                    Err(error) => print(error)
+                }
+            }
+            fn main() {
+                let a: Int! = Ok(1)
+                let b: Int! = Ok(2)
+                handle_both(a, b)
+            }
+        "#;
+        assert_unhandled(source, 0);
+    }
+
+    #[test]
+    fn r25_t40_two_parameters_transitively_handled() {
+        let source = r#"
+            fn outer(first: Int!, second: Int!) {
+                middle(first, second)
+            }
+            fn middle(first: Int!, second: Int!) {
+                handle_both(first, second)
+            }
+            fn handle_both(first: Int!, second: Int!) {
+                match first {
+                    Ok(value) => print(value)
+                    Err(error) => print(error)
+                }
+                match second {
+                    Ok(value) => print(value)
+                    Err(error) => print(error)
+                }
+            }
+            fn main() {
+                let a: Int! = Ok(1)
+                let b: Int! = Ok(2)
+                outer(a, b)
+            }
+        "#;
+        assert_unhandled(source, 0);
+    }
+
+    #[test]
+    fn r25_t41_partial_handling_preserves_second_origin() {
+        let source = r#"
+            fn handle_first(first: Int!, second: Int!) {
+                match first {
+                    Ok(value) => print(value)
+                    Err(error) => print(error)
+                }
+            }
+            fn main() {
+                let a: Int! = Ok(1)
+                let b: Int! = Ok(2)
+                handle_first(a, b)
+            }
+        "#;
+
+        let errors = super::check_errors(source);
+        let unhandled: Vec<_> = errors
+            .iter()
+            .filter(|error| error.message == UNHANDLED)
+            .collect();
+
+        assert_eq!(unhandled.len(), 1, "{errors:#?}");
+
+        let start = source.find("Ok(2)").unwrap();
+        assert_eq!(unhandled[0].span.start as usize, start);
+        assert_eq!(unhandled[0].span.end as usize, start + 5);
+    }
+
+    #[test]
+    fn r25_t42_reversed_named_arguments() {
+        let source = r#"
+            fn handle_both(first: Int!, second: Int!) {
+                match first {
+                    Ok(value) => print(value)
+                    Err(error) => print(error)
+                }
+                match second {
+                    Ok(value) => print(value)
+                    Err(error) => print(error)
+                }
+            }
+            fn main() {
+                let a: Int! = Ok(1)
+                let b: Int! = Ok(2)
+                handle_both(second = b, first = a)
+            }
+        "#;
+        assert_unhandled(source, 0);
+    }
+
+    #[test]
+    fn r25_t43_shadowed_consumer_does_not_inherit_contract() {
+        let source = r#"
+            fn handle_result(result: Int!) {
+                match result {
+                    Ok(value) => print(value)
+                    Err(error) => print(error)
+                }
+            }
+            fn main() {
+                let handle_result = fn(result: Int!) {
+                    print(result)
+                }
+                let input: Int! = Ok(1)
+                handle_result(input)
+            }
+        "#;
+        assert_unhandled(source, 1);
+    }
+
+    #[test]
+    fn r25_t44_unhandled_origins_have_deterministic_order() {
+        let source = r#"
+            fn main() {
+                let first: Int! = Ok(1)
+                let second: Int! = Ok(2)
+            }
+        "#;
+
+        let first = super::check_errors(source);
+        let second = super::check_errors(source);
+
+        assert_eq!(first.len(), 2, "{first:#?}");
+        assert_eq!(second.len(), 2, "{second:#?}");
+
+        let expected = ["Ok(1)", "Ok(2)"];
+
+        for (index, fragment) in expected.iter().enumerate() {
+            let start = source.find(fragment).unwrap();
+
+            assert_eq!(first[index].message, UNHANDLED);
+            assert_eq!(first[index].span.start as usize, start);
+            assert_eq!(first[index].span.end as usize, start + fragment.len());
+
+            assert_eq!(first[index].message, second[index].message);
+            assert_eq!(first[index].span.start, second[index].span.start);
+            assert_eq!(first[index].span.end, second[index].span.end);
+        }
+    }
+
+    #[test]
+    fn r25_t45_mixed_direct_and_transitive_handling() {
+        let source = r#"
+            fn relay(first: Int!, second: Int!) {
+                match first {
+                    Ok(value) => print(value)
+                    Err(error) => print(error)
+                }
+                handle_result(second)
+            }
+            fn handle_result(result: Int!) {
+                match result {
+                    Ok(value) => print(value)
+                    Err(error) => print(error)
+                }
+            }
+            fn main() {
+                let a: Int! = Ok(1)
+                let b: Int! = Ok(2)
+                relay(a, b)
+            }
+        "#;
+        assert_unhandled(source, 0);
+    }
+
+    #[test]
+    fn r25_t46_block_result_preserves_origin() {
+        let source = r#"
+            fn load() -> String! {
+                Ok("data")
+            }
+
+            fn main() {
+                let result = { load() }
+            }
+        "#;
+
+        let errors = super::check_errors(source);
+        let unhandled: Vec<_> = errors
+            .iter()
+            .filter(|error| error.message == UNHANDLED)
+            .collect();
+
+        assert_eq!(unhandled.len(), 1, "{errors:#?}");
+
+        let start = source.rfind("load()").unwrap();
+        assert_eq!(unhandled[0].span.start as usize, start);
+        assert_eq!(unhandled[0].span.end as usize, start + 6);
+    }
+}
+
+// R3.0 — Path-sensitive Result soundness gate.
+//
+// These tests intentionally precede the implementation.
+// A Result obligation is discharged only if every reachable
+// execution path handles or propagates it.
+mod r3_path_sensitive_tests {
+    use super::check_errors;
+
+    const UNHANDLED: &str = "Result is not handled or propagated";
+
+    fn assert_unhandled(source: &str, expected: usize) {
+        let errors = check_errors(source);
+
+        assert!(
+            errors.iter().all(|error| error.message == UNHANDLED),
+            "Unexpected non-Result diagnostics: {errors:#?}"
+        );
+
+        assert_eq!(
+            errors.len(),
+            expected,
+            "Unexpected Result obligations: {errors:#?}"
+        );
+    }
+
+    #[test]
+    fn r3_t01_result_created_inside_if_is_tracked() {
+        let source = r#"
+            fn run(flag: Bool) {
+                if flag {
+                    let result: Int! = Ok(1)
+                }
+            }
+        "#;
+
+        assert_unhandled(source, 1);
+    }
+
+    #[test]
+    fn r3_t02_handling_only_one_branch_is_insufficient() {
+        let source = r#"
+            fn run(flag: Bool) {
+                let result: Int! = Ok(1)
+
+                if flag {
+                    match result {
+                        Ok(value) => print(value)
+                        Err(error) => print(error)
+                    }
+                }
+            }
+        "#;
+
+        assert_unhandled(source, 1);
+    }
+
+    #[test]
+    fn r3_t03_handling_both_branches_is_sufficient() {
+        let source = r#"
+            fn run(flag: Bool) {
+                let result: Int! = Ok(1)
+
+                if flag {
+                    match result {
+                        Ok(value) => print(value)
+                        Err(error) => print(error)
+                    }
+                } else {
+                    match result {
+                        Ok(value) => print(value)
+                        Err(error) => print(error)
+                    }
+                }
+            }
+        "#;
+
+        assert_unhandled(source, 0);
+    }
+
+    #[test]
+    fn r3_t04_early_return_cannot_hide_pending_result() {
+        let source = r#"
+            fn run(flag: Bool) -> Int! {
+                let result: Int! = Ok(1)
+
+                if flag {
+                    return Ok(2)
+                }
+
+                match result {
+                    Ok(value) => print(value)
+                    Err(error) => print(error)
+                }
+
+                Ok(3)
+            }
+        "#;
+
+        assert_unhandled(source, 1);
+    }
+
+    #[test]
+    fn r3_t05_returned_result_is_propagated() {
+        let source = r#"
+            fn run(flag: Bool) -> Int! {
+                let result: Int! = Ok(1)
+
+                if flag {
+                    return result
+                }
+
+                match result {
+                    Ok(value) => print(value)
+                    Err(error) => print(error)
+                }
+
+                Ok(3)
+            }
+        "#;
+
+        assert_unhandled(source, 0);
+    }
+
+    #[test]
+    fn r3_t06_one_match_arm_cannot_handle_every_path() {
+        let source = r#"
+            fn run(flag: Bool) {
+                let result: Int! = Ok(1)
+
+                match flag {
+                    true => match result {
+                        Ok(value) => print(value)
+                        Err(error) => print(error)
+                    }
+                    false => print("skipped")
+                }
+            }
+        "#;
+
+        assert_unhandled(source, 1);
+    }
+
+    #[test]
+    fn r3_t07_result_inside_for_body_is_tracked() {
+        let source = r#"
+            fn run() {
+                let values = [1, 2]
+
+                for value in values {
+                    let result: Int! = Ok(1)
+                }
+            }
+        "#;
+
+        assert_unhandled(source, 1);
+    }
+
+    #[test]
+    fn r3_t08_conditional_overwrite_keeps_old_obligation() {
+        let source = r#"
+            fn run(flag: Bool) {
+                var result: Int! = Ok(1)
+
+                if flag {
+                    let replacement: Int! = Ok(2)
+                    result = replacement
+                }
+
+                match result {
+                    Ok(value) => print(value)
+                    Err(error) => print(error)
+                }
+            }
+        "#;
+
+        let errors = check_errors(source);
+
+        assert_eq!(errors.len(), 1, "Unexpected diagnostics: {errors:#?}");
+        assert_eq!(errors[0].message, UNHANDLED);
+
+        // On the true path, the original Result was overwritten
+        // without being handled.
+        let start = source.find("Ok(1)").unwrap();
+        assert_eq!(errors[0].span.start as usize, start);
+        assert_eq!(errors[0].span.end as usize, start + 5);
+    }
+
+    #[test]
+    fn r3_t09_unconditional_match_after_if_handles_result() {
+        let source = r#"
+            fn run(flag: Bool) {
+                let result: Int! = Ok(1)
+
+                if flag {
+                    print("yes")
+                } else {
+                    print("no")
+                }
+
+                match result {
+                    Ok(value) => print(value)
+                    Err(error) => print(error)
+                }
+            }
+        "#;
+
+        assert_unhandled(source, 0);
+    }
+
+    #[test]
+    fn r3_t10_both_match_arms_handle_result() {
+        let source = r#"
+            fn run(flag: Bool) {
+                let result: Int! = Ok(1)
+
+                match flag {
+                    true => match result {
+                        Ok(value) => print(value)
+                        Err(error) => print(error)
+                    }
+                    false => match result {
+                        Ok(value) => print(value)
+                        Err(error) => print(error)
+                    }
+                }
+            }
+        "#;
+
+        assert_unhandled(source, 0);
+    }
+
+    #[test]
+    fn r3_t11_wildcard_does_not_handle_result() {
+        let source = r#"
+            fn run() {
+                let result: Int! = Ok(1)
+
+                match result {
+                    _ => print("ignored")
+                }
+            }
+        "#;
+
+        assert_unhandled(source, 1);
+    }
+
+    #[test]
+    fn r3_t12_break_bypasses_result_handler() {
+        let source = r#"
+            fn run() {
+                let values = [1, 2]
+
+                for value in values {
+                    let result: Int! = Ok(1)
+
+                    if value > 0 {
+                        break
+                    }
+
+                    match result {
+                        Ok(x) => print(x)
+                        Err(error) => print(error)
+                    }
+                }
+            }
+        "#;
+
+        assert_unhandled(source, 1);
+    }
+
+    #[test]
+    fn r3_t13_continue_bypasses_result_handler() {
+        let source = r#"
+            fn run() {
+                let values = [1, 2]
+
+                for value in values {
+                    let result: Int! = Ok(1)
+
+                    if value > 0 {
+                        continue
+                    }
+
+                    match result {
+                        Ok(x) => print(x)
+                        Err(error) => print(error)
+                    }
+                }
+            }
+        "#;
+
+        assert_unhandled(source, 1);
+    }
+
+    #[test]
+    fn r3_t14_loop_may_execute_zero_times() {
+        let source = r#"
+            fn run() {
+                let result: Int! = Ok(1)
+                let values = [1, 2]
+
+                for value in values {
+                    match result {
+                        Ok(x) => print(x)
+                        Err(error) => print(error)
+                    }
+                }
+            }
+        "#;
+
+        assert_unhandled(source, 1);
+    }
+
+    #[test]
+    fn r3_t15_conditional_selection_keeps_both_obligations() {
+        let source = r#"
+            fn run(flag: Bool) {
+                let first: Int! = Ok(1)
+                let second: Int! = Ok(2)
+                var selected: Int! = first
+
+                if flag {
+                    selected = second
+                }
+
+                match selected {
+                    Ok(value) => print(value)
+                    Err(error) => print(error)
+                }
+            }
+        "#;
+
+        assert_unhandled(source, 2);
+    }
+
+    #[test]
+    fn r3_t16_conditional_origin_survives_alias_copy() {
+        let source = r#"
+            fn run(flag: Bool) {
+                let original: Int! = Ok(1)
+                var selected: Int! = original
+
+                if flag {
+                    let substitute: Int! = Ok(2)
+                    selected = substitute
+                }
+
+                let alias = selected
+
+                match alias {
+                    Ok(value) => print(value)
+                    Err(error) => print(error)
+                }
+            }
+        "#;
+
+        assert_unhandled(source, 1);
+    }
+
+    #[test]
+    fn r3_t17_identical_origins_merge_without_ambiguity() {
+        let source = r#"
+            fn run(flag: Bool) {
+                let original: Int! = Ok(1)
+                var selected: Int! = original
+
+                if flag {
+                    selected = original
+                } else {
+                    selected = original
+                }
+
+                match selected {
+                    Ok(value) => print(value)
+                    Err(error) => print(error)
+                }
+            }
+        "#;
+
+        assert_unhandled(source, 0);
+    }
+
+    #[test]
+    fn r3_t18_both_origins_handled_through_other_aliases() {
+        let source = r#"
+            fn run(flag: Bool) {
+                let first: Int! = Ok(1)
+                let second: Int! = Ok(2)
+                var selected: Int! = first
+
+                if flag {
+                    selected = second
+                }
+
+                match selected {
+                    Ok(value) => print(value)
+                    Err(error) => print(error)
+                }
+
+                match first {
+                    Ok(value) => print(value)
+                    Err(error) => print(error)
+                }
+
+                match second {
+                    Ok(value) => print(value)
+                    Err(error) => print(error)
+                }
+            }
+        "#;
+
+        assert_unhandled(source, 0);
+    }
+
+    // R3.2a — repeated static production sites and loop back-edges.
+
+    #[test]
+    fn r32_t01_repeated_production_overwrites_previous_instance() {
+        let source = r#"
+            fn run() {
+                var current: Int! = Ok(0)
+
+                match current {
+                    Ok(value) => print(value)
+                    Err(error) => print(error)
+                }
+
+                let values = [1, 2]
+
+                for value in values {
+                    let next: Int! = Ok(1)
+                    current = next
+                }
+
+                match current {
+                    Ok(value) => print(value)
+                    Err(error) => print(error)
+                }
+            }
+        "#;
+
+        let errors = super::check_errors(source);
+        assert_eq!(errors.len(), 1, "{errors:#?}");
+        assert_eq!(errors[0].message, UNHANDLED);
+
+        let start = source.find("Ok(1)").unwrap();
+        assert_eq!(errors[0].span.start as usize, start);
+        assert_eq!(errors[0].span.end as usize, start + 5);
+    }
+
+    #[test]
+    fn r32_t02_every_iteration_handles_its_result() {
+        let source = r#"
+            fn run() {
+                let values = [1, 2]
+
+                for value in values {
+                    let next: Int! = Ok(1)
+
+                    match next {
+                        Ok(x) => print(x)
+                        Err(error) => print(error)
+                    }
+                }
+            }
+        "#;
+
+        assert_unhandled(source, 0);
+    }
+
+    #[test]
+    fn r32_t03_nested_loop_repeated_overwrite() {
+        let source = r#"
+            fn run() {
+                var current: Int! = Ok(0)
+
+                match current {
+                    Ok(value) => print(value)
+                    Err(error) => print(error)
+                }
+
+                let values = [1, 2]
+
+                for outer in values {
+                    for inner in values {
+                        let next: Int! = Ok(1)
+                        current = next
+                    }
+                }
+
+                match current {
+                    Ok(value) => print(value)
+                    Err(error) => print(error)
+                }
+            }
+        "#;
+
+        assert_unhandled(source, 1);
+    }
+
+    #[test]
+    fn r32_t04_previous_value_handled_each_iteration() {
+        let source = r#"
+            fn run() {
+                var current: Int! = Ok(0)
+                let values = [1, 2]
+
+                for value in values {
+                    match current {
+                        Ok(x) => print(x)
+                        Err(error) => print(error)
+                    }
+
+                    let next: Int! = Ok(1)
+                    current = next
+                }
+
+                match current {
+                    Ok(x) => print(x)
+                    Err(error) => print(error)
+                }
+            }
+        "#;
+
+        assert_unhandled(source, 0);
+    }
+
+    #[test]
+    fn r32_t05_conditional_production_repeated_in_loop() {
+        let source = r#"
+            fn run(flag: Bool) {
+                var current: Int! = Ok(0)
+
+                match current {
+                    Ok(value) => print(value)
+                    Err(error) => print(error)
+                }
+
+                let values = [1, 2]
+
+                for value in values {
+                    if flag {
+                        let next: Int! = Ok(1)
+                        current = next
+                    }
+                }
+
+                match current {
+                    Ok(value) => print(value)
+                    Err(error) => print(error)
+                }
+            }
+        "#;
+
+        assert_unhandled(source, 1);
+    }
+
+    #[test]
+    fn r32_t06_independent_repeated_production_sites() {
+        let source = r#"
+            fn run() {
+                var left: Int! = Ok(0)
+                var right: Int! = Ok(0)
+
+                match left {
+                    Ok(value) => print(value)
+                    Err(error) => print(error)
+                }
+
+                match right {
+                    Ok(value) => print(value)
+                    Err(error) => print(error)
+                }
+
+                let values = [1, 2]
+
+                for value in values {
+                    let next_left: Int! = Ok(1)
+                    let next_right: Int! = Ok(2)
+
+                    left = next_left
+                    right = next_right
+                }
+
+                match left {
+                    Ok(value) => print(value)
+                    Err(error) => print(error)
+                }
+
+                match right {
+                    Ok(value) => print(value)
+                    Err(error) => print(error)
+                }
+            }
+        "#;
+
+        assert_unhandled(source, 2);
+    }
+
+    #[test]
+    fn r32_t07_break_after_multiple_productions() {
+        let source = r#"
+            fn run() {
+                var current: Int! = Ok(0)
+
+                match current {
+                    Ok(value) => print(value)
+                    Err(error) => print(error)
+                }
+
+                let values = [1, 2]
+
+                for value in values {
+                    let next: Int! = Ok(1)
+                    current = next
+
+                    if value > 1 {
+                        break
+                    }
+                }
+
+                match current {
+                    Ok(value) => print(value)
+                    Err(error) => print(error)
+                }
+            }
+        "#;
+
+        assert_unhandled(source, 1);
+    }
+
+    #[test]
+    fn r32_t08_continue_does_not_erase_prior_instance() {
+        let source = r#"
+            fn run() {
+                var current: Int! = Ok(0)
+
+                match current {
+                    Ok(value) => print(value)
+                    Err(error) => print(error)
+                }
+
+                let values = [1, 2]
+
+                for value in values {
+                    let next: Int! = Ok(1)
+                    current = next
+                    continue
+                }
+
+                match current {
+                    Ok(value) => print(value)
+                    Err(error) => print(error)
+                }
+            }
+        "#;
+
+        assert_unhandled(source, 1);
+    }
+
+    #[test]
+    fn r32_t09_conditional_production_handled_each_iteration() {
+        let source = r#"
+            fn run() {
+                let values = [1, 2]
+
+                for value in values {
+                    if value > 0 {
+                        let next: Int! = Ok(1)
+
+                        match next {
+                            Ok(x) => print(x)
+                            Err(error) => print(error)
+                        }
+                    }
+                }
+            }
+        "#;
+
+        assert_unhandled(source, 0);
+    }
+
+    #[test]
+    fn r32_t10_nested_loop_productions_all_handled() {
+        let source = r#"
+            fn run() {
+                let values = [1, 2]
+
+                for outer in values {
+                    for inner in values {
+                        let next: Int! = Ok(1)
+
+                        match next {
+                            Ok(x) => print(x)
+                            Err(error) => print(error)
+                        }
+                    }
+                }
+            }
+        "#;
+
+        assert_unhandled(source, 0);
+    }
+
+    // R3.2c — soundness and convergence audit.
+
+    #[test]
+    fn r32c_t01_branch_productions_handled_per_iteration() {
+        let source = r#"
+            fn run(flag: Bool) {
+                let values = [1, 2]
+
+                for value in values {
+                    if flag {
+                        let first: Int! = Ok(1)
+                        match first {
+                            Ok(x) => print(x)
+                            Err(error) => print(error)
+                        }
+                    } else {
+                        let second: Int! = Ok(2)
+                        match second {
+                            Ok(x) => print(x)
+                            Err(error) => print(error)
+                        }
+                    }
+                }
+            }
+        "#;
+
+        assert_unhandled(source, 0);
+    }
+
+    #[test]
+    fn r32c_t02_nested_loops_handle_through_alias() {
+        let source = r#"
+            fn run() {
+                let values = [1, 2]
+
+                for outer in values {
+                    for inner in values {
+                        let original: Int! = Ok(1)
+                        let alias = original
+
+                        match alias {
+                            Ok(x) => print(x)
+                            Err(error) => print(error)
+                        }
+                    }
+                }
+            }
+        "#;
+
+        assert_unhandled(source, 0);
+    }
+
+    #[test]
+    fn r32c_t03_continue_bypasses_alias_consumer() {
+        let source = r#"
+            fn run() {
+                let values = [1, 2]
+
+                for value in values {
+                    let original: Int! = Ok(1)
+                    let alias = original
+
+                    if value > 0 {
+                        continue
+                    }
+
+                    match alias {
+                        Ok(x) => print(x)
+                        Err(error) => print(error)
+                    }
+                }
+            }
+        "#;
+
+        assert_unhandled(source, 1);
+    }
+
+    #[test]
+    fn r32c_t04_break_after_handling_is_safe() {
+        let source = r#"
+            fn run() {
+                let values = [1, 2]
+
+                for value in values {
+                    let result: Int! = Ok(1)
+
+                    match result {
+                        Ok(x) => print(x)
+                        Err(error) => print(error)
+                    }
+
+                    if value > 0 {
+                        break
+                    }
+                }
+            }
+        "#;
+
+        assert_unhandled(source, 0);
+    }
+
+    #[test]
+    fn r32c_t05_return_inside_loop_preserves_pending() {
+        let source = r#"
+            fn run(flag: Bool) -> Int! {
+                let values = [1, 2]
+
+                for value in values {
+                    let pending: Int! = Ok(1)
+
+                    if flag {
+                        return Ok(2)
+                    }
+
+                    match pending {
+                        Ok(x) => print(x)
+                        Err(error) => print(error)
+                    }
+                }
+
+                Ok(3)
+            }
+        "#;
+
+        assert_unhandled(source, 1);
+    }
+
+    #[test]
+    fn r32c_t06_is_pattern_is_not_complete_handling() {
+        let source = r#"
+            fn run() {
+                let result: Int! = Ok(1)
+
+                if result is Ok(value) {
+                    print(value)
+                }
+            }
+        "#;
+
+        assert_unhandled(source, 1);
+    }
+
+    #[test]
+    fn r32c_t07_conditional_aliases_then_explicit_handling() {
+        let source = r#"
+            fn run(flag: Bool) {
+                let first: Int! = Ok(1)
+                let second: Int! = Ok(2)
+
+                var selected: Int! = first
+
+                if flag {
+                    selected = second
+                }
+
+                let alias = selected
+
+                match alias {
+                    Ok(x) => print(x)
+                    Err(error) => print(error)
+                }
+
+                match first {
+                    Ok(x) => print(x)
+                    Err(error) => print(error)
+                }
+
+                match second {
+                    Ok(x) => print(x)
+                    Err(error) => print(error)
+                }
+            }
+        "#;
+
+        assert_unhandled(source, 0);
+    }
+
+    #[test]
+    fn r32c_t08_independent_unhandled_branch_sites() {
+        let source = r#"
+            fn run(flag: Bool) {
+                let values = [1, 2]
+
+                for value in values {
+                    if flag {
+                        let first: Int! = Ok(1)
+                    } else {
+                        let second: Int! = Ok(2)
+                    }
+                }
+            }
+        "#;
+
+        assert_unhandled(source, 2);
+    }
+
+    #[test]
+    fn r32c_t09_deterministic_diagnostics() {
+        let source = r#"
+            fn run(flag: Bool) {
+                let first: Int! = Ok(1)
+                let second: Int! = Ok(2)
+
+                if flag {
+                    print("yes")
+                } else {
+                    print("no")
+                }
+            }
+        "#;
+
+        let baseline = super::check_errors(source);
+
+        assert_eq!(baseline.len(), 2, "{baseline:#?}");
+
+        for _ in 0..10 {
+            let current = super::check_errors(source);
+
+            assert_eq!(baseline.len(), current.len());
+
+            for (expected, actual) in baseline.iter().zip(&current) {
+                assert_eq!(expected.message, actual.message);
+                assert_eq!(expected.span.start, actual.span.start);
+                assert_eq!(expected.span.end, actual.span.end);
+            }
+        }
+
+        let expected_sites = ["Ok(1)", "Ok(2)"];
+
+        for (error, site) in baseline.iter().zip(expected_sites) {
+            let start = source.find(site).unwrap();
+
+            assert_eq!(error.message, UNHANDLED);
+            assert_eq!(error.span.start as usize, start);
+            assert_eq!(error.span.end as usize, start + site.len());
+        }
+
+        // Optional output for the cross-process determinism gate.
+        if std::env::var_os("TEMPRA_R3_AUDIT_DUMP").is_some() {
+            for error in &baseline {
+                println!(
+                    "R3_AUDIT:{}:{}:{}",
+                    error.span.start, error.span.end, error.message
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn r32c_t10_many_branches_converge_without_false_positives() {
+        let mut source = String::from(
+            "fn run(flag: Bool) {
+                let values = [1, 2]
+                for value in values {
+            ",
+        );
+
+        for index in 0..16 {
+            source.push_str(&format!(
+                "
+                if flag {{
+                    let result_{index}: Int! = Ok({index})
+                    match result_{index} {{
+                        Ok(x) => print(x)
+                        Err(error) => print(error)
+                    }}
+                }}
+                "
+            ));
+        }
+
+        source.push_str("} }");
+
+        assert_unhandled(&source, 0);
     }
 }

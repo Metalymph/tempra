@@ -60,10 +60,8 @@ fn result_initializers_and_patterns_produce_verified_tir() {
 fn main() -> Int64 {
     let good: Int!String = Ok(10)
     var bad: Int!String = Err("bad")
-    if good is Ok(v) {
-        return match bad { Ok(_) => 0 Err(_) => v }
-    }
-    return 0
+    let value = match good { Ok(v) => v Err(_) => 0 }
+    return match bad { Ok(_) => 0 Err(_) => value }
 }
 "#,
         VmValue::Int64(10),
@@ -161,4 +159,22 @@ fn main() -> Int64 {
     emit_tir_source(source).expect("nested terminating branches must produce valid TIR");
     let actual = tempra_driver::pipeline::interpret_tir_source(source, "main", vec![]).unwrap();
     assert_eq!(actual, tempra_tir_interp::TirRuntimeValue::Int64(2));
+}
+
+#[test]
+fn discarded_nested_result_remains_rejected() {
+    let source = r#"
+fn main() -> Int64 {
+    let nested: Result(Result(Int64, String), String) =
+        Ok(Err("inner"))
+    return 0
+}
+"#;
+
+    let error = emit_tir_source(source).expect_err("discarding a nested Result must be rejected");
+
+    assert!(
+        format!("{error:?}").contains("Result is not handled or propagated"),
+        "unexpected diagnostic: {error:?}"
+    );
 }

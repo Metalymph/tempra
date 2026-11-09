@@ -117,6 +117,10 @@ fn test_pipeline_is_ok_narrowing() {
     let source = r#"
         fn main() -> Int64 {
             let r: Int64!String = Ok(10)
+            let handled = match r {
+                Ok(_) => 0
+                Err(_) => 0
+            }
             if r is Ok(v) {
                 return v
             } else {
@@ -132,6 +136,10 @@ fn test_pipeline_is_err_narrowing() {
     let source = r#"
         fn main() -> Int64 {
             let r: Int64!String = Err("bad")
+            let handled = match r {
+                Ok(_) => 0
+                Err(_) => 0
+            }
             if r is Err(e) {
                 return 1
             } else {

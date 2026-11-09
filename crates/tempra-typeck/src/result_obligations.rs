@@ -1154,6 +1154,62 @@ impl<'a> ResultProvenanceAnalyzer<'a> {
         tail_origin
     }
 
+    /// Transfer nested Result obligations through a directly returned
+    /// Result constructor. The container itself must be returned;
+    /// ordinary construction never discharges payload obligations.
+    fn propagate_returned_result_payloads(&mut self, expr: &HirExpression) {
+        if !self.is_result(expr) {
+            return;
+        }
+
+        match expr {
+            HirExpression::Call(call)
+                if matches!(
+                    call.callee.as_ref(),
+                    HirExpression::Name(_, name)
+                        if name == "Ok" || name == "Err"
+                ) =>
+            {
+                for argument in &call.args {
+                    let payload = match argument {
+                        HirCallArgument::Positional(value) => value,
+                        HirCallArgument::Named(named) => &named.value,
+                    };
+                    self.transfer_returned_payload(payload);
+                }
+            }
+
+            HirExpression::EnumConstructor(constructor)
+                if constructor.variant_name == "Ok" || constructor.variant_name == "Err" =>
+            {
+                for payload in &constructor.payloads {
+                    self.transfer_returned_payload(payload);
+                }
+            }
+
+            _ => {}
+        }
+    }
+
+    fn transfer_returned_payload(&mut self, payload: &HirExpression) {
+        if self.is_result(payload) {
+            let origin = match payload {
+                HirExpression::Name(_, name) => self
+                    .bindings
+                    .resolve(name)
+                    .and_then(|id| self.tracker.origin_of(id)),
+
+                _ => self.origin_by_site.get(&payload.span()).copied(),
+            };
+
+            if let Some(origin) = origin {
+                self.tracker.propagate(origin);
+            }
+        }
+
+        self.propagate_returned_result_payloads(payload);
+    }
+
     fn analyze_statement(&mut self, statement: &HirStatement) {
         match statement {
             HirStatement::Let(binding) => {
@@ -1201,6 +1257,7 @@ impl<'a> ResultProvenanceAnalyzer<'a> {
                     self.tracker.propagate(origin);
                 }
 
+                self.propagate_returned_result_payloads(expr);
                 self.record_return_exit();
             }
 

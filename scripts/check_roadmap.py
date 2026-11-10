@@ -14,6 +14,7 @@ required = (
     "docs/roadmap/release-gates.md",
     "docs/roadmap/formal-verification.md",
     "docs/roadmap/k5.md",
+    "docs/roadmap/vm-parity-gate.md",
     "formal/manifest.toml",
     "formal/obligations/result.md",
     "AGENTS.md",

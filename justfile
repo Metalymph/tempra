@@ -250,3 +250,7 @@ k5-harness-check:
 # K5.2a instrumentation regression tests
 k5-phase-tests:
     cargo test -p tempra-driver --test timing_tests
+
+# VM parity evidence (read-only inventory + selected tests)
+vm-parity-audit:
+    python3 scripts/vm_parity_audit.py --run-tests

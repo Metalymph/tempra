@@ -44,3 +44,12 @@ PRE-AOT Ergal distribution and the start of main Nimonic AOT work:
 
 `tempra repl --shell` and `tempra shell` are aliases to one REPL service,
 not separate language runtimes. See [REPL/Shell](repl-shell.md).
+
+## VM-only comparison prerequisite (2026-11-10)
+
+Before public runtime comparisons (Python/Node/Bun/TypeScript), satisfy
+[the VM parity and lowering audit gate](vm-parity-gate.md), ensure Ergal's
+declared scripting subset runs without HIR/TIR interpreter fallback, and
+record reproducible VM-only release-binary startup/RSS/binary size and
+cache hit/miss baselines. Cross-runtime comparisons cannot be used to
+justify a VM migration or to waive safety/parity defects.

@@ -87,3 +87,14 @@ as history but **do not override** the forward target of LLVM and unified VM.
 
 Proof assets follow the `R.PROOF`, `M.PROOF`, `E.PROOF`, `VM.PROOF` registry and
 make no formal claim until actual checked evidence and implementation linkage exist.
+
+## VM parity and lowering audit is a release prerequisite (2026-11-10)
+
+Follow the [VM-only acceptance gate](vm-parity-gate.md) before public
+cross-runtime comparisons. In particular, HIR->TIR and TIR->bytecode
+unsupported arms require evidence, and an `UnsupportedExperimentalVm`
+permitted by a test is controlled failure rather than coverage. The HIR/TIR
+interpreters remain temporarily available as parity oracles and may be
+removed only after their respective differential and comptime gates pass.
+Internal K5 measurements continue; optimizing the wrong execution path
+before VM promotion would invalidate Ergal performance conclusions.

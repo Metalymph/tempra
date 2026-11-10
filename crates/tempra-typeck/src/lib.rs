@@ -18,6 +18,7 @@ pub mod error;
 pub mod facts;
 pub mod pattern;
 pub mod projection;
+pub mod result_obligations;
 pub mod types;
 
 pub use check_file::{

@@ -30,6 +30,10 @@ fn test_struct_narrowing() {
         if x is User {
             let s = x.name;
         }
+        match x {
+            Ok(_) => {},
+            Err(_) => {},
+        }
     }
     ";
     assert_eq!(typecheck_snippet(source), None);

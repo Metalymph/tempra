@@ -235,3 +235,14 @@ lsp-check:
 lsp-test:
     cargo test -p tempra-lsp
 
+# --------------------------------------------------
+# ROADMAP / K5 MEASUREMENT CONTRACT
+# --------------------------------------------------
+
+# Verify roadmap and formal-obligation registry coherence.
+roadmap-check:
+    python3 scripts/check_roadmap.py
+
+# Test only the K5.1 measurement runner, not the Tempra compiler.
+k5-harness-check:
+    python3 scripts/k5_bench.py --self-test

@@ -3,24 +3,77 @@ use crate::context::TypeContext;
 use crate::types::{types_compatible, Type};
 use tempra_hir::*;
 
+/// Diagnostic emitted when a `Result`-typed expression statement's value is
+/// dropped without being handled.
+pub const RESULT_DISCARD_DIAGNOSTIC: &str =
+    "Result value is discarded; handle it with '?', 'match', or return it";
+
 /// Check a block and return the type of its last expression (or Unit).
+///
+/// The block's value is treated as used by the enclosing construct.
 pub fn check_block(ctx: &mut TypeContext, block: &mut HirBlock, expected: Option<&Type>) -> Type {
+    check_block_inner(ctx, block, expected, true)
+}
+
+/// Check a block whose final value is discarded by its enclosing construct.
+fn check_block_discarded(ctx: &mut TypeContext, block: &mut HirBlock) -> Type {
+    check_block_inner(ctx, block, None, false)
+}
+
+fn check_block_inner(
+    ctx: &mut TypeContext,
+    block: &mut HirBlock,
+    expected: Option<&Type>,
+    value_used: bool,
+) -> Type {
     ctx.scopes.push_scope();
     let mut last_ty = Type::Unit;
     let len = block.statements.len();
     for (i, stmt) in block.statements.iter_mut().enumerate() {
-        let is_last = i == len - 1;
-        last_ty = check_statement(ctx, stmt, if is_last { expected } else { None });
+        let stmt_value_used = value_used && i == len - 1;
+        last_ty = check_statement_with_use(
+            ctx,
+            stmt,
+            if stmt_value_used { expected } else { None },
+            stmt_value_used,
+        );
     }
     ctx.scopes.pop_scope();
     last_ty
 }
 
-/// Check a single statement and return the type it produces.
+/// Check a single statement whose produced value is used by its context.
 pub fn check_statement(
     ctx: &mut TypeContext,
     stmt: &mut HirStatement,
     expected: Option<&Type>,
+) -> Type {
+    check_statement_with_use(ctx, stmt, expected, true)
+}
+
+/// Check a sequence of top-level statements.
+///
+/// `tail_value_used` must reflect the actual consumer of the final statement's
+/// value. The single-file and module check paths pass `false` because they
+/// cannot guarantee a consumer; the REPL passes `true` because it displays the
+/// final value.
+pub fn check_statement_list(
+    ctx: &mut TypeContext,
+    statements: &mut [HirStatement],
+    tail_value_used: bool,
+) {
+    let len = statements.len();
+    for (i, stmt) in statements.iter_mut().enumerate() {
+        let value_used = tail_value_used && i + 1 == len;
+        check_statement_with_use(ctx, stmt, None, value_used);
+    }
+}
+
+fn check_statement_with_use(
+    ctx: &mut TypeContext,
+    stmt: &mut HirStatement,
+    expected: Option<&Type>,
+    value_used: bool,
 ) -> Type {
     match stmt {
         HirStatement::Let(l) => {
@@ -195,10 +248,22 @@ pub fn check_statement(
                 }
             }
 
-            check_block(ctx, &mut f.body, None);
+            check_block_discarded(ctx, &mut f.body);
             ctx.scopes.pop_scope();
             Type::Unit
         }
-        HirStatement::Expr(expr) => check_expression(ctx, expr, expected),
+        HirStatement::Expr(expr) => {
+            let ty = check_expression(ctx, expr, expected);
+            if !value_used {
+                match ty {
+                    Type::Error => {}
+                    Type::Result(_, _) => {
+                        ctx.error(RESULT_DISCARD_DIAGNOSTIC, expr.span());
+                    }
+                    _ => {}
+                }
+            }
+            ty
+        }
     }
 }

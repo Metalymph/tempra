@@ -261,7 +261,12 @@ fn test_recursive_sub_result() {
         r#"
         fn identity(type T, x: T) -> T { return x }
         fn main() {
-            let x = identity[Int!](Ok(1));
+            let x = identity[Int!](Ok(1))
+
+            match x {
+                Ok(value) => print(value)
+                Err(error) => print(error)
+            }
         }
     "#,
     );
@@ -369,7 +374,13 @@ fn test_narrowing_result() {
             return false
         }
         fn main() {
-            let res = is_ok[Int](Ok(1));
+            let input: Int! = Ok(1)
+            let res = is_ok[Int](input)
+
+            match input {
+                Ok(value) => print(value)
+                Err(error) => print(error)
+            }
         }
     "#,
     );

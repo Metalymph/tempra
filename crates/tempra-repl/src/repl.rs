@@ -92,13 +92,11 @@ impl ReplSession {
                 if !hir_file.top_level_statements.is_empty() {
                     candidate_type_ctx.current_is_fallible = true;
                     candidate_type_ctx.current_return_type = None;
-                    for stmt in &mut hir_file.top_level_statements {
-                        tempra_typeck::check_stmt::check_statement(
-                            &mut candidate_type_ctx,
-                            stmt,
-                            None,
-                        );
-                    }
+                    tempra_typeck::check_stmt::check_statement_list(
+                        &mut candidate_type_ctx,
+                        &mut hir_file.top_level_statements,
+                        true,
+                    );
                     candidate_type_ctx.current_is_fallible = false;
                 }
 
@@ -215,6 +213,33 @@ mod contract_tests {
         assert!(matches!(
             session.eval_input("old"),
             ReplOutcome::Value(Value::Int64(42))
+        ));
+    }
+
+    #[test]
+    fn result_discard_uses_the_repl_display_boundary() {
+        let mut session = ReplSession::new();
+        assert!(matches!(
+            session.eval_input("fn load() -> String! { Ok(\"x\") }"),
+            ReplOutcome::Empty
+        ));
+
+        // The REPL displays the final value, so the final statement is a use.
+        assert!(matches!(
+            session.eval_input("load()"),
+            ReplOutcome::Value(Value::Result(result))
+                if matches!(
+                    result.as_ref(),
+                    tempra_interpreter::value::ValueResult::Ok(Value::String(value))
+                        if value == "x"
+                )
+        ));
+
+        // A non-final Result value is discarded before the final statement runs.
+        assert!(matches!(
+            session.eval_input("load()\n1"),
+            ReplOutcome::Diagnostic(message)
+                if message.contains(tempra_typeck::check_stmt::RESULT_DISCARD_DIAGNOSTIC)
         ));
     }
 }

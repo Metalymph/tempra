@@ -25,7 +25,9 @@ fn main() {
         Commands::Test(args) => commands::test::test_command(args.path),
         Commands::Repl => commands::repl::repl_command(),
         Commands::EmitTir(args) => commands::emit_tir::emit_tir_command(args.path),
-        Commands::Timings(args) => commands::timings::timings_command(args.path, args.json),
+        Commands::Timings(args) => {
+            commands::timings::timings_command(args.path, args.json, args.cache, args.modules)
+        }
     };
 
     if let Err(err) = result {

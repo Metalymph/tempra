@@ -1,8 +1,8 @@
 //! Opt-in wall-clock timings for fresh single-source VM compilation.
 //!
 //! Timing is observational. A missing phase means it was not executed,
-//! not that the phase took zero time. Cache hits and module graphs are not
-//! supported by this initial K5.2 slice.
+//! not that the phase took zero time. Cache reuse and module graphs
+//! are reported through opt-in instrumented paths (K5.2b).
 
 use std::time::{Duration, Instant};
 
@@ -19,6 +19,9 @@ pub enum CompilationPhase {
     BytecodeLower,
     BytecodeVerify,
     CacheWrite,
+    CacheLookup,
+    ModuleGraph,
+    ModuleTypecheck,
 }
 
 impl CompilationPhase {
@@ -35,6 +38,9 @@ impl CompilationPhase {
             Self::BytecodeLower => "bytecode_lower",
             Self::BytecodeVerify => "bytecode_verify",
             Self::CacheWrite => "cache_write",
+            Self::CacheLookup => "cache_lookup",
+            Self::ModuleGraph => "module_graph",
+            Self::ModuleTypecheck => "module_typecheck",
         }
     }
 }
@@ -55,6 +61,8 @@ pub struct PhaseSample {
 pub struct CompilationTimings {
     pub wall_ns: u64,
     pub samples: Vec<PhaseSample>,
+    /// Cache reuse decision, present only for a cache-aware invocation.
+    pub cache_hit: Option<bool>,
 }
 
 pub(crate) fn elapsed_ns(duration: Duration) -> u64 {

@@ -1,6 +1,6 @@
 use crate::compilation::{
-    analyze_tir_module, compile_tir_module_instrumented, enforce_analyzed_tir, lower_analyzed_tir,
-    AnalyzedTir, VmCompilation,
+    analyze_tir_module_instrumented, compile_tir_module_instrumented, enforce_analyzed_tir,
+    lower_analyzed_tir, lower_analyzed_tir_instrumented, AnalyzedTir, VmCompilation,
 };
 use crate::contracts::{ContractBindings, ContractSource};
 use crate::error::DriverError;
@@ -427,6 +427,42 @@ pub fn compile_to_bytecode_with_analysis_timed(
     (result, report)
 }
 
+/// Time the normal single-source VM cache lookup and its actual miss path.
+/// A cache hit returns verified bytecode without running the compiler.
+/// The read path includes the existing cache decode and bytecode verification.
+pub fn load_or_compile_cached_source_timed(
+    source: &str,
+    cache_path: &Path,
+) -> (
+    Result<tempra_bytecode::BytecodeModule, DriverError>,
+    CompilationTimings,
+) {
+    let started = std::time::Instant::now();
+    let hash = crate::cache::compute_source_hash(source);
+    let mut report = CompilationTimings::default();
+    let mut cache_hit = false;
+    let result = {
+        let mut timings = Some(&mut report);
+        let cached = measure(&mut timings, Phase::CacheLookup, || {
+            Ok::<_, DriverError>(crate::cache::read_compatible_module(cache_path, &hash))
+        });
+        match cached {
+            Ok(Some(module)) => {
+                cache_hit = true;
+                Ok(module)
+            }
+            Ok(None) => {
+                compile_and_cache_module_instrumented(source, &hash, cache_path, &mut timings)
+                    .map(VmCompilation::into_bytecode)
+            }
+            Err(error) => Err(error),
+        }
+    };
+    report.cache_hit = Some(cache_hit);
+    report.wall_ns = elapsed_ns(started.elapsed());
+    (result, report)
+}
+
 pub fn run_source_with_args(source: &str, args: &[String]) -> Result<(), DriverError> {
     let (value, is_script) = run_source_hir_with_mode(source, args)?;
     if is_script {
@@ -521,6 +557,28 @@ pub fn run_file_with_experimental_vm_jit(
 
 /// Compiles a file and its module graph fresh, retaining TIR and capability facts.
 /// This path does not read or write a bytecode cache.
+/// Profile a fresh module-graph VM compilation with partial timing on failure.
+/// This path does not read or write bytecode cache artifacts.
+pub fn compile_file_to_bytecode_with_analysis_timed(
+    path: &Path,
+    config: &CompilationConfig,
+) -> (Result<VmCompilation, DriverError>, CompilationTimings) {
+    let started = std::time::Instant::now();
+    let mut report = CompilationTimings::default();
+    let result = {
+        let mut timings = Some(&mut report);
+        (|| {
+            let analyzed = analyze_file_to_tir_instrumented(path, config, &mut timings)?;
+            measure(&mut timings, Phase::DenyEnforcement, || {
+                enforce_analyzed_tir(&analyzed)
+            })?;
+            lower_analyzed_tir_instrumented(analyzed, &mut timings)
+        })()
+    };
+    report.wall_ns = elapsed_ns(started.elapsed());
+    (result, report)
+}
+
 pub fn compile_file_to_bytecode_with_analysis(path: &Path) -> Result<VmCompilation, DriverError> {
     compile_file_to_bytecode_with_analysis_with_config(path, &CompilationConfig::default())
 }
@@ -541,25 +599,33 @@ fn analyze_file_to_tir(
     path: &Path,
     config: &CompilationConfig,
 ) -> Result<AnalyzedTir, DriverError> {
+    let mut disabled = None;
+    analyze_file_to_tir_instrumented(path, config, &mut disabled)
+}
+
+fn analyze_file_to_tir_instrumented(
+    path: &Path,
+    config: &CompilationConfig,
+    timings: &mut Option<&mut CompilationTimings>,
+) -> Result<AnalyzedTir, DriverError> {
     use crate::module_graph::{load_module_graph, DiskDocumentLoader};
     use std::collections::HashMap;
     use tempra_typeck::{check_modules_always_with_comptime, ModuleToCheck};
 
     let mut diagnostics = Vec::new();
-    let mut graph = match load_module_graph(
-        path,
-        &DiskDocumentLoader,
-        config.stdlib_root(),
-        &mut diagnostics,
-    ) {
-        Ok(g) => g,
-        Err(_) => {
-            // Diagnostics are rendered with `Display`: the derived `Debug` form escapes
-            // path separators, which makes Windows paths unreadable and un-copyable.
+    let mut graph = measure(timings, Phase::ModuleGraph, || {
+        load_module_graph(
+            path,
+            &DiskDocumentLoader,
+            config.stdlib_root(),
+            &mut diagnostics,
+        )
+        .map_err(|_| {
+            // Match the existing user-facing diagnostic format.
             let err_msgs: Vec<String> = diagnostics.iter().map(|d| d.to_string()).collect();
-            return Err(DriverError::TypeError(err_msgs.join("\n")));
-        }
-    };
+            DriverError::TypeError(err_msgs.join("\n"))
+        })
+    })?;
 
     let mut files = Vec::new();
     for name in &graph.order {
@@ -585,82 +651,93 @@ fn analyze_file_to_tir(
     }
 
     let source_texts = HashMap::new();
-    let type_ctx = check_modules_always_with_comptime(&mut modules_to_check, &source_texts, false);
-    if !type_ctx.errors.is_empty() {
-        let err_msgs: Vec<String> = type_ctx.errors.iter().map(|e| format!("{:?}", e)).collect();
-        return Err(DriverError::TypeError(err_msgs.join("\n")));
-    }
-
-    let mut module_builder = tempra_tir::builder::ModuleBuilder::new();
-    let mut errors = Vec::new();
-
-    let mut bindings = ContractBindings::default();
-    for (name, path, _imports, hir) in &files {
-        let source_identity = ContractSource::Module {
-            name: name.clone(),
-            path: path.clone(),
-        };
-        for item in &hir.items {
-            // This frontend does not lower extend methods. Never discard a
-            // source contract together with an unlowered method, even if unused.
-            if let tempra_hir::HirItem::Extend(extend) = item {
-                if extend
-                    .methods
-                    .iter()
-                    .any(|method| method.deny_contract.is_some() || method.pure_span.is_some())
-                {
-                    return Err(DriverError::UnsupportedExperimentalVm(
-                        "capability-contract enforcement for extend methods is not supported in module/file compilation".into(),
-                    ));
-                }
-            }
-            if let tempra_hir::HirItem::Function(func) = item {
-                if is_generic_template(func) {
-                    continue;
-                }
-                let prefix = if name.is_empty() {
-                    None
-                } else {
-                    Some(name.as_str())
-                };
-                match tempra_tir_lower::lower::lower_function(
-                    func,
-                    &type_ctx,
-                    &mut module_builder,
-                    None,
-                    prefix,
-                ) {
-                    Ok(tir_func) => {
-                        bindings.register(tir_func.id, func, &source_identity)?;
-                        module_builder.add_function(tir_func);
-                    }
-                    Err(e) => {
-                        errors.push(format!("unsupported in fn '{}': {}", func.name, e));
-                    }
-                }
-            }
+    let type_ctx = measure(timings, Phase::ModuleTypecheck, || {
+        let type_ctx =
+            check_modules_always_with_comptime(&mut modules_to_check, &source_texts, false);
+        if !type_ctx.errors.is_empty() {
+            let err_msgs: Vec<String> = type_ctx
+                .errors
+                .iter()
+                .map(|error| format!("{:?}", error))
+                .collect();
+            return Err(DriverError::TypeError(err_msgs.join("\n")));
         }
-        let prefix = if name.is_empty() {
-            None
-        } else {
-            Some(name.as_str())
-        };
-        lower_requested_function_specializations(
-            &hir.items,
-            &type_ctx,
-            &mut module_builder,
-            &mut errors,
-            prefix,
-            &mut bindings,
-            &source_identity,
-        )?;
-    }
+        Ok(type_ctx)
+    })?;
 
-    if !errors.is_empty() {
-        return Err(DriverError::UnsupportedExperimentalVm(errors.join("\n")));
-    }
+    let (module, bindings) = measure(timings, Phase::TirLower, || {
+        let mut module_builder = tempra_tir::builder::ModuleBuilder::new();
+        let mut errors = Vec::new();
 
-    analyze_tir_module(module_builder.module, bindings)
+        let mut bindings = ContractBindings::default();
+        for (name, path, _imports, hir) in &files {
+            let source_identity = ContractSource::Module {
+                name: name.clone(),
+                path: path.clone(),
+            };
+            for item in &hir.items {
+                // This frontend does not lower extend methods. Never discard a
+                // source contract together with an unlowered method, even if unused.
+                if let tempra_hir::HirItem::Extend(extend) = item {
+                    if extend
+                        .methods
+                        .iter()
+                        .any(|method| method.deny_contract.is_some() || method.pure_span.is_some())
+                    {
+                        return Err(DriverError::UnsupportedExperimentalVm(
+                            "capability-contract enforcement for extend methods is not supported in module/file compilation".into(),
+                        ));
+                    }
+                }
+                if let tempra_hir::HirItem::Function(func) = item {
+                    if is_generic_template(func) {
+                        continue;
+                    }
+                    let prefix = if name.is_empty() {
+                        None
+                    } else {
+                        Some(name.as_str())
+                    };
+                    match tempra_tir_lower::lower::lower_function(
+                        func,
+                        &type_ctx,
+                        &mut module_builder,
+                        None,
+                        prefix,
+                    ) {
+                        Ok(tir_func) => {
+                            bindings.register(tir_func.id, func, &source_identity)?;
+                            module_builder.add_function(tir_func);
+                        }
+                        Err(e) => {
+                            errors.push(format!("unsupported in fn '{}': {}", func.name, e));
+                        }
+                    }
+                }
+            }
+            let prefix = if name.is_empty() {
+                None
+            } else {
+                Some(name.as_str())
+            };
+            lower_requested_function_specializations(
+                &hir.items,
+                &type_ctx,
+                &mut module_builder,
+                &mut errors,
+                prefix,
+                &mut bindings,
+                &source_identity,
+            )?;
+        }
+
+        if !errors.is_empty() {
+            return Err(DriverError::UnsupportedExperimentalVm(errors.join("\n")));
+        }
+
+        Ok::<_, DriverError>((module_builder.module, bindings))
+    })?;
+    analyze_tir_module_instrumented(module, bindings, timings)
 }
 
 /// Compiles a file fresh and projects its retained E1–E4 capability facts.

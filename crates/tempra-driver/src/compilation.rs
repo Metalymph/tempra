@@ -70,6 +70,7 @@ impl VmCompilation {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn compile_tir_module(
     module: TirModule,
     bindings: ContractBindings,
@@ -90,15 +91,7 @@ pub(crate) fn compile_tir_module_instrumented(
     lower_analyzed_tir_instrumented(analyzed, timings)
 }
 
-pub(crate) fn analyze_tir_module(
-    module: TirModule,
-    bindings: ContractBindings,
-) -> Result<AnalyzedTir, DriverError> {
-    let mut disabled = None;
-    analyze_tir_module_instrumented(module, bindings, &mut disabled)
-}
-
-fn analyze_tir_module_instrumented(
+pub(crate) fn analyze_tir_module_instrumented(
     module: TirModule,
     bindings: ContractBindings,
     timings: &mut Option<&mut CompilationTimings>,
@@ -129,7 +122,7 @@ pub(crate) fn lower_analyzed_tir(analyzed: AnalyzedTir) -> Result<VmCompilation,
     lower_analyzed_tir_instrumented(analyzed, &mut disabled)
 }
 
-fn lower_analyzed_tir_instrumented(
+pub(crate) fn lower_analyzed_tir_instrumented(
     analyzed: AnalyzedTir,
     timings: &mut Option<&mut CompilationTimings>,
 ) -> Result<VmCompilation, DriverError> {

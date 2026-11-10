@@ -81,6 +81,12 @@ pub struct TimingsArgs {
     /// Emit a versioned JSON report, including partial data on compile errors
     #[arg(long)]
     pub json: bool,
+    /// Measure the real single-source cache lookup and compile only on miss.
+    #[arg(long, conflicts_with = "modules")]
+    pub cache: bool,
+    /// Measure fresh file/module-graph compilation (does not use cache).
+    #[arg(long, conflicts_with = "cache")]
+    pub modules: bool,
     /// File compiled as a single source (imports/module graph not yet supported)
     pub path: PathBuf,
 }

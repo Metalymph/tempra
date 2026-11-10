@@ -21,6 +21,8 @@ pub enum Commands {
     Repl,
     /// Emit TIR (Tempra Intermediate Representation) for a source file [experimental]
     EmitTir(EmitTirArgs),
+    /// K5.2 phase timings of a fresh single-source VM compilation
+    Timings(TimingsArgs),
 }
 
 #[derive(Parser)]
@@ -71,5 +73,14 @@ pub struct TestArgs {
 
 #[derive(Parser)]
 pub struct EmitTirArgs {
+    pub path: PathBuf,
+}
+
+#[derive(Parser)]
+pub struct TimingsArgs {
+    /// Emit a versioned JSON report, including partial data on compile errors
+    #[arg(long)]
+    pub json: bool,
+    /// File compiled as a single source (imports/module graph not yet supported)
     pub path: PathBuf,
 }

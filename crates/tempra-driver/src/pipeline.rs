@@ -1,9 +1,10 @@
 use crate::compilation::{
-    analyze_tir_module, compile_tir_module, enforce_analyzed_tir, lower_analyzed_tir, AnalyzedTir,
-    VmCompilation,
+    analyze_tir_module, compile_tir_module_instrumented, enforce_analyzed_tir, lower_analyzed_tir,
+    AnalyzedTir, VmCompilation,
 };
 use crate::contracts::{ContractBindings, ContractSource};
 use crate::error::DriverError;
+use crate::timings::{elapsed_ns, measure, CompilationPhase as Phase, CompilationTimings};
 use crate::CompilationConfig;
 use std::fs;
 use std::path::Path;
@@ -205,100 +206,118 @@ fn compile_and_cache_module(
     hash: &[u8; 32],
     cache_path: &std::path::Path,
 ) -> Result<VmCompilation, DriverError> {
-    let ast = tempra_parser::parse_source(source)
-        .map_err(|e| DriverError::ParseError(format!("{:?}", e)))?;
-    let mut hir = tempra_hir::lower_file(source, &ast);
-    let type_ctx = tempra_typeck::check_file_with_context(&mut hir)
-        .map_err(|errs| DriverError::TypeError(format!("{:?}", errs)))?;
+    let mut disabled = None;
+    compile_and_cache_module_instrumented(source, hash, cache_path, &mut disabled)
+}
 
-    let mut module_builder = tempra_tir::builder::ModuleBuilder::new();
-    let mut bindings = ContractBindings::default();
-    let source_identity = ContractSource::InMemory;
-    let mut errors = Vec::new();
-    for item in &hir.items {
-        match item {
-            tempra_hir::HirItem::Function(func) => {
-                if is_generic_template(func) {
-                    continue;
-                }
-                match tempra_tir_lower::lower::lower_function(
-                    func,
-                    &type_ctx,
-                    &mut module_builder,
-                    None,
-                    None,
-                ) {
-                    Ok(tir_func) => {
-                        bindings.register(tir_func.id, func, &source_identity)?;
-                        module_builder.add_function(tir_func);
-                    }
-                    Err(e) => {
-                        errors.push(format!("unsupported in fn '{}': {}", func.name, e));
-                    }
-                }
-            }
-            tempra_hir::HirItem::Extend(extend) => {
-                let (target_name, target_ty) = match &extend.target {
-                    tempra_hir::HirType::Named(_, name) => {
-                        let ty = tempra_typeck::types::resolve_named_type(name);
-                        if ty == tempra_hir::Type::Unknown {
-                            if type_ctx.structs.contains_key(name) {
-                                (name.clone(), tempra_hir::Type::Struct(name.clone(), vec![]))
-                            } else if type_ctx.enums.contains_key(name) {
-                                (name.clone(), tempra_hir::Type::Enum(name.clone(), vec![]))
-                            } else {
-                                errors.push(format!("unknown extend target: {}", name));
-                                continue;
-                            }
-                        } else {
-                            (name.clone(), ty)
-                        }
-                    }
-                    _ => {
-                        errors.push(format!("unsupported extend target: {:?}", extend.target));
+fn compile_and_cache_module_instrumented(
+    source: &str,
+    hash: &[u8; 32],
+    cache_path: &std::path::Path,
+    timings: &mut Option<&mut CompilationTimings>,
+) -> Result<VmCompilation, DriverError> {
+    let ast = measure(timings, Phase::Parse, || {
+        tempra_parser::parse_source(source).map_err(|e| DriverError::ParseError(format!("{:?}", e)))
+    })?;
+    let mut hir = measure(timings, Phase::HirLower, || {
+        Ok::<_, DriverError>(tempra_hir::lower_file(source, &ast))
+    })?;
+    let type_ctx = measure(timings, Phase::Typecheck, || {
+        tempra_typeck::check_file_with_context(&mut hir)
+            .map_err(|errs| DriverError::TypeError(format!("{:?}", errs)))
+    })?;
+
+    let (module, bindings) = measure(timings, Phase::TirLower, || {
+        let mut module_builder = tempra_tir::builder::ModuleBuilder::new();
+        let mut bindings = ContractBindings::default();
+        let source_identity = ContractSource::InMemory;
+        let mut errors = Vec::new();
+        for item in &hir.items {
+            match item {
+                tempra_hir::HirItem::Function(func) => {
+                    if is_generic_template(func) {
                         continue;
                     }
-                };
-                for method in &extend.methods {
-                    let mut method_clone = method.clone();
-                    method_clone.name = format!("{}.{}", target_name, method.name);
                     match tempra_tir_lower::lower::lower_function(
-                        &method_clone,
+                        func,
                         &type_ctx,
                         &mut module_builder,
-                        Some(target_ty.clone()),
+                        None,
                         None,
                     ) {
                         Ok(tir_func) => {
-                            bindings.register(tir_func.id, method, &source_identity)?;
+                            bindings.register(tir_func.id, func, &source_identity)?;
                             module_builder.add_function(tir_func);
                         }
                         Err(e) => {
-                            errors.push(format!(
-                                "unsupported in method '{}': {}",
-                                method_clone.name, e
-                            ));
+                            errors.push(format!("unsupported in fn '{}': {}", func.name, e));
                         }
                     }
                 }
+                tempra_hir::HirItem::Extend(extend) => {
+                    let (target_name, target_ty) = match &extend.target {
+                        tempra_hir::HirType::Named(_, name) => {
+                            let ty = tempra_typeck::types::resolve_named_type(name);
+                            if ty == tempra_hir::Type::Unknown {
+                                if type_ctx.structs.contains_key(name) {
+                                    (name.clone(), tempra_hir::Type::Struct(name.clone(), vec![]))
+                                } else if type_ctx.enums.contains_key(name) {
+                                    (name.clone(), tempra_hir::Type::Enum(name.clone(), vec![]))
+                                } else {
+                                    errors.push(format!("unknown extend target: {}", name));
+                                    continue;
+                                }
+                            } else {
+                                (name.clone(), ty)
+                            }
+                        }
+                        _ => {
+                            errors.push(format!("unsupported extend target: {:?}", extend.target));
+                            continue;
+                        }
+                    };
+                    for method in &extend.methods {
+                        let mut method_clone = method.clone();
+                        method_clone.name = format!("{}.{}", target_name, method.name);
+                        match tempra_tir_lower::lower::lower_function(
+                            &method_clone,
+                            &type_ctx,
+                            &mut module_builder,
+                            Some(target_ty.clone()),
+                            None,
+                        ) {
+                            Ok(tir_func) => {
+                                bindings.register(tir_func.id, method, &source_identity)?;
+                                module_builder.add_function(tir_func);
+                            }
+                            Err(e) => {
+                                errors.push(format!(
+                                    "unsupported in method '{}': {}",
+                                    method_clone.name, e
+                                ));
+                            }
+                        }
+                    }
+                }
+                _ => {}
             }
-            _ => {}
         }
-    }
-    lower_requested_function_specializations(
-        &hir.items,
-        &type_ctx,
-        &mut module_builder,
-        &mut errors,
-        None,
-        &mut bindings,
-        &source_identity,
-    )?;
-    if !errors.is_empty() {
-        return Err(DriverError::UnsupportedExperimentalVm(errors.join("\n")));
-    }
+        lower_requested_function_specializations(
+            &hir.items,
+            &type_ctx,
+            &mut module_builder,
+            &mut errors,
+            None,
+            &mut bindings,
+            &source_identity,
+        )?;
+        if !errors.is_empty() {
+            return Err(DriverError::UnsupportedExperimentalVm(errors.join("\n")));
+        }
 
-    let compilation = compile_tir_module(module_builder.module, bindings)?;
+        Ok::<_, DriverError>((module_builder.module, bindings))
+    })?;
+    let compilation = compile_tir_module_instrumented(module, bindings, timings)?;
     let header = tempra_bytecode::BytecodeCacheHeader {
         compiler_fingerprint: crate::cache::compiler_fingerprint(),
         source_hash: *hash,
@@ -310,7 +329,9 @@ fn compile_and_cache_module(
         module: compilation.bytecode().clone(),
     };
 
-    if let Err(e) = crate::cache::write_cache_artifact(cache_path, &artifact) {
+    if let Err(e) = measure(timings, Phase::CacheWrite, || {
+        crate::cache::write_cache_artifact(cache_path, &artifact)
+    }) {
         eprintln!("Warning: failed to write cache artifact: {}", e);
     }
 
@@ -383,6 +404,27 @@ pub fn compile_to_bytecode_with_analysis(
 ) -> Result<VmCompilation, DriverError> {
     let hash = crate::cache::compute_source_hash(source);
     compile_and_cache_module(source, &hash, cache_path)
+}
+
+/// Compile a single source fresh and return partial phase timings even on failure.
+///
+/// This API deliberately never *reads* the bytecode cache and does not
+/// resolve imported modules. It uses the same compiler and validation path
+/// as [`compile_to_bytecode_with_analysis`]. It may write a cache artifact.
+/// Missing stages were not executed; they are not zero-duration stages.
+pub fn compile_to_bytecode_with_analysis_timed(
+    source: &str,
+    cache_path: &Path,
+) -> (Result<VmCompilation, DriverError>, CompilationTimings) {
+    let started = std::time::Instant::now();
+    let hash = crate::cache::compute_source_hash(source);
+    let mut report = CompilationTimings::default();
+    let result = {
+        let mut timings = Some(&mut report);
+        compile_and_cache_module_instrumented(source, &hash, cache_path, &mut timings)
+    };
+    report.wall_ns = elapsed_ns(started.elapsed());
+    (result, report)
 }
 
 pub fn run_source_with_args(source: &str, args: &[String]) -> Result<(), DriverError> {

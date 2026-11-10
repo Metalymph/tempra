@@ -6,3 +6,4 @@ pub mod repl;
 pub mod run;
 pub mod symbols;
 pub mod test;
+pub mod timings;

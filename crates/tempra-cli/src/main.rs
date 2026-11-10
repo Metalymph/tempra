@@ -6,7 +6,8 @@ use clap::Parser;
 
 fn main() {
     let cli = Cli::parse();
-    let suppress_empty_error = matches!(&cli.command, Commands::Effects(args) if args.json);
+    let suppress_empty_error = matches!(&cli.command, Commands::Effects(args) if args.json)
+        || matches!(&cli.command, Commands::Timings(args) if args.json);
 
     let result = match cli.command {
         Commands::Run(args) => commands::run::run_command(
@@ -24,6 +25,7 @@ fn main() {
         Commands::Test(args) => commands::test::test_command(args.path),
         Commands::Repl => commands::repl::repl_command(),
         Commands::EmitTir(args) => commands::emit_tir::emit_tir_command(args.path),
+        Commands::Timings(args) => commands::timings::timings_command(args.path, args.json),
     };
 
     if let Err(err) = result {

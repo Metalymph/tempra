@@ -246,3 +246,7 @@ roadmap-check:
 # Test only the K5.1 measurement runner, not the Tempra compiler.
 k5-harness-check:
     python3 scripts/k5_bench.py --self-test
+
+# K5.2a instrumentation regression tests
+k5-phase-tests:
+    cargo test -p tempra-driver --test timing_tests

@@ -34,8 +34,8 @@ default HIR interpreter remains the actual current path until stack VM
 parity justifies promotion; future comptime authority changes also require
 an explicit parity gate.
 
-**Implementation closure:** local R1–R3 Result/provenance tests are reported
-green for the supported scope, including path-sensitive and loop regressions.
+**Implementation closure:** R1–R3 Result/provenance changes were merged with a
+user-reported green workspace gate for the supported scope.
 This is **not** the closure of canonical R4/R5 or a formal verification
 claim. The first draft obligation is R.PROOF. The phrase "K4 Result"
 used in discussions maps to canonical R;
@@ -50,6 +50,36 @@ substitute for tooling, scripting or distribution gates.
 **Immediate technical milestone:** canonical **K5 Phase Timings and Latency
 Baseline**, followed by K6 regression budgets. K5 is empirical measurement,
 not a mathematical proof; see [K5 protocol](roadmap/k5.md).
+## PRE-AOT integration decision (2026-11-10)
+
+The forward **single non-AOT stack VM** decision, Script 2.0, shared
+REPL/Shell profile, TIR Graph and measured external-dependency audit are
+specified in [the integrated PRE-AOT roadmap](roadmap/pre-aot.md).
+Detailed gates: [VM/comptime migration](roadmap/unified-vm.md),
+[Script 2.0](roadmap/script-2.md), [REPL/Shell](roadmap/repl-shell.md),
+[TIR Graph](roadmap/tir-graph.md), and
+[dependency reduction](roadmap/dependency-reduction.md).
+
+**Identity clarification:** canonical K5.1 is the benchmark protocol and K5.2
+is compiler phase timing; neither is Result Hardening (canonical **R**).
+R4/R5 and `R.PROOF` remain independent open work. Preserve K5/K6 and M/M5
+historical IDs. M5 gates actor-concurrency implementation; O is optional
+optimization rather than a safety substitute.
+
+**Forward target supersedes historical backend planning:** no JIT, LLVM as the
+first Nimonic native codegen, and LLVM/Wasm evaluation later. Historical
+Cranelift AOT or dedicated Wasm proposals below remain recorded history,
+not the active product decision. Old default HIR interpreter, TIR interpreter
+and JIT remain **present today** and may only be retired after documented
+VM parity, comptime-staging and regression gates. `@deny`/`@pure`, Result,
+ownership and deterministic diagnostics must never be bypassed during migration.
+
+S1–S4 product gates still apply: formatter/linter/LSP/MCP must be usable
+before alpha. Full PRE-AOT Ergal distribution additionally requires the
+specified unified VM, `comptime` parity, Shell profile/job-control scope,
+TIR Graph, stdlib, portability and measured startup/footprint. S2 Astro Tone
+site and AI packs include reproducible Python/JavaScript/TypeScript examples.
+
 ## Current implementation baseline
 
 Tempra has a working lexer, parser, AST-to-HIR lowering, typechecker, HIR

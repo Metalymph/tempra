@@ -19,3 +19,28 @@ editing-to-execution workflow and installable distribution.
 
 Do not label *experimental* crates as production-grade because they
 exist in Cargo workspace. Release notes must list unsupported surfaces.
+
+## Additional PRE-AOT gate: unified Script 2.0 distribution
+
+The alpha/beta table above is retained. Do not label unfinished Shell/job
+control or graph queries as shipping features in those releases. Before full
+PRE-AOT Ergal distribution and the start of main Nimonic AOT work:
+
+- No JIT, no general-purpose HIR or TIR interpreter in the shipped engine;
+  `run`, REPL, Shell profile, tests and `comptime` use the same verified
+  bytecode VM with their respective capability budgets and session policies.
+- Complete the staged comptime differential/parity gates, no hidden fallback,
+  Result/ownership/effects consistency, reproducible cache and diagnostics.
+- Stable scripting prelude/top-level behavior, expression-body functions and
+  usable documented I/O/process/Path/collection APIs.
+- REPL with incremental committed state; Shell mode documented on supported
+  platforms with command elision, pipes/redirects, TTY, signals and job control
+  including explicit limitations on Windows vs Unix.
+- TIR Graph with versioned deterministic JSON, query bounds, source mapping
+  and compiler-sourced effects/Result provenance.
+- Packaging macOS/Linux/Windows; process startup, RSS, binary size and
+  dependency footprint measured; Python/JS/TS comparisons reproducible.
+- No formal-proof claim beyond the actually discharged `.PROOF` scope.
+
+`tempra repl --shell` and `tempra shell` are aliases to one REPL service,
+not separate language runtimes. See [REPL/Shell](repl-shell.md).

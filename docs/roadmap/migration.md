@@ -35,8 +35,8 @@ specialized-effect meaning and may have its own `K4.PROOF` in the future.
 - **FORMALLY_VERIFIED**: all declared proof obligations for the stated
   scope are discharged; never apply to a broader language surface.
 
-The working-tree R2/R3 gate has been reported green; it must still be
-consolidated and independently checked before the R milestone is tagged.
+R1–R3 implementation changes have been merged following a user-reported
+workspace-green gate; this does not close R4/R5 or establish formal proof.
 In particular, R4 error compatibility, R5 backend/API parity and aggregate
 completeness must not be marked finished by inference from R3 tests.
 
@@ -50,3 +50,14 @@ websites and packaging do not receive decorative proof milestones.
 `docs/roadmap/status.md` records the implementation gates; this document
 records identity and migration; `formal/manifest.toml` tracks formal
 obligations independently of both.
+
+## 2026-11-10 PRE-AOT clarification
+
+No new K IDs are assigned to Script 2.0, VM unification, REPL/Shell,
+TIR Graph or dependency reduction: see [PRE-AOT](pre-aot.md).
+'K5.1/K5.2 = Result hardening' in parallel design notes is **not canonical**:
+K5.1 is measurement contract and K5.2 is phase timing; Result belongs to R.
+K4 always denotes specialized effects in this repository. M/M5 is the ARC
+acyclic memory correctness gate preceding C; O is advanced memory optimization.
+The future LLVM/Nimonic decision replaces the earlier planned Cranelift AOT
+backend only **prospectively**, without rewriting historical phase records.

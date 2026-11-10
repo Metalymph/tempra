@@ -64,3 +64,17 @@ command output schemas where promised, docs and examples in CI, and
 validated scripting comparison results.
 
 Keep release status, supported language subset, and proven claims distinct.
+
+## PRE-AOT Script 2.0 and unified-runtime overlay (2026-11-10)
+
+Read [PRE-AOT dependencies](pre-aot.md), [Script 2.0](script-2.md),
+[Unified VM and comptime](unified-vm.md), [REPL/Shell](repl-shell.md),
+[TIR Graph](tir-graph.md) and [dependency audit](dependency-reduction.md).
+The prior mention of a 'TIR-comptime transition' means incremental **TIR and
+bytecode lowering to the *same stack VM***, not a second TIR runtime. The old
+HIR interpreter remains authoritative *until* VM parity succeeds.
+
+The alpha pre-release experience requires existing baseline REPL functionality
+plus formatter/linter/LSP/MCP; full interactive Shell job control is an explicit
+full PRE-AOT Ergal exit gate, not a falsely claimed alpha feature. Runtime
+removal and staged-comptime gates must not be skipped merely to ship a date.

@@ -45,6 +45,8 @@ pub enum DirectCapabilitySource {
     Make,
     /// A TIR `MakeStruct` instruction.
     MakeStruct,
+    /// Materialization of a closure capture environment.
+    ClosureEnvironment,
     /// A potentially failing division.
     Division,
     /// A potentially overflowing `Int64` addition.
@@ -180,6 +182,13 @@ pub enum CapabilityAnalysisError {
         /// Location of the call.
         callsite: TirLocation,
     },
+    /// An indirect call whose target cannot yet be resolved safely.
+    UnsupportedIndirectCall {
+        /// Function containing the indirect call.
+        caller: TirFunctionId,
+        /// Location of the indirect call.
+        callsite: TirLocation,
+    },
     /// A called extern has no compiler-known capability classification.
     UnclassifiedExtern {
         /// Calling function.
@@ -218,6 +227,11 @@ impl fmt::Display for CapabilityAnalysisError {
                 formatter,
                 "function {} calls unresolved declaration '{}' ({})",
                 caller.0, name, target.0
+            ),
+            Self::UnsupportedIndirectCall { caller, .. } => write!(
+                formatter,
+                "unresolved indirect closure call in function {}: target effects cannot be proven",
+                caller.0
             ),
             Self::UnclassifiedExtern {
                 caller,
@@ -427,6 +441,119 @@ struct SummaryState {
 /// The analyzer still validates IDs and call topology that can be malformed in
 /// hand-built modules. It returns the first such error in deterministic scan
 /// order instead of panicking.
+/// Precomputed, conservative closure target resolution within one TIR function.
+///
+/// The set of possible targets is a *may* set. Every Store to a slot
+/// contributes, regardless of CFG order. Unknown definitions invalidate
+/// resolution rather than silently dropping an effect-bearing target.
+struct ClosureTargetIndex {
+    definitions: HashMap<TirValueId, ClosureDefinition>,
+    stores: HashMap<TirSlotId, Vec<TirValueId>>,
+}
+
+#[derive(Clone, Copy)]
+enum ClosureDefinition {
+    Make(TirFunctionId),
+    Load(TirSlotId),
+}
+
+impl ClosureTargetIndex {
+    fn new(function: &TirFunction) -> Self {
+        let mut index = Self {
+            definitions: HashMap::new(),
+            stores: HashMap::new(),
+        };
+        for block in &function.blocks {
+            for instr in &block.instrs {
+                match instr {
+                    TirInstr::MakeClosure(result, target, _) => {
+                        index
+                            .definitions
+                            .insert(*result, ClosureDefinition::Make(*target));
+                    }
+                    TirInstr::Load(result, slot) => {
+                        index
+                            .definitions
+                            .insert(*result, ClosureDefinition::Load(*slot));
+                    }
+                    TirInstr::Store(slot, value) => {
+                        index.stores.entry(*slot).or_default().push(*value);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        index
+    }
+
+    fn targets_for(&self, value: TirValueId) -> Option<Vec<TirFunctionId>> {
+        let mut values_on_path = HashSet::new();
+        let mut slots_on_path = HashSet::new();
+        let targets = self.resolve_value(value, &mut values_on_path, &mut slots_on_path)?;
+        if targets.is_empty() {
+            None
+        } else {
+            {
+                let mut targets = targets;
+                targets.sort_by_key(|target| target.0);
+                targets.dedup();
+                Some(targets)
+            }
+        }
+    }
+
+    fn resolve_value(
+        &self,
+        value: TirValueId,
+        values_on_path: &mut HashSet<TirValueId>,
+        slots_on_path: &mut HashSet<TirSlotId>,
+    ) -> Option<Vec<TirFunctionId>> {
+        if !values_on_path.insert(value) {
+            return None;
+        }
+        let result = match self.definitions.get(&value) {
+            Some(ClosureDefinition::Make(target)) => {
+                let mut targets = Vec::new();
+                targets.push(*target);
+                Some(targets)
+            }
+            Some(ClosureDefinition::Load(slot)) => {
+                self.resolve_slot(*slot, values_on_path, slots_on_path)
+            }
+            None => None,
+        };
+        values_on_path.remove(&value);
+        result
+    }
+
+    fn resolve_slot(
+        &self,
+        slot: TirSlotId,
+        values_on_path: &mut HashSet<TirValueId>,
+        slots_on_path: &mut HashSet<TirSlotId>,
+    ) -> Option<Vec<TirFunctionId>> {
+        if !slots_on_path.insert(slot) {
+            return None;
+        }
+        let result = (|| {
+            let writes = self.stores.get(&slot)?;
+            if writes.is_empty() {
+                return None;
+            }
+            let mut all_targets = Vec::new();
+            for value in writes {
+                all_targets.extend(self.resolve_value(*value, values_on_path, slots_on_path)?);
+            }
+            Some(all_targets)
+        })();
+        slots_on_path.remove(&slot);
+        result
+    }
+}
+
+/// Analyzes direct and transitive capability requirements of a TIR module.
+///
+/// Resolves provable closure targets conservatively and rejects unresolved indirect calls.
 pub fn analyze(module: &TirModule) -> Result<CapabilityAnalysis, CapabilityAnalysisError> {
     let mut functions: Vec<&TirFunction> = module.functions.iter().collect();
     functions.sort_by_key(|function| function.id.0);
@@ -491,6 +618,7 @@ pub fn analyze(module: &TirModule) -> Result<CapabilityAnalysis, CapabilityAnaly
             function.params.iter().cloned().collect();
         let mut slot_types: HashMap<TirSlotId, TirType> = HashMap::new();
         let value_index = FunctionValueIndex::new(function);
+        let closure_targets = ClosureTargetIndex::new(function);
         let mut blocks: Vec<_> = function.blocks.iter().collect();
         blocks.sort_by_key(|block| block.id.0);
 
@@ -521,60 +649,81 @@ pub fn analyze(module: &TirModule) -> Result<CapabilityAnalysis, CapabilityAnaly
                     &mut slot_types,
                 );
 
-                let TirInstr::Call(_, target_id, arguments) = instruction else {
-                    continue;
+                let (resolved_targets, arguments) = match instruction {
+                    TirInstr::Call(_, target, arguments) => (vec![*target], arguments),
+                    TirInstr::CallClosure(_, callable, arguments) => {
+                        let targets = closure_targets.targets_for(*callable).ok_or(
+                            CapabilityAnalysisError::UnsupportedIndirectCall {
+                                caller: function.id,
+                                callsite: location,
+                            },
+                        )?;
+                        (targets, arguments)
+                    }
+                    _ => continue,
                 };
+                for target_id in resolved_targets {
+                    let target_id = &target_id;
 
-                let Some(target) = function_by_id.get(target_id).copied() else {
-                    return Err(CapabilityAnalysisError::UnknownCallTarget {
-                        caller: function.id,
-                        target: *target_id,
-                        callsite: location,
-                    });
-                };
-                let edge = CallEdge {
-                    caller: function.id,
-                    callee: target.id,
-                    callsite: location,
-                };
-                call_edges.push(edge);
-
-                if target.is_extern {
-                    let Some(capabilities) = capabilities_for_extern(&target.name) else {
-                        return Err(CapabilityAnalysisError::UnclassifiedExtern {
+                    let Some(target) = function_by_id.get(target_id).copied() else {
+                        return Err(CapabilityAnalysisError::UnknownCallTarget {
                             caller: function.id,
-                            extern_id: target.id,
-                            name: target.name.clone(),
+                            target: *target_id,
                             callsite: location,
                         });
                     };
-                    record_origin(
-                        &mut states[state_index],
-                        &mut direct_origins,
-                        capabilities,
-                        location,
-                        DirectCapabilitySource::ExternCall {
-                            extern_id: target.id,
-                            name: target.name.clone(),
-                        },
-                    );
-                    record_local_effect_facts(
-                        &mut local_effect_facts,
-                        &value_index,
-                        target,
-                        arguments,
-                        location,
-                        capabilities,
-                    );
-                } else if target.blocks.is_empty() {
-                    return Err(CapabilityAnalysisError::UnresolvedDeclaration {
+                    // Indirect externs need capture-aware argument/fact binding.
+                    // Until supported, reject rather than lose resource-specific effects.
+                    if target.is_extern && matches!(instruction, TirInstr::CallClosure(_, _, _)) {
+                        return Err(CapabilityAnalysisError::UnsupportedIndirectCall {
+                            caller: function.id,
+                            callsite: location,
+                        });
+                    }
+                    let edge = CallEdge {
                         caller: function.id,
-                        target: target.id,
-                        name: target.name.clone(),
+                        callee: target.id,
                         callsite: location,
-                    });
-                } else {
-                    internal_edges.push(edge);
+                    };
+                    call_edges.push(edge);
+
+                    if target.is_extern {
+                        let Some(capabilities) = capabilities_for_extern(&target.name) else {
+                            return Err(CapabilityAnalysisError::UnclassifiedExtern {
+                                caller: function.id,
+                                extern_id: target.id,
+                                name: target.name.clone(),
+                                callsite: location,
+                            });
+                        };
+                        record_origin(
+                            &mut states[state_index],
+                            &mut direct_origins,
+                            capabilities,
+                            location,
+                            DirectCapabilitySource::ExternCall {
+                                extern_id: target.id,
+                                name: target.name.clone(),
+                            },
+                        );
+                        record_local_effect_facts(
+                            &mut local_effect_facts,
+                            &value_index,
+                            target,
+                            arguments,
+                            location,
+                            capabilities,
+                        );
+                    } else if target.blocks.is_empty() {
+                        return Err(CapabilityAnalysisError::UnresolvedDeclaration {
+                            caller: function.id,
+                            target: target.id,
+                            name: target.name.clone(),
+                            callsite: location,
+                        });
+                    } else {
+                        internal_edges.push(edge);
+                    }
                 }
             }
         }
@@ -817,6 +966,11 @@ fn classify_instruction(
         TirInstr::Const(_, _) => return None,
         TirInstr::Make(_, _, _, _) => (Capability::Alloc, DirectCapabilitySource::Make),
         TirInstr::MakeStruct(_, _, _) => (Capability::Alloc, DirectCapabilitySource::MakeStruct),
+        TirInstr::MakeClosure(_, _, captures) if !captures.is_empty() => (
+            Capability::Alloc,
+            DirectCapabilitySource::ClosureEnvironment,
+        ),
+        TirInstr::MakeClosure(_, _, _) | TirInstr::CallClosure(_, _, _) => return None,
         TirInstr::Get(_, _, TirKey::Index(_)) => {
             (Capability::Panic, DirectCapabilitySource::ConstantIndexGet)
         }
@@ -903,6 +1057,22 @@ fn record_instruction_type(
             None
         }
         TirInstr::Load(result, slot) => slot_types.get(slot).cloned().map(|ty| (*result, ty)),
+        TirInstr::MakeClosure(result, target, captures) => functions.get(target).map(|function| {
+            let params = function
+                .params
+                .iter()
+                .skip(captures.len())
+                .map(|(_, ty)| ty.clone())
+                .collect();
+            (
+                *result,
+                TirType::Function(params, Box::new(function.return_type.clone())),
+            )
+        }),
+        TirInstr::CallClosure(result, callable, _) => match value_types.get(callable) {
+            Some(TirType::Function(_, ret)) => Some((*result, (**ret).clone())),
+            _ => None,
+        },
         TirInstr::Call(result, target, _) => functions
             .get(target)
             .map(|function| (*result, function.return_type.clone())),

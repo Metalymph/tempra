@@ -50,7 +50,10 @@ pub fn map_type(ty: &Type) -> Result<TirType, TirLowerError> {
         Type::Associated(_, _) => Err(TirLowerError::UnsupportedType("Associated".to_string())),
         Type::BuiltinError => Ok(TirType::String),
         Type::Namespace(_) => Err(TirLowerError::UnsupportedType("Namespace".to_string())),
-        Type::Function(_, _) => Err(TirLowerError::UnsupportedType("Function".to_string())),
+        Type::Function(params, ret) => Ok(TirType::Function(
+            params.iter().map(map_type).collect::<Result<Vec<_>, _>>()?,
+            Box::new(map_type(ret)?),
+        )),
         Type::GenericParam { .. } => {
             Err(TirLowerError::UnsupportedType("GenericParam".to_string()))
         }
@@ -87,6 +90,13 @@ pub fn unmap_type(tir_ty: &TirType) -> Result<Type, TirLowerError> {
                 .collect::<Result<Vec<_>, _>>()?,
         )),
         TirType::Struct(name) => Ok(Type::Struct(name.clone(), vec![])),
+        TirType::Function(params, ret) => Ok(Type::Function(
+            params
+                .iter()
+                .map(unmap_type)
+                .collect::<Result<Vec<_>, _>>()?,
+            Box::new(unmap_type(ret)?),
+        )),
         _ => Err(TirLowerError::UnsupportedType(format!("{:?}", tir_ty))),
     }
 }
@@ -212,6 +222,14 @@ fn resolve_hir_type(
                 .map(|elem| resolve_hir_type(elem, _type_ctx, self_ty, generic_subs))
                 .collect::<Result<Vec<_>, _>>()?,
         )),
+        HirType::Function(_, params, ret) => {
+            let params = params
+                .iter()
+                .map(|p| resolve_hir_type(p, _type_ctx, self_ty, generic_subs))
+                .collect::<Result<Vec<_>, _>>()?;
+            let ret = resolve_hir_type(ret, _type_ctx, self_ty, generic_subs)?;
+            Ok(Type::Function(params, Box::new(ret)))
+        }
         HirType::Apply(_, callee, args) => {
             if let HirType::Named(_, name) = &**callee {
                 if name == "Slice" && args.len() == 1 {
@@ -367,18 +385,19 @@ impl<'a> LowerContext<'a> {
                 if name == "None" {
                     return Ok(Type::Option(Box::new(Type::Unknown)));
                 }
-                if let Some(info) = self.type_ctx.scopes.lookup(name) {
-                    Ok(info.ty.clone())
-                } else if let Some(hir_ty) = self.local_hir_types.get(name) {
+                if let Some(hir_ty) = self.local_hir_types.get(name) {
                     Ok(hir_ty.clone())
                 } else if let Some((_, tir_ty, _)) = self.locals.get(name) {
                     unmap_type(tir_ty)
+                } else if let Some(info) = self.type_ctx.scopes.lookup(name) {
+                    Ok(info.ty.clone())
                 } else if self.type_ctx.is_module(name) {
                     Ok(Type::Namespace(name.clone()))
                 } else {
                     Err(TirLowerError::UnknownLocal(name.clone(), *span))
                 }
             }
+            HirExpression::Closure(closure) => self.infer_closure_type(closure),
             HirExpression::Binary(b) => match b.op {
                 HirBinaryOp::Add | HirBinaryOp::Sub | HirBinaryOp::Mul | HirBinaryOp::Div => {
                     self.infer_expr_type(&b.left)
@@ -607,7 +626,9 @@ impl<'a> LowerContext<'a> {
                         }
                         "Ok" | "Err" => Ok(Type::Unknown),
                         _ => {
-                            if let Some((_, sig)) = self.lookup_function(name) {
+                            if let Some(Type::Function(_, ret)) = self.local_hir_types.get(name) {
+                                Ok((**ret).clone())
+                            } else if let Some((_, sig)) = self.lookup_function(name) {
                                 Ok(sig.return_type.clone())
                             } else {
                                 Err(TirLowerError::UnsupportedExpr(
@@ -2149,8 +2170,126 @@ impl<'a> LowerContext<'a> {
         self.builder.build_load(slot).map_err(Into::into)
     }
 
+    /// Infer a closure's declared function type independently of outer HIR scopes.
+    /// Captures are deliberately rejected by lowering until VM Parity 2B.
+    fn infer_closure_type(&self, closure: &HirClosure) -> Result<Type, TirLowerError> {
+        if !closure.captures.is_empty() {
+            return Err(TirLowerError::UnsupportedExpr(
+                "closure captures are not supported by VM Parity 2A".into(),
+                closure.span,
+            ));
+        }
+        let mut params = Vec::with_capacity(closure.parameters.len());
+        for param in &closure.parameters {
+            if param.kind != tempra_ast::ParameterKind::Runtime || param.is_inout {
+                return Err(TirLowerError::UnsupportedExpr(
+                    "non-runtime/inout closure parameters are not supported in VM Parity 2A".into(),
+                    param.span,
+                ));
+            }
+            params.push(resolve_hir_type(
+                &param.ty,
+                self.type_ctx,
+                self.self_ty.as_ref(),
+                &self.generic_subs,
+            )?);
+        }
+        let ret = match &closure.return_type {
+            Some(ret) => resolve_hir_type(
+                ret,
+                self.type_ctx,
+                self.self_ty.as_ref(),
+                &self.generic_subs,
+            )?,
+            None => Type::Unit,
+        };
+        Ok(Type::Function(params, Box::new(ret)))
+    }
+
+    /// Lift capture-free HIR closures into deterministic, module-local functions.
+    /// Their body is isolated from the parent function's locals. The return
+    /// expression is materialized explicitly, preserving Tempra expression blocks.
+    fn lower_closure(&mut self, closure: &HirClosure) -> Result<TirValueId, TirLowerError> {
+        let Type::Function(params, ret) = self.infer_closure_type(closure)? else {
+            unreachable!("closure inference always returns a function type")
+        };
+        let synthetic_name = format!(
+            "{}$closure${}${}",
+            self.builder.func.name, closure.span.start, closure.span.end
+        );
+        let return_type = map_type(&ret)?;
+
+        {
+            let child_builder = self
+                .module_builder
+                .new_function(&synthetic_name, return_type.clone());
+            let mut child = LowerContext::new(
+                child_builder,
+                self.type_ctx,
+                self.module_builder,
+                self.self_ty.clone(),
+                self.generic_subs.clone(),
+            );
+            child.module_prefix = self.module_prefix.clone();
+            let entry = child.builder.new_block();
+            child.builder.set_current_block(entry);
+
+            for (parameter, parameter_type) in closure.parameters.iter().zip(params.iter()) {
+                let tir_type = map_type(parameter_type)?;
+                let parameter_id = child.builder.add_param(tir_type.clone());
+                let slot = child
+                    .builder
+                    .build_slot(tir_type.clone(), Some(&parameter.name))?;
+                child.builder.build_store(slot, parameter_id)?;
+                child
+                    .locals
+                    .insert(parameter.name.clone(), (slot, tir_type, false));
+                child
+                    .local_hir_types
+                    .insert(parameter.name.clone(), parameter_type.clone());
+            }
+
+            for (index, stmt) in closure.body.statements.iter().enumerate() {
+                if child.builder.is_terminated() {
+                    break;
+                }
+                let is_tail = index + 1 == closure.body.statements.len();
+                if is_tail && return_type != TirType::Unit {
+                    if let HirStatement::Expr(expr) = stmt {
+                        let result =
+                            child.lower_expression_with_expected_type(expr, &return_type)?;
+                        child.builder.build_ret(Some(result))?;
+                        continue;
+                    }
+                }
+                child.lower_statement(stmt)?;
+            }
+
+            if !child.builder.is_terminated() {
+                if return_type == TirType::Unit {
+                    child.builder.build_ret(None)?;
+                } else {
+                    let current = child.builder.get_current_block().unwrap();
+                    if child.builder.is_block_reachable_from_entry(current) {
+                        return Err(TirLowerError::MissingReturn(closure.body.span));
+                    }
+                }
+            }
+
+            child.builder.prune_unreachable_blocks();
+            let synthesized = child.builder.build();
+            child.module_builder.add_function(synthesized);
+        }
+
+        let function_id = self.module_builder.declare_function(&synthetic_name);
+        self.builder
+            .build_make_closure(function_id, vec![])
+            .map_err(Into::into)
+    }
+
     pub fn lower_expression(&mut self, expr: &HirExpression) -> Result<TirValueId, TirLowerError> {
         match expr {
+            HirExpression::Closure(closure) => self.lower_closure(closure),
             HirExpression::Integer(span, s) => {
                 let val = s.parse::<i64>().map_err(|_| {
                     TirLowerError::UnsupportedExpr("Invalid Int64 literal".into(), *span)
@@ -2777,6 +2916,36 @@ impl<'a> LowerContext<'a> {
                             .builder
                             .build_make(ty, Some(name.clone()), vec![arg_val])
                             .map_err(|e| e.into());
+                    }
+
+                    if let Some((slot, TirType::Function(params, _), _)) = self.locals.get(name) {
+                        let slot = *slot;
+                        let params = params.clone();
+                        if params.len() != c.args.len() {
+                            return Err(TirLowerError::UnsupportedExpr(
+                                format!(
+                                    "closure call arity mismatch: expected {}, found {}",
+                                    params.len(),
+                                    c.args.len()
+                                ),
+                                c.span,
+                            ));
+                        }
+                        let callee = self.builder.build_load(slot)?;
+                        let mut args = Vec::with_capacity(c.args.len());
+                        for (argument, expected_type) in c.args.iter().zip(params.iter()) {
+                            let expr = match argument {
+                                HirCallArgument::Positional(expr) => expr,
+                                HirCallArgument::Named(named) => &named.value,
+                            };
+                            args.push(
+                                self.lower_expression_with_expected_type(expr, expected_type)?,
+                            );
+                        }
+                        return self
+                            .builder
+                            .build_call_closure(callee, args)
+                            .map_err(Into::into);
                     }
 
                     if let Some((resolved_name, sig)) = self.lookup_function(name) {

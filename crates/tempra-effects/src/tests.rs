@@ -2653,3 +2653,93 @@ fn specialized_witness_prefers_a_shorter_path_to_the_same_origin() {
     assert_eq!(witness.calls[0].callee, TirFunctionId(2));
     assert_eq!(witness.origin.location().function, TirFunctionId(2));
 }
+
+#[test]
+fn closure_local_call_propagates_callee_effects() {
+    let mut main = function(
+        0,
+        "main",
+        vec![
+            TirInstr::MakeClosure(TirValueId(0), TirFunctionId(1), vec![]),
+            TirInstr::Slot(
+                TirSlotId(0),
+                TirType::Function(vec![], Box::new(TirType::Unit)),
+            ),
+            TirInstr::Store(TirSlotId(0), TirValueId(0)),
+            TirInstr::Load(TirValueId(1), TirSlotId(0)),
+            TirInstr::CallClosure(TirValueId(2), TirValueId(1), vec![]),
+        ],
+    );
+    main.return_type = TirType::Unit;
+    let target = function(
+        1,
+        "closure_body",
+        vec![
+            TirInstr::Const(TirValueId(0), TirConst::Int64(10)),
+            TirInstr::Const(TirValueId(1), TirConst::Int64(2)),
+            TirInstr::Div(TirValueId(2), TirValueId(0), TirValueId(1)),
+        ],
+    );
+    let analysis = analyze(&module(vec![main, target])).unwrap();
+    assert!(analysis
+        .summary(TirFunctionId(0))
+        .unwrap()
+        .required
+        .contains(Capability::Panic));
+    assert_eq!(analysis.call_edges().len(), 1);
+    assert_eq!(analysis.call_edges()[0].callee, TirFunctionId(1));
+}
+
+#[test]
+fn closure_unknown_parameter_fails_closed() {
+    let mut main = function(
+        0,
+        "main",
+        vec![TirInstr::CallClosure(TirValueId(1), TirValueId(0), vec![])],
+    );
+    main.params.push((
+        TirValueId(0),
+        TirType::Function(vec![], Box::new(TirType::Unit)),
+    ));
+    let error = analyze(&module(vec![main])).unwrap_err();
+    assert!(matches!(
+        error,
+        CapabilityAnalysisError::UnsupportedIndirectCall {
+            caller: TirFunctionId(0),
+            ..
+        }
+    ));
+}
+
+#[test]
+fn closure_slot_with_multiple_targets_propagates_all_effects() {
+    let call_ty = TirType::Function(vec![], Box::new(TirType::Unit));
+    let main = function(
+        0,
+        "main",
+        vec![
+            TirInstr::Slot(TirSlotId(0), call_ty),
+            TirInstr::MakeClosure(TirValueId(0), TirFunctionId(1), vec![]),
+            TirInstr::MakeClosure(TirValueId(1), TirFunctionId(2), vec![]),
+            TirInstr::Store(TirSlotId(0), TirValueId(0)),
+            TirInstr::Store(TirSlotId(0), TirValueId(1)),
+            TirInstr::Load(TirValueId(2), TirSlotId(0)),
+            TirInstr::CallClosure(TirValueId(3), TirValueId(2), vec![]),
+        ],
+    );
+    let alloc_body = function(1, "alloc_body", vec![string_const(0, "alloc")]);
+    let panic_body = function(
+        2,
+        "panic_body",
+        vec![
+            TirInstr::Const(TirValueId(0), TirConst::Int64(1)),
+            TirInstr::Const(TirValueId(1), TirConst::Int64(2)),
+            TirInstr::Div(TirValueId(2), TirValueId(0), TirValueId(1)),
+        ],
+    );
+    let analysis = analyze(&module(vec![main, panic_body, alloc_body])).unwrap();
+    let required = analysis.summary(TirFunctionId(0)).unwrap().required;
+    assert!(required.contains(Capability::Alloc));
+    assert!(required.contains(Capability::Panic));
+    assert_eq!(analysis.call_edges().len(), 2);
+}

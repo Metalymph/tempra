@@ -64,6 +64,10 @@ pub enum TirInstr {
     Store(TirSlotId, TirValueId),
 
     Call(TirValueId, TirFunctionId, Vec<TirValueId>),
+    // The referenced function receives captured values first, then call arguments.
+    // The captured environment may be empty and requires no heap allocation.
+    MakeClosure(TirValueId, TirFunctionId, Vec<TirValueId>),
+    CallClosure(TirValueId, TirValueId, Vec<TirValueId>),
 
     Add(TirValueId, TirValueId, TirValueId),
     Sub(TirValueId, TirValueId, TirValueId),

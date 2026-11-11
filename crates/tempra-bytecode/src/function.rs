@@ -19,6 +19,10 @@ impl fmt::Display for LocalId {
     }
 }
 
+/// Stable index into a module's structurally interned callable signatures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SignatureId(pub u32);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BytecodeType {
     Unit,
@@ -32,6 +36,15 @@ pub enum BytecodeType {
     /// Used when the bytecode verifier doesn't have enough metadata to perform full static type checking
     /// for complex user-defined types.
     Any,
+    /// An indirect callable whose full signature is in `BytecodeModule::signatures`.
+    Callable(SignatureId),
+}
+
+/// Function-valued signature excluding any captured/hidden parameters.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BytecodeSignature {
+    pub params: Vec<BytecodeType>,
+    pub ret: BytecodeType,
 }
 
 impl fmt::Display for BytecodeType {
@@ -45,6 +58,7 @@ impl fmt::Display for BytecodeType {
             BytecodeType::Float64 => write!(f, "Float64"),
             BytecodeType::String => write!(f, "String"),
             BytecodeType::Any => write!(f, "Any"),
+            BytecodeType::Callable(id) => write!(f, "Callable(#{})", id.0),
         }
     }
 }

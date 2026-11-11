@@ -1,6 +1,8 @@
 use crate::bytecode::BytecodeModule;
 use crate::constant::{BytecodeConstant, ConstId};
-use crate::function::{BytecodeFunction, BytecodeType, FunctionId, LocalId};
+use crate::function::{
+    BytecodeFunction, BytecodeSignature, BytecodeType, FunctionId, LocalId, SignatureId,
+};
 use crate::opcode::{BytecodeInstr, InstrOffset};
 use crate::verify::verify_module;
 use std::fmt;
@@ -60,7 +62,7 @@ impl From<crate::verify::BytecodeVerifyError> for BytecodeSerializeError {
 }
 
 const MAGIC: &[u8; 4] = b"TMBC";
-const FORMAT_VERSION: u32 = 2;
+const FORMAT_VERSION: u32 = 5;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct BytecodeCacheHeader {
@@ -152,6 +154,17 @@ pub fn encode_artifact(
         }
     }
 
+    // Callable signatures precede functions because function param/local types
+    // may refer to signature IDs. Signatures are emitted in canonical interning order.
+    write_u32(&mut buf, artifact.module.signatures.len() as u32)?;
+    for signature in &artifact.module.signatures {
+        write_u32(&mut buf, signature.params.len() as u32)?;
+        for param in &signature.params {
+            write_type(&mut buf, param)?;
+        }
+        write_type(&mut buf, &signature.ret)?;
+    }
+
     // Functions
     write_u32(&mut buf, artifact.module.functions.len() as u32)?;
     for f in &artifact.module.functions {
@@ -208,8 +221,13 @@ fn write_type(w: &mut impl Write, ty: &BytecodeType) -> io::Result<()> {
         BytecodeType::String => 5,
         BytecodeType::Any => 6,
         BytecodeType::UInt8 => 7,
+        BytecodeType::Callable(_) => 8,
     };
-    w.write_all(&[tag])
+    w.write_all(&[tag])?;
+    if let BytecodeType::Callable(id) = ty {
+        write_u32(w, id.0)?;
+    }
+    Ok(())
 }
 
 fn write_instr(w: &mut impl Write, instr: &BytecodeInstr) -> io::Result<()> {
@@ -274,6 +292,16 @@ fn write_instr(w: &mut impl Write, instr: &BytecodeInstr) -> io::Result<()> {
         }
         BytecodeInstr::Return => w.write_all(&[34]),
         BytecodeInstr::Unreachable => w.write_all(&[35]),
+        BytecodeInstr::MakeClosure(id, captures) => {
+            w.write_all(&[53])?;
+            write_u32(w, id.0)?;
+            w.write_all(&captures.to_le_bytes())
+        }
+        BytecodeInstr::CallClosure(signature_id, argc) => {
+            w.write_all(&[54])?;
+            write_u32(w, signature_id.0)?;
+            w.write_all(&argc.to_le_bytes())
+        }
         BytecodeInstr::Call(id, argc) => {
             w.write_all(&[36])?;
             write_u32(w, id.0)?;
@@ -366,7 +394,7 @@ pub fn decode_artifact(bytes: &[u8]) -> Result<BytecodeCacheArtifact, BytecodeSe
     // Module
     let mut module = BytecodeModule::new();
     module.version = read_u32(&mut cursor)?;
-    if module.version != 1 {
+    if module.version != 4 {
         return Err(BytecodeSerializeError::UnsupportedVersion);
     }
 
@@ -397,6 +425,18 @@ pub fn decode_artifact(bytes: &[u8]) -> Result<BytecodeCacheArtifact, BytecodeSe
             _ => return Err(BytecodeSerializeError::InvalidTag),
         };
         module.constants.push(c);
+    }
+
+    // Callable signatures, indexed by SignatureId.
+    let signature_len = read_u32(&mut cursor)?;
+    for _ in 0..signature_len {
+        let param_len = read_u32(&mut cursor)?;
+        let mut params = Vec::with_capacity(param_len as usize);
+        for _ in 0..param_len {
+            params.push(read_type(&mut cursor)?);
+        }
+        let ret = read_type(&mut cursor)?;
+        module.signatures.push(BytecodeSignature { params, ret });
     }
 
     // Functions
@@ -482,6 +522,7 @@ fn read_type(r: &mut impl Read) -> Result<BytecodeType, BytecodeSerializeError> 
         5 => Ok(BytecodeType::String),
         6 => Ok(BytecodeType::Any),
         7 => Ok(BytecodeType::UInt8),
+        8 => Ok(BytecodeType::Callable(SignatureId(read_u32(r)?))),
         _ => Err(BytecodeSerializeError::InvalidTag),
     }
 }
@@ -532,6 +573,24 @@ fn read_instr(r: &mut impl Read) -> Result<BytecodeInstr, BytecodeSerializeError
         ))),
         34 => Ok(BytecodeInstr::Return),
         35 => Ok(BytecodeInstr::Unreachable),
+        53 => {
+            let target = FunctionId(read_u32(r)?);
+            let mut count = [0u8; 2];
+            r.read_exact(&mut count)?;
+            Ok(BytecodeInstr::MakeClosure(
+                target,
+                u16::from_le_bytes(count),
+            ))
+        }
+        54 => {
+            let signature_id = SignatureId(read_u32(r)?);
+            let mut argc = [0u8; 2];
+            r.read_exact(&mut argc)?;
+            Ok(BytecodeInstr::CallClosure(
+                signature_id,
+                u16::from_le_bytes(argc),
+            ))
+        }
         36 => {
             let func_id = read_u32(r)?;
             let mut argc_bytes = [0u8; 2];

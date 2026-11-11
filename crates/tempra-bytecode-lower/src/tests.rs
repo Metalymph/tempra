@@ -690,3 +690,122 @@ fn conflicting_struct_field_types_are_rejected_before_bytecode_emission() {
         other => panic!("expected TIR verification failure, got {other:?}"),
     }
 }
+
+// VM Parity 2A.5b: TIR -> bytecode callable lowering.
+#[test]
+fn lower_tir_capture_free_closure_and_indirect_call() {
+    use tempra_bytecode::opcode::BytecodeInstr;
+    use tempra_bytecode::serialize::encode_module;
+    use tempra_bytecode::verify::verify_module;
+    use tempra_tir::builder::ModuleBuilder;
+
+    let mut module = ModuleBuilder::new();
+    let mut lambda = module.new_function("lambda", TirType::Int64);
+    let entry = lambda.new_block();
+    lambda.set_current_block(entry);
+    let x = lambda.add_param(TirType::Int64);
+    let one = lambda.build_const(TirConst::Int64(1)).unwrap();
+    let added = lambda.build_add(x, one).unwrap();
+    lambda.build_ret(Some(added)).unwrap();
+    let lambda_id = lambda.func.id;
+    module.add_function(lambda.build());
+
+    let mut main = module.new_function("main", TirType::Int64);
+    let entry = main.new_block();
+    main.set_current_block(entry);
+    let closure = main.build_make_closure(lambda_id, vec![]).unwrap();
+    let ten = main.build_const(TirConst::Int64(10)).unwrap();
+    let result = main.build_call_closure(closure, vec![ten]).unwrap();
+    main.build_ret(Some(result)).unwrap();
+    module.add_function(main.build());
+
+    let bc = lower_tir_module(&module.module).unwrap();
+    verify_module(&bc).unwrap();
+    assert!(bc
+        .functions
+        .iter()
+        .flat_map(|f| &f.code)
+        .any(|instr| matches!(instr, BytecodeInstr::MakeClosure(_, 0))));
+    assert!(bc
+        .functions
+        .iter()
+        .flat_map(|f| &f.code)
+        .any(|instr| matches!(instr, BytecodeInstr::CallClosure(_, 1))));
+    assert_eq!(encode_module(&bc).unwrap(), encode_module(&bc).unwrap());
+}
+
+#[test]
+fn lower_tir_captured_closure_signature_and_higher_order_call() {
+    use tempra_bytecode::verify::verify_module;
+    use tempra_tir::builder::ModuleBuilder;
+
+    let fn_type = TirType::Function(vec![TirType::Int64], Box::new(TirType::Int64));
+    let mut module = ModuleBuilder::new();
+
+    let mut lambda = module.new_function("lambda", TirType::Int64);
+    let entry = lambda.new_block();
+    lambda.set_current_block(entry);
+    let base = lambda.add_param(TirType::Int64);
+    let x = lambda.add_param(TirType::Int64);
+    let sum = lambda.build_add(base, x).unwrap();
+    lambda.build_ret(Some(sum)).unwrap();
+    let lambda_id = lambda.func.id;
+    module.add_function(lambda.build());
+
+    let mut apply = module.new_function("apply", TirType::Int64);
+    let entry = apply.new_block();
+    apply.set_current_block(entry);
+    let callable = apply.add_param(fn_type);
+    let arg = apply.add_param(TirType::Int64);
+    let result = apply.build_call_closure(callable, vec![arg]).unwrap();
+    apply.build_ret(Some(result)).unwrap();
+    let apply_id = apply.func.id;
+    module.add_function(apply.build());
+
+    let mut main = module.new_function("main", TirType::Int64);
+    let entry = main.new_block();
+    main.set_current_block(entry);
+    let seven = main.build_const(TirConst::Int64(7)).unwrap();
+    let captured = main.build_make_closure(lambda_id, vec![seven]).unwrap();
+    let ten = main.build_const(TirConst::Int64(10)).unwrap();
+    let result = main.build_call(apply_id, vec![captured, ten]).unwrap();
+    main.build_ret(Some(result)).unwrap();
+    module.add_function(main.build());
+
+    let bc = lower_tir_module(&module.module).unwrap();
+    verify_module(&bc).unwrap();
+    assert_eq!(bc.signatures.len(), 1);
+    assert_eq!(
+        bc.signatures[0].params,
+        vec![tempra_bytecode::function::BytecodeType::Int64]
+    );
+}
+
+#[test]
+fn lower_tir_callable_signatures_are_reproducible() {
+    use tempra_bytecode::serialize::encode_module;
+    use tempra_tir::builder::ModuleBuilder;
+
+    fn make() -> Vec<u8> {
+        let mut module = ModuleBuilder::new();
+        let mut lambda = module.new_function("lambda", TirType::Int64);
+        let entry = lambda.new_block();
+        lambda.set_current_block(entry);
+        let x = lambda.add_param(TirType::Int64);
+        lambda.build_ret(Some(x)).unwrap();
+        let lambda_id = lambda.func.id;
+        module.add_function(lambda.build());
+
+        let mut main = module.new_function("main", TirType::Int64);
+        let entry = main.new_block();
+        main.set_current_block(entry);
+        let callable = main.build_make_closure(lambda_id, vec![]).unwrap();
+        let arg = main.build_const(TirConst::Int64(5)).unwrap();
+        let result = main.build_call_closure(callable, vec![arg]).unwrap();
+        main.build_ret(Some(result)).unwrap();
+        module.add_function(main.build());
+        encode_module(&lower_tir_module(&module.module).unwrap()).unwrap()
+    }
+
+    assert_eq!(make(), make());
+}

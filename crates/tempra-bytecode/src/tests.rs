@@ -437,3 +437,379 @@ fn serialization_is_byte_stable_for_reproducibility_sensitive_values() {
         BytecodeInstr::Call(FunctionId(17), 3)
     );
 }
+
+#[test]
+fn closure_isa_roundtrip_reserves_stable_opcode_ids() {
+    use crate::serialize::decode_artifact;
+
+    let mut module = BytecodeModule::new();
+    let target = module.add_function(BytecodeFunction::new(
+        "lambda".into(),
+        vec![BytecodeType::Int64],
+        BytecodeType::Int64,
+    ));
+    let signature_id = module.intern_signature(crate::function::BytecodeSignature {
+        params: vec![BytecodeType::Int64],
+        ret: BytecodeType::Int64,
+    });
+    let mut caller = BytecodeFunction::new("main".into(), vec![], BytecodeType::Unit);
+    caller.code.push(BytecodeInstr::MakeClosure(target, 0));
+    caller
+        .code
+        .push(BytecodeInstr::CallClosure(signature_id, 1));
+    module.add_function(caller);
+
+    assert_eq!(BytecodeInstr::MakeClosure(target, 0).opcode_id(), 53);
+    assert_eq!(BytecodeInstr::CallClosure(signature_id, 1).opcode_id(), 54);
+    assert_eq!(crate::opcode::BYTECODE_OPCODE_COUNT, 55);
+    let bytes = encode_module(&module).unwrap();
+    assert_eq!(bytes, encode_module(&module).unwrap());
+    let decoded = decode_artifact(&bytes).unwrap();
+    assert_eq!(decoded.module.version, 4);
+    assert_eq!(encode_module(&decoded.module).unwrap(), bytes);
+    assert_eq!(
+        decoded.module.functions[1].code[0],
+        BytecodeInstr::MakeClosure(target, 0)
+    );
+    assert_eq!(
+        decoded.module.functions[1].code[1],
+        BytecodeInstr::CallClosure(signature_id, 1)
+    );
+}
+
+#[test]
+fn closure_isa_fails_closed_in_verifier() {
+    use crate::verify::verify_module;
+
+    let mut module = BytecodeModule::new();
+    let target = module.add_function(BytecodeFunction::new(
+        "lambda".into(),
+        vec![],
+        BytecodeType::Int64,
+    ));
+    let signature_id = module.intern_signature(crate::function::BytecodeSignature {
+        params: vec![],
+        ret: BytecodeType::Int64,
+    });
+    let mut caller = BytecodeFunction::new("main".into(), vec![], BytecodeType::Unit);
+    caller.max_stack = 2;
+    caller.code = vec![BytecodeInstr::MakeClosure(target, 0), BytecodeInstr::Return];
+    module.add_function(caller);
+    // Unit-returning function cannot leave an unused callable on its stack.
+    assert!(matches!(
+        verify_module(&module),
+        Err(BytecodeVerifyError::ReturnTypeMismatch { .. })
+    ));
+
+    module.functions[1].code = vec![
+        BytecodeInstr::CallClosure(signature_id, 0),
+        BytecodeInstr::Return,
+    ];
+    assert!(verify_module(&module).is_err());
+    assert!(matches!(
+        decode_and_verify_artifact(&encode_module(&module).unwrap()),
+        Err(BytecodeSerializeError::VerifyError(_))
+    ));
+}
+
+#[test]
+fn previous_bytecode_cache_version_is_rejected() {
+    let module = BytecodeModule::new();
+    let mut bytes = encode_module(&module).unwrap();
+    bytes[4..8].copy_from_slice(&2_u32.to_le_bytes());
+    assert!(matches!(
+        decode_artifact(&bytes),
+        Err(BytecodeSerializeError::UnsupportedVersion)
+    ));
+}
+
+#[test]
+fn callable_signature_table_is_deterministic_and_roundtrips() {
+    use crate::function::{BytecodeSignature, SignatureId};
+    use crate::serialize::decode_artifact;
+    use crate::verify::verify_module;
+
+    let mut module = BytecodeModule::new();
+    let signature = BytecodeSignature {
+        params: vec![BytecodeType::Int64],
+        ret: BytecodeType::Int64,
+    };
+    let id = module.intern_signature(signature.clone());
+    assert_eq!(id, SignatureId(0));
+    assert_eq!(module.intern_signature(signature), id);
+    assert_eq!(module.signatures.len(), 1);
+
+    let mut func = BytecodeFunction::new("main".into(), vec![], BytecodeType::Unit);
+    func.locals = vec![BytecodeType::Callable(id)];
+    func.code = vec![BytecodeInstr::Return];
+    module.add_function(func);
+    verify_module(&module).unwrap();
+
+    let first = encode_module(&module).unwrap();
+    assert_eq!(first, encode_module(&module).unwrap());
+    let decoded = decode_artifact(&first).unwrap().module;
+    assert_eq!(decoded.signatures, module.signatures);
+    assert_eq!(decoded.functions[0].locals, module.functions[0].locals);
+    assert_eq!(encode_module(&decoded).unwrap(), first);
+}
+
+#[test]
+fn callable_signature_reference_is_verified_fail_closed() {
+    use crate::function::SignatureId;
+    use crate::verify::verify_module;
+
+    let mut module = BytecodeModule::new();
+    let mut func = BytecodeFunction::new("main".into(), vec![], BytecodeType::Unit);
+    func.locals = vec![BytecodeType::Callable(SignatureId(77))];
+    func.code = vec![BytecodeInstr::Return];
+    module.add_function(func);
+    assert!(matches!(
+        verify_module(&module),
+        Err(BytecodeVerifyError::InvalidSignatureId(SignatureId(77)))
+    ));
+    assert!(matches!(
+        decode_and_verify_artifact(&encode_module(&module).unwrap()),
+        Err(BytecodeSerializeError::VerifyError(
+            BytecodeVerifyError::InvalidSignatureId(SignatureId(77))
+        ))
+    ));
+}
+
+#[test]
+fn previous_closure_bytecode_cache_version_is_rejected() {
+    use crate::serialize::decode_artifact;
+    let module = BytecodeModule::new();
+    let mut bytes = encode_module(&module).unwrap();
+    bytes[4..8].copy_from_slice(&3_u32.to_le_bytes());
+    assert!(matches!(
+        decode_artifact(&bytes),
+        Err(BytecodeSerializeError::UnsupportedVersion)
+    ));
+}
+
+#[test]
+fn closure_typed_bytecode_valid_call_and_capture_roundtrip() {
+    use crate::function::BytecodeSignature;
+    use crate::serialize::decode_and_verify_artifact;
+    use crate::verify::verify_module;
+
+    let mut module = BytecodeModule::new();
+    let signature_id = module.intern_signature(BytecodeSignature {
+        params: vec![BytecodeType::Int64],
+        ret: BytecodeType::Int64,
+    });
+    let seven = module.add_constant(BytecodeConstant::Int64(7));
+    let ten = module.add_constant(BytecodeConstant::Int64(10));
+
+    let mut target = BytecodeFunction::new(
+        "lambda".into(),
+        vec![BytecodeType::Int64, BytecodeType::Int64],
+        BytecodeType::Int64,
+    );
+    target.locals = target.params.clone();
+    target.max_stack = 2;
+    target.code = vec![
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::LoadLocal(LocalId(1)),
+        BytecodeInstr::AddI64,
+        BytecodeInstr::Return,
+    ];
+    let target_id = module.add_function(target);
+
+    let mut main = BytecodeFunction::new("main".into(), vec![], BytecodeType::Int64);
+    main.max_stack = 2;
+    main.code = vec![
+        BytecodeInstr::ConstI64(seven),
+        BytecodeInstr::MakeClosure(target_id, 1),
+        BytecodeInstr::ConstI64(ten),
+        BytecodeInstr::CallClosure(signature_id, 1),
+        BytecodeInstr::Return,
+    ];
+    module.add_function(main);
+
+    verify_module(&module).unwrap();
+    let first = encode_module(&module).unwrap();
+    let second = encode_module(&module).unwrap();
+    assert_eq!(first, second);
+    let decoded = decode_and_verify_artifact(&first).unwrap();
+    assert_eq!(encode_module(&decoded.module).unwrap(), first);
+    assert_eq!(
+        decoded.module.functions[1].code[3],
+        BytecodeInstr::CallClosure(signature_id, 1)
+    );
+}
+
+#[test]
+fn closure_typed_bytecode_rejects_wrong_argument_type() {
+    use crate::function::BytecodeSignature;
+    use crate::verify::verify_module;
+
+    let mut module = BytecodeModule::new();
+    let signature_id = module.intern_signature(BytecodeSignature {
+        params: vec![BytecodeType::Int64],
+        ret: BytecodeType::Int64,
+    });
+    let target_id = module.add_function(BytecodeFunction::new(
+        "lambda".into(),
+        vec![BytecodeType::Int64],
+        BytecodeType::Int64,
+    ));
+    let mut main = BytecodeFunction::new("main".into(), vec![], BytecodeType::Int64);
+    main.max_stack = 2;
+    main.code = vec![
+        BytecodeInstr::MakeClosure(target_id, 0),
+        BytecodeInstr::ConstBool(true),
+        BytecodeInstr::CallClosure(signature_id, 1),
+        BytecodeInstr::Return,
+    ];
+    module.add_function(main);
+
+    assert!(matches!(
+        verify_module(&module),
+        Err(BytecodeVerifyError::StackTypeMismatch {
+            expected: BytecodeType::Int64,
+            found: BytecodeType::Bool,
+        })
+    ));
+}
+
+#[test]
+fn closure_typed_bytecode_rejects_wrong_callee_signature() {
+    use crate::function::BytecodeSignature;
+    use crate::verify::verify_module;
+
+    let mut module = BytecodeModule::new();
+    let actual_signature = module.intern_signature(BytecodeSignature {
+        params: vec![],
+        ret: BytecodeType::Int64,
+    });
+    let expected_signature = module.intern_signature(BytecodeSignature {
+        params: vec![BytecodeType::Int64],
+        ret: BytecodeType::Int64,
+    });
+    let zero = module.add_constant(BytecodeConstant::Int64(0));
+    let target = module.add_function(BytecodeFunction::new(
+        "lambda".into(),
+        vec![],
+        BytecodeType::Int64,
+    ));
+    let mut main = BytecodeFunction::new("main".into(), vec![], BytecodeType::Int64);
+    main.max_stack = 2;
+    main.code = vec![
+        BytecodeInstr::MakeClosure(target, 0),
+        BytecodeInstr::ConstI64(zero),
+        BytecodeInstr::CallClosure(expected_signature, 1),
+        BytecodeInstr::Return,
+    ];
+    module.add_function(main);
+    assert_ne!(actual_signature, expected_signature);
+    assert!(matches!(
+        verify_module(&module),
+        Err(BytecodeVerifyError::StackTypeMismatch {
+            expected: BytecodeType::Callable(_),
+            found: BytecodeType::Callable(_),
+        })
+    ));
+}
+
+#[test]
+fn closure_typed_bytecode_rejects_invalid_signature_reference() {
+    use crate::function::SignatureId;
+    use crate::verify::verify_module;
+    let mut module = BytecodeModule::new();
+    let mut main = BytecodeFunction::new("main".into(), vec![], BytecodeType::Unit);
+    main.max_stack = 1;
+    main.code = vec![
+        BytecodeInstr::CallClosure(SignatureId(999), 0),
+        BytecodeInstr::Return,
+    ];
+    module.add_function(main);
+    assert!(matches!(
+        verify_module(&module),
+        Err(BytecodeVerifyError::InvalidSignatureId(SignatureId(999)))
+    ));
+}
+
+#[test]
+fn closure_typed_bytecode_rejects_missing_public_signature() {
+    use crate::verify::verify_module;
+    let mut module = BytecodeModule::new();
+    let target_id = module.add_function(BytecodeFunction::new(
+        "lambda".into(),
+        vec![BytecodeType::Int64],
+        BytecodeType::Int64,
+    ));
+    let mut main = BytecodeFunction::new("main".into(), vec![], BytecodeType::Unit);
+    main.max_stack = 1;
+    main.code = vec![
+        BytecodeInstr::MakeClosure(target_id, 0),
+        BytecodeInstr::Return,
+    ];
+    module.add_function(main);
+    assert!(matches!(
+        verify_module(&module),
+        Err(BytecodeVerifyError::MissingClosureSignature(id)) if id == target_id
+    ));
+}
+
+#[test]
+fn closure_typed_bytecode_rejects_wrong_capture_type() {
+    use crate::function::BytecodeSignature;
+    use crate::verify::verify_module;
+    let mut module = BytecodeModule::new();
+    module.intern_signature(BytecodeSignature {
+        params: vec![BytecodeType::Int64],
+        ret: BytecodeType::Int64,
+    });
+    let target = module.add_function(BytecodeFunction::new(
+        "lambda".into(),
+        vec![BytecodeType::Int64, BytecodeType::Int64],
+        BytecodeType::Int64,
+    ));
+    let mut main = BytecodeFunction::new("main".into(), vec![], BytecodeType::Unit);
+    main.max_stack = 1;
+    main.code = vec![
+        BytecodeInstr::ConstBool(true),
+        BytecodeInstr::MakeClosure(target, 1),
+        BytecodeInstr::Return,
+    ];
+    module.add_function(main);
+    assert!(matches!(
+        verify_module(&module),
+        Err(BytecodeVerifyError::StackTypeMismatch {
+            expected: BytecodeType::Int64,
+            found: BytecodeType::Bool,
+        })
+    ));
+}
+
+#[test]
+fn closure_typed_bytecode_rejects_wrong_arity() {
+    use crate::function::BytecodeSignature;
+    use crate::verify::verify_module;
+    let mut module = BytecodeModule::new();
+    let signature = module.intern_signature(BytecodeSignature {
+        params: vec![BytecodeType::Int64],
+        ret: BytecodeType::Int64,
+    });
+    let mut main = BytecodeFunction::new("main".into(), vec![], BytecodeType::Unit);
+    main.max_stack = 1;
+    main.code = vec![
+        BytecodeInstr::CallClosure(signature, 0),
+        BytecodeInstr::Return,
+    ];
+    module.add_function(main);
+    assert!(verify_module(&module).is_err());
+}
+
+#[test]
+fn closure_typed_bytecode_rejects_previous_cache_format() {
+    use crate::serialize::decode_artifact;
+    let bytes = encode_module(&BytecodeModule::new()).unwrap();
+    let mut old_version = bytes.clone();
+    old_version[4..8].copy_from_slice(&4_u32.to_le_bytes());
+    assert_eq!(
+        decode_artifact(&old_version).unwrap_err(),
+        BytecodeSerializeError::UnsupportedVersion
+    );
+}

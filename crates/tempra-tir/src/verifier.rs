@@ -327,6 +327,94 @@ fn verify_function_inner(
                         value_types.insert(*res, None);
                     }
                 }
+                TirInstr::MakeClosure(res, target_func, captures) => {
+                    if let Some(f) = functions.get(target_func) {
+                        if captures.len() > f.params.len() {
+                            errors.push(VerifierError::GenericError(format!(
+                                "closure capture count exceeds target parameter count for {:?}",
+                                target_func
+                            )));
+                            value_types.insert(*res, None);
+                        } else {
+                            for (capture, (_param_id, expected)) in
+                                captures.iter().zip(f.params.iter())
+                            {
+                                match value_types.get(capture) {
+                                    None => errors.push(VerifierError::UndeclaredValue(*capture)),
+                                    Some(Some(actual)) if actual != expected => {
+                                        errors.push(VerifierError::TypeMismatch {
+                                            expected: expected.clone(),
+                                            actual: actual.clone(),
+                                        });
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            // Hidden capture parameters are excluded from the callable signature.
+                            let params = f.params[captures.len()..]
+                                .iter()
+                                .map(|(_, ty)| ty.clone())
+                                .collect();
+                            value_types.insert(
+                                *res,
+                                Some(TirType::Function(params, Box::new(f.return_type.clone()))),
+                            );
+                        }
+                    } else {
+                        errors.push(VerifierError::FunctionNotFound(*target_func));
+                        value_types.insert(*res, None);
+                    }
+                }
+                TirInstr::CallClosure(res, callee, args) => {
+                    let callee_type = value_types.get(callee).cloned();
+                    match callee_type {
+                        None => {
+                            errors.push(VerifierError::UndeclaredValue(*callee));
+                            value_types.insert(*res, None);
+                        }
+                        Some(Some(TirType::Function(params, ret))) => {
+                            if args.len() != params.len() {
+                                errors.push(VerifierError::GenericError(format!(
+                                    "closure call arity mismatch: expected {}, found {}",
+                                    params.len(),
+                                    args.len()
+                                )));
+                            }
+                            for (arg, expected) in args.iter().zip(params.iter()) {
+                                match value_types.get(arg) {
+                                    None => errors.push(VerifierError::UndeclaredValue(*arg)),
+                                    Some(Some(actual)) if actual != expected => {
+                                        errors.push(VerifierError::TypeMismatch {
+                                            expected: expected.clone(),
+                                            actual: actual.clone(),
+                                        });
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            // Still diagnose undeclared extra arguments on wrong-arity calls.
+                            for arg in args.iter().skip(params.len()) {
+                                if !value_types.contains_key(arg) {
+                                    errors.push(VerifierError::UndeclaredValue(*arg));
+                                }
+                            }
+                            value_types.insert(*res, Some(*ret));
+                        }
+                        Some(Some(other)) => {
+                            errors.push(VerifierError::GenericError(format!(
+                                "cannot call non-function TIR value of type {:?}",
+                                other
+                            )));
+                            value_types.insert(*res, None);
+                        }
+                        Some(None) => {
+                            errors.push(VerifierError::GenericError(
+                                "closure callee type is unresolved".to_string(),
+                            ));
+                            value_types.insert(*res, None);
+                        }
+                    }
+                }
                 TirInstr::Add(res, a, b)
                 | TirInstr::Sub(res, a, b)
                 | TirInstr::Mul(res, a, b)

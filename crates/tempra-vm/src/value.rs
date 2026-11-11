@@ -1,5 +1,15 @@
 use std::fmt;
 use std::rc::Rc;
+use tempra_bytecode::function::{FunctionId, SignatureId};
+
+/// Callable plus ordered captured values. Capture values precede explicit
+/// arguments in the synthesized target's parameter list.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VmClosure {
+    pub function_id: FunctionId,
+    pub signature_id: SignatureId,
+    pub captures: Vec<VmValue>,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum VmValue {
@@ -10,6 +20,8 @@ pub enum VmValue {
     UInt8(u8),
     Float64(f64),
     String(String),
+    /// A first-class typed callable; empty captures require no heap allocation.
+    Closure(VmClosure),
     Enum(String, String, Vec<VmValue>), // enum_name, variant_name, payloads
     Tuple(Vec<VmValue>),
     Array(Rc<Vec<VmValue>>),
@@ -34,6 +46,7 @@ impl VmValue {
             VmValue::UInt8(_) => "UInt8",
             VmValue::Float64(_) => "Float64",
             VmValue::String(_) => "String",
+            VmValue::Closure(_) => "Closure",
             VmValue::Enum(_, _, _) => "Enum",
             VmValue::Tuple(_) => "Tuple",
             VmValue::Array(_) => "Array",
@@ -53,6 +66,7 @@ impl fmt::Display for VmValue {
             VmValue::UInt8(b) => write!(f, "{}", b),
             VmValue::Float64(v) => write!(f, "{}", v),
             VmValue::String(s) => write!(f, "{:?}", s),
+            VmValue::Closure(closure) => write!(f, "<closure @{}>", closure.function_id.0),
             VmValue::Enum(_e, v, payloads) => {
                 if payloads.is_empty() {
                     write!(f, "{}", v)

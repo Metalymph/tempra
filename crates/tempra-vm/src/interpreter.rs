@@ -1,10 +1,10 @@
 use crate::error::VmError;
 use crate::profile::{FunctionProfile, ProfilingState, VmOptions, VmProfile};
-use crate::value::VmValue;
+use crate::value::{VmClosure, VmValue};
 use std::rc::Rc;
 use tempra_bytecode::bytecode::BytecodeModule;
 use tempra_bytecode::constant::BytecodeConstant;
-use tempra_bytecode::function::{BytecodeType, FunctionId};
+use tempra_bytecode::function::{BytecodeSignature, BytecodeType, FunctionId, SignatureId};
 use tempra_bytecode::opcode::BytecodeInstr;
 use tempra_bytecode::verify::verify_module;
 
@@ -785,6 +785,108 @@ impl<'a> Interpreter<'a> {
                     }
                 }
 
+                BytecodeInstr::MakeClosure(target_id, capture_count) => {
+                    let target = self
+                        .module
+                        .functions
+                        .get(target_id.0 as usize)
+                        .ok_or_else(|| VmError::UnknownFunction(target_id.to_string()))?;
+                    let capture_len = usize::from(capture_count);
+                    if capture_len > target.params.len() {
+                        return Err(VmError::WrongArity {
+                            expected: target.params.len() as u16,
+                            found: capture_count,
+                        });
+                    }
+                    // The verifier requires the public signature to be in the
+                    // module table. Resolve it when constructing the value,
+                    // so indirect dispatch only compares compact SignatureIds.
+                    let public_signature = BytecodeSignature {
+                        params: target.params[capture_len..].to_vec(),
+                        ret: target.ret,
+                    };
+                    let signature_id = self
+                        .module
+                        .signatures
+                        .iter()
+                        .position(|signature| signature == &public_signature)
+                        .map(|index| SignatureId(index as u32))
+                        .ok_or_else(|| {
+                            VmError::Message("closure public signature missing from module".into())
+                        })?;
+
+                    let mut captures = Vec::with_capacity(capture_len);
+                    for _ in 0..capture_len {
+                        captures.push(self.pop()?);
+                    }
+                    captures.reverse();
+                    self.push(VmValue::Closure(VmClosure {
+                        function_id: target_id,
+                        signature_id,
+                        captures,
+                    }))?;
+                }
+                BytecodeInstr::CallClosure(signature_id, argc) => {
+                    // Stack contract: [..., callable, arg0, ..., argN].
+                    let mut args = Vec::with_capacity(usize::from(argc));
+                    for _ in 0..argc {
+                        args.push(self.pop()?);
+                    }
+                    args.reverse();
+                    let closure = match self.pop()? {
+                        VmValue::Closure(closure) => closure,
+                        other => {
+                            return Err(VmError::TypeMismatch {
+                                expected: "Closure".into(),
+                                found: other.type_name().into(),
+                            })
+                        }
+                    };
+                    if closure.signature_id != signature_id {
+                        return Err(VmError::TypeMismatch {
+                            expected: format!("Callable(#{})", signature_id.0),
+                            found: format!("Callable(#{})", closure.signature_id.0),
+                        });
+                    }
+                    let (param_count, local_count, max_stack, is_extern) = {
+                        let target = self
+                            .module
+                            .functions
+                            .get(closure.function_id.0 as usize)
+                            .ok_or_else(|| {
+                                VmError::UnknownFunction(closure.function_id.to_string())
+                            })?;
+                        (
+                            target.params.len(),
+                            target.locals.len(),
+                            target.max_stack as usize,
+                            target.is_extern,
+                        )
+                    };
+                    if is_extern {
+                        return Err(VmError::Native(
+                            "indirect calls to native externs are not supported yet".into(),
+                        ));
+                    }
+                    let supplied = closure.captures.len() + args.len();
+                    if supplied != param_count {
+                        return Err(VmError::WrongArity {
+                            expected: param_count as u16,
+                            found: supplied as u16,
+                        });
+                    }
+                    if local_count < supplied {
+                        return Err(VmError::LocalOutOfBounds(local_count as u32));
+                    }
+                    let mut locals = vec![None; local_count];
+                    // Captured parameters are hidden, ordered before the
+                    // explicitly supplied arguments.
+                    for (index, value) in closure.captures.into_iter().chain(args).enumerate() {
+                        locals[index] = Some(value);
+                    }
+                    // Always execute the target in the bytecode VM, never JIT.
+                    self.push_interpreted_frame(closure.function_id, locals, max_stack);
+                }
                 BytecodeInstr::Call(target_id, argc) => {
                     #[cfg(feature = "jit-cranelift")]
                     if self
@@ -959,17 +1061,8 @@ impl<'a> Interpreter<'a> {
                         locals[i as usize] = Some(self.pop()?);
                     }
 
-                    if let Some(ref mut prof) = self.profiling {
-                        prof.stats[target_id.0 as usize].call_count += 1;
-                    }
-
-                    let new_frame = Frame {
-                        function_id: target_id,
-                        ip: 0,
-                        locals,
-                        stack: Vec::with_capacity(target_func.max_stack as usize),
-                    };
-                    self.call_stack.push(new_frame);
+                    let callee_max_stack = target_func.max_stack as usize;
+                    self.push_interpreted_frame(target_id, locals, callee_max_stack);
                 }
 
                 BytecodeInstr::Return => {
@@ -1305,6 +1398,27 @@ impl<'a> Interpreter<'a> {
                 }
             }
         }
+    }
+
+    /// Enters a verified bytecode function using the same frame lifecycle for
+    /// direct and indirect calls. The caller has already populated parameter
+    /// locals and handled native/JIT dispatch where applicable.
+    #[inline]
+    fn push_interpreted_frame(
+        &mut self,
+        function_id: FunctionId,
+        locals: Vec<Option<VmValue>>,
+        max_stack: usize,
+    ) {
+        if let Some(ref mut profiling) = self.profiling {
+            profiling.stats[function_id.0 as usize].call_count += 1;
+        }
+        self.call_stack.push(Frame {
+            function_id,
+            ip: 0,
+            locals,
+            stack: Vec::with_capacity(max_stack),
+        });
     }
 
     #[inline(always)]

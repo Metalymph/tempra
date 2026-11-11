@@ -82,6 +82,7 @@ fn normalize_vm(val: VmValue) -> NormalizedValue {
         VmValue::UInt8(u) => NormalizedValue::UInt8(u),
         VmValue::Float64(f) => NormalizedValue::Float(f),
         VmValue::String(s) => NormalizedValue::String(s),
+        VmValue::Closure(_) => NormalizedValue::Unsupported("vm_closure".into()),
         VmValue::Array(arr) => {
             let inner = arr.iter().map(|v| normalize_vm(v.clone())).collect();
             NormalizedValue::Array(inner)
@@ -617,22 +618,18 @@ fn test_match_non_exhaustive_error() {
 }
 
 #[test]
-fn test_unsupported_closure() {
+fn test_closure_no_capture_is_first_class() {
     let source = r#"
         fn main() -> Int64 {
             let f = fn(x: Int64) -> Int64 { x + 1 }
             return f(10)
         }
     "#;
-    let hir_res = run_source_hir(source, &[]);
-    assert!(
-        hir_res.is_ok(),
-        "HIR should support closures: {:?}",
-        hir_res.err()
-    );
 
-    let vm_res = run_source_vm(source, &[]);
-    assert!(vm_res.is_err(), "VM should have failed for closures");
+    assert_differential(source);
+
+    let result = run_source_vm(source, &[]).expect("capture-free closure must execute on the VM");
+    assert_eq!(result, VmValue::Int64(11));
 }
 
 #[test]

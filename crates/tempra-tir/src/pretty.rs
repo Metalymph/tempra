@@ -114,6 +114,18 @@ pub fn format_instr(instr: &TirInstr) -> String {
         TirInstr::Call(res, func, args) => {
             format!("%{} = call @{} ({})", res.0, func.0, format_args(args))
         }
+        TirInstr::MakeClosure(res, func, captures) => format!(
+            "%{} = make_closure @{} captures ({})",
+            res.0,
+            func.0,
+            format_args(captures)
+        ),
+        TirInstr::CallClosure(res, callee, args) => format!(
+            "%{} = call_closure %{} ({})",
+            res.0,
+            callee.0,
+            format_args(args)
+        ),
         TirInstr::Add(res, a, b) => format!("%{} = add %{}, %{}", res.0, a.0, b.0),
         TirInstr::Sub(res, a, b) => format!("%{} = sub %{}, %{}", res.0, a.0, b.0),
         TirInstr::Mul(res, a, b) => format!("%{} = mul %{}, %{}", res.0, a.0, b.0),

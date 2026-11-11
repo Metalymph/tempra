@@ -1,4 +1,4 @@
-use crate::lower::lower_function;
+use crate::lower::{lower_function, map_type, unmap_type};
 use tempra_hir::*;
 use tempra_span::Span;
 use tempra_tir::builder::ModuleBuilder;
@@ -418,4 +418,179 @@ fn if_missing_return_error() {
     let res = lower_function(&func, &ctx, &mut builder, None, None);
     assert!(res.is_err());
     assert!(res.unwrap_err().to_string().contains("missing return"));
+}
+
+// VM Parity 2A.1: callable signatures must survive HIR <-> TIR conversion.
+#[test]
+fn closure_function_type_roundtrip_including_nested_callable() {
+    let signature = Type::Function(
+        vec![
+            Type::Int64,
+            Type::Function(vec![Type::Bool], Box::new(Type::String)),
+        ],
+        Box::new(Type::Option(Box::new(Type::UInt8))),
+    );
+
+    let mapped = map_type(&signature).expect("function signature must lower to TIR");
+    assert_eq!(
+        mapped,
+        TirType::Function(
+            vec![
+                TirType::Int64,
+                TirType::Function(vec![TirType::Bool], Box::new(TirType::String)),
+            ],
+            Box::new(TirType::Option(Box::new(TirType::UInt8))),
+        )
+    );
+    assert_eq!(
+        unmap_type(&mapped).expect("TIR function signature must map to HIR"),
+        signature
+    );
+}
+
+#[test]
+fn closure_function_type_rejects_unresolved_nested_types() {
+    let bad_parameter = Type::Function(vec![Type::Unknown], Box::new(Type::Unit));
+    assert!(map_type(&bad_parameter).is_err());
+
+    let bad_return = Type::Function(vec![Type::Int64], Box::new(Type::Error));
+    assert!(map_type(&bad_return).is_err());
+}
+
+// VM Parity 2A.5a — HIR closure lowering into verified, deterministic TIR.
+#[test]
+fn lower_capture_free_closure_as_first_class_value() {
+    let span = Span::new(100, 135);
+    let int = || HirType::Named(span, "Int64".to_string());
+    let closure = HirExpression::Closure(HirClosure {
+        span,
+        captures: vec![],
+        parameters: vec![HirParameter {
+            span,
+            name: "x".into(),
+            ty: int(),
+            is_inout: false,
+            kind: tempra_ast::ParameterKind::Runtime,
+        }],
+        return_type: Some(int()),
+        body: HirBlock {
+            span,
+            statements: vec![HirStatement::Expr(HirExpression::Binary(HirBinary {
+                span,
+                left: Box::new(HirExpression::Name(span, "x".into())),
+                op: HirBinaryOp::Add,
+                right: Box::new(HirExpression::Integer(span, "1".into())),
+            }))],
+        },
+    });
+
+    let call = HirExpression::Call(HirCall {
+        span,
+        callee: Box::new(HirExpression::Name(span, "f".into())),
+        type_args: None,
+        args: vec![HirCallArgument::Positional(HirExpression::Integer(
+            span,
+            "10".into(),
+        ))],
+    });
+    let func = create_function(
+        "main",
+        int(),
+        vec![
+            HirStatement::Let(HirLet {
+                span,
+                name: "f".into(),
+                ty: None,
+                value: closure,
+            }),
+            HirStatement::Return(Some(call)),
+        ],
+    );
+    let ctx = create_test_ctx();
+    let mut builder = ModuleBuilder::new();
+    let main = lower_function(&func, &ctx, &mut builder, None, None).unwrap();
+    builder.add_function(main);
+
+    assert!(verify_module(&builder.module).is_ok());
+    assert_eq!(builder.module.functions.len(), 2);
+    let formatted = format_tir_module(&builder.module);
+    assert!(formatted.contains("make_closure @"));
+    assert!(formatted.contains("call_closure %"));
+    assert!(formatted.contains("add %"));
+    assert!(formatted.contains("ret %"));
+    assert!(builder
+        .module
+        .functions
+        .iter()
+        .any(|f| f.name == "main$closure$100$135"));
+}
+
+#[test]
+fn closure_lifting_rejects_explicit_captures() {
+    let span = Span::new(3, 45);
+    let closure = HirExpression::Closure(HirClosure {
+        span,
+        captures: vec![HirCapture::Named(HirCaptureNamed {
+            span,
+            mode: HirCaptureMode::Ref,
+            name: "base".into(),
+        })],
+        parameters: vec![],
+        return_type: Some(HirType::Named(span, "Int64".into())),
+        body: HirBlock {
+            span,
+            statements: vec![HirStatement::Expr(HirExpression::Integer(span, "1".into()))],
+        },
+    });
+    let func = create_function(
+        "main",
+        HirType::Named(span, "Unit".into()),
+        vec![HirStatement::Let(HirLet {
+            span,
+            name: "f".into(),
+            ty: None,
+            value: closure,
+        })],
+    );
+    let ctx = create_test_ctx();
+    let mut builder = ModuleBuilder::new();
+    let err = lower_function(&func, &ctx, &mut builder, None, None).unwrap_err();
+    assert!(err.to_string().contains("captures are not supported"));
+}
+
+#[test]
+fn closure_lifting_is_reproducible() {
+    let span = Span::new(10, 20);
+    let func = create_function(
+        "main",
+        HirType::Named(span, "Unit".into()),
+        vec![HirStatement::Let(HirLet {
+            span,
+            name: "f".into(),
+            ty: None,
+            value: HirExpression::Closure(HirClosure {
+                span,
+                captures: vec![],
+                parameters: vec![],
+                return_type: Some(HirType::Named(span, "Int64".into())),
+                body: HirBlock {
+                    span,
+                    statements: vec![HirStatement::Expr(HirExpression::Integer(
+                        span,
+                        "11".into(),
+                    ))],
+                },
+            }),
+        })],
+    );
+
+    let generate = || {
+        let ctx = create_test_ctx();
+        let mut builder = ModuleBuilder::new();
+        let main = lower_function(&func, &ctx, &mut builder, None, None).unwrap();
+        builder.add_function(main);
+        assert!(verify_module(&builder.module).is_ok());
+        format_tir_module(&builder.module)
+    };
+    assert_eq!(generate(), generate());
 }

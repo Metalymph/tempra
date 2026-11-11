@@ -68,6 +68,8 @@ pub enum EffectDirectOriginKind {
     Make,
     /// A TIR struct construction.
     MakeStruct,
+    /// Allocation of a closure capture environment.
+    ClosureEnvironment,
     /// A conservative may-panic division.
     Division,
     /// A potentially overflowing checked `Int64` addition.
@@ -299,6 +301,9 @@ fn project_witness(
         DirectCapabilitySource::StringConstant => (EffectDirectOriginKind::StringConstant, None),
         DirectCapabilitySource::Make => (EffectDirectOriginKind::Make, None),
         DirectCapabilitySource::MakeStruct => (EffectDirectOriginKind::MakeStruct, None),
+        DirectCapabilitySource::ClosureEnvironment => {
+            (EffectDirectOriginKind::ClosureEnvironment, None)
+        }
         DirectCapabilitySource::Division => (EffectDirectOriginKind::Division, None),
         DirectCapabilitySource::IntegerAddition => (EffectDirectOriginKind::IntegerAddition, None),
         DirectCapabilitySource::IntegerSubtraction => {

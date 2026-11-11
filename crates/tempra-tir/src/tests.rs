@@ -869,3 +869,113 @@ fn struct_field_inference_guard_bounds_deep_dependency_chains() {
         "expected bounded-inference error, got {errors:?}"
     );
 }
+
+// VM Parity 2A.2: typed callable IR gate, independent of bytecode emission.
+#[test]
+fn closure_tir_valid_call_and_capture_signature() {
+    let mut module = ModuleBuilder::new();
+    let mut lambda = module.new_function("$closure$0", TirType::Int64);
+    let block = lambda.new_block();
+    lambda.set_current_block(block);
+    let captured = lambda.add_param(TirType::Int64);
+    let argument = lambda.add_param(TirType::Int64);
+    let sum = lambda.build_add(captured, argument).unwrap();
+    lambda.build_ret(Some(sum)).unwrap();
+    let lambda_id = lambda.func.id;
+    module.add_function(lambda.build());
+
+    let mut main = module.new_function("main", TirType::Int64);
+    let block = main.new_block();
+    main.set_current_block(block);
+    let captured = main.build_const(TirConst::Int64(2)).unwrap();
+    let callable = main.build_make_closure(lambda_id, vec![captured]).unwrap();
+    let input = main.build_const(TirConst::Int64(10)).unwrap();
+    let result = main.build_call_closure(callable, vec![input]).unwrap();
+    main.build_ret(Some(result)).unwrap();
+    module.add_function(main.build());
+
+    let verified = verify_module_with_types(&module.module).unwrap();
+    let main_id = module.function_table["main"];
+    assert_eq!(
+        verified.functions[&main_id][&callable],
+        TirType::Function(vec![TirType::Int64], Box::new(TirType::Int64))
+    );
+    assert_eq!(verified.functions[&main_id][&result], TirType::Int64);
+    let ir = format_tir_module(&module.module);
+    assert!(ir.contains("make_closure"));
+    assert!(ir.contains("call_closure"));
+}
+
+#[test]
+fn closure_tir_rejects_missing_target() {
+    let mut module = ModuleBuilder::new();
+    let mut main = module.new_function("main", TirType::Unit);
+    let block = main.new_block();
+    main.set_current_block(block);
+    main.build_make_closure(TirFunctionId(999), vec![]).unwrap();
+    main.build_ret(None).unwrap();
+    module.add_function(main.build());
+    let errors = verify_module(&module.module).unwrap_err();
+    assert!(errors.contains(&VerifierError::FunctionNotFound(TirFunctionId(999))));
+}
+
+#[test]
+fn closure_tir_rejects_wrong_call_arity_and_argument_type() {
+    let mut module = ModuleBuilder::new();
+    let mut lambda = module.new_function("$closure$1", TirType::Int64);
+    let block = lambda.new_block();
+    lambda.set_current_block(block);
+    let p = lambda.add_param(TirType::Int64);
+    lambda.build_ret(Some(p)).unwrap();
+    let lambda_id = lambda.func.id;
+    module.add_function(lambda.build());
+
+    let mut main = module.new_function("main", TirType::Unit);
+    let block = main.new_block();
+    main.set_current_block(block);
+    let callable = main.build_make_closure(lambda_id, vec![]).unwrap();
+    main.build_call_closure(callable, vec![]).unwrap();
+    let wrong = main.build_const(TirConst::Bool(true)).unwrap();
+    main.build_call_closure(callable, vec![wrong]).unwrap();
+    main.build_ret(None).unwrap();
+    module.add_function(main.build());
+
+    let errors = verify_module(&module.module).unwrap_err();
+    assert!(errors.iter().any(|err| matches!(err,
+        VerifierError::GenericError(message) if message.contains("closure call arity mismatch")
+    )));
+    assert!(errors.contains(&VerifierError::TypeMismatch {
+        expected: TirType::Int64,
+        actual: TirType::Bool,
+    }));
+}
+
+#[test]
+fn closure_tir_rejects_invalid_capture_and_noncallable() {
+    let mut module = ModuleBuilder::new();
+    let mut lambda = module.new_function("$closure$2", TirType::Unit);
+    let block = lambda.new_block();
+    lambda.set_current_block(block);
+    lambda.add_param(TirType::Int64);
+    lambda.build_ret(None).unwrap();
+    let lambda_id = lambda.func.id;
+    module.add_function(lambda.build());
+
+    let mut main = module.new_function("main", TirType::Unit);
+    let block = main.new_block();
+    main.set_current_block(block);
+    let wrong = main.build_const(TirConst::Bool(true)).unwrap();
+    main.build_make_closure(lambda_id, vec![wrong]).unwrap();
+    main.build_call_closure(wrong, vec![]).unwrap();
+    main.build_ret(None).unwrap();
+    module.add_function(main.build());
+
+    let errors = verify_module(&module.module).unwrap_err();
+    assert!(errors.contains(&VerifierError::TypeMismatch {
+        expected: TirType::Int64,
+        actual: TirType::Bool,
+    }));
+    assert!(errors.iter().any(|err| matches!(err,
+        VerifierError::GenericError(message) if message.contains("non-function")
+    )));
+}

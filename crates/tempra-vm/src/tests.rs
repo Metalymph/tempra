@@ -608,6 +608,8 @@ fn opcode_ids_are_unique_and_within_bounds() {
             tempra_bytecode::function::LocalId(0),
             tempra_bytecode::constant::ConstId(0),
         ),
+        BytecodeInstr::MakeClosure(FunctionId(0), 0),
+        BytecodeInstr::CallClosure(tempra_bytecode::function::SignatureId(0), 0),
     ];
 
     for instr in samples {
@@ -833,4 +835,156 @@ fn vm_float64_comparisons_and_negation_preserve_ieee_754() {
         }
         other => panic!("expected Float64, got {other:?}"),
     }
+}
+
+#[test]
+fn vm_closure_no_captures_dispatches_and_returns() {
+    use tempra_bytecode::function::BytecodeSignature;
+
+    let mut module = BytecodeModule::new();
+    let signature = module.intern_signature(BytecodeSignature {
+        params: vec![BytecodeType::Int64],
+        ret: BytecodeType::Int64,
+    });
+    let one = module.add_constant(BytecodeConstant::Int64(1));
+    let ten = module.add_constant(BytecodeConstant::Int64(10));
+
+    let mut lambda = BytecodeFunction::new(
+        "lambda".into(),
+        vec![BytecodeType::Int64],
+        BytecodeType::Int64,
+    );
+    lambda.locals = lambda.params.clone();
+    lambda.max_stack = 2;
+    lambda.code = vec![
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::ConstI64(one),
+        BytecodeInstr::AddI64,
+        BytecodeInstr::Return,
+    ];
+    let target = module.add_function(lambda);
+
+    let mut main = BytecodeFunction::new("main".into(), vec![], BytecodeType::Int64);
+    main.max_stack = 2;
+    main.code = vec![
+        BytecodeInstr::MakeClosure(target, 0),
+        BytecodeInstr::ConstI64(ten),
+        BytecodeInstr::CallClosure(signature, 1),
+        BytecodeInstr::Return,
+    ];
+    module.add_function(main);
+
+    assert_eq!(
+        run_function(&module, "main", vec![]).unwrap(),
+        VmValue::Int64(11)
+    );
+}
+
+#[test]
+fn vm_closure_capture_order_and_repeat_calls() {
+    use tempra_bytecode::function::BytecodeSignature;
+
+    let mut module = BytecodeModule::new();
+    let signature = module.intern_signature(BytecodeSignature {
+        params: vec![BytecodeType::Int64],
+        ret: BytecodeType::Int64,
+    });
+    let seven = module.add_constant(BytecodeConstant::Int64(7));
+    let ten = module.add_constant(BytecodeConstant::Int64(10));
+
+    let mut lambda = BytecodeFunction::new(
+        "lambda".into(),
+        vec![BytecodeType::Int64, BytecodeType::Int64],
+        BytecodeType::Int64,
+    );
+    lambda.locals = lambda.params.clone();
+    lambda.max_stack = 2;
+    lambda.code = vec![
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::LoadLocal(LocalId(1)),
+        BytecodeInstr::AddI64,
+        BytecodeInstr::Return,
+    ];
+    let target = module.add_function(lambda);
+
+    let mut main = BytecodeFunction::new("main".into(), vec![], BytecodeType::Int64);
+    main.locals = vec![BytecodeType::Callable(signature)];
+    main.max_stack = 3;
+    main.code = vec![
+        BytecodeInstr::ConstI64(seven),
+        BytecodeInstr::MakeClosure(target, 1),
+        BytecodeInstr::StoreLocal(LocalId(0)),
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::ConstI64(ten),
+        BytecodeInstr::CallClosure(signature, 1),
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::ConstI64(ten),
+        BytecodeInstr::CallClosure(signature, 1),
+        BytecodeInstr::AddI64,
+        BytecodeInstr::Return,
+    ];
+    module.add_function(main);
+
+    assert_eq!(
+        run_function(&module, "main", vec![]).unwrap(),
+        VmValue::Int64(34)
+    );
+}
+
+#[test]
+fn vm_closure_as_function_parameter() {
+    use tempra_bytecode::function::BytecodeSignature;
+
+    let mut module = BytecodeModule::new();
+    let signature = module.intern_signature(BytecodeSignature {
+        params: vec![BytecodeType::Int64],
+        ret: BytecodeType::Int64,
+    });
+    let one = module.add_constant(BytecodeConstant::Int64(1));
+    let ten = module.add_constant(BytecodeConstant::Int64(10));
+
+    let mut lambda = BytecodeFunction::new(
+        "lambda".into(),
+        vec![BytecodeType::Int64],
+        BytecodeType::Int64,
+    );
+    lambda.locals = lambda.params.clone();
+    lambda.max_stack = 2;
+    lambda.code = vec![
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::ConstI64(one),
+        BytecodeInstr::AddI64,
+        BytecodeInstr::Return,
+    ];
+    let lambda_id = module.add_function(lambda);
+
+    let mut apply = BytecodeFunction::new(
+        "apply".into(),
+        vec![BytecodeType::Callable(signature), BytecodeType::Int64],
+        BytecodeType::Int64,
+    );
+    apply.locals = apply.params.clone();
+    apply.max_stack = 2;
+    apply.code = vec![
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::LoadLocal(LocalId(1)),
+        BytecodeInstr::CallClosure(signature, 1),
+        BytecodeInstr::Return,
+    ];
+    let apply_id = module.add_function(apply);
+
+    let mut main = BytecodeFunction::new("main".into(), vec![], BytecodeType::Int64);
+    main.max_stack = 2;
+    main.code = vec![
+        BytecodeInstr::MakeClosure(lambda_id, 0),
+        BytecodeInstr::ConstI64(ten),
+        BytecodeInstr::Call(apply_id, 2),
+        BytecodeInstr::Return,
+    ];
+    module.add_function(main);
+
+    assert_eq!(
+        run_function(&module, "main", vec![]).unwrap(),
+        VmValue::Int64(11)
+    );
 }

@@ -1,6 +1,7 @@
 use crate::error::BytecodeLowerError;
 use std::collections::HashMap;
 use tempra_bytecode::constant::BytecodeConstant;
+use tempra_bytecode::function::{BytecodeSignature, SignatureId};
 use tempra_bytecode::opcode::stack_effect;
 use tempra_bytecode::*;
 use tempra_tir::ir::*;
@@ -12,6 +13,34 @@ pub fn lower_tir_module(module: &TirModule) -> Result<BytecodeModule, BytecodeLo
     let mut bc_module = BytecodeModule::new();
     let mut ordered_functions: Vec<_> = module.functions.iter().collect();
     ordered_functions.sort_by_key(|function| function.id.0);
+
+    // VM Parity 2A.5b: canonical pre-interning of callable signatures.
+    // Signatures are interned in sorted function / SSA value order, NEVER in
+    // HashMap iteration order. This preserves K2 reproducibility guarantees.
+    for tir_func in &ordered_functions {
+        for (_, ty) in &tir_func.params {
+            intern_tir_type(ty, &mut bc_module)?;
+        }
+        intern_tir_type(&tir_func.return_type, &mut bc_module)?;
+        for block in &tir_func.blocks {
+            for instr in &block.instrs {
+                match instr {
+                    TirInstr::Slot(_, ty) | TirInstr::Make(_, ty, _, _) => {
+                        intern_tir_type(ty, &mut bc_module)?;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if let Some(types) = verified.functions.get(&tir_func.id) {
+            let mut values: Vec<_> = types.iter().collect();
+            values.sort_by_key(|(id, _)| id.0);
+            for (_, ty) in values {
+                intern_tir_type(ty, &mut bc_module)?;
+            }
+        }
+    }
+
     let mut function_ids = HashMap::with_capacity(ordered_functions.len());
 
     // First pass: assign bytecode identities in canonical TIR identity order.
@@ -19,9 +48,9 @@ pub fn lower_tir_module(module: &TirModule) -> Result<BytecodeModule, BytecodeLo
         let params = tir_func
             .params
             .iter()
-            .map(|(_, ty)| map_type(ty))
+            .map(|(_, ty)| map_type(ty, &bc_module))
             .collect::<Result<Vec<_>, _>>()?;
-        let ret = map_type(&tir_func.return_type)?;
+        let ret = map_type(&tir_func.return_type, &bc_module)?;
         let mut bc_func = BytecodeFunction::new(tir_func.name.clone(), params, ret);
         bc_func.is_extern = tir_func.is_extern;
         let bytecode_id = bc_module.add_function(bc_func);
@@ -62,9 +91,9 @@ fn lower_function(
     let params = tir_func
         .params
         .iter()
-        .map(|(_, ty)| map_type(ty))
+        .map(|(_, ty)| map_type(ty, bc_module))
         .collect::<Result<Vec<_>, _>>()?;
-    let ret = map_type(&tir_func.return_type)?;
+    let ret = map_type(&tir_func.return_type, bc_module)?;
 
     let mut bc_func = BytecodeFunction::new(tir_func.name.clone(), params, ret);
     bc_func.is_extern = tir_func.is_extern;
@@ -118,7 +147,8 @@ impl<'a> FunctionLowerer<'a> {
         // 1. Map parameters to locals (0..N)
         for (i, (val_id, ty)) in self.tir_func.params.iter().enumerate() {
             self.value_to_local.insert(*val_id, LocalId(i as u32));
-            self.value_types.insert(*val_id, map_type(ty)?);
+            self.value_types
+                .insert(*val_id, map_type(ty, self.bc_module)?);
         }
         let mut next_local = self.tir_func.params.len() as u32;
 
@@ -127,7 +157,7 @@ impl<'a> FunctionLowerer<'a> {
             for instr in &block.instrs {
                 if let TirInstr::Slot(id, ty) = instr {
                     self.slot_to_local.insert(*id, LocalId(next_local));
-                    self.slot_types.insert(*id, map_type(ty)?);
+                    self.slot_types.insert(*id, map_type(ty, self.bc_module)?);
                     next_local += 1;
                 }
             }
@@ -152,7 +182,7 @@ impl<'a> FunctionLowerer<'a> {
         // Map params types
         for (val_id, ty) in &self.tir_func.params {
             if let Some(local) = self.value_to_local.get(val_id) {
-                local_types[local.0 as usize] = map_type(ty)?;
+                local_types[local.0 as usize] = map_type(ty, self.bc_module)?;
             }
         }
 
@@ -174,7 +204,7 @@ impl<'a> FunctionLowerer<'a> {
                 if let Some(id) = get_instr_res_id(instr) {
                     let inferred = match self.verified_value_types.and_then(|types| types.get(&id))
                     {
-                        Some(ty) => map_type(ty)?,
+                        Some(ty) => map_type(ty, self.bc_module)?,
                         None => self.infer_instr_res_type(instr)?,
                     };
                     self.value_types.insert(id, inferred);
@@ -388,6 +418,70 @@ impl<'a> FunctionLowerer<'a> {
                 }
             }
             TirInstr::Slot(_, _) => {}
+            TirInstr::MakeClosure(res, func_id, captures) => {
+                let target = self.function_ids.get(func_id).copied().ok_or(
+                    BytecodeLowerError::MissingFunctionMapping {
+                        caller: self.tir_func.id,
+                        target: *func_id,
+                    },
+                )?;
+                let count = u16::try_from(captures.len()).map_err(|_| {
+                    BytecodeLowerError::UnsupportedInstr("closure capture count exceeds u16".into())
+                })?;
+                for capture in captures {
+                    self.load_val(*capture)?;
+                }
+                self.emit(BytecodeInstr::MakeClosure(target, count));
+                self.store_res(*res)?;
+            }
+            TirInstr::CallClosure(res, callee, args) => {
+                let signature_id = match self.value_types.get(callee).copied() {
+                    Some(BytecodeType::Callable(id)) => id,
+                    Some(other) => {
+                        return Err(BytecodeLowerError::UnsupportedInstr(format!(
+                            "indirect call requires a typed callable, found {:?}",
+                            other
+                        )));
+                    }
+                    None => {
+                        return Err(BytecodeLowerError::UnknownValue(format!("%{}", callee.0)));
+                    }
+                };
+                let signature = self
+                    .bc_module
+                    .signatures
+                    .get(signature_id.0 as usize)
+                    .ok_or_else(|| {
+                        BytecodeLowerError::UnsupportedInstr(format!(
+                            "missing callable signature #{}",
+                            signature_id.0
+                        ))
+                    })?;
+                if args.len() != signature.params.len() {
+                    return Err(BytecodeLowerError::UnsupportedInstr(format!(
+                        "indirect call arity mismatch: expected {}, found {}",
+                        signature.params.len(),
+                        args.len()
+                    )));
+                }
+                let returns_value = signature.ret != BytecodeType::Unit;
+                let argc = u16::try_from(args.len()).map_err(|_| {
+                    BytecodeLowerError::UnsupportedInstr(
+                        "closure argument count exceeds u16".into(),
+                    )
+                })?;
+                // Stack contract: callable first, then arguments left-to-right.
+                self.load_val(*callee)?;
+                for arg in args {
+                    self.load_val(*arg)?;
+                }
+                self.emit(BytecodeInstr::CallClosure(signature_id, argc));
+                if !returns_value {
+                    // Like static Call, TIR always defines a result, even for Unit.
+                    self.emit(BytecodeInstr::ConstUnit);
+                }
+                self.store_res(*res)?;
+            }
             TirInstr::Make(res, ty, variant, args) => {
                 for arg in args {
                     self.load_val(*arg)?;
@@ -692,7 +786,9 @@ fn get_instr_res_id(instr: &TirInstr) -> Option<TirValueId> {
         | TirInstr::And(id, _, _)
         | TirInstr::Or(id, _, _)
         | TirInstr::Not(id, _)
-        | TirInstr::Call(id, _, _) => Some(*id),
+        | TirInstr::Call(id, _, _)
+        | TirInstr::MakeClosure(id, _, _)
+        | TirInstr::CallClosure(id, _, _) => Some(*id),
         TirInstr::Make(id, _, _, _)
         | TirInstr::MakeStruct(id, _, _)
         | TirInstr::Get(id, _, _)
@@ -709,7 +805,26 @@ fn get_instr_res_id(instr: &TirInstr) -> Option<TirValueId> {
     }
 }
 
-fn map_type(ty: &TirType) -> Result<BytecodeType, BytecodeLowerError> {
+/// Intern a TIR type using stable, structural first-use order.
+fn intern_tir_type(
+    ty: &TirType,
+    module: &mut BytecodeModule,
+) -> Result<BytecodeType, BytecodeLowerError> {
+    if let TirType::Function(params, ret) = ty {
+        let params = params
+            .iter()
+            .map(|param| intern_tir_type(param, module))
+            .collect::<Result<Vec<_>, _>>()?;
+        let ret = intern_tir_type(ret, module)?;
+        return Ok(BytecodeType::Callable(
+            module.intern_signature(BytecodeSignature { params, ret }),
+        ));
+    }
+    map_type(ty, module)
+}
+
+/// Map only previously interned callable signatures; never assign an ID here.
+fn map_type(ty: &TirType, module: &BytecodeModule) -> Result<BytecodeType, BytecodeLowerError> {
     match ty {
         TirType::Unit => Ok(BytecodeType::Unit),
         TirType::Bool => Ok(BytecodeType::Bool),
@@ -725,6 +840,31 @@ fn map_type(ty: &TirType) -> Result<BytecodeType, BytecodeLowerError> {
         TirType::Struct(_) => Ok(BytecodeType::Any),
         TirType::Enum(_) => Ok(BytecodeType::Any),
         TirType::UInt8 => Ok(BytecodeType::UInt8),
+        TirType::Function(params, ret) => {
+            let mapped_params = params
+                .iter()
+                .map(|param| map_type(param, module))
+                .collect::<Result<Vec<_>, _>>()?;
+            let mapped_ret = map_type(ret, module)?;
+            let signature = BytecodeSignature {
+                params: mapped_params,
+                ret: mapped_ret,
+            };
+            let index = module
+                .signatures
+                .iter()
+                .position(|known| known == &signature)
+                .ok_or_else(|| {
+                    BytecodeLowerError::UnsupportedType(format!(
+                        "callable signature was not interned: {:?}",
+                        ty
+                    ))
+                })?;
+            let id = u32::try_from(index).map_err(|_| {
+                BytecodeLowerError::UnsupportedType("too many callable signatures".into())
+            })?;
+            Ok(BytecodeType::Callable(SignatureId(id)))
+        }
         _ => Err(BytecodeLowerError::UnsupportedType(format!("{:?}", ty))),
     }
 }

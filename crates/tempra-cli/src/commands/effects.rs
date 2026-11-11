@@ -109,6 +109,7 @@ fn origin_kind_name(kind: EffectDirectOriginKind) -> &'static str {
         EffectDirectOriginKind::StringConstant => "string_constant",
         EffectDirectOriginKind::Make => "make",
         EffectDirectOriginKind::MakeStruct => "make_struct",
+        EffectDirectOriginKind::ClosureEnvironment => "closure_environment",
         EffectDirectOriginKind::Division => "division",
         EffectDirectOriginKind::IntegerAddition => "integer_addition",
         EffectDirectOriginKind::IntegerSubtraction => "integer_subtraction",

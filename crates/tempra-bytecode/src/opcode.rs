@@ -1,7 +1,7 @@
 use crate::bytecode::BytecodeModule;
 use crate::constant::ConstId;
 use crate::error::BytecodeError;
-use crate::function::{BytecodeFunction, BytecodeType, FunctionId, LocalId};
+use crate::function::{BytecodeFunction, BytecodeType, FunctionId, LocalId, SignatureId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InstrOffset(pub usize);
@@ -60,6 +60,10 @@ pub enum BytecodeInstr {
 
     // Calls
     Call(FunctionId, u16), // ID, argc
+    /// Target function ID, followed by the number of captured values on stack.
+    MakeClosure(FunctionId, u16),
+    /// The stack contains the callable followed by arguments (left to right).
+    CallClosure(SignatureId, u16), // expected signature, argc
 
     // Enum-like
     MakeEnum(ConstId, ConstId, u16), // enum_name, variant_name, payload_count
@@ -86,7 +90,7 @@ pub enum BytecodeInstr {
     AddI64LC(LocalId, ConstId), // LoadLocal a; ConstI64 b; AddI64
 }
 
-pub const BYTECODE_OPCODE_COUNT: usize = 53;
+pub const BYTECODE_OPCODE_COUNT: usize = 55;
 
 impl BytecodeInstr {
     pub fn opcode_id(&self) -> usize {
@@ -144,6 +148,8 @@ impl BytecodeInstr {
             BytecodeInstr::ArrayPush => 50,
             BytecodeInstr::AddI64LL(_, _) => 51,
             BytecodeInstr::AddI64LC(_, _) => 52,
+            BytecodeInstr::MakeClosure(_, _) => 53,
+            BytecodeInstr::CallClosure(_, _) => 54,
         }
     }
 
@@ -202,6 +208,8 @@ impl BytecodeInstr {
             BytecodeInstr::ArrayPush => "ArrayPush",
             BytecodeInstr::AddI64LL(_, _) => "AddI64LL",
             BytecodeInstr::AddI64LC(_, _) => "AddI64LC",
+            BytecodeInstr::MakeClosure(_, _) => "MakeClosure",
+            BytecodeInstr::CallClosure(_, _) => "CallClosure",
         }
     }
 }
@@ -256,6 +264,48 @@ pub fn stack_effect(
         BytecodeInstr::Return => {
             let pops = if func.ret == BytecodeType::Unit { 0 } else { 1 };
             StackEffect { pops, pushes: 0 }
+        }
+        BytecodeInstr::MakeClosure(id, capture_count) => {
+            let target = module
+                .functions
+                .get(id.0 as usize)
+                .ok_or(BytecodeError::InvalidFunctionId(*id))?;
+            if *capture_count as usize > target.params.len() {
+                return Err(BytecodeError::Message(format!(
+                    "closure capture count {} exceeds function parameter count {}",
+                    capture_count,
+                    target.params.len()
+                )));
+            }
+            StackEffect {
+                pops: *capture_count,
+                pushes: 1,
+            }
+        }
+        BytecodeInstr::CallClosure(signature_id, argc) => {
+            let signature = module
+                .signatures
+                .get(signature_id.0 as usize)
+                .ok_or_else(|| {
+                    BytecodeError::Message(format!(
+                        "invalid callable signature ID #{}",
+                        signature_id.0
+                    ))
+                })?;
+            if usize::from(*argc) != signature.params.len() {
+                return Err(BytecodeError::Message(format!(
+                    "closure arity mismatch: expected {}, found {}",
+                    signature.params.len(),
+                    argc
+                )));
+            }
+            let pops = argc
+                .checked_add(1)
+                .ok_or_else(|| BytecodeError::Message("too many indirect-call operands".into()))?;
+            StackEffect {
+                pops,
+                pushes: u16::from(signature.ret != BytecodeType::Unit),
+            }
         }
         BytecodeInstr::Call(id, argc) => {
             let target = module

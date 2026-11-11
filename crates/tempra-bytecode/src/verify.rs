@@ -1,6 +1,8 @@
 use crate::bytecode::BytecodeModule;
 use crate::constant::ConstId;
-use crate::function::{BytecodeFunction, BytecodeType, FunctionId, LocalId};
+use crate::function::{
+    BytecodeFunction, BytecodeSignature, BytecodeType, FunctionId, LocalId, SignatureId,
+};
 use crate::opcode::{stack_effect, BytecodeInstr};
 use std::collections::{HashMap, VecDeque};
 use thiserror::Error;
@@ -9,6 +11,12 @@ use thiserror::Error;
 pub enum BytecodeVerifyError {
     #[error("invalid function id: @{0}")]
     InvalidFunctionId(FunctionId),
+
+    #[error("invalid callable signature id: #{0:?}")]
+    InvalidSignatureId(SignatureId),
+
+    #[error("missing closure signature for function @{0}")]
+    MissingClosureSignature(FunctionId),
 
     #[error("invalid constant id: #{0}")]
     InvalidConstId(ConstId),
@@ -76,7 +84,25 @@ impl VerificationState {
     }
 }
 
+fn verify_callable_type(
+    module: &BytecodeModule,
+    ty: BytecodeType,
+) -> Result<(), BytecodeVerifyError> {
+    if let BytecodeType::Callable(id) = ty {
+        if module.signatures.get(id.0 as usize).is_none() {
+            return Err(BytecodeVerifyError::InvalidSignatureId(id));
+        }
+    }
+    Ok(())
+}
+
 pub fn verify_module(module: &BytecodeModule) -> Result<(), BytecodeVerifyError> {
+    for signature in &module.signatures {
+        for param in &signature.params {
+            verify_callable_type(module, *param)?;
+        }
+        verify_callable_type(module, signature.ret)?;
+    }
     for i in 0..module.functions.len() {
         verify_function(module, FunctionId(i as u32))?;
     }
@@ -99,6 +125,14 @@ pub fn verify_function_direct(
     module: &BytecodeModule,
     func: &BytecodeFunction,
 ) -> Result<(), BytecodeVerifyError> {
+    for ty in func
+        .params
+        .iter()
+        .chain(func.locals.iter())
+        .chain(std::iter::once(&func.ret))
+    {
+        verify_callable_type(module, *ty)?;
+    }
     if func.code.is_empty() {
         return Ok(());
     }
@@ -139,6 +173,12 @@ pub fn verify_function_direct(
         let mut current_pc = pc;
         while current_pc < func.code.len() {
             let instr = &func.code[current_pc];
+
+            // Resolve signature IDs before stack effects so malformed bytecode
+            // receives a structured error rather than a generic instruction error.
+            if let BytecodeInstr::CallClosure(signature_id, _) = instr {
+                verify_callable_type(module, BytecodeType::Callable(*signature_id))?;
+            }
 
             // Check stack underflow and type safety
             let effect = stack_effect(instr, module, func)
@@ -316,6 +356,71 @@ pub fn verify_function_direct(
                 }
                 BytecodeInstr::Unreachable => {
                     break; // End of path
+                }
+                BytecodeInstr::MakeClosure(target_id, capture_count) => {
+                    let target = module
+                        .functions
+                        .get(target_id.0 as usize)
+                        .ok_or(BytecodeVerifyError::InvalidFunctionId(target_id))?;
+                    let hidden_count = usize::from(capture_count);
+                    if hidden_count > target.params.len() {
+                        return Err(BytecodeVerifyError::Message(format!(
+                            "closure has {} captures but target accepts {} parameters",
+                            hidden_count,
+                            target.params.len()
+                        )));
+                    }
+                    let public_signature = BytecodeSignature {
+                        params: target.params[hidden_count..].to_vec(),
+                        ret: target.ret,
+                    };
+                    let signature_index = module
+                        .signatures
+                        .iter()
+                        .position(|signature| signature == &public_signature)
+                        .ok_or(BytecodeVerifyError::MissingClosureSignature(target_id))?;
+                    for expected in target.params[..hidden_count].iter().rev() {
+                        let found = state.pop_ty()?;
+                        if found != *expected {
+                            return Err(BytecodeVerifyError::StackTypeMismatch {
+                                expected: *expected,
+                                found,
+                            });
+                        }
+                    }
+                    state
+                        .stack
+                        .push(BytecodeType::Callable(SignatureId(signature_index as u32)));
+                }
+                BytecodeInstr::CallClosure(signature_id, argc) => {
+                    let signature = module
+                        .signatures
+                        .get(signature_id.0 as usize)
+                        .ok_or(BytecodeVerifyError::InvalidSignatureId(signature_id))?;
+                    if usize::from(argc) != signature.params.len() {
+                        return Err(BytecodeVerifyError::Message(format!(
+                            "indirect call expects {} arguments, found {}",
+                            signature.params.len(),
+                            argc
+                        )));
+                    }
+                    for expected in signature.params.iter().rev() {
+                        let found = state.pop_ty()?;
+                        if found != *expected {
+                            return Err(BytecodeVerifyError::StackTypeMismatch {
+                                expected: *expected,
+                                found,
+                            });
+                        }
+                    }
+                    let found = state.pop_ty()?;
+                    let expected = BytecodeType::Callable(signature_id);
+                    if found != expected {
+                        return Err(BytecodeVerifyError::StackTypeMismatch { expected, found });
+                    }
+                    if signature.ret != BytecodeType::Unit {
+                        state.stack.push(signature.ret);
+                    }
                 }
                 BytecodeInstr::Call(id, argc) => {
                     let target = module

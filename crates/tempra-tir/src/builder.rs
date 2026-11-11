@@ -392,6 +392,29 @@ impl FunctionBuilder {
         Ok(id)
     }
 
+    /// Construct a callable referencing a function and its captured values.
+    /// Captured values become the leading parameters of the target function.
+    pub fn build_make_closure(
+        &mut self,
+        target: TirFunctionId,
+        captures: Vec<TirValueId>,
+    ) -> Result<TirValueId, TirBuildError> {
+        let id = self.next_value();
+        self.push_instr(TirInstr::MakeClosure(id, target, captures))?;
+        Ok(id)
+    }
+
+    /// Call a function value, checked against its TIR function signature.
+    pub fn build_call_closure(
+        &mut self,
+        callee: TirValueId,
+        args: Vec<TirValueId>,
+    ) -> Result<TirValueId, TirBuildError> {
+        let id = self.next_value();
+        self.push_instr(TirInstr::CallClosure(id, callee, args))?;
+        Ok(id)
+    }
+
     pub fn build_slot(
         &mut self,
         ty: TirType,

@@ -86,6 +86,15 @@ pub fn disassemble_function(
             BytecodeInstr::JumpIfFalse(off) => out.push_str(&format!("JumpIfFalse {}\n", off.0)),
             BytecodeInstr::Return => out.push_str("Return\n"),
             BytecodeInstr::Unreachable => out.push_str("Unreachable\n"),
+            BytecodeInstr::MakeClosure(id, captures) => {
+                out.push_str(&format!("MakeClosure @{} captures={}\n", id.0, captures));
+            }
+            BytecodeInstr::CallClosure(signature_id, argc) => {
+                out.push_str(&format!(
+                    "CallClosure signature=#{} argc={}\n",
+                    signature_id.0, argc
+                ));
+            }
             BytecodeInstr::Call(id, argc) => {
                 let target = module.functions.get(id.0 as usize);
                 let name = target.map(|f| f.name.as_str()).unwrap_or("unknown");

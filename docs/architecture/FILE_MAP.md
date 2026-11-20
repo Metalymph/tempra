@@ -1,112 +1,232 @@
-# Tempra Repository File Map
+# Tempra — Repository & Documentation File Map
 
-This index points to current source-of-truth files. A crate's presence in the workspace does not imply production completeness.
+**Documentation revision:** v0.2 — 2026-11-16
+**Purpose:** directory navigation and responsibility ownership; **not** an implementation or feature-completeness certificate.
+**Source baseline:** repository `Metalymph/tempra`, GitHub `main` tree inspected on 2026-11-16. Paths may differ on the local `feature/k5-compiler-timings` branch.
 
-## Project documentation
+## 1. How to use this index
 
-- `README.md`: project overview and current high-level status.
-- `docs/roadmap.md`: authoritative milestone sequencing, statuses, dependencies and acceptance gates. It records E and K1–K4 history with K3 IN PROGRESS, K4 DONE and K5/K6 PLANNED; semantic E → R → M → M5 (gate for C) → C → V; first-class milestone A (native AOT) with Cranelift as the initial backend; O, standalone experimental RC-free research (NR, never blocks A) and P as need-based work; and conditional U.
-- `docs/TEMPRA_SURFACE_SPEC_v0.1.md`: current surface-language reference.
-- `docs/GRAMMAR.md`: parser-oriented grammar for implemented syntax.
-- `docs/specs/effects-v0.1.md`: implemented E1–E6 capability contracts/tooling, current enforcement and conditional U boundary.
-- `docs/E1_CAPABILITY_ANALYSIS.md`: implemented analysis, integration, contracts and E6 projection boundaries.
-- `docs/TIR_SPEC.md`: TIR model, verifier role, and analysis insertion point.
-- `docs/architecture/ARCHITECTURE.md`: actual compiler paths and crate boundaries.
-- `docs/architecture/PIPELINE.md`: current default and experimental data flow.
-- `docs/DEV_GUIDE.md`: contributor workflow.
-- `docs/TOOLING.md`: current CLI diagnostics and LSP behavior.
+This map answers *where should I inspect or change a specific part of Tempra?* It does not redefine syntax, effects, borrowing or memory. Use the following authority order:
 
-`docs/specs/syntax-v0.1.md` is an early historical sketch. It is not authoritative where it conflicts with the surface spec or grammar. Phase-numbered JIT, VM, and lowering documents are implementation records for their named prototypes, not the current language roadmap.
+1. [Memory & Ownership v0.4](../Tempra_Memory_Ownership_v0.4.md) is the **only normative memory model**.
+2. [Surface Syntax v0.2](../TEMPRA_SURFACE_SPEC_v0.2.md) and [Grammar](../GRAMMAR.md) define the documented source surface; explicitly open actor/receiver forms are not assumed implemented.
+3. [Comptime](../COMPTIME_SPEC.md), [Capability Contracts](../specs/effects-v0.1.md) and [Specialized Effects v0.2](../specs/specialized-effects-v0.2.md) define their respective semantic domains.
+4. [Architecture](ARCHITECTURE.md), [Pipeline](PIPELINE.md) and compiler/VM documents describe implementation boundaries, not a second language semantics.
+5. [Roadmap](../roadmap.md) governs work ordering and reported milestone status, not the behavior of a legal program.
 
-## Frontend and semantic analysis
+`docs/README.md` is the documentation index and authority map. This file is a **source navigation companion** for implementers.
 
-- `crates/tempra-lexer/src/`: tokens and lexical analysis.
-- `crates/tempra-parser/src/`: recursive-descent parsing.
-- `crates/tempra-ast/src/`: source-shaped AST definitions.
-- `crates/tempra-hir/src/hir.rs`: HIR definitions.
-- `crates/tempra-hir/src/lower.rs`: AST-to-HIR lowering.
-- `crates/tempra-typeck/src/check_file.rs`: file-level typechecking coordination.
-- `crates/tempra-typeck/src/check_item.rs`, `check_stmt.rs`, `check_expr.rs`: item, statement, and expression checking.
-- `crates/tempra-typeck/src/context.rs`: semantic context and collected facts.
+## 2. Documentation tree
 
-## Driver and execution
+The following describes the approved consolidated layout. Files revised in this documentation series are intended to replace their former versions **under the same current paths** unless named otherwise. Archived paths and proposals are documented separately. The exact local tree should be checked before the PR.
 
-- `crates/tempra-cli/src/app.rs`: CLI definitions and command dispatch.
-- `crates/tempra-cli/src/commands/`: implemented runtime, frontend tooling, TIR emission and fresh effect-inspection commands.
-- `crates/tempra-driver/src/pipeline.rs`: default HIR interpreter and experimental VM orchestration.
-- `crates/tempra-driver/src/config.rs`: explicit file/module compilation inputs and executable-relative standard-library discovery.
-- `crates/tempra-driver/src/compilation.rs`: private verify/analyze/enforce/bytecode boundary and public immutable `VmCompilation` product for fresh compilation.
-- `crates/tempra-driver/src/contracts.rs`: canonical conversion (including the sole pure expansion), distinct deny/pure provenance and compilation-local contract binding.
-- `crates/tempra-driver/src/enforcement.rs`: contract/summary intersection, structured violations with E1 witnesses, and typed invariant failures.
-- `crates/tempra-driver/src/effect_tooling.rs`: immutable E6 diagnostic/inspection projection keyed by TIR IDs.
-- `crates/tempra-driver/src/module_graph.rs`: filesystem module loading, import resolution from supplied roots, ordering, and cycle detection.
-- `crates/tempra-driver/src/build.rs`, `install.rs`: incomplete build and install scaffolds.
-- `crates/tempra-interpreter/src/comptime.rs`: canonical K1.1 comptime session facade, configuration and typed boundary errors.
-- `crates/tempra-interpreter/src/arithmetic.rs`: interpreter-only checked `UInt8` division adapter.
-- `crates/tempra-interpreter/src/`: default HIR evaluator and runtime value representation.
+```text
+docs/
+├── README.md
+├── Tempra_Memory_Ownership_v0.4.md
+├── TEMPRA_SURFACE_SPEC_v0.2.md
+├── GRAMMAR.md
+├── COMPTIME_SPEC.md
+├── TIR_SPEC.md
+├── TIR_LOWERING.md
+├── TIR_TO_BYTECODE.md
+├── TIR_INTERP.md
+├── BYTECODE_ISA.md
+├── BYTECODE_VM.md
+├── BYTECODE_CACHE.md
+├── VM_COVERAGE.md
+├── VM_PERF_BASELINE.md
+├── STDLIB.md
+├── STDLIB_TUTORIAL.md
+├── TYPES_TUTORIAL.md
+├── TOOLING.md
+├── E1_CAPABILITY_ANALYSIS.md
+├── K4_SPECIALIZED_EFFECTS_GATE.md
+├── DEV_GUIDE.md
+├── roadmap.md
+├── architecture/
+│   ├── ARCHITECTURE.md
+│   ├── PIPELINE.md
+│   └── FILE_MAP.md
+├── specs/
+│   ├── effects-v0.1.md
+│   ├── specialized-effects-v0.2.md
+│   ├── module-system-v0.1.md
+│   └── pattern_matching_v1.md
+├── roadmap/
+│   ├── Tempra Script.md
+│   ├── status.md
+│   ├── migration.md
+│   ├── k5.md
+│   ├── release-gates.md
+│   └── formal-verification.md
+├── editor/
+│   ├── README.md
+│   ├── neovim.md
+│   ├── vscode.md
+│   └── zed.md
+├── cli/                            # local layout; confirm tracked files
+├── proposals/
+│   └── INDENTATION_SYNTAX_PROPOSAL_v0.1.md
+└── archive/
+    ├── jit/
+    ├── syntax/
+    └── effects/
+```
 
-## TIR and experimental VM
+`docs/proposals/` contains **non-normative exploration**. The indentation/Python-style proposal is not a change to the canonical parser syntax, and no runtime, AST or ownership behavior is implied by its presence.
 
-- `crates/tempra-tir/src/ir.rs`: TIR IDs, types, instructions, blocks, functions, and modules.
-- `crates/tempra-tir/src/builder.rs`: deterministic TIR construction and function table.
-- `crates/tempra-tir/src/verifier.rs`: structural and type verification.
-- `crates/tempra-tir-lower/src/lower.rs`: typed-HIR-to-TIR lowering for the supported subset.
-- `crates/tempra-tir-interp/src/`: focused TIR interpreter used for validation.
-- `crates/tempra-bytecode/src/`: bytecode model, verifier, cache format, and profiling support.
-- `crates/tempra-bytecode-lower/src/`: TIR-to-bytecode lowering.
-- `crates/tempra-vm/src/`: experimental bytecode VM.
-- `crates/tempra-jit-cranelift/src/`: opt-in Cranelift JIT for eligible VM functions.
+`docs/archive/` contains preserved history. The reviewed archival candidates include the original `CRANELIFT_JIT.md`, `JIT_BURNIN.md`, `JIT_HEAP_BOUNDARY.md`, `JIT_PHASE_17_CLOSURE.md`, `specs/syntax-v0.1.md` and `specs/specialized-effects-v0.1.md`. Later superseded copies may also be retained there. Do not treat an archived document as current or restore obsolete links without redirecting them to the active specification.
 
-## Standard library and native boundary
+## 3. Frontend: source to typed HIR
 
-- `std/`: Tempra declarations for standard modules and extern functions.
-- `crates/tempra-native/src/registry.rs`: native extern registry and lookup.
-- `crates/tempra-native/src/std/`: implemented filesystem, path, strings, and console I/O externs.
-- `crates/tempra-stdlib/`: legacy placeholder; new standard-library work belongs in `std/` and `tempra-native`.
+| Path (relative to repo root) | Responsibility | Status on inspected `main` |
+| --- | --- | --- |
+| `crates/tempra-lexer/src/` | Tokens, lexical spans | Present |
+| `crates/tempra-parser/src/` | Source grammar and parsing | Present |
+| `crates/tempra-ast/src/` | AST item/expression/type structures | Present |
+| `crates/tempra-hir/src/hir.rs` | HIR nodes | Present |
+| `crates/tempra-hir/src/lower.rs` | AST → HIR lowering | Present |
+| `crates/tempra-typeck/src/check_file.rs` | File-level typing coordination | Present |
+| `crates/tempra-typeck/src/check_item.rs` | Item declarations, interfaces, methods | Present |
+| `crates/tempra-typeck/src/check_stmt.rs` | Statements and local binding checks | Present |
+| `crates/tempra-typeck/src/check_expr.rs` | Expression type checking | Present |
+| `crates/tempra-typeck/src/context.rs` | Typed semantic context | Present |
+| `crates/tempra-typeck/src/types.rs` | Type definitions/helpers | Present |
+| `crates/tempra-typeck/src/pattern.rs` | Pattern analysis | Present |
+| `crates/tempra-typeck/src/result_obligations.rs` | Result/value-use obligations | Present |
+| `crates/tempra-typeck/src/projection.rs` | Associated-type projection | Present |
 
-## Diagnostics and tooling
+**Memory work:** the v0.4 type/borrow checker belongs in semantic/compiler analysis, not in a separate user-visible ownership language and not as an implementation-specific VM hack. The listed current typecheck files **do not by themselves prove** nonduplicability, borrow provenance, no-cycle safety or complete ownership enforcement.
 
-- `crates/tempra-diagnostics/src/lib.rs`: structured diagnostics, labels, notes, spans, and JSON conversion.
-- `crates/tempra-analysis/src/lib.rs`: editor-oriented semantic analysis over driver/frontend data.
-- `crates/tempra-lsp/src/server.rs`: active LSP server implementation.
+## 4. Driver: compilation orchestration and contracts
 
-## Capability analysis
+| Path | Responsibility |
+| --- | --- |
+| `crates/tempra-driver/src/pipeline.rs` | HIR execution / experimental VM path orchestration |
+| `crates/tempra-driver/src/compilation.rs` | Fresh verify → analyze → enforce → bytecode boundary; compilation products |
+| `crates/tempra-driver/src/config.rs` | Explicit compilation configuration and executable-relative `std/` root discovery |
+| `crates/tempra-driver/src/module_graph.rs` | Module loading/import graph and resolution |
+| `crates/tempra-driver/src/contracts.rs` | Source contract normalization and concrete function binding |
+| `crates/tempra-driver/src/enforcement.rs` | Broad/specialized deny enforcement and typed violations |
+| `crates/tempra-driver/src/specialized_matching.rs` | Specialized-effect matching |
+| `crates/tempra-driver/src/effect_tooling.rs` | E6 diagnostics/inspection projection |
+| `crates/tempra-driver/src/cache.rs` | VM cache integration |
+| `crates/tempra-driver/src/build.rs` | Build scaffold; not proof of completed native compiler |
+| `crates/tempra-driver/src/install.rs` | Install scaffold; not proof of production distribution |
 
-- `crates/tempra-effects/src/capability.rs`: internal capability identifiers and compact stable set representation.
-- `crates/tempra-effects/src/analysis.rs`: pure TIR scan, call graph, fixed-point propagation, structured errors, and witness reconstruction.
-- `crates/tempra-effects/src/externs.rs`: called-extern classification for the current native registry.
+The driver is the owner of compiler-wide enforcement and explicit compilation inputs. It must not route around contracts by selecting a backend lacking a required analyzer. The accepted `CompilationConfig` stdlib root is an input; no implicit cwd discovery belongs in module resolution.
 
-## Incomplete and planned middle-end/backend crates
+## 5. TIR, analysis, bytecode and Tempra Script VM
 
-- `crates/tempra-mir/`: MIR scaffold; lowering is not implemented.
-- `crates/tempra-ir/`: small generic IR scaffold, separate from the active TIR path.
-- `crates/tempra-opt/`: optimization scaffold for O and preparatory NR analyses; ARC and escape work are not implemented language guarantees.
-- `crates/tempra-runtime/src/arithmetic.rs`: public shared checked `Int64` contract and typed arithmetic failures used across runtime backends.
-- `crates/tempra-runtime/`: shared runtime contracts and support.
-- `crates/tempra-backend-cranelift/`: native AOT scaffold and initial backend direction for milestone A, distinct from the experimental JIT.
-- `crates/tempra-backend-wasm/`: dedicated Wasm backend scaffold.
-- `crates/tempra-wasm-host/`, `crates/tempra-component-host/`: Wasm hosting scaffolds, not compiler backends.
-- `crates/tempra-linker/`: linker scaffold.
+| Path | Responsibility | Qualification |
+| --- | --- | --- |
+| `crates/tempra-tir/src/ir.rs` | Typed TIR IDs, functions, CFG blocks and instructions | Structural IR; v0.4 representation still to be designed/verified |
+| `crates/tempra-tir/src/builder.rs` | TIR construction / stable function identities | Presence does not guarantee generic/ownership coverage |
+| `crates/tempra-tir/src/verifier.rs` | Structural/typed TIR checking | Not a certified v0.4 borrow checker |
+| `crates/tempra-tir/src/pretty.rs` | Readable TIR output | Inspection only |
+| `crates/tempra-tir-lower/src/lower.rs` | Typed HIR → TIR | Subset coverage; unsupported constructs fail |
+| `crates/tempra-tir-interp/src/` | Narrow TIR micro-interpreter | Tests/validation, not an Tempra Script general runtime |
+| `crates/tempra-effects/src/capability.rs` | Capability vocabulary and sets | Compiler-internal types |
+| `crates/tempra-effects/src/analysis.rs` | Per-function direct/transitive effects, graph and witnesses | Verified-TIR-surface scope |
+| `crates/tempra-effects/src/operations.rs` | Specialized operation vocabulary | Compiler-owned taxonomy |
+| `crates/tempra-effects/src/facts.rs` | Specialized analysis facts | No extra independent effects analyzer |
+| `crates/tempra-effects/src/externs.rs` | Classification of native calls | Must match registry metadata |
+| `crates/tempra-bytecode-lower/src/lower.rs` | TIR → stack bytecode | Typed opcode selection and relocation |
+| `crates/tempra-bytecode-lower/src/peephole.rs` | Local bytecode optimization | Must preserve ownership/effects |
+| `crates/tempra-bytecode/src/opcode.rs` | Bytecode opcode enum | ISA's implementation authority for exact variants |
+| `crates/tempra-bytecode/src/verify.rs` | Stack bytecode verifier | Does not yet certify v0.4 ownership |
+| `crates/tempra-bytecode/src/serialize.rs` | Serialized cache/artifact format | Cache format version separate from semantic revision |
+| `crates/tempra-vm/src/interpreter.rs` | Stack VM dispatch | Experimental on inspected `main`; Tempra Script target |
+| `crates/tempra-vm/src/value.rs` | VM value representation | Current Rust representation ≠ normative Tempra memory model |
+| `crates/tempra-vm/src/profile.rs` | Counters and VM profiling | Hotness is telemetry; no future JIT promotion |
 
-## Phase E ownership
+**Identity invariant:** `TirFunctionId` must not be conflated with a vector index or bytecode function position; the lowering is responsible for a deterministic explicit mapping.
 
-E1 added `crates/tempra-effects/`, depending only on `tempra-tir`. It owns the internal capability vocabulary, sets, per-function summaries, direct discovery, call graph, fixed-point propagation, structured analysis errors, and deterministic provenance.
+## 6. Current comptime and shared runtime
 
-E2 integrates analysis only in fresh VM compilations, retaining the typed result
-in `VmCompilation`. Cache hits, TIR emission/interpreter and HIR paths remain
-independent. E3.1 adds syntax-only AST/HIR contracts and driver-owned declaration
-metadata exposed by `VmCompilation::contract`/`contracts`. E3.2 adds driver
-enforcement before bytecode, semantic cache fingerprinting, and explicit rejection
-of annotated execution on HIR/REPL/source-TIR paths using the shared HIR presence
-scan. E4 adds AST/HIR `pure_span`, driver-only expansion into effective denied sets,
-and pure detection in that same scan; E3.2 enforcement and the cache fingerprint
-are unchanged. E6 adds immutable driver projections and `tempra effects` without
-changing analysis or enforcement. E1–E6 complete the currently meaningful
-surface, not all TIR coverage; instruction-level source mapping remains absent.
-The K1 audit selected the HIR interpreter kernel and added its canonical
-comptime facade; K1 and K2 are complete, K3 runtime parity is IN PROGRESS for
-currently executable surfaces, K4 specialized effects are DONE, and K5/K6
-responsiveness is PLANNED. Unsafe belongs to standalone conditional U, not the
-immediate E sequence.
-Frontend-only `check` does not certify contracts. The historical E5 audit and
-its three correctness debts are recorded in `docs/E1_CAPABILITY_ANALYSIS.md`.
+| Path | Responsibility |
+| --- | --- |
+| `crates/tempra-interpreter/src/comptime.rs` | Historical canonical K1 HIR-evaluator facade, fuel, mode and boundary handling |
+| `crates/tempra-interpreter/src/` | HIR interpreter, evaluator and values; historical default execution path |
+| `crates/tempra-interpreter/src/arithmetic.rs` | Interpreter-side numeric compatibility helpers |
+| `crates/tempra-runtime/src/arithmetic.rs` | Shared checked numeric semantics and errors |
+| `crates/tempra-runtime/src/` | Runtime support shared by covered consumers |
+
+**TARGET:** migrate comptime to the Tempra Script VM **only after** the dedicated [Comptime](../COMPTIME_SPEC.md) parity gate. This does not mean deleting `tempra-interpreter` now: its current comptime authority and HIR-reference testing must be retained until verified replacements exist.
+
+## 7. Standard library and native extern boundary
+
+| Path | Responsibility |
+| --- | --- |
+| `std/` | `.tmpr` standard-library declarations (`fs`, `io`, `path`, `strings`, …) |
+| `crates/tempra-native/src/registry.rs` | Native callable registry |
+| `crates/tempra-native/src/std/fs.rs` | Filesystem externs |
+| `crates/tempra-native/src/std/io.rs` | Console/stream I/O externs |
+| `crates/tempra-native/src/std/path.rs` | Path externs |
+| `crates/tempra-native/src/std/strings.rs` | Strings externs |
+| `crates/tempra-stdlib/` | Existing placeholder/legacy crate on inspected tree; verify before deletion |
+
+An extern declared in `std/` is not evidence of a fully implemented native API. The registry, effect classifier, ownership/cancellation rules and runtime tests must agree. External pointer/FFI rules remain subject to Memory v0.4; `@unsafe` does not currently authorize arbitrary public raw access.
+
+## 8. CLI, tooling and editor integrations
+
+| Path | Responsibility |
+| --- | --- |
+| `crates/tempra-cli/src/app.rs` | CLI command/argument definitions |
+| `crates/tempra-cli/src/commands/` | `run`, frontend checks, IR/effect inspection and other implemented commands |
+| `crates/tempra-repl/` | REPL integration |
+| `crates/tempra-analysis/src/lib.rs` | Analysis adapters for editors/tools |
+| `crates/tempra-diagnostics/src/lib.rs` | Structured diagnostics, labels/spans, JSON projection |
+| `crates/tempra-lsp/src/server.rs` | Language server |
+| `docs/TOOLING.md` | Tooling contract/documentation (not an implementation file) |
+| `docs/editor/` | Editor setup guides |
+
+Frontend-only `check` is **not** the current capability/memory execution certificate. Tooling must not silently claim greater analysis coverage than the driver actually establishes.
+
+## 9. Incomplete backends, scaffolds and retired components
+
+| Path | Inspected `main` state | Target handling |
+| --- | --- | --- |
+| `crates/tempra-mir/` | Scaffold | Design optional lower IR only if justified; no implemented production path claimed |
+| `crates/tempra-ir/` | Generic IR scaffold | Distinct from active TIR |
+| `crates/tempra-opt/` | Optimization scaffold | Ownership/escape/reuse passes require proven facts |
+| `crates/tempra-backend-wasm/` | Wasm codegen scaffold | Dedicated Wasm/WASI future track |
+| `crates/tempra-wasm-host/` | Wasm host scaffold | Runtime hosting, **not** Wasm emission |
+| `crates/tempra-component-host/` | Component host scaffold | Separate from compiler backend |
+| `crates/tempra-linker/` | Linker scaffold | Future verified native output |
+| `crates/tempra-jit-cranelift/` | Legacy JIT code still present on remote `main` | **Remove** in separate implementation cleanup; archive docs |
+| `crates/tempra-backend-cranelift/` | Legacy native-backend scaffold still present on remote `main` | **Remove** in separate implementation cleanup; **not** Tempra Native's backend |
+
+**Tempra Native LLVM AOT:** approved future direction, **not** represented as a verified/implemented LLVM backend crate on the inspected repository tree. Do not invent `crates/tempra-backend-llvm/` as an existing path. Tempra Native's zero-GC/ARC objective is not proven and must not be presented as a shipping guarantee.
+
+JIT and Cranelift historical prototype notes belong in `docs/archive/jit/`. Merely moving documentation **does not remove Cargo dependencies, feature flags, CLI switches, tests or CI references**; that work is separate.
+
+## 10. Where to make upcoming changes
+
+| Goal | Primary starting point | Required reading |
+| --- | --- | --- |
+| Reconcile surface grammar | `tempra-parser`, `tempra-ast`, `tempra-hir` | Surface v0.2 and Grammar |
+| Implement `ref`, `inout`, `consume`, nonduplicable resources | `tempra-typeck`, `tempra-hir`, `tempra-tir`, VM runtime | Memory v0.4; avoid VM-only safety semantics |
+| Add ownership-aware verifier | `tempra-tir/src/verifier.rs`, lowering and bytecode verifier | Memory v0.4 and TIR Spec |
+| Fix specialization function ID mapping | `tempra-driver`, `tempra-tir`, `tempra-bytecode-lower` | K2/reproducibility and cache rules |
+| Extend capability classification | `tempra-effects` and `tempra-native` | Effects and K4 ledger |
+| Improve Tempra Script stack execution | `tempra-vm`, `tempra-bytecode-lower` | Bytecode VM/ISA; benchmark before optimization |
+| Move `comptime` to VM | `tempra-typeck`, `tempra-interpreter/comptime.rs`, VM | Comptime Spec and K1 parity obligations |
+| Record K5/K6 | `docs/roadmap/k5.md` and benchmark harness | Exact commit/environment/raw data, no invented speedups |
+| Remove JIT/Cranelift implementation | Cargo workspace, JIT/Cranelift crates, CLI/tests/CI/Just recipes | Dedicated code-removal PR; keep history archived |
+| Develop Tempra Native | New backend design, only after requirements/gates | LLVM AOT target, Memory v0.4; no assumed RC-free proof |
+
+## 11. Repository maintenance and verification
+
+Before merging the unified documentation PR:
+
+1. Pin the **actual** base commit on `feature/k5-compiler-timings` or its replacement branch and inspect its files; this map was verified against `main`.
+2. Confirm that revised docs are present under their intended paths; update `docs/README.md` links from old Surface Syntax v0.1 to v0.2 and refresh archive references.
+3. Check all relative Markdown links (including links from nested `architecture/`, `roadmap/`, `archive/` and `proposals/` directories).
+4. Validate referenced source paths with `git ls-files`; archive changes can affect historical relative links.
+5. Run compiler and driver regression suites before changing status labels. No result from a historical test report certifies a later feature branch.
+6. Document which memory-v0.4 obligations are still *specified only*, which are implemented, and which have evidence of parity or formal proof.
+7. Keep roadmap snapshot/version semantics/cache labels truthful; record actual K5 measurements from the active branch before claiming performance.
+
+**Index invariant:** a file path identifies code or documentation to inspect; it does not prove implementation completeness or authorize conflicting language behavior.

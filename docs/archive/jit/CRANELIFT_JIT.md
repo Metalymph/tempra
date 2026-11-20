@@ -26,12 +26,12 @@ The prototype currently supports an `Int64 + internal Bool + Heap Read-Only Subs
 - **Arithmetic**: `Add`, `Sub`, `Mul`, `Div` (signed).
 - **Comparisons**: `Eq`, `Lt`, `Gt`.
 - **Boolean Logic**: `Not`, `And`, `Or` (logical/bitwise).
-- **Control Flow**: 
+- **Control Flow**:
     - Conditional branches (`JumpIfFalse`).
     - Unconditional jumps (`Jump`).
     - Recursive and iterative loops.
     - Deeply nested `if-else` and `else-if` chains.
-- **Function Calls (v1)**: 
+- **Function Calls (v1)**:
     - Static `Call` to other JIT-eligible Int64 functions.
     - Automatic pre-compilation of dependencies.
 - **Superinstructions**:

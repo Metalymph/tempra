@@ -1,58 +1,175 @@
-# TIR to Bytecode Lowering
+# Tempra — TIR to Bytecode Lowering
 
-This document describes the strategy used to translate Tempra Intermediate Representation (TIR) into stack-based bytecode.
+**Version:** v0.2 (documentation consolidation)
+**Status:** Existing SSA-like TIR → stack-bytecode strategy, with future ownership-aware obligations explicitly identified.
+**Authority:** [Memory & Ownership v0.4](Tempra_Memory_Ownership_v0.4.md) governs semantic correctness. This document is not evidence that all v0.4 rules are implemented.
 
-## Lowering Strategy
+## 1. Place in the pipeline
 
-The current lowering strategy prioritizes **correctness and simplicity** over performance. It follows a "pragmatic" approach suitable for the initial bootstrap phases.
+```text
+Source → Typed HIR → TIR → TIR verification
+       → Bytecode lowering → Bytecode verification → Tempra Script VM
+```
 
-### 1. Persistent Value Materialization (SSA to Locals)
-TIR is an SSA-like representation where values are explicitly named (e.g., `%0`, `%1`). To avoid complex stack scheduling or register allocation, every `TirValueId` is mapped to a dedicated bytecode **local variable**.
+The initial implementation prioritises a simple, auditable mapping instead of whole-program stack scheduling. A source feature may be accepted by the parser/type checker but unsupported by TIR or bytecode lowering. This must produce a controlled diagnostic; it must **never** silently fall back to the HIR interpreter after a semantic, capability or verifier failure.
 
-- **Production**: When an instruction produces a result (e.g., `%2 = add %0 %1`), the lowerer emits the instruction and immediately stores the result into its corresponding local slot (`StoreLocal tmp2`).
-- **Consumption**: When a value is used as an operand, it is loaded from its local slot (`LoadLocal tmpX`).
+The current remote `main` snapshot may still default to HIR execution. The planned VM-first promotion requires parity gates. No JIT or Cranelift backend belongs to the target execution pipeline.
 
-This approach ensures that values are always available, regardless of stack depth or use order, at the cost of many `StoreLocal`/`LoadLocal` pairs.
+## 2. Persistent values: SSA-like IDs → bytecode locals
 
-### 2. Stack Machine Mapping
-TIR instructions map directly to their bytecode counterparts:
-- `Const` -> `ConstI64`, `ConstU64`, `ConstF64`, `ConstBool`, etc.
-- `Add`, `Sub`, `Mul`, `Div` -> the opcode matching the verified numeric type:
-  `AddI64`/`AddU64`/`AddF64`, and likewise for the other arithmetic operations.
-- `Eq` -> `Eq` for comparable values.
-- `Lt`, `Gt` -> `LtI64`/`GtI64`, `LtU64`/`GtU64` or `LtF64`/`GtF64` according
-  to the verified operand type.
-- `Call` -> `Call`.
+Each `TirValueId` is assigned a bytecode temporary local:
 
-### Numeric opcode selection
+1. **Produce:** emit instructions for the TIR producer, then `StoreLocal(temp)`.
+2. **Use:** emit `LoadLocal(temp)` before the consuming operation.
+3. **Return:** load the result local, then `Return` (or return directly when equivalent).
+4. **Parameters:** initialized in the function entry; their identity is not assumed to match an unrelated function index.
 
-Lowering consumes `verify_module_with_types`; verified TIR types are
-authoritative. This prevents `UInt64` or `Float64` arithmetic from being emitted
-with `Int64` opcodes when source literals or inferred types do not carry enough
-information. The verifier rejects arithmetic with unsupported or unresolved
-numeric types before any bytecode is emitted. `UInt8` arithmetic is not expanded
-in TIR lowering; it is rejected rather than silently reinterpreted as `Int64`.
-The bytecode format and generic `Eq` opcode are unchanged.
+This yields redundant loads and stores but makes scheduling and debugging straightforward. In the **legacy v0 physical design**, a load may be repeated. Under **Memory v0.4**, repetition is only valid if it preserves semantic value independence, resource ownership and borrowing constraints. Loading a nonduplicable resource twice is **not** a licence to create two owners.
 
-`UInt64` has no reachable source construction path today: integer literals are
-typed as `Int64` and there is no implemented numeric conversion constructor.
-Its checked contract is therefore validated at the TIR, bytecode and VM
-boundaries rather than claimed as source-level parity. `Float64` literals and
-unary negation are reachable from source.
+`TirSlotId` for explicit mutable slots maps to a distinct local range from temporaries. Source immutability and `inout` exclusivity must be preserved through the mapping.
 
-### 3. Control Flow & Jump Patching
-Lowering is performed block-by-block. 
-- **Labels**: Each `TirBlock` corresponds to a starting offset in the bytecode.
-- **Relocation**: Branch instructions (`Br`, `CondBr`) are emitted with placeholder offsets.
-- **Fixup**: After all blocks are lowered, the lowerer performs a second pass to patch the placeholder offsets with the actual bytecode addresses of the target blocks.
+### 2.1 Demonstration
 
-### 4. Memory Slots
-`TirSlotId` (explicit memory slots used for mutable variables) are mapped to a separate range of bytecode locals, distinct from the temporary locals used for SSA values.
+```text
+TIR:
+    %0 = load $a
+    %1 = load $b
+    %2 = add.i64 %0, %1
+    ret %2
 
-## Unsupported Instructions (v0)
-The following TIR instructions are NOT supported in v0 and will cause a `BytecodeLowerError`:
-- `Make`, `Get`, `Set` (Struct/Tuple operations).
-- `Tag`, `Unwrap` (Enum operations).
+Bytecode schematic:
+    LoadLocal a
+    StoreLocal tmp0
+    LoadLocal b
+    StoreLocal tmp1
+    LoadLocal tmp0
+    LoadLocal tmp1
+    AddI64
+    StoreLocal tmp2
+    LoadLocal tmp2
+    Return
+```
 
-## Future Optimizations (Phase 13.6+)
-The current lowering generates redundant bytecode (e.g., `StoreLocal X` followed immediately by `LoadLocal X`). These will be optimized away in future phases using a **peephole optimizer** or a more sophisticated stack-tracking lowerer.
+This is illustrative. The actual lowerer can omit unnecessary temporaries after verified optimisation.
+
+## 3. Typed instruction selection
+
+The lowerer **consumes verified TIR type information**, not the apparent source spelling of a literal.
+
+| TIR operation | Bytecode families |
+|---|---|
+| `Const` | `ConstUnit`, `ConstBool`, `ConstI64`, `ConstU64`, `ConstF64`, `ConstString` |
+| `Add`, `Sub`, `Mul`, `Div` | Matching `I64`, `U64` or `F64` typed arithmetic |
+| `Lt`, `Gt` | Matching `LtI64/GtI64`, `LtU64/GtU64` or `LtF64/GtF64` |
+| `Eq` | `Eq`, only for permitted comparable types |
+| `Call` | `Call` with verified target and arity |
+| `Ret` | Return according to verified signature |
+| `Br`, `CondBr` | `Jump`, `JumpIfFalse`, with patching |
+| Enum/tuple/array/string operations | Only implemented opcode families verified for their type and ownership semantics |
+
+The original v0 lowerer used `verify_module_with_types` to prevent unsigned or float operations from being emitted as signed `Int64`. This remains mandatory. Unsupported or unresolved numeric types are rejected rather than coerced.
+
+The historical snapshot reports that `UInt8` arithmetic is not expanded by TIR lowering. `UInt64` bytecode/VM arithmetic has dedicated checked semantics, although source-level reachability may be narrower. Reachability must be verified against the active branch before a release claim.
+
+**Arithmetic guarantees:** checked `Int64`/`UInt64` operations report controlled failures; `Float64` preserves IEEE 754, including signed zero and NaN. Numeric type selection is not an optimisation hint.
+
+## 4. Control-flow blocks and relocation
+
+Lowering proceeds block-by-block:
+
+1. Assign each TIR block a symbolic label.
+2. Emit instructions for the block, recording its start offset.
+3. Emit branches with relocation placeholders.
+4. After code emission, patch branch operands to verified target instruction boundaries.
+5. Verify stack depth, type consistency, reachability and valid terminators.
+
+The translator must not accidentally attach a source `TirFunctionId` to a different position in the bytecode function table. Specialization IDs and physical indices must remain separate and deterministic.
+
+`if`, loops, `match`, early return and `Result` propagation must preserve CFG and evaluation order. `?` lowers through ordinary `Result` branching/unwrapping; it does not introduce exceptions.
+
+## 5. Existing v0 coverage versus historical restrictions
+
+The original `TIR_TO_BYTECODE.md` described `Make/Get/Set` (struct/tuple) and `Tag/Unwrap` (enum) as unsupported and listed peephole optimisation as future work. **That list was tied to an early bootstrap stage and is not a valid description of every later VM phase.**
+
+Other current repository docs describe subsequent ADT, array, tuple, index, pattern and peephole work. Therefore:
+
+- Do not restore the old blanket `Unsupported Instructions (v0)` list as current truth.
+- A construct may be *documented as present* at VM level while its current HIR → TIR → bytecode path remains incomplete.
+- Use a branch-specific coverage ledger and regression tests to establish which sources are executable today.
+- Unsupported lowering must fail deterministically with a useful diagnostic.
+
+See [VM_COVERAGE.md](VM_COVERAGE.md), [TIR_LOWERING.md](TIR_LOWERING.md) and [BYTECODE_VM.md](BYTECODE_VM.md). They also require branch-aligned review.
+
+## 6. Ownership-aware lowering obligations — v0.4, not certified as implemented
+
+The source checker, typed TIR and lowerer must collectively preserve these contracts:
+
+| Semantic event | Required verified behaviour |
+|---|---|
+| Passing a duplicable value | Original stays semantically valid; independent copy semantics |
+| Last-use physical move | Permitted only if observationally equivalent |
+| Explicit `consume` | Ownership transfers and source becomes unusable |
+| Nonduplicable resource | One owner; no implicit duplicate through local loads, `Dup`, call or closure |
+| `ref` access | Valid owner, shared read-only loan, non-owning |
+| `inout` access | Exclusive mutating loan and no incompatible simultaneous access |
+| `Slice(T)` | Borrowed, read-only; does not extend owner lifetime |
+| `inout Slice(T)` | Exclusive write access to underlying elements |
+| `Range` | Owned independent descriptor; bounds checked when applied |
+| Closure environment | Explicit `ref`, `inout`, `consume`; recursive `fn[self]` cannot create a strong owner cycle |
+| Async suspension | No live dynamic borrow crosses `.await()` |
+| Exit/error/cancellation | Proper ownership cleanup; no double destruction or use-after-release |
+
+No concrete new opcode names are assigned here. The final mechanism may use explicit instructions, ownership-typed operands, verifier metadata, or a combination. The verifier must have enough normalized facts to reject an incorrect lowering; it must not rely on an undocumented optimizer convention.
+
+In particular, **replacing `StoreLocal(tmp); LoadLocal(tmp)`** is only legal when it does not change ownership transfer, copy effects, borrower lifetime, diagnostics or resource cleanup.
+
+## 7. Effects, specializations and module boundaries
+
+`@deny` and `@pure` constraints are established by compiler-owned semantic facts on supported paths; lowering must not bypass them. For `@deny(alloc)`, possible physical allocations from semantic copies or compacting buffers cannot be dismissed because one backend *might* optimise them away.
+
+For imported functions and specializations, the contract must be available at the boundary through verified summaries. Modifying semantics or specialization identity can invalidate dependent caches.
+
+If a bytecode cache artifact lacks sufficient trust to prove newly added ownership or effect obligations, reject the hit and recompile; **do not** assume old verified bytes imply current semantic correctness.
+
+## 8. Optimisation policy
+
+The bootstrap translator emits deliberately redundant `LoadLocal` and `StoreLocal` instructions. The VM documentation records later conservative peephole optimisation for generated temporaries and optional superinstructions. Treat that as an implementation optimisation, not a change to the source language.
+
+Required guards:
+
+- Apply transformations only to verified instruction ranges with adjusted branch targets.
+- Re-run the relevant bytecode verifier after rewriting.
+- Keep user-visible local/debug semantics consistent.
+- Reject or roll back an invalid optimisation without executing unverified bytecode.
+- Preserve effects and ownership facts; structural stack verification alone is not enough for v0.4.
+
+AOT LLVM may optimise representations independently; it must satisfy the same language-level memory/effect semantics.
+
+## 9. Comptime migration
+
+On the documented K1 baseline, `comptime` is executed by the HIR interpreter before runtime TIR emission. The future VM-based evaluator must preserve semantics for compile-time branches, specialization, errors, effect restrictions, deterministic fuel/call-depth and memory invariants.
+
+A compile-time VM evaluator is not automatically available merely because runtime bytecode executes; it must support evaluation during type checking before a complete runtime TIR module necessarily exists.
+
+## 10. Validation matrix
+
+| Gate | Minimum validation |
+|---|---|
+| Numeric typing | Signed/unsigned/float opcode matches checked TIR |
+| CFG | All forward/backward targets patched to instruction boundaries |
+| Function identity | Specialization and call targets deterministic |
+| Stack/locals | Init-before-load, arity and merge checks pass |
+| ADT/collection | Only supported typed operations lower; unsupported fail closed |
+| Result | Propagation, early return, controlled failures preserved |
+| Ownership | Copy/move/consume, exclusivity, provenance and cleanup verified |
+| Effects | Deny/pure contracts survive compilation and cache hits |
+| Reproducibility | Same supported inputs/build/options produce canonical artifacts |
+| Backend parity | VM and future LLVM AOT agree on observable semantics |
+
+The ownership row describes a **future gate**, not a passed implementation milestone.
+
+## 11. Status and next review
+
+The currently accessible source is the GitHub `main` snapshot, not the local `feature/k5-compiler-timings` branch. Before merging the documentation PR, compare this specification with the active `tempra-bytecode-lower` and verifier implementations, record the exact tested commit and revise any remaining historical status statements.
+
+**Principle:** the lowering stage schedules and encodes computation; it does not define who owns memory.

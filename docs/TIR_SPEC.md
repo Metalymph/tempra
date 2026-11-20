@@ -1,172 +1,193 @@
-# TIR Specification (v0.1)
+# Tempra Intermediate Representation (TIR) — Specification v0.2
 
-## Overview
-TIR (Tempra Intermediate Representation) is the core representation designed to be strongly typed, verifiable, readable, serializable, and backend-friendly. It serves as the bridge between Tempra's frontend (HIR) and various backend execution strategies.
+**Status:** Consolidated technical specification. Existing TIR v0 capabilities are documented separately from the **approved but not implemented** Memory & Ownership v0.4 obligations. This is not a claim of completed ownership verification.
 
-**Current Stage**: Phase 12 - TIR Bootstrap.
-The goal of this phase is to establish the minimal data model and verification logic for TIR without completely removing the existing HIR interpreter. 
+**Authorities:** [Memory & Ownership v0.4](Tempra_Memory_Ownership_v0.4.md) is the sole normative memory model; [Surface Syntax v0.2](TEMPRA_SURFACE_SPEC_v0.2.md) defines the language surface; [Capability Contracts](specs/effects-v0.1.md) and [Specialized Effects v0.2](specs/specialized-effects-v0.2.md) govern effects. This document governs TIR structural representation and verification within those constraints.
 
-## Non-Goals
-- Complete virtual machine execution (currently).
-- High-performance definitive bytecode.
-- Cranelift or Wasm backends.
-- Advanced optimization passes.
-- JIT compilation.
-- Removing the current HIR interpreter.
+## 1. Purpose
 
-## Pipeline
-`Source -> AST -> HIR -> Typeck -> TIR -> TIR verification -> analyses -> VM / Compiler`
+TIR is Tempra's typed, explicit, verifiable intermediate representation. Its principal uses are:
 
-The HIR interpreter remains the default runtime. TIR generation is used by experimental VM and inspection paths and supports a smaller language subset.
+- a stable semantic boundary between typed HIR and executable lowering;
+- a carrier for typed operations, control flow and per-function analysis facts;
+- input to the Tempra Script bytecode pipeline and future LLVM-based Tempra Native AOT;
+- a readable debugging/inspection representation;
+- a validation target for the limited TIR micro-interpreter.
 
-E2 inserts capability analysis after TIR verification in fresh VM compilations,
-retaining the TIR and facts. E1 remains a pure TIR analyzer. TIR emission and
-interpretation verify without capability analysis; cache hits and HIR paths do
-not construct an E2 analysis product.
+TIR is **not** a second language-level memory model. Physical slots, stack values, references or VM-specific runtime handles cannot change the semantics of a Tempra value.
 
-## TIR v0.1 Types
-TIR supports a minimal subset of types in v0.1:
-- `Unit`, `Bool`, `Never`
-- Numeric: `Int64`, `UInt64`, `UInt8`, `Float64`
-- Strings: `String`
-- Composite: `Tuple`, `Array`, `Slice`, `Struct`, `Enum`, `Option`, `Result`
-- Special: `Tag`, `Function`
+## 2. Compiler pipelines and status
 
-## Instruction Set (v0.1 Core)
-TIR uses explicit values with numeric identifiers (e.g., `%0`, `%1`).
+```text
+Source → lexer/parser → AST → HIR → typechecking/specialization
+     → verified TIR → capability analysis/contract enforcement
+     → bytecode lowering → bytecode verifier → Tempra Script stack VM
 
-### Values and Constants
-- `const`: Creates a literal constant value.
-- `make`: Allocates/creates a composite type (Struct, Enum, Tuple, Array).
+Future: verified TIR + ownership/effect summaries → LLVM AOT (Tempra Native)
+```
 
-### Mutability (Slot / Load / Store Model)
-Variables in TIR are managed explicitly through memory slots:
-- `slot`: Declares a local, typed storage slot.
-- `load`: Reads a value from a slot.
-- `store`: Writes a value to a slot.
+In the remote `main` baseline, `tempra run` still defaults to the HIR interpreter, and the VM is opt-in. Promotion to VM-default is a **planned gate**, not an implemented fact. Likewise, the current K1 `comptime` kernel uses HIR execution, while VM-based compile-time evaluation remains a **planned parity-gated migration**. The target architecture includes **neither JIT nor Cranelift**; removal of historical implementation code is a separate task.
 
-### Operations
-- `get` / `set`: Access elements (fields, constant indices) within objects.
-- `get_index`: Access an element of an Array or Slice using a dynamic index.
-- `slice`: Create a read-only Slice view from an Array or another Slice.
-- `len`: Retrieve the length of an Array or Slice (element count) or String (scalar count).
-- `size`: Retrieve the UTF-8 byte size of a String.
-- `bytes`: Retrieve a read-only Slice view of a String's bytes as UInt8.
-- `tag` / `unwrap`: Support for algebraic data type destructuring. `tag` produces
-  `String` in the current TIR/bytecode/VM representation, not the reserved `Tag`
-  type. Comparisons require the same operand type, including tag/string comparisons.
-- `add`, `sub`, `mul`, `div`: Typed numeric arithmetic. Verified operand and
-  result types determine the backend opcode; `Int64` and `UInt64` integer
-  arithmetic is checked, `Float64` follows IEEE 754, and unsupported numeric
-  type combinations are rejected before execution.
-- `eq`, `lt`, `gt`: Typed numeric comparison, producing boolean results.
-  Ordering is signed for `Int64`, unsigned for `UInt64`, and IEEE-ordered for
-  `Float64` (NaN compares false with `<`, `>`, `<=` and `>=`).
-- `and`, `or`, `not`: Boolean logic operations.
-- `call`: Invokes a TIR function.
+TIR's supported executable subset can be narrower than HIR. Reject an unsupported lowering explicitly; never silently claim execution parity or bypass effect checks.
 
-### Terminators
-Every block must end with a terminator:
-- `br`: Unconditional branch to a block.
-- `condbr`: Conditional branch based on a boolean value.
-- `ret`: Returns a value or `Unit` from the function.
-- `unreachable`: Marks code paths that should logically never execute.
+## 3. Identity and determinism
 
-## Verifier Invariants
-The verifier ensures the structural and type soundness of a TIR module:
-- Every function must have at least one block (the entry block).
-- All branched-to block IDs must exist within the function.
-- Condition branches (`condbr`) must act on `Bool` type.
-- `ret` instructions must return a value compatible with the function's return type.
-- Arithmetic operations are strictly typed. For `add`, `sub`, `mul`, `div`,
-  `lt`, `gt` and `eq`, the verifier requires consistent operand types and
-  accepts the supported numeric set `Int64`, `UInt64` and `Float64` for the
-  relevant operation; unsupported or unresolved numeric types are rejected
-  before bytecode lowering. Verified type information is retained for backend
-  opcode selection.
-- `load` and `store` must operate on declared slots, matching their type.
-- Struct field types are inferred from non-internal `make struct` instructions
-  and propagated across functions until stable. Every construction of the same
-  nominal struct must agree on a field's resolved type; a conflicting
-  assignment is rejected with `StructFieldTypeConflict` before bytecode
-  lowering. Fields discovered earlier in the same inference pass are retained.
-  Internal `$`-prefixed structs are excluded because iterator state is
-  polymorphic over the element type.
-- `get`, `set`, `tag`, and `unwrap` have smoke validation but defer strict structural layout type checking until fully implemented.
+- `TirFunctionId` is a compilation-local semantic identifier, **not** an index into `TirModule.functions` or the bytecode function vector.
+- `TirBlockId` is scoped to its function.
+- `TirValueId` names a typed computed value; `TirSlotId` names explicitly addressable local storage.
+- Module emission and function-ID to bytecode-index mapping must be deterministic. Existing K2 work emits in canonical ID order and resolves calls through an explicit map.
+- Function specialization may produce new concrete TIR functions. Never assume a generic template has executable concrete code before specialization.
 
-## Analysis Roadmap
+Cross-process reproducibility under K2 is a bounded same-build, same-source/module-order, same-host/target contract, **not** a universal cross-machine promise.
 
-TIR evolution follows the [roadmap](roadmap.md)'s layered dependency model
-rather than assigning concurrency instructions to the next TIR version. The
-roadmap is authoritative for sequencing, statuses, dependencies and gates.
+## 4. Type vocabulary
 
-- **Semantic:** E (implemented for the current surface) → R (Result/value-use
-  hardening, not a capability/effect) → M (acyclic ownership and ARC-cycle
-  prevention; M5 stabilization gate) → C (pluggable actor concurrency: task,
-  actor, channel and selection) → V (`@verified`, consuming prior facts). Actor
-  concurrency implementation requires M5.
-- **Native AOT:** First-class milestone A, with Cranelift as the initial backend.
-  It may progress incrementally and does not wait for O, NR or P.
-- **Optimization:** O covers uniqueness, escape, stack promotion, reuse and
-  retain/release elimination after M ownership facts; P covers deep latency,
-  invalidation, specialization control and data-structure work after K5/K6
-  measurements. O is not a prerequisite for C or A.
-- **Research:** NR is standalone experimental RC-free research with fallback ARC
-  and never blocks baseline AOT.
-- **Conditional:** U — Unsafe Boundary is DEFERRED / CONDITIONAL and activates
-  only when a real source operation requires memory/type-safety authorization.
+The documented TIR v0 representation covers:
 
-E1–E6 are implemented for the currently meaningful surface; K3 runtime parity is
-IN PROGRESS for currently executable surfaces, K4 is DONE, and K5/K6 are
-PLANNED. E6 reuses current facts and is not a complete TIR Graph. No current TIR
-capability origin emits Unsafe.
+| Group | Types |
+|---|---|
+| Basic | `Unit`, `Bool`, `Never` |
+| Numeric | `Int64`, `UInt64`, `UInt8`, `Float64` |
+| Text | `String` |
+| Aggregates | `Tuple`, `Array`, `Slice`, `Struct`, `Enum`, `Option`, `Result` |
+| Additional | `Tag`, `Function` |
 
-K1.7 historically changes cache trust to `semantics-2`. K2.2 changes current
-trust to `semantics-3` so artifacts that may contain the former specialization
-ID/index miscompilation are not reused. K2.4 changes current trust to
-`semantics-4` so interface candidate selection and diagnostics are not reused
-from unordered iteration. The bytecode format remains an independent
-structural version, and neither TIR nor capability facts are rebuilt on a
-compatible bytecode-only cache hit. `TirFunctionId` is a compilation-local
-identity, not a physical position in `TirModule.functions`; bytecode lowering
-emits functions by ascending ID and resolves calls through an explicit mapping.
-K2.5 keeps revision 4 and proves exact cross-process artifact equality for the
-currently supported same-build, same-host/target bytecode surface; no Level 4
-cross-machine guarantee is implied.
+`Tag` is reserved/represented differently from existing ADT tag instructions: in the historical v0 TIR/bytecode/VM representation `tag` yields a `String`. Do not silently substitute the type `Tag`. The set of TIR-representable types does not by itself certify that every source-level operation is lowerable or executable.
 
-K3.2 raises cache trust to `semantics-5` without changing TIR or bytecode
-formats. For `Int64`, `add`, `sub` and `mul` are checked, `div` distinguishes
-zero from signed overflow, and lowered negation inherits checked `sub` behavior.
-All supported runtime consumers use the shared contract; host panics, native
-traps and profile-dependent wrapping are not semantic outcomes.
+`Range` is a **language-level owned descriptor** in Memory v0.4. Its final TIR physical representation is **not fixed here**. Likewise, resource nonduplicability, loan provenance and closure environment types need explicit verifiable contracts without presuming invented opcodes.
 
-K4.5B historically raised cache trust to `semantics-6` without changing TIR or
-bytecode formats. Revision-5 artifacts can retain specialized `@deny` clauses
-that were not statically enforced. K4.9D subsequently raises trust to
-`semantics-7` for v0.2 family/category enforcement, and K4.9E confirms
-compatibility without another semantic change. Current compilation matches the
-retained clauses against the existing specialized-effect summaries and
-witnesses. These revisions do not change TIR or bytecode formats.
+## 5. Core instruction families (existing v0)
 
-K3.3 raises current trust to `semantics-8` and types numeric TIR more strictly.
-Revision-7 artifacts may contain `UInt64`/`Float64` arithmetic lowered to
-`Int64` bytecode or may lack Float64 literal support. The verifier now validates
-numeric operand types and exposes verified types to bytecode lowering so each
-numeric operation selects its matching opcode. `UInt64` arithmetic is checked
-through the shared runtime kernel, `Float64` preserves IEEE 754 semantics, and
-unsupported numeric operations fail verification rather than silently using
-`Int64`. The TIR instruction set and bytecode format are unchanged.
+TIR is an SSA-like value IR with mutable slots. These are the documented instruction *families*, not a claim about final binary layout.
 
-This section does not define future TIR opcodes. Their exact representation belongs to the corresponding phase specifications.
+| Family | Instruction | Meaning |
+|---|---|---|
+| Literals | `const` | Produce a constant value |
+| Aggregate | `make` | Construct a typed value (array, tuple, struct, enum) |
+| Slots | `slot`, `load`, `store` | Declare, read, or overwrite a local storage slot |
+| Access | `get`, `set` | Field or statically indexed access/update |
+| Indexed | `get_index` | Dynamically indexed Array/Slice access |
+| Views | `slice` | Read-only borrowed view of Array/Slice |
+| Sizing | `len`, `size`, `bytes` | Collection length, UTF-8 byte size, read-only byte view |
+| ADT | `tag`, `unwrap` | Inspect and extract a variant payload |
+| Numeric | `add`, `sub`, `mul`, `div` | Typed arithmetic |
+| Comparisons | `eq`, `lt`, `gt` | Typed comparisons |
+| Boolean | `and`, `or`, `not` | Boolean operators; short-circuit semantics must be preserved in source lowering |
+| Invocation | `call` | Typed call to known target |
 
-## Capability-analysis contract
+A `make` operation is **not automatically** a heap allocation. Effect classification must be based on the semantic operation and its admitted implementations, not syntax alone. Similarly `load` is not automatically a semantic copy and `store` is not automatically a legal ownership transfer.
 
-E1 scans `TirInstr::Call` to build a function call graph. E2 retains structural
-provenance (`TirFunctionId`, function-scoped `TirBlockId`, instruction index),
-edges, origins and witnesses. It adds no source mapping: TIR does not retain a
-reliable one. A future lowering side table maps locations to module identity and
-existing source spans.
+### 5.1 Arithmetic and comparisons
 
-Direct `Alloc` classification is based on semantic runtime allocation in the current representation; `const` and `make` are not normative allocation sites by syntax alone. Direct `Panic` classification is conservative may-fail information. Checked `Int64` add, sub, mul and div contribute `Panic`; later verified analysis may prove individual arithmetic, divisions or bounds accesses safe without changing E1's collection policy.
+The typed verifier exposes operand/result types to bytecode lowering. `Int64` and `UInt64` integer arithmetic must produce controlled checked failures on overflow/underflow/division by zero; `Int64::MIN / -1` is overflow. `Float64` follows IEEE 754, including NaN and signed zero. Ordered float comparisons return false on NaN. Unsupported/unresolved numeric combinations are errors before bytecode generation; **no silent conversion to `Int64`**.
 
-An extern requires a known capability classification only when a TIR call targets it. Unused extern declarations do not invalidate a module.
+`UInt8` exists as a TIR type but historic TIR arithmetic lowering is limited; do not infer complete source-level numeric parity.
+
+### 5.2 Borrowed `slice` and `bytes`
+
+`Slice(T)` is a non-owning read-only view with provenance. Writable element access requires an exclusive `inout Slice(T)` contract. `bytes` must not provide writable access to a String's UTF-8 storage. The existing physical view instruction does not, by itself, prove owner lifetime, non-escape or exclusivity. Those are obligations from Memory v0.4.
+
+## 6. Basic blocks and terminators
+
+Every completed block has exactly one terminating control-flow operation:
+
+- `br(target)` — unconditional branch;
+- `condbr(condition, true_block, false_block)` — Bool conditional branch;
+- `ret(value?)` — return matching the function's signature;
+- `unreachable` — logically impossible path; executing it is a controlled error.
+
+A builder must reject appending instructions to a terminated block; the lowering must not manufacture joins for branches that all terminate. Returned non-`Unit` values must be present on all reachable returning paths; missing returns are reported, not synthesized.
+
+### Schematic example
+
+```text
+fn choose(%0: Int64, %1: Int64) -> Int64 {
+  entry:
+    %2 = gt %0, %1
+    condbr %2, left, right
+  left:
+    ret %0
+  right:
+    ret %1
+}
+```
+
+This is illustrative TIR pseudotext, not a serialization grammar or literal pretty-printer output.
+
+## 7. Existing structural and type verifier
+
+The documented v0 verifier checks, where supported:
+
+1. Functions contain a valid entry block and valid block references.
+2. Terminators are well formed; `condbr` requires Bool.
+3. `ret` matches the declared return type.
+4. Slots exist; `load` and `store` agree on slot types.
+5. Arithmetic and ordering are typed and restricted to supported operand kinds.
+6. Struct-field inference unifies field types across corresponding nominal `make` constructs; contradictions are rejected (`StructFieldTypeConflict`). Internal `$`-prefixed iterator state was excluded from the legacy nominal field inference.
+7. Unsupported or unresolved numeric types are rejected before bytecode lowering.
+
+The older verifier described `get`, `set`, `tag` and `unwrap` as having smoke coverage rather than complete structural-layout checking. **Do not upgrade this historical assurance without active-branch tests.**
+
+## 8. Required ownership-aware verifier (Memory v0.4; not complete)
+
+The approved memory model requires a checkable semantic trace/facts for:
+
+| Invariant | Rejection example |
+|---|---|
+| Copyability | Duplicate a nonduplicable resource via `load`, aggregate construction or call |
+| Semantic `consume` | Read source after its ownership was transferred |
+| Shared loan | Mutate owner through an incompatible path while `ref`/Slice loan lives |
+| Exclusive loan | Two simultaneous `inout` or incompatible shared/exclusive loans |
+| Provenance | Return, store or escape a borrowed temporary beyond its owner |
+| CFG lifetime | Illegally keep a loan live across a join, loop or unwind path |
+| Closure captures | Hidden capture or unsafe escaping `ref`/`inout` environment |
+| Suspension | Live dynamic loan across `.await()` or into `spawn` |
+| Destruction | Leak/double release/use-after-destroy on return, failure or cancellation |
+| Aggregates | Non-escaping borrowed fields follow their owner's lifetime |
+| Effects | Potentially allocating copy under `@deny(alloc)` |
+
+Per Memory v0.4, these need normalized verifier-level facts, not merely a frontend-only promise. The *representation*—explicit IR instructions, typed operations, summaries, provenance or equivalent proof material—remains a design/implementation decision. No specific `move`, `borrow`, `drop` or `retain` opcode is declared implemented by this document.
+
+Static/owned descriptors and owned values may cross suspension when their contracts allow; dynamic borrowed slices, `ref` and `inout` cannot remain live across `.await()` in v1. Actor handles remain **DEFERRED POST NO-CYCLE**.
+
+## 9. Capability/effect analysis boundary
+
+E1 is a pure scan over verified TIR. The documented pipeline constructs per-function direct capability origins, a call graph, transitive required sets and witnesses; E2 retains those immutable facts in fresh compilation; E3 checks source contracts before executable bytecode is accepted.
+
+- `@pure` denies `io`, `process`, `spawn`, `nondeterminism`; alone it does not deny allocation or panic.
+- `@deny(alloc)` must conservatively reject semantic operations that may allocate dynamically, including copies of owned dynamic buffers as specified by v0.4.
+- Checked integer operations can conservatively require `Panic`.
+- Only operations present in TIR can be analyzed by E1; HIR-only operations are explicit coverage gaps, not silently allowed operations.
+- Source-derived specialized effects, including `fs`/`net` families and `io.read`/`io.write` categories, remain governed by the effects specifications.
+- Raw TIR interpretation and mere TIR emission do **not** certify source capability contracts.
+
+Direct `Alloc` must reflect the semantic/runtime allocation contract. A syntactic `const` or `make` alone is not automatically an allocation origin, and an optional optimizer cannot justify accepting source that violates `@deny(alloc)`.
+
+### 9.1 Summaries across modules
+
+The current analysis can retain `TirFunctionId`, block and instruction identities as structural provenance. A reliable mapping to original source spans belongs to a lowering-owned side table. Future ownership analyses extend deterministic `BorrowSummary`-style facts with copyability, escape, capture, suspension, cleanup and effects; generic specialization must preserve these facts.
+
+## 10. Result and control-flow conventions
+
+`Result` propagation with `?` is lowered to explicit branching over a discriminant, error extraction and early return. `Result` is a value type, **not** a hidden exception/unwind mechanism. The lowering is required to preserve correct cleanup and resource ownership on the early-error path when v0.4 is implemented.
+
+`if`/`match` expressions and loops may produce values; joining values must follow the language type rules, independent of whether the physical TIR uses slots, block parameters or another future encoding.
+
+## 11. Cache trust, revisions and reproducibility
+
+Bytecode cache trust revision and bytecode format version are independent. The historical milestones documented revisions 2 (K1), 3–4 (K2), 5 (K3 checked arithmetic), 6–7 (K4 specialized effects) and 8 (K3 numeric parity). **Revision 8 was the remote-main baseline**, not a guarantee of current local branch state. Never fabricate a newer revision number. Adding executable ownership guarantees or changing comptime authority requires correct trust invalidation; compatible bytecode-only cache hits do not reconstruct TIR or analyzer facts.
+
+## 12. Runtime consumers and non-goals
+
+- **Tempra Script VM:** intended default scripting runtime after parity. [BYTECODE_ISA.md](BYTECODE_ISA.md), [TIR_TO_BYTECODE.md](TIR_TO_BYTECODE.md) and [BYTECODE_VM.md](BYTECODE_VM.md) specify the runtime-side contract.
+- **TIR micro-interpreter:** a limited validation tool, documented in [TIR_INTERP.md](TIR_INTERP.md); not a general scripting VM, nor the approved final comptime engine.
+- **Tempra Native:** future LLVM AOT; no new user-visible memory model. Its RC-free aim is experimental until proven.
+- **JIT/Cranelift:** historical; excluded from target architecture, implementation removal pending.
+- **Actors/concurrency:** no TIR opcodes or actor scheduling policy is frozen here; safety gate M5 applies.
+- **FFI/`@unsafe`:** wrapper contracts and external-resource policy follow v0.4; concrete raw ABI and unsafe surface are deferred.
+
+## 13. Validation work before declaring full compliance
+
+Required tests include bad TIR rejection; CFG joins/loops; deterministic function identities; arithmetic type correctness; error and early-return cleanup; copy and loan exclusivity; nonduplicable resources; borrowed aggregates; escape analysis; closure environments; async suspension; effect classification; stale-cache handling; VM/AOT agreement for the supported subset. A passing structural TIR verifier does **not** prove these v0.4 properties until they are implemented and tested.
+
+**Rule:** TIR is a verified carrier of Tempra semantics, never an alternative source of them.

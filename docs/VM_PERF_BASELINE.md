@@ -1,162 +1,134 @@
-# VM Performance Baseline (Phase 14.15)
+# Tempra Script VM — Performance Baseline and K5 Measurement Protocol v0.2
 
-This document records the performance characteristics of the experimental Tempra VM (stack-based v0) compared to the reference HIR interpreter.
+**Status:** historical data plus reproducible measurement protocol; **not** a current benchmark report.
+**Source baseline:** GitHub `main`, historical Phase 14.15–14.20 VM work and [roadmap/k5.md](roadmap/k5.md).
+**Memory authority:** [Tempra Memory & Ownership v0.4](Tempra_Memory_Ownership_v0.4.md).
+**Target runtime:** Tempra Script stack VM without JIT. Tempra Native LLVM AOT is a separate future benchmark subject.
 
-## Methodology
+## 1. Scope and comparison rules
 
-Benchmarks are executed via a dedicated performance harness in `crates/tempra-driver/tests/perf_baseline.rs`.
+Measure whole-process scripting usability separately from VM execution efficiency. Cold compiler startup, cache reuse, instruction dispatch, memory consumption, code size and developer responsiveness are distinct metrics. No optimization invalidates memory semantics, controlled arithmetic, `@deny`/`@pure` or Result propagation.
 
-- **HIR Avg**: Average execution time using the reference HIR interpreter.
-- **VM Miss Avg**: Average time for a full cold run (Compile + Cache Write + Execute).
-- **VM Hit Avg**: Average time for a warm run (Cache Read + Verify + Execute).
-- **BC Size**: Approximate size of the bytecode artifact (including headers).
-- **Instrs / Fns**: Count of bytecode instructions and functions generated.
+**Do not infer November 2026 performance from old Phase 14 samples.** No current timing run was performed for this documentation update. The active local `feature/k5-compiler-timings` branch must be measured before publishing results.
 
-Measurements are averaged over 20 iterations after 2 warmup runs.
+JIT/Cranelift phases and their speedups are **historical**. Their code is designated for removal, not for further tuning. Historical design/benchmarks belong in `docs/archive/` if preservation is desired. Retain VM-only work such as peephole passes, stack/frame tuning and superinstructions, subject to updated tests.
 
-## Baseline Results (Sample)
+## 2. Historical Phase 14.15 sample (not a contemporary result)
 
-| Case | HIR Avg | VM Miss Avg | VM Hit Avg | VM Exec | BC Size | Instrs | Fns | Cache File |
-|------|---------|-------------|------------|---------|---------|--------|-----|------------|
-| arithmetic_loop_1000 | 2.27ms  | 5.86ms      | 4.17ms     | 3.57ms  | 25 KB   | 3072   | 1   | 25 KB      |
-| for_expr_collect_1000| 1.54ms  | 15.13ms     | 14.13ms    | 13.98ms | 25 KB   | 3086   | 1   | 25 KB      |
-| struct_access_1000   | 3.90ms  | 7.54ms      | 5.81ms     | 5.09ms  | 25 KB   | 3087   | 1   | 25 KB      |
-| string_basics_repeat | 73µs    | 259µs       | 97µs       | 58µs    | 826 B   | 118    | 1   | 834 B      |
+The prior document reported averages over **20 iterations following 2 warmups**, using `crates/tempra-driver/tests/perf_baseline.rs`. It did **not** provide a reproducible full machine/profile/source fingerprint for these samples, so figures below are historical context only.
 
-*Note: Results vary significantly depending on hardware and system load.*
+| Case | HIR avg | VM miss avg | VM hit avg | VM exec | BC size | Instructions | Functions | Cache file |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `arithmetic_loop_1000` | 2.27 ms | 5.86 ms | 4.17 ms | 3.57 ms | 25 KB | 3072 | 1 | 25 KB |
+| `for_expr_collect_1000` | 1.54 ms | 15.13 ms | 14.13 ms | 13.98 ms | 25 KB | 3086 | 1 | 25 KB |
+| `struct_access_1000` | 3.90 ms | 7.54 ms | 5.81 ms | 5.09 ms | 25 KB | 3087 | 1 | 25 KB |
+| `string_basics_repeat` | 73 µs | 259 µs | 97 µs | 58 µs | 826 B | 118 | 1 | 834 B |
 
-## Candidates for Optimization
+Columns reproduce the original source even where they are not strictly consistent (for example `BC size` versus `Cache file` for the string case). The difference is **not** silently corrected or explained without raw artifacts.
 
-### Phase 17.7 — Heap-aware JIT Examples & CLI Smoke
-Introduced the `examples/jit_heap/` directory with 5 runnable source-level examples.
-- **Heap Perf Harness**: Run via `just jit-heap-perf` (alias: `cargo test -p tempra-driver --test heap_jit_perf --features jit-cranelift -- --ignored --nocapture`).
-- **Smoke Validation**: `just jit-heap-smoke` verifies all 5 examples exit 0 via the CLI JIT path.
-- **Integration Suite**: `just jit-heap` runs 19 tests covering Phases 17.4/17.5/17.6 correctness.
+### 2.1 Historical Phase 14 VM-only tuning (not independently rerun)
 
-### Phase 17.5 — JIT Generic Helper Intrinsics
-Replaced hardcoded dispatch helpers with generic intrinsics (`generic_len`, `generic_size`, `generic_get_i64`). 
-- **Dynamic Dispatch**: Generic intrinsics resolve exact types at runtime without needing specialized bytecode, returning graceful fallbacks for unexpected object variants.
-- **Overhead Note**: The match statement on the `JitHeapObject` variant introduces a minimal single-branch overhead compared to specialized helpers, but enables a vastly simplified compiler frontend.
+The previous report described these optimizations and provisional micro-benchmark observations:
 
-### Phase 16.0 — JIT Heap Boundary Design
-Established the architectural interface for supporting heap-allocated types in the native JIT.
-- **Opaque Handle ABI**: Defined `HeapHandle` as an opaque `u64` token, isolating the JIT from internal VM memory layouts.
-- **Runtime Helpers**: Designed the "Boundary" interface where JIT-compiled code interacts with the heap exclusively via VM-provided C-compatible helpers.
-- **Fallible ABI**: Adopted a `(Value, Status)` pattern for soft errors (e.g. bounds checks) to enable graceful fallbacks and future deoptimization.
-- **Safety Policy**: JIT never dereferences or mutates heap memory directly; ownership remains 100% with the VM runtime.
+| Phase | VM-only change | Historical observation |
+|---|---|---|
+| 14.16 | Peephole elimination of redundant temporary `StoreLocal/LoadLocal` | ~15–25% fewer instructions; ~5–10% runtime improvement in microbenchmarks |
+| 14.17 | Frame/call-stack and operand-stack preallocation; direct local initialization | ~10–15% runtime reduction in reported cases |
+| 14.18 | `AddI64LL` and `AddI64LC` superinstructions | ~10–12% execution-time reduction in arithmetic-heavy cases |
+| 14.19 | Optional call/instruction/backedge profiling | Low disabled-path overhead reported |
+| 14.20 | Opcode histograms and per-function profiles | Diagnosed load/store density and superinstruction use |
 
-### Phase 15.8 — JIT Bool/Branch support hardening
-Consolidated the `Int64 + internal Bool` subset by resolving complex control-flow lowering bugs and adding native boolean opcode support.
-- **Branch Hardening**: Fixed TIR lowering for deeply nested `if-else` and `match` structures.
-- **Boolean Opcodes**: Added `ConstBool`, `Not`, `And`, and `Or` to the Cranelift JIT.
-- **Reachability Validation**: Improved TIR verifier parity and return-path checking for unreachable join blocks.
-- **Success**: Verified with the full burn-in corpus (12 tests passed).
+These percentages are not automatically additive, do not establish today's throughput, and may not apply after memory-model changes. Remeasure under K5.
 
-### Phase 15.7 — JIT Stability Burn-in
-Established a comprehensive validation suite to ensure JIT reliability across complex Int64 workloads.
-- **Burn-in Corpus**: Added `examples/jit_burnin/` with coverage for deep call chains, nested loops, and heavy branching.
-- **Differential Testing**: Automated comparison between HIR interpreter results and JIT execution.
-- **Fallback Verification**: Confirmed that unsupported features (Strings, Structs) reject the JIT gracefully and use the VM stack interpreter.
-- **Stress Testing**: Validated state stability over repeated executions and warm-run reuse.
+## 3. Canonical K5 measurement contract
 
-### Phase 15.5 — JIT Threshold Tuning & Policy
-Introduced a stable, measurable compilation policy to prevent compile storms and eliminate wasted Cranelift invocations.
-- **New `VmOptions` fields**: `jit_min_instruction_count` (default 8) and `jit_retry_limit` (default 1).
-- **Updated defaults**: `hot_call_threshold` lowered from 1000 → 100; `hot_backedge_threshold` from 10 000 → 1000.
-- **Compile-storm guard**: a permanently-rejected function is never re-attempted, costing only a boolean check on every call.
-- **Policy stats**: `VmProfile` now exposes `jit_skipped_below_threshold` (decision-check counter), `jit_skipped_too_small`, `jit_skipped_retry_limit`, `jit_permanent_rejections`, and `jit_retryable_failures`.
-- **Summary section**: `VmProfile::summary()` prints a `JIT Policy:` block when any of those counters is non-zero.
-- **Verified**: 14 integration tests + 4 low-level unit tests all pass.
+Record **before** measurements:
 
-### Phase 15.4 — JIT Trace & Performance Validation
-Added precise timing metrics to evaluate JIT compilation overhead versus native execution speedups.
-- **Timing Metrics**: `VmProfile` now tracks `jit_compile_time_ns` and `jit_total_native_time_ns`.
-- **Benchmarking**: Upgraded `perf_baseline.rs` to evaluate performance across HIR, cold VM JIT, and warm VM JIT execution modes.
-- **Profitability**: Built automated "Time-to-profitability" estimates measuring compile costs against per-call native speedups.
-- **Guardrails**: Rejection limits verified and accurately tracked as explicit fallbacks.
+- Full git commit, dirty state and branch; compiler build/version/profile, semantic revision and bytecode format.
+- OS, architecture, CPU, memory, host/target, binary install path, tool versions and environment variables that affect execution.
+- Complete fixture source/input hash and module/stdlib resolution; configuration, runtime selection, cache root and warmed/cold state.
+- Warmup count, sample count, sample order, method for median and tails, stdout/stderr digest and exit code.
+- Exact measurement command and raw artifacts (CSV/JSON/text); CPU governor/power configuration where relevant.
 
-### Phase 15.3 — JIT Int64 Calls v1
-Expanded JIT support to allow static calls between eligible Int64 functions.
-- **Dependency Compilation**: The VM automatically resolves and pre-compiles `Call` instruction targets, maintaining the JIT-cache without VM-to-JIT callbacks.
-- **Recursive Safety**: Cleanly rejects cyclical call graphs to prevent compilation loops.
-- **Diagnostics**: Rejection reasons (e.g. nested calls to string functions) correctly propagate up the call chain for full profile visibility.
+**K5 measures distinctly:** process-start-to-exit wall time, compiler stage timings, cold/warm VM cache path, VM execution-only time, CPU, peak RSS and (when measured) editor/check/LSP responsiveness. Filesystem-page-cache coldness, absent Tempra cache, compiler-process cold start and warm in-process VM are **different experimental conditions**; label them separately.
 
-### Phase 15.2 — JIT Observability & Guardrails
-Added performance tracking and safe fallbacks for the JIT integration.
-- **Metrics**: `VmProfile` now tracks `jit_compile_attempts`, `jit_compile_successes`, `jit_runtime_calls`, and `jit_fallback_calls`.
-- **Diagnostics**: `JitEligibility` provides clear reasons when a function cannot be compiled natively.
-- **Rejection Caching**: The VM caches rejection reasons to avoid redundant compilation attempts of unsupported functions.
-- **Verification**: Fully tested via driver integration to ensure accurate JIT statistics without semantic changes.
+The initial `scripts/k5_bench.py` is documented as measuring **new-process wall time only**. It does not by itself measure peak RSS, compiler stages, or physical cold filesystem cache. Its harness self-test is not a Tempra benchmark.
 
-### Phase 15.1 — JIT/VM Integration Hook
-Integrated JIT into the VM dispatch loop.
-- **Opt-in**: JIT is disabled by default, ensuring stability.
-- **Transparent Fallback**: Unsupported functions or compilation failures revert to the interpreter.
-- **Hotness Driven**: JIT triggers based on `hot_call_threshold` and `hot_backedge_threshold`.
-- **Verified**: Integration tests confirm 100% result parity between JIT and interpreter.
+### 3.1 Recommended benchmark matrix
 
-### Phase 15.0 — Cranelift JIT Prototype
-Introduced `tempra-jit-cranelift`, a prototype JIT compiler supporting hot `Int64` functions. 
+| Mode | Required boundaries | Primary reported metric |
+|---|---|---|
+| HIR reference (historical only) | Same source semantics, no VM | End-to-end and execution-only for differential context |
+| VM cold compiler / absent artifact | Start, parse, typecheck, TIR, checks, lower, verify, write, run | Wall time and per-stage breakdown |
+| VM compatible cache hit | Start, read, validate, verify, run | Wall time, cache time, execution time |
+| VM in-process repeated execution | Already verified module, known inputs | Execution latency and instruction counters |
+| VM stale/corrupt cache | Incompatible/invalid artifact followed by safe rebuild | Failure containment, rebuild latency |
+| CLI check/edit workflow | Only documented frontend/analysis steps | Check and responsiveness latency |
 
-**Observations:**
-- Preliminary tests show native execution of simple arithmetic loops is significantly faster than interpreted execution.
-- Successful lowering of stack-based bytecode to Cranelift SSA.
-- Ready for future integration with VM hot function profiling.
+Do not compare process startup for one runtime with only execution time for another. If `cargo run` is used, distinguish Cargo build overhead from installed-binary startup.
 
-### Phase 14.20 — VM Profiling & Trace Visibility
-Extended profiling to include global and per-function opcode execution counts. Added `VmProfile::summary()` for human-readable execution reports.
+## 4. Compiler phase timings
 
-**Observations:**
-- Opcode distribution reveals high density of `LoadLocal/StoreLocal`, suggesting further stack-to-register optimization potential.
-- Superinstructions like `AddI64LC` are clearly visible in the trace, confirming the effectiveness of the peephole optimizer.
-- Minimal overhead confirmed for the disabled path.
+The planned K5.2 instrumented pipeline reports lexer, parser, AST/HIR, typechecker including `comptime`, TIR lowering, verification, effect analysis/contracts, bytecode lowering, bytecode verification and cache read/write. The selection/pruning of compile-time branches must not be double-counted as both compiler and VM execution work without clear labeling.
 
-### Phase 14.19 — Hot Function Counters
-Added opt-in profiling infrastructure to track call counts, instruction counts, and loop backedges. This allows the VM to identify "hot" functions and loops based on configurable thresholds.
+Timers should not alter semantic behavior or create hidden inputs that change deterministic compilation. Profiling allocation itself should be measured or excluded consistently when interpreting `@deny(alloc)` cases.
 
-**Observations:**
-- Minimal overhead when disabled (verified via performance baseline).
-- Provides actionable metrics for future JIT/Cranelift integration.
-- Correctness verified via dedicated profiling tests.
+## 5. Memory and correctness before performance
 
-### Phase 14.18 — Superinstructions v1
-Introduced conservative superinstructions `AddI64LL` (Local + Local) and `AddI64LC` (Local + Constant) to reduce dispatch overhead.
+v0.4 makes value semantics, `consume` invalidation, resource cleanup, nonescaping borrows and `@deny(alloc)` normative. Optimizations cannot rely on unsafe alias sharing, omit a required copy solely to make an invalid contract pass, or leak owners during early returns.
 
-**Observations:**
-- Further performance improvement: ~10% to 12% reduction in execution time for arithmetic-heavy code.
-- Instruction count reduced in hot loops.
-- Peephole optimizer enhanced with multi-instruction fusion patterns to identify these candidates.
+Track at least:
 
-### Phase 14.17 — VM Stack/Frame Tuning
-Optimized VM runtime by pre-allocating call stack and operand stacks based on `max_stack` metadata. Refined the function call path to avoid temporary allocations.
+- Peak RSS and allocation counts, clearly distinguished from VM value-copy counts.
+- Repeated Array/String copies, Slice creation/lifetime, closure capture, and Resource transfer where implemented.
+- Error paths (`Result` propagation, overflow, bounds errors), verifier-rejected artifacts and cold-cache failures.
+- Impact of nonduplicable types and borrow provenance enforcement when implemented.
+- Determinism of generated bytecode and successful cache reuse under the K2.5 bounded reproducibility guarantee.
 
-**Observations:**
-- Measurable performance improvement: ~10% to 15% reduction in execution time.
-- Fewer allocations during hot loops (especially for function calls).
-- Cleaner instruction dispatch with reduced borrow churn.
+No claim of ARC NO-CYCLE completion, zero runtime reference counting in Tempra Native, or actor concurrency performance is made by this file.
 
-### Phase 14.16 — Peephole Lowering v1
-Added a conservative post-pass peephole optimizer that eliminates redundant `StoreLocal/LoadLocal` pairs for single-use temporary variables.
+## 6. VM optimization backlog (JIT-free)
 
-**Observations:**
-- Reduction in instruction counts: ~15% to 25% for simple expressions and string metadata access.
-- VM Execution time improved slightly (~5-10% in micro-benchmarks).
-- Verifier overhead remains negligible.
+The following are **candidates**, not promised wins:
 
-## Lowering Optimizations
+1. Reduce redundant temporary loads/stores while preserving verification and ownership events.
+2. Retune local/operand-stack and frame capacity using representative workloads.
+3. Profile superinstructions and adjust only after counting actual opcode distribution.
+4. Reduce verifier/cache work safely without skipping semantic trust checks.
+5. Investigate stack scheduling and typed dispatch only with reliable K5/K6 regressions.
+6. Benchmark allocation hot spots and buffer operations under value semantics independently of AOT elimination.
 
-The TIR-to-Bytecode lowerer includes a peephole optimization pass:
-1. **Conservative Peephole**: Identifies redundant `StoreLocal/LoadLocal` sequences for temporary locals.
-2. **Jump Fixups**: Automatically adjusts jump offsets when instructions are removed.
-3. **Safety Verification**: Each optimized function is re-verified by the bytecode verifier; if verification fails, the unoptimized version is used.
-4. **Direct Local Initialization**: Function calls pop arguments directly into the callee's local slots, bypassing intermediate vector allocations.
-5. **Efficient Dispatch**: The instruction loop minimizes redundant call stack lookups and employs inlined stack helpers.
-6. **Superinstructions**: High-frequency instruction sequences (like `LoadLocal` + `AddI64`) are fused into single opcodes to reduce dispatch overhead.
-7. **Frame Allocation**: Reuse or pre-allocate call frames to reduce heap pressure.
-8. **Cranelift JIT**: Direct machine code generation for hot functions.
+Use K6 to establish regression budgets **after** K5 publishes a reproducible baseline. Avoid replacing a sound verifier with an unverified fast path.
 
-## Caveats
+## 7. Comparative language benchmarking
 
-- The VM is currently unoptimized and focuses on correctness and safety (hardening).
-- The baseline includes all hardening checks (verifier, runtime bounds checks).
-- Inlining is not yet implemented in the TIR lowerer, which impacts method call performance.
+For public comparisons, pin the exact versions of CPython, Node.js, Bun and any TypeScript compiler/transpiler. Document whether source is TypeScript or JavaScript, whether transpilation is included, and whether runtime cold startup is included.
+
+Compare equivalent output, input size, error handling and observable work first. Run stable identical fixtures and validate output hashes; report throughput/latency separately from code complexity or developer experience. Do not invent rankings or describe the historical Phase 14 VM numbers as current Python/Node/Bun results.
+
+## 8. Reporting template
+
+```text
+Benchmark / source hash:
+Commit / dirty state / semantic revision:
+Host / OS / CPU / RAM / compiler profile:
+Runtime path:
+Command / tool versions:
+Cache condition (absent / valid / stale / corrupt):
+Warmups / samples:
+Correct result hash, stdout/stderr, exit:
+Median / p95 / min / max / spread:
+Peak RSS / CPU (if collected):
+Compiler phases (if collected):
+Raw artifact path / reproducibility notes:
+```
+
+Record separate time units consistently (µs/ms/s), preserve raw samples, and prefer medians and dispersion over standalone rounded means.
+
+## 9. Next review and historical references
+
+Before the final PR, compare this file with the active K5 implementation and the **actual tests** in the branch. Decide whether the historical Phase 14 sample table remains useful here or is better moved to `docs/archive/performance/` once a current measured K5 baseline exists.
+
+The old Phase 15–17 Cranelift performance narrative is deliberately excluded from the active VM performance plan. Its technical history should remain available under `docs/archive/jit/`, not blended with Tempra Script's future benchmark path.
+
+**Principle:** performance measurements are evidence; optimizations never redefine semantics.

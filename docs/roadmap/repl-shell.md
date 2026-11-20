@@ -56,7 +56,7 @@ compatibility.
 **Alpha:** usable VM-backed REPL, diagnostics, history/multiline/completion and
 explicitly documented Shell-preview subset if exposed; baseline fmt/lint/LSP/MCP
 remain hard gates. **Beta:** broader shell parsing, subprocess/result handling,
-terminal integration and cross-platform stress. **Full PRE-AOT Ergal exit:**
+terminal integration and cross-platform stress. **Full PRE-AOT Tempra Script exit:**
 Shell mode offers documented job control on supported platforms, TTY and signals
 where supported, with cross-platform fallback behavior and tested security
 boundaries. Do not market a stub alias as feature complete.

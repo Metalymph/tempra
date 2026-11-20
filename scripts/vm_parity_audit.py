@@ -151,7 +151,7 @@ def to_markdown(data: dict) -> str:
             snippet = hint["text"].replace("`", "'").replace("|", "/")
             rows.append(f"  - L{hint['line']}: `{snippet}`")
     rows += ["", "## Next required engineering actions", "",
-             "1. Turn every declared Ergal feature into runnable VM positive/negative tests.",
+             "1. Turn every declared Tempra Script feature into runnable VM positive/negative tests.",
              "2. Audit every HIR -> TIR and TIR -> bytecode unsupported arm and verify all side effects.",
              "3. Add explicit diagnostics/exit/observable-output parity; no permissive ‘or unsupported’ tests.",
              "4. Move comptime and REPL only after differential gates; remove old engines last.",

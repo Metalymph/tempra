@@ -1,8 +1,8 @@
-# PRE-AOT integration — Tempra Ergal Script 2.0
+# PRE-AOT integration — Tempra Script Script 2.0
 
 **Decision date:** 2026-11-10. **Status:** adopted direction / pending implementation.
 
-This planning integration extends [the canonical roadmap](../roadmap.md), [Ergal](ergal.md),
+This planning integration extends [the canonical roadmap](../roadmap.md), [Tempra Script](Tempra Script.md),
 [release gates](release-gates.md), [formal work](formal-verification.md), and
 [milestone IDs](migration.md). It does **not** supersede historical records or normative
 language specifications. Work that exists only as a scaffold remains experimental.
@@ -15,12 +15,12 @@ language specifications. Work that exists only as a scaffold remains experimenta
   allowed effects, fuel, access to state and staging; there is no second general VM.
 - A central **typed, verified TIR** with provenance and typed semantic facts. Source
   lowering may be staged for `comptime` but uses the same semantics and bytecode VM.
-- **No JIT in the Ergal target.** Remove experimental Cranelift JIT safely after
+- **No JIT in the Tempra Script target.** Remove experimental Cranelift JIT safely after
   dependency, feature and regression audits; do not remove a working fallback first.
 - Retire the general HIR runtime interpreter and the general TIR interpreter **after**
   compiled VM coverage and compile-time parity gates. A small compiler constant
   folder is not a second general interpreter.
-- **LLVM** is the first Nimonic native AOT backend; LLVM-based Wasm is the first
+- **LLVM** is the first Tempra Native native AOT backend; LLVM-based Wasm is the first
   option to evaluate. Do not ship an embedded Wasm VM or promise Wasm support now.
 - No second language dialect, general macro system or Python indentation syntax.
   Canonical `.tmpr` uses `{}` blocks everywhere.
@@ -43,8 +43,8 @@ language specifications. Work that exists only as a scaffold remains experimenta
 | C | Structured concurrency, actor and scheduler model | Implementation after M5 |
 | O | ARC optimization, reuse, escape, uniqueness | Does not gate M5 correctness |
 | P | Compiler optimization, staged VM comptime and responsiveness | K5 evidence + semantic prerequisites |
-| S1–S4 | Ergal product gates, site, developer tooling, distribution | Product sequencing, not new K IDs |
-| A | Nimonic LLVM AOT | After Ergal scripting maturity |
+| S1–S4 | Tempra Script product gates, site, developer tooling, distribution | Product sequencing, not new K IDs |
+| A | Tempra Native LLVM AOT | After Tempra Script scripting maturity |
 | H (planning) | Self-hosting | After language/AOT maturity; not a historical canonical K ID |
 
 `K4 Result` and `K5 Result` in earlier conversational notes are historical
@@ -70,10 +70,10 @@ unrelated smaller work can begin. Parallel tracks are shown deliberately.
    [Script 2.0](script-2.md). The top-level experience must work on the VM.
 7. **REPL/Shell profile**, [TIR Graph](tir-graph.md), formatter/linter/LSP/MCP
    and agent knowledge packs. Parallelize where their semantic APIs are ready.
-8. **Ergal release gates:** alpha requires coherent editing-to-execution tooling;
+8. **Tempra Script release gates:** alpha requires coherent editing-to-execution tooling;
    beta broadens coverage; full PRE-AOT distribution gates include documented
    interactive Shell/job support and VM-only execution.
-9. **Nimonic/LLVM** and then self-hosting, each with explicit semantic/parity gates.
+9. **Tempra Native/LLVM** and then self-hosting, each with explicit semantic/parity gates.
 
 **Dependency reduction** is cross-cutting from the beginning, with measured
 changes staged in isolated PRs. See [audit procedure](dependency-reduction.md).
@@ -97,4 +97,4 @@ permitted by a test is controlled failure rather than coverage. The HIR/TIR
 interpreters remain temporarily available as parity oracles and may be
 removed only after their respective differential and comptime gates pass.
 Internal K5 measurements continue; optimizing the wrong execution path
-before VM promotion would invalidate Ergal performance conclusions.
+before VM promotion would invalidate Tempra Script performance conclusions.

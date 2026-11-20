@@ -10,7 +10,7 @@ required = (
     "docs/roadmap.md",
     "docs/roadmap/migration.md",
     "docs/roadmap/status.md",
-    "docs/roadmap/ergal.md",
+    "docs/roadmap/script.md",
     "docs/roadmap/release-gates.md",
     "docs/roadmap/formal-verification.md",
     "docs/roadmap/k5.md",

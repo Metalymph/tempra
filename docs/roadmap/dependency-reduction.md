@@ -26,13 +26,13 @@ security/maintenance and cost of replacement.
 | --- | --- |
 | Keep | Complex, maintained and correct dependency; no measured benefit to replace |
 | Narrow features | Needed crate includes unused or expensive functionality |
-| Isolate optional | Backend/platform/experimental component absent from normal Ergal |
+| Isolate optional | Backend/platform/experimental component absent from normal Tempra Script |
 | Replace with std/local code | Small, stable feature, trivial to test and maintain |
 | Remove | No remaining dependency or execution requirement, verified via graph/tests |
 
 Audit JIT removal early but do not assume removing a Rust workspace member is
 sufficient to drop its transitive dependencies. Separate optional LLVM/Wasm and
-platform integration from Ergal's shipping dependency graph. Cargo feature
+platform integration from Tempra Script's shipping dependency graph. Cargo feature
 unification means target-specific dep auditing requires the actual target and
 feature configuration, not only a text search of `Cargo.toml`.
 

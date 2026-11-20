@@ -1,436 +1,120 @@
-# Tempra
+# Tempra Documentation
 
-> **From scripts to software. Without switching languages.**
+**Document role:** documentation index and authority map
+**Updated:** 2026-11-15
+**Status:** active index; documentation reconciliation in progress
+**Scope:** language specifications, implementation architecture, roadmap, tooling, and historical records
 
-Tempra is a statically typed, script-first programming language designed to grow
-from small scripts into efficient native software without switching languages.
-It combines a compact, expression-oriented syntax with static type checking,
-explicit error handling, compile-time evaluation, and capability contracts.
+Tempra is a scripting-first, statically checked, value-oriented language. Its execution and compilation paths are developed incrementally. A design decision, an implementation, a passing regression test, and a formal proof are **different claims**; this documentation must not conflate them.
 
-**Status: Experimental — actively developed.** Tempra is not production-ready.
-The language, CLI, and internal APIs may change.
+This page is the entry point for `docs/`. It does not redefine language semantics. For a given topic, use the authoritative document identified below; when a document describes the historical implementation, do not interpret it as the current language contract.
 
-Native AOT output is a core design goal, not a current feature. Today Tempra
-runs on its default HIR interpreter, with an opt-in bytecode VM and Cranelift
-JIT available for experimentation.
+## 1. Normative sources and precedence
 
----
+| Domain | Source | Authority and limits |
+| --- | --- | --- |
+| Memory safety, ownership, borrowing, value semantics, closure captures, async ownership, resource cleanup | [Memory & Ownership v0.4](Tempra_Memory_Ownership_v0.4.md) | **Canonical and overriding memory-model specification.** Approved design, not an implementation or proof certificate. |
+| Surface syntax and source constructs | [Surface Syntax v0.1](TEMPRA_SURFACE_SPEC_v0.1.md) | Existing surface-language reference **pending full reconciliation**. Statements about memory semantics that conflict with Memory v0.4 are obsolete. |
+| Parser-oriented syntax | [Grammar](GRAMMAR.md) | Parser-oriented description, subordinate to the agreed surface language and memory constraints; implementation status must be checked against current parser tests. |
+| Comptime language rules, restrictions, and current execution policy | [Comptime Specification](COMPTIME_SPEC.md) | Governs compile-time evaluation; current HIR-based execution status and planned VM migration must remain distinct. Memory behavior must conform to Memory v0.4. |
+| Broad capability contracts | [Capability Contracts v0.1](specs/effects-v0.1.md) | `@deny(...)`, `@pure`, effect analysis, and explicitly documented enforcement boundaries. |
+| Refined effect families and operation semantics | [Specialized Effects v0.2](specs/specialized-effects-v0.2.md) | Current specialized-effect refinement. Historical v0.1 is archived. Memory v0.4 governs allocation-sensitive ownership/copy semantics. |
+| Module system | [Module System v0.1](specs/module-system-v0.1.md) | Module organization and resolution, subject to current implementation checks. |
+| Pattern matching | [Pattern Matching v1](specs/pattern_matching_v1.md) | Pattern semantics within its documented implemented subset. |
+| Typed intermediate representation | [TIR Specification](TIR_SPEC.md) | Current TIR design/implemented subset; ownership-aware invariants in Memory v0.4 are the **target**, not an assertion that all TIR passes already enforce them. |
+| Bytecode and VM representation | [Bytecode ISA](BYTECODE_ISA.md), [Bytecode VM](BYTECODE_VM.md), [Bytecode Cache](BYTECODE_CACHE.md) | Descriptions of implementation contracts, encoding, and cache boundaries. Verify status against the corresponding source and tests. |
+| Delivery order and gates | [Roadmap](roadmap.md) | Authority for milestones, prerequisites, and reported progress **only**. A milestone description does not override a semantic specification. |
 
-## Why Tempra?
+**Conflict rule:** a historical implementation description, test report, prototype document, or roadmap entry cannot authorize behavior forbidden by Memory v0.4. When sources conflict, record the discrepancy explicitly and reconcile the affected documents and implementation; do not silently assume the current compiler already complies.
 
-- **One language from start to finish.** Begin with top-level statements, add
-  types and a `main` entry point when you need them, and follow the same
-  language toward future native builds.
-- **Static types without ceremony.** Types are checked across variables,
-  functions, generics, and interfaces, with inference where it helps and no
-  implicit coercions.
-- **Failure is part of the type system.** There are no exceptions. `Option`,
-  `Result`, `?`, and exhaustive `match` make failure visible and local.
-- **Effects belong in signatures.** `@deny(...)` and `@pure` let functions
-  declare the capabilities they do not accept, with tooling that explains
-  violations.
-- **Values by default.** `let` is immutable, `var` is explicit, and `inout`
-  marks mutation at call sites. Arrays and slices are values; slices are views
-  over shared storage.
-- **A small, coherent surface.** One loop form (`for`), expressions everywhere,
-  structural static interfaces, and a deliberately compact standard library.
+## 2. Runtime architecture: actual state versus target
 
----
+### Scripting runtime — Tempra Script
 
-## A Taste of Tempra
-
-Run any example with `tempra run <file>`.
-
-### A script with no boilerplate
-
-```tempra
-let languages = ["Rust", "Swift", "Go"]
-
-for language in languages {
-    print(language)
-}
-```
-
-Top-level code executes directly in script mode; a `main` function is optional.
-
-### Types and pattern matching
-
-```tempra
-struct Language {
-    name: String
-    year: Int
-}
-
-enum Status {
-    Active
-    Retired
-}
-
-fn describe(lang: Language, status: Status) -> String {
-    let state = match status {
-        Active => "active"
-        Retired => "retired"
-    }
-    return lang.name + " (" + state + ")"
-}
-
-let languages = [
-    Language { name: "Rust", year: 2010 },
-    Language { name: "Swift", year: 2014 },
-]
-
-for lang in languages {
-    print(describe(lang, Active))
-}
-```
-
-Structs and enums are core data types, and `if` and `match` are expressions.
-
-### Errors as values
-
-```tempra
-fn read_config(path: String) -> String! {
-    let text = fs.read(path)?
-    return Ok(text)
-}
-
-fn main()! {
-    let config = read_config("examples/sample.txt")?
-    print(config)
-}
-```
-
-`String!` is shorthand for a fallible result, and `?` propagates an error to the
-caller. A `main` function can itself be fallible.
-
----
-
-## Design Philosophy
-
-Tempra aims to keep the language small while allowing the compiler to become
-more capable underneath it.
-
-- **Script first, not script only.** Direct feedback for small programs, with a
-  typed path to larger applications and future native backends.
-- **Explicit over implicit.** Mutation, fallibility, conversions, and effects
-  are visible in source code.
-- **Types as documentation.** Static checks catch mistakes early without
-  requiring a heavy type-system vocabulary.
-- **One obvious construct per job.** `for` covers iteration, `if` and `match`
-  produce values, and errors are ordinary values.
-- **Safety before optimization.** Memory-model guarantees come before aggressive
-  ARC optimization or concurrency.
-- **Tooling is part of the language.** Structured diagnostics, symbol
-  information, capability inspection, and LSP support are first-class concerns.
-
----
-
-## Current Capabilities
-
-### Language
-
-- Static type checking for bindings, functions, methods, generics, and
-  structural interfaces.
-- `struct`, `enum`, tuples, `Option`, `Result`, arrays, and slices.
-- Pattern matching with exhaustiveness checking, guards, struct/tuple patterns,
-  and `is` narrowing.
-- `if`, `match`, and blocks as expressions; `for` as a statement or expression.
-- Named functions, explicit-capture closures, generic specialization, `inout`
-  parameters, methods, and `extend` blocks.
-- UTF-8 strings where `.len()` counts Unicode scalar values and `.size()` counts
-  bytes; string indexing and slicing are intentionally unsupported.
-- Value-oriented collections with eager helpers such as `map`, `filter`, `find`,
-  `reduce`, `fold`, `enumerate`, `zip`, `take`, `skip`, and `chain`.
-- Checked `Int64` arithmetic: overflow and division by zero produce controlled
-  errors instead of wrapping or trapping.
-
-### Explicit errors
-
-There is no exception system. Fallible operations return `Result`, optional
-values use `Option`, and `?` propagates errors. `match` is exhaustive for
-`Bool`, enums, `Option`, and `Result`.
-
-### Comptime
-
-`comptime` expressions and blocks are evaluated during type checking and
-materialized as constants. Tempra also supports `comptime` parameters,
-`if comptime`, `comptime match`, and type values in generic code. Evaluation is
-deterministic, bounded by evaluator fuel and a call-depth limit, and rejects
-host effects such as I/O.
-
-Full specialization and runtime erasure for every comptime form remain under
-development.
-
-### Capability contracts
-
-Functions can declare capability contracts with `@deny(...)` and `@pure`:
-
-```tempra
-@pure
-pub fn add(a: Int, b: Int) -> Int {
-    return a + b
-}
-```
-
-`@pure` means `@deny(io, process, spawn, nondeterminism)`; pure code may still
-allocate or fail with a controlled panic. Contracts are checked transitively
-through calls.
-
-Capability enforcement currently runs during fresh compilation on the
-experimental VM path and can be inspected with `tempra effects`. The default HIR
-interpreter, REPL, and test runner reject annotated programs rather than execute
-them without enforcement. `tempra check` validates frontend types only; it does
-not certify capability contracts.
-
-### Runtime and tooling
-
-- Default HIR interpreter with script mode and an interactive REPL.
-- Experimental TIR and bytecode VM with verified bytecode and a compilation
-  cache.
-- Opt-in Cranelift JIT for eligible `Int64` functions and a read-only heap
-  subset.
-- CLI commands for running, checking, testing, diagnostics, symbols, effects,
-  and TIR emission.
-- LSP support for diagnostics, completion, hover, definitions, document symbols,
-  semantic tokens, references, highlights, and rename.
-- MVP native standard library: `std.fs`, `std.path`, `std.strings`, and
-  `std.io`, plus the collection helpers above. Module coverage is still growing
-  and differs between the default interpreter and experimental VM.
-
----
-
-## Getting Started
-
-### Prerequisites
-
-- A stable Rust toolchain (see `rust-toolchain.toml`).
-- `just` is optional; the equivalent Cargo commands work without it.
-
-### Build and run
-
-```bash
-cargo build --release -p tempra-cli
-./target/release/tempra run examples/hello.tmpr
-```
-
-Output:
+**Target pipeline:**
 
 ```text
-hello
+Source → Lexer → Parser → typed HIR → TIR → verification
+       → bytecode lowering → bytecode verification → stack VM
 ```
 
-For a development build:
+- **Current baseline on GitHub `main` at the time of this index:** the HIR interpreter remains the default `tempra run` path; the bytecode VM is an experimental path with a smaller supported surface. Current local development may be ahead of `main`.
+- **Transition:** make the VM the authoritative scripting execution path only after the VM parity, correctness, capability, and implementation gates have passed. No silent fallback may bypass semantic or capability checks.
+- **Memory target:** ARC **NO-CYCLE** for Tempra Script's owning runtime values, with Memory v0.4 constraints enforced at the compiler/runtime boundary. This is a planned implementation gate, not a completed guarantee.
+- **Compile-time execution:** existing K1 documentation identifies the HIR interpreter as the canonical comptime kernel. VM-backed comptime is a planned transition and requires independent parity checks for determinism, fuel/termination, capabilities, cache trust, and ownership rules.
 
-```bash
-cargo run -p tempra-cli -- run examples/hello.tmpr
-```
+### Native compilation — Tempra Native
 
-To run the test suite:
+- **Planned backend:** LLVM-based native AOT, consuming the same ownership and effect contracts as Tempra Script.
+- **Memory research objective:** eliminate GC/reference counting for managed native values when sound and practical. RC-free behavior is **not** an established implementation guarantee.
+- **Do not treat a compiler scaffold or an implementation experiment as a released backend.**
 
-```bash
-cargo test --workspace
-```
+### Retired design direction — JIT and Cranelift
 
-or, with `just`:
+The architectural decision is to **remove**, not merely freeze, the experimental Cranelift JIT and Cranelift backend direction. Their historical documents are preserved under [`archive/jit/`](archive/jit/).
 
-```bash
-just test
-```
+**Documentation archival is not code removal.** Until the separate implementation change has actually removed JIT/Cranelift crates, features, CLI options, tests, commands, CI references, and dependencies, documentation must state that the old code may still exist. No current production or forward-looking design should describe the JIT as an active target.
 
----
+## 3. Documentation map
 
-## CLI Overview
+### Language and semantics
 
-The examples below use `tempra` for brevity. From a local build, substitute
-`./target/release/tempra` or `./target/debug/tempra`.
+- [Memory & Ownership v0.4](Tempra_Memory_Ownership_v0.4.md) — single source of truth for the memory model.
+- [Surface Syntax v0.1](TEMPRA_SURFACE_SPEC_v0.1.md) — current source-language reference; scheduled for full syntax and semantic review.
+- [Grammar](GRAMMAR.md) — parser-oriented grammar; scheduled for consistency review.
+- [Comptime Specification](COMPTIME_SPEC.md) — compile-time evaluation, current HIR authority and future VM parity gate.
+- [Capability Contracts](specs/effects-v0.1.md) and [Specialized Effects v0.2](specs/specialized-effects-v0.2.md) — effect and capability contracts.
+- [Module System](specs/module-system-v0.1.md) and [Pattern Matching](specs/pattern_matching_v1.md) — domain-specific specifications.
 
-```text
-tempra run <file> [args...]        Execute with the default HIR interpreter
-tempra check <file> [--json]       Parse and type-check
-tempra diagnostics <file> [--json] Emit structured diagnostics
-tempra symbols <file> [--json]     Print a structural symbol outline
-tempra effects <file> [--json]     Inspect capability facts from fresh VM compilation
-tempra test <file>                 Run a script and its expect assertions
-tempra repl                        Start the interactive REPL
-tempra emit-tir <file>             Print TIR for supported programs (experimental)
-```
+### Compiler and runtime
 
-`check`, `diagnostics`, `symbols`, and `effects` accept `--json`. `emit-tir`
-works only for programs supported by the current TIR lowering.
+- [Architecture](architecture/ARCHITECTURE.md), [Pipeline](architecture/PIPELINE.md), and [Repository File Map](architecture/FILE_MAP.md) — architectural boundaries and repository layout; **pending VM-parity review**.
+- [TIR Specification](TIR_SPEC.md), [TIR Lowering](TIR_LOWERING.md), [TIR Interpreter](TIR_INTERP.md), and [TIR to Bytecode](TIR_TO_BYTECODE.md) — intermediate representation and transformations.
+- [Bytecode ISA](BYTECODE_ISA.md), [Bytecode VM](BYTECODE_VM.md), and [Bytecode Cache](BYTECODE_CACHE.md) — scripting execution and artifact format.
+- [VM Coverage](VM_COVERAGE.md) and [VM Performance Baseline](VM_PERF_BASELINE.md) — bounded historical or measured evidence; not a current feature certification without fresh tests.
+- [K4 Specialized Effects Gate](K4_SPECIALIZED_EFFECTS_GATE.md) and [E1 Capability Analysis](E1_CAPABILITY_ANALYSIS.md) — implementation and validation history, retaining their dated scope.
 
-### Experimental VM and JIT
+### Roadmap, development and tooling
 
-The bytecode VM is opt-in and requires a `main` function. It supports a smaller
-language subset than the default interpreter.
+- [Roadmap](roadmap.md) and [roadmap subdocuments](roadmap/) — milestones, Tempra Script release gates, status snapshots, performance work, and proof requirements.
+- [Developer Guide](DEV_GUIDE.md) and [Type Tutorial](TYPES_TUTORIAL.md) — contributors' implementation guidance; **verify HIR/VM paths before following**.
+- [Standard Library](STDLIB.md) and [Stdlib Tutorial](STDLIB_TUTORIAL.md) — currently documented stdlib and contribution workflow; **verify actual runtime support**.
+- [Tooling](TOOLING.md) and [Editor Integration](editor/README.md) — diagnostics, language tooling, and editor setup.
 
-```bash
-tempra run --experimental-vm examples/jit_heap/string_len.tmpr
-```
+## 4. Historical archive
 
-The Cranelift JIT must be compiled in and enabled on top of the VM:
+The [`archive/`](archive/) directory preserves superseded specifications and prototype write-ups **for traceability**, not as current engineering instructions.
 
-```bash
-cargo build -p tempra-cli --features jit-cranelift
-tempra run --experimental-vm --experimental-jit examples/jit_heap/string_len.tmpr
-```
+| Archive location | Historical material | Why archived |
+| --- | --- | --- |
+| [`archive/jit/`](archive/jit/) | `CRANELIFT_JIT.md`, `JIT_BURNIN.md`, `JIT_HEAP_BOUNDARY.md`, `JIT_PHASE_17_CLOSURE.md` | Experimental Cranelift JIT design, tests, and heap boundary. |
+| [`archive/syntax/syntax-v0.1.md`](archive/syntax/syntax-v0.1.md) | Early syntax sketch | Already superseded by the later surface and parser documentation. |
+| [`archive/effects/specialized-effects-v0.1.md`](archive/effects/specialized-effects-v0.1.md) | Early specialized-effects baseline | Superseded by the normative specialized-effects v0.2. |
 
-The JIT targets hot `Int64` functions and a read-only heap subset, including
-`String.len`, `String.size`, `Array.len`, and `Array.get_i64`. Functions outside
-that subset run in the VM. `--experimental-jit` requires `--experimental-vm` and
-a JIT-enabled build.
+Preserve original content where feasible. Correct links to archived historical references; do not edit historical records to pretend that later decisions were known at the time. Git history remains the final record of changes.
 
----
+## 5. Known reconciliation points
 
-## Compiler Architecture
+The items below are **documentation and implementation alignment requirements**, not a claim that they are complete.
 
-Tempra currently has two execution paths. The default path favors language
-coverage and direct execution; the experimental path adds typed backend IR,
-verification, and bytecode.
+1. **`Slice(T)` mutability:** older Surface Syntax text permits direct slice writes; Memory v0.4 defines a read-only view and requires exclusive `inout` access for mutation of underlying elements.
+2. **Explicit closure captures:** preserve the existing `fn[ref name]`, `fn[inout name]`, `fn[consume name]`, and recursive `fn[self]` syntax. No default capture mode, no invented `captures` keyword, and no strong ownership cycle for recursive `self`.
+3. **By-value versus `consume`:** ordinary duplicable parameters preserve value semantics; a physical move on proven last use is an optimization. Explicit `consume` is a semantic ownership transfer that invalidates the source. Nonduplicable resources require appropriate explicit ownership contracts.
+4. **Method receivers:** reconcile `self`, `ref self`, `inout self`, and proposed consuming receiver contracts with the actual grammar and type checker. Do not claim unimplemented spellings already work.
+5. **Async/actors:** no live dynamic borrow across suspension; task-owned values and actor isolation use the single memory model. Actor-handle identity and lifetime remain **DEFERRED POST NO-CYCLE**.
+6. **Allocation effects:** verify the conservative `@deny(alloc)` contract against physical copying, COW, buffer compaction, closure environments, and runtime allocation. Do not let backend-specific optimizations define source-level validity.
+7. **Comptime authority:** verify that migration from HIR evaluation to VM evaluation preserves type, ownership, deterministic execution, effects, termination/fuel budgets, and semantic cache invalidation.
+8. **JIT and Cranelift removal:** archive the documents now; remove runtime/compiler code and references in a separate verified implementation change. Replace forward-looking AOT references with LLVM only where the roadmap has approved that direction.
+9. **Implementation status:** update coverage, feature flags, CLI examples, test commands, and performance claims only against the exact commit and test results after VM parity.
+10. **Links and references:** check links after historical files move to `archive/`; no living normative file should link to archived content as if it were current.
 
-```text
-Default interpreter
-source → lexer/parser → AST → HIR → type checking (and comptime) → HIR interpreter
+## 6. Documentation maintenance rules
 
-Experimental VM
-source → lexer/parser → AST → HIR → type checking (and comptime)
-       → TIR lowering → TIR verification → capability analysis
-       → contract enforcement → bytecode lowering → bytecode verification
-       → VM → optional Cranelift JIT
-```
+- **One topic, one canonical contract.** Supporting tutorials and architecture explanations link to the relevant specification instead of restating incompatible rules.
+- **Label implementation status explicitly.** Use *approved design*, *implemented (bounded surface)*, *experimental*, *planned*, *deferred*, or *historical* accurately.
+- **Prefer source-tested examples.** A syntactically illustrative example must be marked as such; do not present it as accepted by the present compiler without validation.
+- **Keep future migrations distinct from completed work.** Especially for VM parity, ARC NO-CYCLE, LLVM AOT, and comptime-on-VM.
+- **Preserve history.** Move obsolete documents to `archive/` and retain their provenance; update incoming relative links.
+- **Validate documentation changes.** At minimum, check relative links, source paths, compiler flags, example syntax, and claimed tests against the chosen commit.
 
-- **HIR** is the typed high-level representation interpreted by default.
-- **TIR** is the strongly typed, verifiable backend-facing representation used
-  by the experimental VM and capability analysis.
-- **Bytecode** is verified before execution and cached for repeat runs.
-- **Capability analysis** computes direct and transitive capability requirements
-  over verified TIR.
-
-The workspace is split into focused crates: frontend (`tempra-lexer`,
-`tempra-parser`, `tempra-ast`), semantic layers (`tempra-hir`,
-`tempra-typeck`), execution (`tempra-interpreter`, `tempra-tir*`,
-`tempra-bytecode*`, `tempra-vm`, `tempra-jit-cranelift`), native bindings
-(`tempra-native`, `std/`), and tooling (`tempra-driver`, `tempra-diagnostics`,
-`tempra-analysis`, `tempra-lsp`, `tempra-cli`, `tempra-repl`).
-
-MIR, native AOT, complete Wasm emission, the linker, and related backend crates
-contain scaffolds or prototypes. They are not part of a working output pipeline
-today.
-
----
-
-## Development Status
-
-### Implemented
-
-- Lexer, parser, AST, HIR lowering, type checker, and default HIR interpreter.
-- Script mode without `main`, plus app mode with a `main` entry point.
-- Core language surface: structs, enums, tuples, `Option`, `Result`, arrays,
-  slices, pattern matching, generics, structural interfaces, closures, methods,
-  and `inout`.
-- Checked `Int64` arithmetic.
-- Comptime core: expressions, blocks, parameters, `if comptime`, and
-  `comptime match`.
-- MVP standard library and eager collection helpers.
-- CLI, structured diagnostics, symbol extraction, REPL, and LSP tooling.
-
-### Experimental
-
-- TIR lowering, verification, and interpretation.
-- Bytecode lowering, verification, VM execution, and the bytecode cache; the VM
-  requires `main` and supports a narrower language subset.
-- Capability analysis, `@deny`/`@pure` enforcement, and `tempra effects` on the
-  fresh VM compilation path.
-- Cranelift JIT for eligible `Int64` functions and a read-only heap subset.
-- `tempra emit-tir`.
-- Wasm, native backend, MIR/IR, optimization, and linker crates in scaffold or
-  prototype form.
-
-### Planned
-
-- Native AOT compilation.
-- A complete Wasm backend and Wasm hosting path.
-- Pluggable actor concurrency.
-- `@verified` functions with stronger static guarantees.
-- A complete acyclic ownership model and ARC-cycle prevention.
-- Advanced ARC optimizations such as escape analysis, stack promotion, and
-  retain/release elimination.
-- Full comptime specialization and broader TIR coverage.
-- Package management, incremental builds, and deeper compiler performance work.
-
----
-
-## Roadmap Overview
-
-K3 runtime parity is **in progress**, the K4 specialized-effect track is
-complete, and K5/K6 responsiveness measurement and budgets are planned. The
-semantic dependency order is:
-
-- **E** — capability/effect core (implemented for the current surface).
-- **R** — Result/value-use hardening (Result only).
-- **M** — memory model and acyclic ownership, ending in the mandatory M5
-  stabilization gate.
-- **C** — pluggable actor concurrency, blocked on M5 implementation.
-- **V** — verified functions (`@verified`), separate from effects and ordinary
-  safety.
-
-Optimization and backend work follows actual prerequisites rather than one
-global sequence:
-
-- **A** — native AOT, a first-class milestone and core product goal, with
-  native ABI, ownership-aware code generation, Cranelift-based AOT, linking,
-  standalone executables, parity, performance, and binary-size gates.
-- **O** — advanced memory optimization. It is not a prerequisite for C or A.
-- **NR** — standalone experimental RC-free research with fallback ARC. It never
-  blocks native AOT.
-- **P** — compiler performance, including cold/incremental builds, cache
-  invalidation, specialization control, footprint, artifact size, and latency
-  budgets.
-- **U** — a conditional unsafe boundary, only if a real low-level primitive
-  requires it.
-
-Wasm/WASI, VM, JIT, type-system hardening, comptime specialization, the standard
-library, REPL/LSP/tooling, the TIR Graph, package management, and release
-hardening remain explicit engineering tracks. See the
-[roadmap](docs/roadmap.md) for dependencies, statuses, and acceptance gates.
-
----
-
-## Documentation
-
-- [Surface syntax specification](docs/TEMPRA_SURFACE_SPEC_v0.1.md)
-- [Grammar](docs/GRAMMAR.md)
-- [Comptime specification](docs/COMPTIME_SPEC.md)
-- [Capability contracts](docs/specs/effects-v0.1.md)
-- [Architecture](docs/architecture/ARCHITECTURE.md)
-- [Compiler pipeline](docs/architecture/PIPELINE.md)
-- [Standard library](docs/STDLIB.md)
-- [TIR specification](docs/TIR_SPEC.md)
-- [Bytecode VM](docs/BYTECODE_VM.md)
-- [Cranelift JIT](docs/CRANELIFT_JIT.md)
-- [Tooling and diagnostics](docs/TOOLING.md)
-- [Developer guide](docs/DEV_GUIDE.md)
-- [Roadmap](docs/roadmap.md)
-
-The `examples/` directory contains runnable programs covering scripts, types,
-collections, errors, and experimental JIT cases.
-
----
-
-## Contributing and License
-
-Contributions, bug reports, and language-design discussions are welcome. Tempra
-is experimental, so expect breaking changes and open an issue before starting a
-large change.
-
-Before submitting a pull request, run the workspace tests and formatting check:
-
-```bash
-cargo fmt --all -- --check
-cargo test --workspace
-```
-
-The `justfile` contains additional workspace automation such as `just test`,
-`just check`, and `just fmt`.
-
-Tempra is licensed under the Apache License 2.0. See [LICENSE](LICENSE) for the
-full text.
+**Revision workflow:** reconcile Surface Syntax and Grammar against Memory v0.4; audit comptime; synchronize architecture/runtime/TIR documents after VM parity; then update stdlib, developer guides, roadmap, tooling, and performance/coverage reports. The documentation consolidation should land as a coherent PR, not as a collection of mutually inconsistent partial releases.

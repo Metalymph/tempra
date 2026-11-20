@@ -1,4 +1,4 @@
-# Ergal VM-only acceptance gate — before cross-runtime comparisons
+# Tempra Script VM-only acceptance gate — before cross-runtime comparisons
 
 **Decision date:** 2026-11-10. **Status:** accepted sequence; gate not yet passed.
 
@@ -16,7 +16,7 @@ because an experimental VM test passes.
 2. **Audit the complete execution chain:** Source -> HIR -> checked TIR ->
    verified bytecode -> stack VM. Record all supported syntax, unsupported
    lowering cases, verifier failures, semantic mismatches and error categories.
-3. **Close functionality gaps** on the declared Ergal surface: normal scripts
+3. **Close functionality gaps** on the declared Tempra Script surface: normal scripts
    without `main`, module graph, functions/generics, patterns, closures,
    collections, Result/Option, error and effect contracts, stdlib/FFI and CLI
    arguments. Anything intentionally deferred must be documented and must fail
@@ -58,7 +58,7 @@ for formal R.PROOF, M.PROOF, E.PROOF or VM.PROOF evidence.
 | Runtime coverage | Top-level scripts, args, modules, imports, stdlib, generics and closures | Audit pending |
 | Comptime | Early lowering, normal function calls, budgets, stage values and deterministic output | Audit pending |
 | REPL/shell | Incremental VM evaluation, state, process/job handling where declared | Planned |
-| Build footprint | JIT/old runtime removed from shipping closure; LLVM absent from Ergal | Planned |
+| Build footprint | JIT/old runtime removed from shipping closure; LLVM absent from Tempra Script | Planned |
 | Performance | Internal before/after timings, wall time, RSS and binary footprint | K5 underway |
 
 ### Explicitly weak evidence
@@ -85,5 +85,5 @@ minimal regression test before the fix. Differential runners must validate
 exit codes, stdout/stderr and observable effects where applicable, not merely
 `Ok()` and equal final integers. Never hide regressions with an HIR fallback.
 
-The VM-only gate is **not passed** until all declared Ergal supported cases
+The VM-only gate is **not passed** until all declared Tempra Script supported cases
 have explicit evidence on bytecode VM and comptime is parity-validated.

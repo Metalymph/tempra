@@ -825,3 +825,40 @@ fn vm_parity_ref_capture_immutable_ordered() {
 
     assert_differential(source);
 }
+
+// VM Parity 2B.2: source-to-bytecode CFG coverage for nonescaping ref captures.
+#[test]
+fn vm_parity_ref_capture_called_across_if_branches() {
+    let source = r#"
+        fn main() -> Int64 {
+            let base = 10
+            let add = fn[ref base](x: Int64) -> Int64 {
+                base + x
+            }
+            if 2 > 1 {
+                return add(5)
+            } else {
+                return add(7)
+            }
+        }
+    "#;
+    assert_differential(source);
+}
+
+#[test]
+fn vm_parity_ref_capture_created_in_conditional_branch() {
+    let source = r#"
+        fn main() -> Int64 {
+            let base = 10
+            if 1 < 2 {
+                let add = fn[ref base](x: Int64) -> Int64 {
+                    base + x
+                }
+                return add(5)
+            } else {
+                return 17
+            }
+        }
+    "#;
+    assert_differential(source);
+}

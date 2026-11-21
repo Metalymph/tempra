@@ -718,6 +718,35 @@ fn verify_function_inner(
 // This is a conservative structural proof, not a general lexical borrow checker.
 // A borrowed closure may move through local slots and be called in its owner
 // frame, but it cannot escape through a return, an argument, or an aggregate.
+// A Store in the entry block may execute repeatedly if the CFG returns to
+// entry. Counted-once syntax is not counted-once execution (v0.4 §14.5).
+fn borrowed_entry_can_repeat(func: &TirFunction, entry: TirBlockId) -> bool {
+    let successors = |id: TirBlockId| -> Vec<TirBlockId> {
+        let terminator = func
+            .blocks
+            .iter()
+            .find(|block| block.id == id)
+            .and_then(|block| block.terminator.as_ref());
+        match terminator {
+            Some(TirTerminator::Br(target)) => vec![*target],
+            Some(TirTerminator::CondBr(_, yes, no)) => vec![*yes, *no],
+            _ => vec![],
+        }
+    };
+
+    let mut pending = successors(entry);
+    let mut seen = HashSet::new();
+    while let Some(block) = pending.pop() {
+        if block == entry {
+            return true;
+        }
+        if seen.insert(block) {
+            pending.extend(successors(block));
+        }
+    }
+    false
+}
+
 fn verify_borrowed_closure_frame_lifetimes(func: &TirFunction) -> Vec<VerifierError> {
     let mut source_slots = HashSet::new();
     let mut borrowed_values = HashSet::new();
@@ -760,7 +789,9 @@ fn verify_borrowed_closure_frame_lifetimes(func: &TirFunction) -> Vec<VerifierEr
                 }
             }
         }
-        let entry_write = writes.len() == 1 && Some(writes[0].0) == entry_block;
+        let entry_write = writes.len() == 1
+            && Some(writes[0].0) == entry_block
+            && entry_block.is_some_and(|id| !borrowed_entry_can_repeat(func, id));
         let initialized_before_borrow = entry_write
             && borrow_sites.iter().all(|(block, index, slot)| {
                 *slot != source || *block != writes[0].0 || writes[0].1 < *index

@@ -910,3 +910,281 @@ fn borrowed_closure_verifier_rejects_source_reassignment() {
         Err(BytecodeVerifyError::Unsupported(_))
     ));
 }
+
+// VM Parity 2B.2: CFG-aware artifact proof. These tests deliberately keep
+// the 2B.1 owner initialization restriction; source-level NLL is separate.
+fn borrowed_cfg_fixture() -> (
+    BytecodeModule,
+    FunctionId,
+    FunctionId,
+    crate::function::SignatureId,
+    crate::constant::ConstId,
+) {
+    use crate::function::BytecodeSignature;
+    let mut module = BytecodeModule::new();
+    let signature = module.intern_signature(BytecodeSignature {
+        params: vec![],
+        ret: BytecodeType::Unit,
+    });
+    let ten = module.add_constant(BytecodeConstant::Int64(10));
+    let mut target = BytecodeFunction::new(
+        "borrowed_body".into(),
+        vec![BytecodeType::Int64],
+        BytecodeType::Unit,
+    );
+    target.locals = vec![BytecodeType::Int64];
+    target.code = vec![BytecodeInstr::Return];
+    let borrowed = module.add_function(target);
+
+    let mut plain = BytecodeFunction::new("plain_body".into(), vec![], BytecodeType::Unit);
+    plain.code = vec![BytecodeInstr::Return];
+    let plain = module.add_function(plain);
+    (module, borrowed, plain, signature, ten)
+}
+
+#[test]
+fn borrowed_cfg_accepts_calls_in_separate_branches() {
+    use crate::opcode::InstrOffset;
+    use crate::verify::verify_module;
+    let (mut module, target, _, sig, ten) = borrowed_cfg_fixture();
+    let mut main = BytecodeFunction::new("main".into(), vec![], BytecodeType::Unit);
+    main.locals = vec![BytecodeType::Int64, BytecodeType::Callable(sig)];
+    main.max_stack = 2;
+    main.code = vec![
+        BytecodeInstr::ConstI64(ten),                // 0
+        BytecodeInstr::StoreLocal(LocalId(0)),       // 1
+        BytecodeInstr::BorrowLocal(LocalId(0)),      // 2
+        BytecodeInstr::MakeClosureRef(target, 1),    // 3
+        BytecodeInstr::StoreLocal(LocalId(1)),       // 4
+        BytecodeInstr::ConstBool(true),              // 5
+        BytecodeInstr::JumpIfFalse(InstrOffset(10)), // 6
+        BytecodeInstr::LoadLocal(LocalId(1)),        // 7
+        BytecodeInstr::CallClosure(sig, 0),          // 8
+        BytecodeInstr::Jump(InstrOffset(12)),        // 9
+        BytecodeInstr::LoadLocal(LocalId(1)),        // 10
+        BytecodeInstr::CallClosure(sig, 0),          // 11
+        BytecodeInstr::Return,                       // 12
+    ];
+    module.add_function(main);
+    assert!(verify_module(&module).is_ok());
+}
+
+#[test]
+fn borrowed_cfg_accepts_same_owner_join() {
+    use crate::opcode::InstrOffset;
+    use crate::verify::verify_module;
+    let (mut module, target, _, sig, ten) = borrowed_cfg_fixture();
+    let mut main = BytecodeFunction::new("main".into(), vec![], BytecodeType::Unit);
+    main.locals = vec![BytecodeType::Int64];
+    main.max_stack = 2;
+    main.code = vec![
+        BytecodeInstr::ConstI64(ten),
+        BytecodeInstr::StoreLocal(LocalId(0)),
+        BytecodeInstr::ConstBool(true),
+        BytecodeInstr::JumpIfFalse(InstrOffset(7)),
+        BytecodeInstr::BorrowLocal(LocalId(0)),
+        BytecodeInstr::MakeClosureRef(target, 1),
+        BytecodeInstr::Jump(InstrOffset(9)),
+        BytecodeInstr::BorrowLocal(LocalId(0)),
+        BytecodeInstr::MakeClosureRef(target, 1),
+        BytecodeInstr::CallClosure(sig, 0),
+        BytecodeInstr::Return,
+    ];
+    module.add_function(main);
+    assert!(verify_module(&module).is_ok());
+}
+
+#[test]
+fn borrowed_cfg_accepts_owner_initialized_before_loop() {
+    use crate::opcode::InstrOffset;
+    use crate::verify::verify_module;
+    let (mut module, target, _, sig, ten) = borrowed_cfg_fixture();
+    let mut main = BytecodeFunction::new("main".into(), vec![], BytecodeType::Unit);
+    main.locals = vec![BytecodeType::Int64, BytecodeType::Callable(sig)];
+    main.max_stack = 2;
+    main.code = vec![
+        BytecodeInstr::ConstI64(ten),
+        BytecodeInstr::StoreLocal(LocalId(0)),
+        BytecodeInstr::BorrowLocal(LocalId(0)),
+        BytecodeInstr::MakeClosureRef(target, 1),
+        BytecodeInstr::StoreLocal(LocalId(1)),
+        BytecodeInstr::ConstBool(true),
+        BytecodeInstr::JumpIfFalse(InstrOffset(10)),
+        BytecodeInstr::LoadLocal(LocalId(1)),
+        BytecodeInstr::CallClosure(sig, 0),
+        BytecodeInstr::Jump(InstrOffset(5)),
+        BytecodeInstr::Return,
+    ];
+    module.add_function(main);
+    assert!(verify_module(&module).is_ok());
+}
+
+#[test]
+fn borrowed_cfg_rejects_initializer_that_repeats_in_loop() {
+    use crate::opcode::InstrOffset;
+    use crate::verify::verify_module;
+    let (mut module, target, _, _, ten) = borrowed_cfg_fixture();
+    let mut main = BytecodeFunction::new("main".into(), vec![], BytecodeType::Unit);
+    main.locals = vec![BytecodeType::Int64];
+    main.max_stack = 2;
+    main.code = vec![
+        BytecodeInstr::ConstBool(true),
+        BytecodeInstr::JumpIfFalse(InstrOffset(8)),
+        BytecodeInstr::ConstI64(ten),
+        BytecodeInstr::StoreLocal(LocalId(0)),
+        BytecodeInstr::BorrowLocal(LocalId(0)),
+        BytecodeInstr::MakeClosureRef(target, 1),
+        BytecodeInstr::Pop,
+        BytecodeInstr::Jump(InstrOffset(0)),
+        BytecodeInstr::Return,
+    ];
+    module.add_function(main);
+    assert!(
+        matches!(verify_module(&module), Err(BytecodeVerifyError::Unsupported(s))
+        if s.contains("non-repeating initialization"))
+    );
+}
+
+#[test]
+fn borrowed_cfg_rejects_conditional_return_escape_after_join() {
+    use crate::opcode::InstrOffset;
+    use crate::verify::verify_module;
+    let (mut module, target, plain, sig, ten) = borrowed_cfg_fixture();
+    let mut main = BytecodeFunction::new("main".into(), vec![], BytecodeType::Callable(sig));
+    main.locals = vec![BytecodeType::Int64];
+    main.max_stack = 2;
+    main.code = vec![
+        BytecodeInstr::ConstI64(ten),
+        BytecodeInstr::StoreLocal(LocalId(0)),
+        BytecodeInstr::ConstBool(true),
+        BytecodeInstr::JumpIfFalse(InstrOffset(7)),
+        BytecodeInstr::BorrowLocal(LocalId(0)),
+        BytecodeInstr::MakeClosureRef(target, 1),
+        BytecodeInstr::Jump(InstrOffset(8)),
+        BytecodeInstr::MakeClosure(plain, 0),
+        BytecodeInstr::Return,
+    ];
+    module.add_function(main);
+    assert!(
+        matches!(verify_module(&module), Err(BytecodeVerifyError::Unsupported(s))
+        if s.contains("may not be returned"))
+    );
+}
+
+#[test]
+fn borrowed_cfg_rejects_incompatible_handle_origins_at_join() {
+    use crate::opcode::InstrOffset;
+    use crate::verify::verify_module;
+    let (mut module, target, _, _, ten) = borrowed_cfg_fixture();
+    let mut main = BytecodeFunction::new("main".into(), vec![], BytecodeType::Unit);
+    main.locals = vec![BytecodeType::Int64, BytecodeType::Int64];
+    main.max_stack = 2;
+    main.code = vec![
+        BytecodeInstr::ConstI64(ten),
+        BytecodeInstr::StoreLocal(LocalId(0)),
+        BytecodeInstr::ConstI64(ten),
+        BytecodeInstr::StoreLocal(LocalId(1)),
+        BytecodeInstr::ConstBool(true),
+        BytecodeInstr::JumpIfFalse(InstrOffset(9)),
+        BytecodeInstr::BorrowLocal(LocalId(0)),
+        BytecodeInstr::Jump(InstrOffset(10)),
+        BytecodeInstr::Unreachable,
+        BytecodeInstr::BorrowLocal(LocalId(1)),
+        BytecodeInstr::MakeClosureRef(target, 1),
+        BytecodeInstr::Pop,
+        BytecodeInstr::Return,
+    ];
+    module.add_function(main);
+    assert!(
+        matches!(verify_module(&module), Err(BytecodeVerifyError::Unsupported(s))
+        if s.contains("incompatible borrowed-handle provenance"))
+    );
+}
+
+#[test]
+fn borrowed_cfg_rejects_branch_only_owner_initialization() {
+    use crate::opcode::InstrOffset;
+    use crate::verify::verify_module;
+    let (mut module, target, _, _, ten) = borrowed_cfg_fixture();
+    let mut main = BytecodeFunction::new("main".into(), vec![], BytecodeType::Unit);
+    main.locals = vec![BytecodeType::Int64];
+    main.max_stack = 2;
+    main.code = vec![
+        BytecodeInstr::ConstBool(true),
+        BytecodeInstr::JumpIfFalse(InstrOffset(4)),
+        BytecodeInstr::ConstI64(ten),
+        BytecodeInstr::StoreLocal(LocalId(0)),
+        BytecodeInstr::BorrowLocal(LocalId(0)),
+        BytecodeInstr::MakeClosureRef(target, 1),
+        BytecodeInstr::Pop,
+        BytecodeInstr::Return,
+    ];
+    module.add_function(main);
+    assert!(matches!(
+        verify_module(&module),
+        Err(BytecodeVerifyError::LocalNotInitialized(LocalId(0)))
+    ));
+}
+
+#[test]
+fn borrowed_cfg_rejects_handle_drop_on_one_branch() {
+    use crate::opcode::InstrOffset;
+    use crate::verify::verify_module;
+    let (mut module, target, _, _, ten) = borrowed_cfg_fixture();
+    let mut main = BytecodeFunction::new("main".into(), vec![], BytecodeType::Unit);
+    main.locals = vec![BytecodeType::Int64];
+    main.max_stack = 2;
+    main.code = vec![
+        BytecodeInstr::ConstI64(ten),
+        BytecodeInstr::StoreLocal(LocalId(0)),
+        BytecodeInstr::BorrowLocal(LocalId(0)),
+        BytecodeInstr::ConstBool(true),
+        BytecodeInstr::JumpIfFalse(InstrOffset(7)),
+        BytecodeInstr::MakeClosureRef(target, 1),
+        BytecodeInstr::Jump(InstrOffset(8)),
+        BytecodeInstr::Pop,
+        BytecodeInstr::Pop,
+        BytecodeInstr::Return,
+    ];
+    module.add_function(main);
+    assert!(verify_module(&module).is_err());
+}
+
+#[test]
+fn verifier_rechecks_widened_stack_types_after_cfg_merge() {
+    use crate::function::BytecodeSignature;
+    use crate::opcode::InstrOffset;
+    use crate::verify::verify_module;
+    let mut module = BytecodeModule::new();
+    let sig = module.intern_signature(BytecodeSignature {
+        params: vec![],
+        ret: BytecodeType::Unit,
+    });
+    let variant = module.add_constant(BytecodeConstant::String("Case".into()));
+    let enum_name = module.add_constant(BytecodeConstant::String("Choice".into()));
+    let mut target = BytecodeFunction::new("plain".into(), vec![], BytecodeType::Unit);
+    target.code.push(BytecodeInstr::Return);
+    let target = module.add_function(target);
+    let mut main = BytecodeFunction::new("main".into(), vec![], BytecodeType::Unit);
+    main.max_stack = 2;
+    // Visit the callable path first. A second predecessor then widens its
+    // input to Any; the call site must be verified again and rejected.
+    main.code = vec![
+        BytecodeInstr::ConstBool(true),
+        BytecodeInstr::JumpIfFalse(InstrOffset(5)),
+        BytecodeInstr::MakeEnum(enum_name, variant, 0),
+        BytecodeInstr::Jump(InstrOffset(6)),
+        BytecodeInstr::Unreachable,
+        BytecodeInstr::MakeClosure(target, 0),
+        BytecodeInstr::CallClosure(sig, 0),
+        BytecodeInstr::Return,
+    ];
+    module.add_function(main);
+    assert!(matches!(
+        verify_module(&module),
+        Err(BytecodeVerifyError::StackTypeMismatch {
+            expected: BytecodeType::Callable(_),
+            found: BytecodeType::Any,
+        })
+    ));
+}

@@ -1213,3 +1213,83 @@ fn borrowed_closure_lifetime_rejects_uninitialized_source() {
         "{errors:?}"
     );
 }
+
+// CFG Borrow Safety: one syntactic Store in a cyclic entry block can execute
+// again after a borrow was created; the structural 2B.1 proof must reject it.
+#[test]
+fn borrowed_closure_lifetime_rejects_reentering_owner_initializer() {
+    let mut module = ModuleBuilder::new();
+    let mut lambda = module.new_function("borrowed_body", TirType::Unit);
+    let lambda_entry = lambda.new_block();
+    lambda.set_current_block(lambda_entry);
+    lambda.add_param(TirType::Int64);
+    lambda.build_ret(None).unwrap();
+    let target = lambda.func.id;
+    module.add_function(lambda.build());
+
+    let mut main = module.new_function("main", TirType::Unit);
+    let entry = main.new_block();
+    let body = main.new_block();
+    let exit = main.new_block();
+    main.set_current_block(entry);
+    let owner = main.build_slot(TirType::Int64, Some("owner")).unwrap();
+    let ten = main.build_const(TirConst::Int64(10)).unwrap();
+    main.build_store(owner, ten).unwrap();
+    let cond = main.build_const(TirConst::Bool(true)).unwrap();
+    main.build_condbr(cond, body, exit).unwrap();
+
+    main.set_current_block(body);
+    let callback = main.build_make_closure_ref(target, vec![owner]).unwrap();
+    main.build_call_closure(callback, vec![]).unwrap();
+    main.build_br(entry).unwrap();
+
+    main.set_current_block(exit);
+    main.build_ret(None).unwrap();
+    module.add_function(main.build());
+
+    let errors = verify_module(&module.module).unwrap_err();
+    assert!(
+        errors.iter().any(|error| matches!(error,
+            VerifierError::GenericError(msg) if msg.contains("entry-block initialization")
+        )),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn borrowed_closure_lifetime_accepts_separate_branch_calls() {
+    let mut module = ModuleBuilder::new();
+    let mut lambda = module.new_function("borrowed_body", TirType::Unit);
+    let lambda_entry = lambda.new_block();
+    lambda.set_current_block(lambda_entry);
+    lambda.add_param(TirType::Int64);
+    lambda.build_ret(None).unwrap();
+    let target = lambda.func.id;
+    module.add_function(lambda.build());
+
+    let mut main = module.new_function("main", TirType::Unit);
+    let entry = main.new_block();
+    let yes = main.new_block();
+    let no = main.new_block();
+    let exit = main.new_block();
+    main.set_current_block(entry);
+    let owner = main.build_slot(TirType::Int64, Some("owner")).unwrap();
+    let ten = main.build_const(TirConst::Int64(10)).unwrap();
+    main.build_store(owner, ten).unwrap();
+    let borrowed = main.build_make_closure_ref(target, vec![owner]).unwrap();
+    let cond = main.build_const(TirConst::Bool(true)).unwrap();
+    main.build_condbr(cond, yes, no).unwrap();
+
+    main.set_current_block(yes);
+    main.build_call_closure(borrowed, vec![]).unwrap();
+    main.build_br(exit).unwrap();
+
+    main.set_current_block(no);
+    main.build_call_closure(borrowed, vec![]).unwrap();
+    main.build_br(exit).unwrap();
+
+    main.set_current_block(exit);
+    main.build_ret(None).unwrap();
+    module.add_function(main.build());
+    assert!(verify_module(&module.module).is_ok());
+}

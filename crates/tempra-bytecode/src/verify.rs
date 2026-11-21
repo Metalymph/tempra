@@ -136,6 +136,7 @@ pub fn verify_function_direct(
     if func.code.is_empty() {
         return Ok(());
     }
+    verify_borrowed_frame_contract(module, func)?;
     // Every parameter occupies an initialized local. A malformed artifact must
     // fail verification before indexing the local-state vector.
     if func.params.len() > func.locals.len() {
@@ -356,6 +357,48 @@ pub fn verify_function_direct(
                 }
                 BytecodeInstr::Unreachable => {
                     break; // End of path
+                }
+                BytecodeInstr::BorrowLocal(id) => {
+                    if id.0 as usize >= func.locals.len() {
+                        return Err(BytecodeVerifyError::InvalidLocalId(id));
+                    }
+                    if !state.locals_init[id.0 as usize] {
+                        return Err(BytecodeVerifyError::LocalNotInitialized(id));
+                    }
+                    state.stack.push(func.locals[id.0 as usize]);
+                }
+                BytecodeInstr::MakeClosureRef(target_id, capture_count) => {
+                    let target = module
+                        .functions
+                        .get(target_id.0 as usize)
+                        .ok_or(BytecodeVerifyError::InvalidFunctionId(target_id))?;
+                    let hidden_count = usize::from(capture_count);
+                    if hidden_count == 0 || hidden_count > target.params.len() {
+                        return Err(BytecodeVerifyError::Message(
+                            "borrowed closure requires a nonempty valid capture prefix".into(),
+                        ));
+                    }
+                    let public_signature = crate::function::BytecodeSignature {
+                        params: target.params[hidden_count..].to_vec(),
+                        ret: target.ret,
+                    };
+                    let signature_index = module
+                        .signatures
+                        .iter()
+                        .position(|sig| sig == &public_signature)
+                        .ok_or(BytecodeVerifyError::MissingClosureSignature(target_id))?;
+                    for expected in target.params[..hidden_count].iter().rev() {
+                        let found = state.pop_ty()?;
+                        if found != *expected {
+                            return Err(BytecodeVerifyError::StackTypeMismatch {
+                                expected: *expected,
+                                found,
+                            });
+                        }
+                    }
+                    state
+                        .stack
+                        .push(BytecodeType::Callable(SignatureId(signature_index as u32)));
                 }
                 BytecodeInstr::MakeClosure(target_id, capture_count) => {
                     let target = module
@@ -606,6 +649,211 @@ pub fn verify_function_direct(
         });
     }
 
+    Ok(())
+}
+
+// VM Parity 2B.1e.2: frame-scoped borrowed closure validation.
+// This additional proof runs *before* the ordinary typed stack verifier. It is
+// required because the stack type of BorrowLocal is its source value type, but
+// the runtime carries a non-owning frame handle until that value is read.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BorrowProvenance {
+    Plain,
+    Handle(LocalId),
+    BorrowedClosure,
+}
+
+fn verify_borrowed_frame_contract(
+    module: &BytecodeModule,
+    func: &BytecodeFunction,
+) -> Result<(), BytecodeVerifyError> {
+    let has_borrows = func.code.iter().any(|instruction| {
+        matches!(
+            instruction,
+            BytecodeInstr::BorrowLocal(_) | BytecodeInstr::MakeClosureRef(_, _)
+        )
+    });
+    if !has_borrows {
+        return Ok(());
+    }
+
+    // The CFG-level borrow provenance lattice comes later. No flow-sensitive
+    // assumptions are made across branches in this restricted milestone.
+    if func.code.iter().any(|instruction| {
+        matches!(
+            instruction,
+            BytecodeInstr::Jump(_) | BytecodeInstr::JumpIfFalse(_)
+        )
+    }) {
+        return Err(BytecodeVerifyError::Unsupported(
+            "borrowed closures with bytecode branches need CFG lifetime analysis".into(),
+        ));
+    }
+
+    let mut writes = vec![0usize; func.locals.len()];
+    for instr in &func.code {
+        if let BytecodeInstr::StoreLocal(local) = instr {
+            let index = local.0 as usize;
+            if index >= writes.len() {
+                return Err(BytecodeVerifyError::InvalidLocalId(*local));
+            }
+            writes[index] += 1;
+        }
+    }
+
+    let mut initialized = vec![false; func.locals.len()];
+    for item in initialized.iter_mut().take(func.params.len()) {
+        *item = true;
+    }
+    let mut locals = vec![BorrowProvenance::Plain; func.locals.len()];
+    let mut stack: Vec<BorrowProvenance> = Vec::new();
+    let mut made_borrowed_closure = false;
+
+    for instr in &func.code {
+        let effect = stack_effect(instr, module, func)
+            .map_err(|err| BytecodeVerifyError::Message(err.to_string()))?;
+        if stack.len() < usize::from(effect.pops) {
+            return Err(BytecodeVerifyError::StackUnderflow);
+        }
+        match *instr {
+            BytecodeInstr::BorrowLocal(source) => {
+                let index = source.0 as usize;
+                if index >= initialized.len() {
+                    return Err(BytecodeVerifyError::InvalidLocalId(source));
+                }
+                // The caller owns the slot; borrowed params and callable slots
+                // are excluded until interprocedural borrow tracking exists.
+                if index < func.params.len()
+                    || writes[index] != 1
+                    || !initialized[index]
+                    || matches!(func.locals[index], BytecodeType::Callable(_))
+                    || locals[index] != BorrowProvenance::Plain
+                {
+                    return Err(BytecodeVerifyError::Unsupported(
+                        "borrowed local needs one preceding initialization and a noncallable owner slot".into(),
+                    ));
+                }
+                stack.push(BorrowProvenance::Handle(source));
+            }
+            BytecodeInstr::MakeClosureRef(target_id, count) => {
+                if count == 0 {
+                    return Err(BytecodeVerifyError::Unsupported(
+                        "borrowed closure with zero captures is invalid".into(),
+                    ));
+                }
+                let target = module
+                    .functions
+                    .get(target_id.0 as usize)
+                    .ok_or(BytecodeVerifyError::InvalidFunctionId(target_id))?;
+                if target.is_extern || usize::from(count) > target.params.len() {
+                    return Err(BytecodeVerifyError::Unsupported(
+                        "borrowed closure target must be a defined function with enough parameters"
+                            .into(),
+                    ));
+                }
+                let mut handles = Vec::with_capacity(usize::from(count));
+                for _ in 0..count {
+                    match stack.pop() {
+                        Some(BorrowProvenance::Handle(local)) => handles.push(local),
+                        _ => {
+                            return Err(BytecodeVerifyError::Unsupported(
+                                "MakeClosureRef may only consume BorrowLocal handles".into(),
+                            ))
+                        }
+                    }
+                }
+                handles.reverse();
+                for (local, expected) in handles.iter().zip(target.params.iter()) {
+                    if func.locals[local.0 as usize] != *expected {
+                        return Err(BytecodeVerifyError::StackTypeMismatch {
+                            expected: *expected,
+                            found: func.locals[local.0 as usize],
+                        });
+                    }
+                }
+                made_borrowed_closure = true;
+                stack.push(BorrowProvenance::BorrowedClosure);
+            }
+            BytecodeInstr::LoadLocal(local) => {
+                let index = local.0 as usize;
+                if index >= locals.len() {
+                    return Err(BytecodeVerifyError::InvalidLocalId(local));
+                }
+                if !initialized[index] {
+                    return Err(BytecodeVerifyError::LocalNotInitialized(local));
+                }
+                stack.push(locals[index]);
+            }
+            BytecodeInstr::StoreLocal(local) => {
+                let index = local.0 as usize;
+                if index >= locals.len() {
+                    return Err(BytecodeVerifyError::InvalidLocalId(local));
+                }
+                let value = stack.pop().ok_or(BytecodeVerifyError::StackUnderflow)?;
+                if matches!(value, BorrowProvenance::Handle(_)) {
+                    return Err(BytecodeVerifyError::Unsupported(
+                        "borrow handle cannot be stored outside MakeClosureRef".into(),
+                    ));
+                }
+                initialized[index] = true;
+                locals[index] = value;
+            }
+            BytecodeInstr::CallClosure(_, argc) => {
+                for _ in 0..argc {
+                    let arg = stack.pop().ok_or(BytecodeVerifyError::StackUnderflow)?;
+                    if arg != BorrowProvenance::Plain {
+                        return Err(BytecodeVerifyError::Unsupported(
+                            "borrowed callable cannot escape as a call argument".into(),
+                        ));
+                    }
+                }
+                let callee = stack.pop().ok_or(BytecodeVerifyError::StackUnderflow)?;
+                if matches!(callee, BorrowProvenance::Handle(_)) {
+                    return Err(BytecodeVerifyError::Unsupported(
+                        "raw borrow handle is not callable".into(),
+                    ));
+                }
+                for _ in 0..effect.pushes {
+                    stack.push(BorrowProvenance::Plain);
+                }
+            }
+            BytecodeInstr::Return => {
+                // Even a Unit return may leave borrowed data on the stack in
+                // a malformed module. The ordinary verifier checks stack types.
+                if stack.iter().any(|kind| *kind != BorrowProvenance::Plain) {
+                    return Err(BytecodeVerifyError::Unsupported(
+                        "borrowed closure/handle may not be returned".into(),
+                    ));
+                }
+                for _ in 0..effect.pops {
+                    stack.pop();
+                }
+            }
+            _ => {
+                for _ in 0..effect.pops {
+                    if stack.pop() != Some(BorrowProvenance::Plain) {
+                        return Err(BytecodeVerifyError::Unsupported(
+                            "borrowed closure/handle escapes via unsupported bytecode operation"
+                                .into(),
+                        ));
+                    }
+                }
+                for _ in 0..effect.pushes {
+                    stack.push(BorrowProvenance::Plain);
+                }
+            }
+        }
+    }
+    if !made_borrowed_closure {
+        return Err(BytecodeVerifyError::Unsupported(
+            "BorrowLocal without MakeClosureRef is unsupported".into(),
+        ));
+    }
+    if stack.iter().any(|kind| *kind != BorrowProvenance::Plain) {
+        return Err(BytecodeVerifyError::Unsupported(
+            "borrowed data remains on the stack after function exit".into(),
+        ));
+    }
     Ok(())
 }
 

@@ -418,6 +418,29 @@ impl<'a> FunctionLowerer<'a> {
                 }
             }
             TirInstr::Slot(_, _) => {}
+            TirInstr::MakeClosureRef(res, func_id, captured_slots) => {
+                let target = self.function_ids.get(func_id).copied().ok_or(
+                    BytecodeLowerError::MissingFunctionMapping {
+                        caller: self.tir_func.id,
+                        target: *func_id,
+                    },
+                )?;
+                let count = u16::try_from(captured_slots.len()).map_err(|_| {
+                    BytecodeLowerError::UnsupportedInstr(
+                        "borrowed closure capture count exceeds u16".into(),
+                    )
+                })?;
+                for slot in captured_slots {
+                    let local =
+                        self.slot_to_local.get(slot).copied().ok_or_else(|| {
+                            BytecodeLowerError::UnknownSlot(format!("${}", slot.0))
+                        })?;
+                    // A borrow handle is not a copied local value.
+                    self.emit(BytecodeInstr::BorrowLocal(local));
+                }
+                self.emit(BytecodeInstr::MakeClosureRef(target, count));
+                self.store_res(*res)?;
+            }
             TirInstr::MakeClosure(res, func_id, captures) => {
                 let target = self.function_ids.get(func_id).copied().ok_or(
                     BytecodeLowerError::MissingFunctionMapping {
@@ -788,6 +811,7 @@ fn get_instr_res_id(instr: &TirInstr) -> Option<TirValueId> {
         | TirInstr::Not(id, _)
         | TirInstr::Call(id, _, _)
         | TirInstr::MakeClosure(id, _, _)
+        | TirInstr::MakeClosureRef(id, _, _)
         | TirInstr::CallClosure(id, _, _) => Some(*id),
         TirInstr::Make(id, _, _, _)
         | TirInstr::MakeStruct(id, _, _)

@@ -120,6 +120,7 @@ fn origin_kind_name(kind: EffectDirectOriginKind) -> &'static str {
         EffectDirectOriginKind::Slice => "slice",
         EffectDirectOriginKind::Bytes => "bytes",
         EffectDirectOriginKind::ArrayPush => "array_push",
+        EffectDirectOriginKind::BorrowedClosure => "borrowed_closure",
         EffectDirectOriginKind::ExternCall => "extern_call",
     }
 }

@@ -68,6 +68,8 @@ pub enum EffectDirectOriginKind {
     Make,
     /// A TIR struct construction.
     MakeStruct,
+    /// Allocation of a frame-bound borrowed closure environment.
+    BorrowedClosure,
     /// Allocation of a closure capture environment.
     ClosureEnvironment,
     /// A conservative may-panic division.
@@ -301,6 +303,7 @@ fn project_witness(
         DirectCapabilitySource::StringConstant => (EffectDirectOriginKind::StringConstant, None),
         DirectCapabilitySource::Make => (EffectDirectOriginKind::Make, None),
         DirectCapabilitySource::MakeStruct => (EffectDirectOriginKind::MakeStruct, None),
+        DirectCapabilitySource::BorrowedClosure => (EffectDirectOriginKind::BorrowedClosure, None),
         DirectCapabilitySource::ClosureEnvironment => {
             (EffectDirectOriginKind::ClosureEnvironment, None)
         }

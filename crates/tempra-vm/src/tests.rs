@@ -600,6 +600,8 @@ fn opcode_ids_are_unique_and_within_bounds() {
         BytecodeInstr::GetField(tempra_bytecode::constant::ConstId(0)),
         BytecodeInstr::SetField(tempra_bytecode::constant::ConstId(0)),
         BytecodeInstr::ArrayPush,
+        BytecodeInstr::BorrowLocal(LocalId(0)),
+        BytecodeInstr::MakeClosureRef(FunctionId(0), 0),
         BytecodeInstr::AddI64LL(
             tempra_bytecode::function::LocalId(0),
             tempra_bytecode::function::LocalId(0),
@@ -987,4 +989,59 @@ fn vm_closure_as_function_parameter() {
         run_function(&module, "main", vec![]).unwrap(),
         VmValue::Int64(11)
     );
+}
+
+// VM Parity 2B.1e.2: MakeClosureRef retains a frame-local handle, not a
+// captured copy. A lifted hidden capture may move through a local before use.
+#[test]
+fn vm_ref_borrow_slot_identity_and_late_dereference() {
+    use tempra_bytecode::function::BytecodeSignature;
+    let mut module = BytecodeModule::new();
+    let signature = module.intern_signature(BytecodeSignature {
+        params: vec![BytecodeType::Int64],
+        ret: BytecodeType::Int64,
+    });
+    let ten = module.add_constant(BytecodeConstant::Int64(10));
+    let five = module.add_constant(BytecodeConstant::Int64(5));
+
+    let mut lambda = BytecodeFunction::new(
+        "lambda".into(),
+        vec![BytecodeType::Int64, BytecodeType::Int64],
+        BytecodeType::Int64,
+    );
+    lambda.locals = vec![BytecodeType::Int64; 3];
+    lambda.max_stack = 2;
+    lambda.code = vec![
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::StoreLocal(LocalId(2)),
+        BytecodeInstr::LoadLocal(LocalId(2)),
+        BytecodeInstr::LoadLocal(LocalId(1)),
+        BytecodeInstr::AddI64,
+        BytecodeInstr::Return,
+    ];
+    let target = module.add_function(lambda);
+
+    let mut main = BytecodeFunction::new("main".into(), vec![], BytecodeType::Int64);
+    main.locals = vec![BytecodeType::Int64, BytecodeType::Callable(signature)];
+    main.max_stack = 2;
+    main.code = vec![
+        BytecodeInstr::ConstI64(ten),
+        BytecodeInstr::StoreLocal(LocalId(0)),
+        BytecodeInstr::BorrowLocal(LocalId(0)),
+        BytecodeInstr::MakeClosureRef(target, 1),
+        BytecodeInstr::StoreLocal(LocalId(1)),
+        BytecodeInstr::LoadLocal(LocalId(1)),
+        BytecodeInstr::ConstI64(five),
+        BytecodeInstr::CallClosure(signature, 1),
+        BytecodeInstr::Return,
+    ];
+    module.add_function(main);
+
+    tempra_bytecode::verify::verify_module(&module).unwrap();
+    assert_eq!(
+        run_function(&module, "main", vec![]).unwrap(),
+        VmValue::Int64(15)
+    );
+    // In-memory VM support only: serialized artifacts stay fail-closed.
+    assert!(tempra_bytecode::serialize::encode_module(&module).is_err());
 }

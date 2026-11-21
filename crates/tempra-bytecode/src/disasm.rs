@@ -86,6 +86,12 @@ pub fn disassemble_function(
             BytecodeInstr::JumpIfFalse(off) => out.push_str(&format!("JumpIfFalse {}\n", off.0)),
             BytecodeInstr::Return => out.push_str("Return\n"),
             BytecodeInstr::Unreachable => out.push_str("Unreachable\n"),
+            BytecodeInstr::BorrowLocal(id) => {
+                out.push_str(&format!("BorrowLocal ${}\n", id.0));
+            }
+            BytecodeInstr::MakeClosureRef(id, captures) => {
+                out.push_str(&format!("MakeClosureRef @{} captures={}\n", id.0, captures));
+            }
             BytecodeInstr::MakeClosure(id, captures) => {
                 out.push_str(&format!("MakeClosure @{} captures={}\n", id.0, captures));
             }

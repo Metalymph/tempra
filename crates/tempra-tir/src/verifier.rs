@@ -365,6 +365,61 @@ fn verify_function_inner(
                         value_types.insert(*res, None);
                     }
                 }
+                TirInstr::MakeClosureRef(res, target_func, captures) => {
+                    // Storage is borrowed, not copied: validate slot identities
+                    // and their exact types against hidden leading parameters.
+                    if captures.is_empty() {
+                        errors.push(VerifierError::GenericError(
+                            "make_closure_ref requires at least one borrowed slot".into(),
+                        ));
+                        value_types.insert(*res, None);
+                    } else if let Some(f) = functions.get(target_func) {
+                        if f.is_extern || f.blocks.is_empty() {
+                            errors.push(VerifierError::GenericError(format!(
+                                "make_closure_ref requires a defined target: {:?}",
+                                target_func
+                            )));
+                            value_types.insert(*res, None);
+                        } else if captures.len() > f.params.len() {
+                            errors.push(VerifierError::GenericError(format!(
+                                "borrowed closure capture count exceeds target parameters for {:?}",
+                                target_func
+                            )));
+                            value_types.insert(*res, None);
+                        } else {
+                            let mut seen = std::collections::HashSet::new();
+                            for (slot, (_, expected)) in captures.iter().zip(f.params.iter()) {
+                                if !seen.insert(*slot) {
+                                    errors.push(VerifierError::GenericError(format!(
+                                        "duplicate borrowed capture slot ${}",
+                                        slot.0
+                                    )));
+                                }
+                                match slot_types.get(slot) {
+                                    None => errors.push(VerifierError::UndeclaredSlot(*slot)),
+                                    Some(actual) if actual != expected => {
+                                        errors.push(VerifierError::TypeMismatch {
+                                            expected: expected.clone(),
+                                            actual: actual.clone(),
+                                        });
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            let params = f.params[captures.len()..]
+                                .iter()
+                                .map(|(_, ty)| ty.clone())
+                                .collect();
+                            value_types.insert(
+                                *res,
+                                Some(TirType::Function(params, Box::new(f.return_type.clone()))),
+                            );
+                        }
+                    } else {
+                        errors.push(VerifierError::FunctionNotFound(*target_func));
+                        value_types.insert(*res, None);
+                    }
+                }
                 TirInstr::CallClosure(res, callee, args) => {
                     let callee_type = value_types.get(callee).cloned();
                     match callee_type {
@@ -650,9 +705,163 @@ fn verify_function_inner(
         }
     }
 
+    errors.extend(verify_borrowed_closure_frame_lifetimes(func));
+
     if errors.is_empty() {
         Ok(value_types)
     } else {
         Err(errors)
+    }
+}
+
+// VM Parity 2B.1d: frame-bound borrowed closures.
+// This is a conservative structural proof, not a general lexical borrow checker.
+// A borrowed closure may move through local slots and be called in its owner
+// frame, but it cannot escape through a return, an argument, or an aggregate.
+fn verify_borrowed_closure_frame_lifetimes(func: &TirFunction) -> Vec<VerifierError> {
+    let mut source_slots = HashSet::new();
+    let mut borrowed_values = HashSet::new();
+    let mut borrow_sites = Vec::new();
+
+    for block in &func.blocks {
+        for (index, instr) in block.instrs.iter().enumerate() {
+            if let TirInstr::MakeClosureRef(result, _, captures) = instr {
+                borrowed_values.insert(*result);
+                for slot in captures {
+                    source_slots.insert(*slot);
+                    borrow_sites.push((block.id, index, *slot));
+                }
+            }
+        }
+    }
+
+    if borrowed_values.is_empty() {
+        return Vec::new();
+    }
+
+    let mut errors = Vec::new();
+    let entry_block = func.blocks.first().map(|block| block.id);
+
+    // For this milestone, owner storage must have one static initialization
+    // in the entry block, and it must execute before any borrow in that block.
+    // A single instruction in a loop/non-entry block is NOT a safe initializer.
+    // This conservative restriction also excludes later mutation of a borrowed
+    // slot, even when a more sophisticated analysis could prove it harmless.
+    let mut ordered_sources: Vec<_> = source_slots.iter().copied().collect();
+    ordered_sources.sort_by_key(|slot| slot.0);
+    for source in ordered_sources {
+        let mut writes = Vec::new();
+        for block in &func.blocks {
+            for (index, instr) in block.instrs.iter().enumerate() {
+                if let TirInstr::Store(slot, _) = instr {
+                    if *slot == source {
+                        writes.push((block.id, index));
+                    }
+                }
+            }
+        }
+        let entry_write = writes.len() == 1 && Some(writes[0].0) == entry_block;
+        let initialized_before_borrow = entry_write
+            && borrow_sites.iter().all(|(block, index, slot)| {
+                *slot != source || *block != writes[0].0 || writes[0].1 < *index
+            });
+        if !initialized_before_borrow {
+            errors.push(VerifierError::GenericError(format!(
+                "borrowed source slot ${} requires exactly one entry-block initialization before the borrow",
+                source.0
+            )));
+        }
+    }
+
+    // May-flow fixpoint: any local slot receiving a borrowed closure becomes
+    // tainted; any subsequent load is tainted as well. Union over every Store
+    // is necessary across branches and loops (never use the last Store only).
+    let mut borrowed_slots = HashSet::new();
+    loop {
+        let mut changed = false;
+        for block in &func.blocks {
+            for instr in &block.instrs {
+                match instr {
+                    TirInstr::Store(slot, value) if borrowed_values.contains(value) => {
+                        changed |= borrowed_slots.insert(*slot);
+                    }
+                    TirInstr::Load(value, slot) if borrowed_slots.contains(slot) => {
+                        changed |= borrowed_values.insert(*value);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    // Scan in stable function/block/instruction order. All uses other than
+    // local Store/Load and CallClosure-as-callee are forbidden until full
+    // interprocedural lifetime support is available.
+    for block in &func.blocks {
+        for instr in &block.instrs {
+            if let TirInstr::MakeClosureRef(_, _, captures) = instr {
+                if captures.iter().any(|slot| borrowed_slots.contains(slot)) {
+                    errors.push(VerifierError::GenericError(
+                        "nested ref capture of a borrowed closure is unsupported".into(),
+                    ));
+                }
+            }
+            if instruction_escapes_borrowed_closure(instr, &borrowed_values) {
+                errors.push(VerifierError::GenericError(
+                    "borrowed closure escapes its owner frame or is used as a non-callee value"
+                        .into(),
+                ));
+            }
+        }
+        if let Some(TirTerminator::Ret(Some(value))) = &block.terminator {
+            if borrowed_values.contains(value) {
+                errors.push(VerifierError::GenericError(
+                    "borrowed closure escapes its owner frame through return".into(),
+                ));
+            }
+        }
+    }
+
+    errors
+}
+
+fn instruction_escapes_borrowed_closure(instr: &TirInstr, borrowed: &HashSet<TirValueId>) -> bool {
+    let contains = |value: &TirValueId| borrowed.contains(value);
+    match instr {
+        TirInstr::Const(_, _)
+        | TirInstr::Slot(_, _)
+        | TirInstr::Load(_, _)
+        | TirInstr::Store(_, _)
+        | TirInstr::MakeClosureRef(_, _, _) => false,
+        TirInstr::CallClosure(_, _, args)
+        | TirInstr::Call(_, _, args)
+        | TirInstr::MakeClosure(_, _, args)
+        | TirInstr::Make(_, _, _, args) => args.iter().any(contains),
+        TirInstr::MakeStruct(_, _, fields) => fields.iter().any(|(_, value)| contains(value)),
+        TirInstr::Get(_, object, _)
+        | TirInstr::Tag(_, object)
+        | TirInstr::Len(_, object)
+        | TirInstr::Size(_, object)
+        | TirInstr::Bytes(_, object)
+        | TirInstr::Not(_, object) => contains(object),
+        TirInstr::Unwrap(_, object, _, _) => contains(object),
+        TirInstr::Set(_, object, _, value)
+        | TirInstr::GetIndex(_, object, value)
+        | TirInstr::ArrayPush(_, object, value)
+        | TirInstr::Add(_, object, value)
+        | TirInstr::Sub(_, object, value)
+        | TirInstr::Mul(_, object, value)
+        | TirInstr::Div(_, object, value)
+        | TirInstr::Eq(_, object, value)
+        | TirInstr::Lt(_, object, value)
+        | TirInstr::Gt(_, object, value)
+        | TirInstr::And(_, object, value)
+        | TirInstr::Or(_, object, value) => contains(object) || contains(value),
+        TirInstr::Slice(_, object, start, end) => {
+            contains(object) || contains(start) || contains(end)
+        }
     }
 }

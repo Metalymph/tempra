@@ -1,6 +1,7 @@
 use crate::error::VmError;
 use crate::profile::{FunctionProfile, ProfilingState, VmOptions, VmProfile};
-use crate::value::{VmClosure, VmValue};
+use crate::value::{VmBorrow, VmClosure, VmValue};
+use std::collections::HashSet;
 use std::rc::Rc;
 use tempra_bytecode::bytecode::BytecodeModule;
 use tempra_bytecode::constant::BytecodeConstant;
@@ -19,6 +20,8 @@ use tempra_jit_cranelift::{
 };
 
 pub struct Frame {
+    /// Unique lifetime identity; never reused within this interpreter.
+    pub token: u64,
     pub function_id: FunctionId,
     pub ip: usize,
     pub locals: Vec<Option<VmValue>>,
@@ -30,6 +33,8 @@ pub type NativeResolver = fn(&str, &str) -> Option<fn(&[VmValue]) -> Result<VmVa
 pub struct Interpreter<'a> {
     pub module: &'a BytecodeModule,
     pub call_stack: Vec<Frame>,
+    next_frame_token: u64,
+    borrowed_sources: HashSet<(u64, u32)>,
     pub(crate) profiling: Option<ProfilingState>,
     pub native_resolver: Option<NativeResolver>,
 
@@ -48,6 +53,8 @@ impl<'a> Interpreter<'a> {
         Self {
             module,
             call_stack: Vec::with_capacity(32),
+            next_frame_token: 0,
+            borrowed_sources: HashSet::new(),
             profiling: None,
             native_resolver: None,
             #[cfg(feature = "jit-cranelift")]
@@ -76,6 +83,8 @@ impl<'a> Interpreter<'a> {
         Self {
             module,
             call_stack: Vec::with_capacity(32),
+            next_frame_token: 0,
+            borrowed_sources: HashSet::new(),
             profiling,
             native_resolver: None,
             #[cfg(feature = "jit-cranelift")]
@@ -211,11 +220,14 @@ impl<'a> Interpreter<'a> {
             locals[i] = Some(arg);
         }
 
+        let initial_max_stack = func.max_stack as usize;
+        let initial_token = self.allocate_frame_token()?;
         let initial_frame = Frame {
+            token: initial_token,
             function_id,
             ip: 0,
             locals,
-            stack: Vec::with_capacity(func.max_stack as usize),
+            stack: Vec::with_capacity(initial_max_stack),
         };
 
         self.call_stack.push(initial_frame);
@@ -386,6 +398,10 @@ impl<'a> Interpreter<'a> {
             50 => "ArrayPush",
             51 => "AddI64LL",
             52 => "AddI64LC",
+            53 => "MakeClosure",
+            54 => "CallClosure",
+            55 => "BorrowLocal",
+            56 => "MakeClosureRef",
             _ => "Unknown",
         }
     }
@@ -625,10 +641,17 @@ impl<'a> Interpreter<'a> {
                     self.push(val)?;
                 }
                 BytecodeInstr::StoreLocal(id) => {
-                    let val = self.pop()?;
+                    let val = self.pop_raw()?;
                     let frame = self.call_stack.last_mut().ok_or(VmError::MissingReturn)?;
                     if id.0 as usize >= frame.locals.len() {
                         return Err(VmError::LocalOutOfBounds(id.0));
+                    }
+                    if self.borrowed_sources.contains(&(frame.token, id.0))
+                        || matches!(frame.locals[id.0 as usize], Some(VmValue::BorrowedLocal(_)))
+                    {
+                        return Err(VmError::Message(
+                            "cannot overwrite an active immutable borrowed local".into(),
+                        ));
                     }
                     frame.locals[id.0 as usize] = Some(val);
                 }
@@ -785,6 +808,73 @@ impl<'a> Interpreter<'a> {
                     }
                 }
 
+                BytecodeInstr::BorrowLocal(local) => {
+                    let owner = self.call_stack.last().ok_or(VmError::MissingReturn)?;
+                    let value = owner
+                        .locals
+                        .get(local.0 as usize)
+                        .ok_or(VmError::LocalOutOfBounds(local.0))?
+                        .as_ref()
+                        .ok_or(VmError::LocalNotInitialized(local.0))?;
+                    if matches!(value, VmValue::BorrowedLocal(_)) {
+                        return Err(VmError::Message(
+                            "nested borrowed locals are not supported".into(),
+                        ));
+                    }
+                    let token = owner.token;
+                    self.borrowed_sources.insert((token, local.0));
+                    self.push(VmValue::BorrowedLocal(VmBorrow {
+                        owner_frame: token,
+                        local_id: local,
+                    }))?;
+                }
+                BytecodeInstr::MakeClosureRef(target_id, capture_count) => {
+                    let target = self
+                        .module
+                        .functions
+                        .get(target_id.0 as usize)
+                        .ok_or_else(|| VmError::UnknownFunction(target_id.to_string()))?;
+                    let count = usize::from(capture_count);
+                    if count == 0 || count > target.params.len() || target.is_extern {
+                        return Err(VmError::Message(
+                            "invalid borrowed closure target/capture count".into(),
+                        ));
+                    }
+                    let public_signature = BytecodeSignature {
+                        params: target.params[count..].to_vec(),
+                        ret: target.ret,
+                    };
+                    let signature_id = self
+                        .module
+                        .signatures
+                        .iter()
+                        .position(|sig| sig == &public_signature)
+                        .map(|index| SignatureId(index as u32))
+                        .ok_or_else(|| {
+                            VmError::Message("borrowed closure signature missing".into())
+                        })?;
+                    let owner_token = self.call_stack.last().ok_or(VmError::MissingReturn)?.token;
+                    let mut captures = Vec::with_capacity(count);
+                    for _ in 0..count {
+                        let raw = self.pop_raw()?;
+                        match &raw {
+                            VmValue::BorrowedLocal(handle) if handle.owner_frame == owner_token => {
+                                captures.push(raw)
+                            }
+                            _ => {
+                                return Err(VmError::Message(
+                                    "MakeClosureRef requires current-frame borrow handles".into(),
+                                ))
+                            }
+                        }
+                    }
+                    captures.reverse();
+                    self.push(VmValue::Closure(VmClosure {
+                        function_id: target_id,
+                        signature_id,
+                        captures,
+                    }))?;
+                }
                 BytecodeInstr::MakeClosure(target_id, capture_count) => {
                     let target = self
                         .module
@@ -885,7 +975,7 @@ impl<'a> Interpreter<'a> {
                         locals[index] = Some(value);
                     }
                     // Always execute the target in the bytecode VM, never JIT.
-                    self.push_interpreted_frame(closure.function_id, locals, max_stack);
+                    self.push_interpreted_frame(closure.function_id, locals, max_stack)?;
                 }
                 BytecodeInstr::Call(target_id, argc) => {
                     #[cfg(feature = "jit-cranelift")]
@@ -1062,7 +1152,7 @@ impl<'a> Interpreter<'a> {
                     }
 
                     let callee_max_stack = target_func.max_stack as usize;
-                    self.push_interpreted_frame(target_id, locals, callee_max_stack);
+                    self.push_interpreted_frame(target_id, locals, callee_max_stack)?;
                 }
 
                 BytecodeInstr::Return => {
@@ -1072,7 +1162,10 @@ impl<'a> Interpreter<'a> {
                         None
                     };
 
-                    self.call_stack.pop();
+                    if let Some(popped) = self.call_stack.pop() {
+                        self.borrowed_sources
+                            .retain(|(frame_id, _)| *frame_id != popped.token);
+                    }
 
                     if let Some(prev_frame) = self.call_stack.last_mut() {
                         if let Some(val) = ret_val {
@@ -1354,46 +1447,54 @@ impl<'a> Interpreter<'a> {
                 BytecodeInstr::Unreachable => return Err(VmError::UnreachableExecuted),
 
                 BytecodeInstr::AddI64LL(a, b) => {
-                    let frame = self.call_stack.last().ok_or(VmError::MissingReturn)?;
-                    let val_a = frame
-                        .locals
-                        .get(a.0 as usize)
-                        .ok_or(VmError::LocalOutOfBounds(a.0))?
-                        .as_ref()
-                        .ok_or(VmError::LocalNotInitialized(a.0))?;
-                    let val_b = frame
-                        .locals
-                        .get(b.0 as usize)
-                        .ok_or(VmError::LocalOutOfBounds(b.0))?
-                        .as_ref()
-                        .ok_or(VmError::LocalNotInitialized(b.0))?;
-
-                    if let (VmValue::Int64(ia), VmValue::Int64(ib)) = (val_a, val_b) {
-                        let res = VmValue::Int64(tempra_runtime::add_i64(*ia, *ib)?);
-                        self.push(res)?;
-                    } else {
-                        return Err(VmError::Message("Type mismatch in AddI64LL".into()));
+                    let (left, right) = {
+                        let frame = self.call_stack.last().ok_or(VmError::MissingReturn)?;
+                        let left = frame
+                            .locals
+                            .get(a.0 as usize)
+                            .ok_or(VmError::LocalOutOfBounds(a.0))?
+                            .as_ref()
+                            .ok_or(VmError::LocalNotInitialized(a.0))?
+                            .clone();
+                        let right = frame
+                            .locals
+                            .get(b.0 as usize)
+                            .ok_or(VmError::LocalOutOfBounds(b.0))?
+                            .as_ref()
+                            .ok_or(VmError::LocalNotInitialized(b.0))?
+                            .clone();
+                        (left, right)
+                    };
+                    let left = self.resolve_borrowed_value(left)?;
+                    let right = self.resolve_borrowed_value(right)?;
+                    match (left, right) {
+                        (VmValue::Int64(x), VmValue::Int64(y)) => {
+                            self.push(VmValue::Int64(tempra_runtime::add_i64(x, y)?))?;
+                        }
+                        _ => return Err(VmError::Message("Type mismatch in AddI64LL".into())),
                     }
                 }
                 BytecodeInstr::AddI64LC(a, id) => {
-                    let frame = self.call_stack.last().ok_or(VmError::MissingReturn)?;
-                    let val_a = frame
-                        .locals
-                        .get(a.0 as usize)
-                        .ok_or(VmError::LocalOutOfBounds(a.0))?
-                        .as_ref()
-                        .ok_or(VmError::LocalNotInitialized(a.0))?;
-
+                    let raw = {
+                        let frame = self.call_stack.last().ok_or(VmError::MissingReturn)?;
+                        frame
+                            .locals
+                            .get(a.0 as usize)
+                            .ok_or(VmError::LocalOutOfBounds(a.0))?
+                            .as_ref()
+                            .ok_or(VmError::LocalNotInitialized(a.0))?
+                            .clone()
+                    };
+                    let value = self.resolve_borrowed_value(raw)?;
                     let constant = match self.module.constants.get(id.0 as usize) {
-                        Some(BytecodeConstant::Int64(i)) => *i,
+                        Some(BytecodeConstant::Int64(x)) => *x,
                         _ => return Err(VmError::InvalidConstant(id.0)),
                     };
-
-                    if let VmValue::Int64(ia) = val_a {
-                        let res = VmValue::Int64(tempra_runtime::add_i64(*ia, constant)?);
-                        self.push(res)?;
-                    } else {
-                        return Err(VmError::Message("Type mismatch in AddI64LC".into()));
+                    match value {
+                        VmValue::Int64(x) => {
+                            self.push(VmValue::Int64(tempra_runtime::add_i64(x, constant)?))?;
+                        }
+                        _ => return Err(VmError::Message("Type mismatch in AddI64LC".into())),
                     }
                 }
             }
@@ -1409,16 +1510,19 @@ impl<'a> Interpreter<'a> {
         function_id: FunctionId,
         locals: Vec<Option<VmValue>>,
         max_stack: usize,
-    ) {
+    ) -> Result<(), VmError> {
+        let token = self.allocate_frame_token()?;
         if let Some(ref mut profiling) = self.profiling {
             profiling.stats[function_id.0 as usize].call_count += 1;
         }
         self.call_stack.push(Frame {
+            token,
             function_id,
             ip: 0,
             locals,
             stack: Vec::with_capacity(max_stack),
         });
+        Ok(())
     }
 
     #[inline(always)]
@@ -1427,14 +1531,53 @@ impl<'a> Interpreter<'a> {
         Ok(())
     }
 
+    fn allocate_frame_token(&mut self) -> Result<u64, VmError> {
+        self.next_frame_token = self
+            .next_frame_token
+            .checked_add(1)
+            .ok_or_else(|| VmError::Message("VM frame token space exhausted".into()))?;
+        Ok(self.next_frame_token)
+    }
+
+    fn resolve_borrowed_value(&self, mut value: VmValue) -> Result<VmValue, VmError> {
+        let mut depth = 0;
+        while let VmValue::BorrowedLocal(handle) = value {
+            if depth >= self.call_stack.len() {
+                return Err(VmError::Message("cyclic borrowed local handle".into()));
+            }
+            let frame = self
+                .call_stack
+                .iter()
+                .find(|frame| frame.token == handle.owner_frame)
+                .ok_or_else(|| {
+                    VmError::Message("borrowed owner frame is no longer alive".into())
+                })?;
+            value = frame
+                .locals
+                .get(handle.local_id.0 as usize)
+                .ok_or(VmError::LocalOutOfBounds(handle.local_id.0))?
+                .as_ref()
+                .ok_or(VmError::LocalNotInitialized(handle.local_id.0))?
+                .clone();
+            depth += 1;
+        }
+        Ok(value)
+    }
+
     #[inline(always)]
-    fn pop(&mut self) -> Result<VmValue, VmError> {
+    fn pop_raw(&mut self) -> Result<VmValue, VmError> {
         self.call_stack
             .last_mut()
-            .unwrap()
+            .ok_or(VmError::MissingReturn)?
             .stack
             .pop()
             .ok_or(VmError::StackUnderflow)
+    }
+
+    #[inline(always)]
+    fn pop(&mut self) -> Result<VmValue, VmError> {
+        let value = self.pop_raw()?;
+        self.resolve_borrowed_value(value)
     }
 
     #[inline(always)]

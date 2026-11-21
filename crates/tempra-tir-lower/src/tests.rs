@@ -526,7 +526,7 @@ fn lower_capture_free_closure_as_first_class_value() {
 }
 
 #[test]
-fn closure_lifting_rejects_explicit_captures() {
+fn closure_lifting_rejects_unknown_ref_capture_local() {
     let span = Span::new(3, 45);
     let closure = HirExpression::Closure(HirClosure {
         span,
@@ -555,7 +555,7 @@ fn closure_lifting_rejects_explicit_captures() {
     let ctx = create_test_ctx();
     let mut builder = ModuleBuilder::new();
     let err = lower_function(&func, &ctx, &mut builder, None, None).unwrap_err();
-    assert!(err.to_string().contains("captures are not supported"));
+    assert!(err.to_string().contains("unknown local variable"));
 }
 
 #[test]
@@ -593,4 +593,115 @@ fn closure_lifting_is_reproducible() {
         format_tir_module(&builder.module)
     };
     assert_eq!(generate(), generate());
+}
+
+// VM Parity 2B.1c: source-level immutable borrow becomes slot-based TIR.
+#[test]
+fn lower_immutable_ref_capture_preserves_hidden_parameter_order() {
+    let span = Span::new(200, 260);
+    let int = || HirType::Named(span, "Int64".into());
+    let ref_capture = |name: &str| {
+        HirCapture::Named(HirCaptureNamed {
+            span,
+            mode: HirCaptureMode::Ref,
+            name: name.to_string(),
+        })
+    };
+    let addition = HirExpression::Binary(HirBinary {
+        span,
+        op: HirBinaryOp::Add,
+        left: Box::new(HirExpression::Name(span, "a".into())),
+        right: Box::new(HirExpression::Name(span, "b".into())),
+    });
+    let closure = HirExpression::Closure(HirClosure {
+        span,
+        captures: vec![ref_capture("a"), ref_capture("b")],
+        parameters: vec![],
+        return_type: Some(int()),
+        body: HirBlock {
+            span,
+            statements: vec![HirStatement::Expr(addition)],
+        },
+    });
+    let func = create_function(
+        "main",
+        int(),
+        vec![
+            HirStatement::Let(HirLet {
+                span,
+                name: "a".into(),
+                ty: None,
+                value: HirExpression::Integer(span, "7".into()),
+            }),
+            HirStatement::Let(HirLet {
+                span,
+                name: "b".into(),
+                ty: None,
+                value: HirExpression::Integer(span, "4".into()),
+            }),
+            HirStatement::Let(HirLet {
+                span,
+                name: "f".into(),
+                ty: None,
+                value: closure,
+            }),
+            HirStatement::Return(Some(HirExpression::Call(HirCall {
+                span,
+                callee: Box::new(HirExpression::Name(span, "f".into())),
+                type_args: None,
+                args: vec![],
+            }))),
+        ],
+    );
+    let ctx = create_test_ctx();
+    let mut builder = ModuleBuilder::new();
+    let main = lower_function(&func, &ctx, &mut builder, None, None).unwrap();
+    builder.add_function(main);
+    assert!(verify_module(&builder.module).is_ok());
+    let formatted = format_tir_module(&builder.module);
+    assert!(formatted.contains("make_closure_ref @"));
+    assert!(formatted.contains("captures ($0, $1)"));
+    assert!(formatted.contains("call_closure %"));
+}
+
+#[test]
+fn lower_ref_capture_rejects_mutable_var() {
+    let span = Span::new(10, 50);
+    let int = || HirType::Named(span, "Int64".into());
+    let closure = HirExpression::Closure(HirClosure {
+        span,
+        captures: vec![HirCapture::Named(HirCaptureNamed {
+            span,
+            mode: HirCaptureMode::Ref,
+            name: "x".into(),
+        })],
+        parameters: vec![],
+        return_type: Some(int()),
+        body: HirBlock {
+            span,
+            statements: vec![HirStatement::Expr(HirExpression::Name(span, "x".into()))],
+        },
+    });
+    let func = create_function(
+        "main",
+        int(),
+        vec![
+            HirStatement::Var(HirVar {
+                span,
+                name: "x".into(),
+                ty: None,
+                value: HirExpression::Integer(span, "7".into()),
+            }),
+            HirStatement::Let(HirLet {
+                span,
+                name: "f".into(),
+                ty: None,
+                value: closure,
+            }),
+        ],
+    );
+    let ctx = create_test_ctx();
+    let mut builder = ModuleBuilder::new();
+    let err = lower_function(&func, &ctx, &mut builder, None, None).unwrap_err();
+    assert!(err.to_string().contains("immutable let"));
 }

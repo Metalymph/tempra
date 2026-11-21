@@ -120,6 +120,16 @@ pub fn format_instr(instr: &TirInstr) -> String {
             func.0,
             format_args(captures)
         ),
+        TirInstr::MakeClosureRef(res, func, captures) => format!(
+            "%{} = make_closure_ref @{} captures ({})",
+            res.0,
+            func.0,
+            captures
+                .iter()
+                .map(|slot| format!("${}", slot.0))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
         TirInstr::CallClosure(res, callee, args) => format!(
             "%{} = call_closure %{} ({})",
             res.0,

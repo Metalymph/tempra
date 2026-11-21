@@ -67,6 +67,11 @@ pub enum TirInstr {
     // The referenced function receives captured values first, then call arguments.
     // The captured environment may be empty and requires no heap allocation.
     MakeClosure(TirValueId, TirFunctionId, Vec<TirValueId>),
+    // VM Parity 2B.1b: borrowed capture representation (not yet executable).
+    // Unlike MakeClosure, the environment names ORIGINAL storage slots; no
+    // captured value is copied or moved by this instruction. Borrow lifetimes
+    // and non-escaping enforcement belong to the later capture lowering gate.
+    MakeClosureRef(TirValueId, TirFunctionId, Vec<TirSlotId>),
     CallClosure(TirValueId, TirValueId, Vec<TirValueId>),
 
     Add(TirValueId, TirValueId, TirValueId),

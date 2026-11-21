@@ -404,6 +404,19 @@ impl FunctionBuilder {
         Ok(id)
     }
 
+    /// Construct a borrowed closure referencing existing local storage slots.
+    /// This is TIR-only until non-escaping borrow lifetime validation and
+    /// native VM support have been implemented.
+    pub fn build_make_closure_ref(
+        &mut self,
+        target: TirFunctionId,
+        captures: Vec<TirSlotId>,
+    ) -> Result<TirValueId, TirBuildError> {
+        let id = self.next_value();
+        self.push_instr(TirInstr::MakeClosureRef(id, target, captures))?;
+        Ok(id)
+    }
+
     /// Call a function value, checked against its TIR function signature.
     pub fn build_call_closure(
         &mut self,

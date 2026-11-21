@@ -292,6 +292,10 @@ fn write_instr(w: &mut impl Write, instr: &BytecodeInstr) -> io::Result<()> {
         }
         BytecodeInstr::Return => w.write_all(&[34]),
         BytecodeInstr::Unreachable => w.write_all(&[35]),
+        BytecodeInstr::BorrowLocal(_) | BytecodeInstr::MakeClosureRef(_, _) => Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "borrowed closure instructions cannot be serialized before 2B.1e.2",
+        )),
         BytecodeInstr::MakeClosure(id, captures) => {
             w.write_all(&[53])?;
             write_u32(w, id.0)?;

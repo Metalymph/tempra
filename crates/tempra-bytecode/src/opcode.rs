@@ -64,6 +64,11 @@ pub enum BytecodeInstr {
     MakeClosure(FunctionId, u16),
     /// The stack contains the callable followed by arguments (left to right).
     CallClosure(SignatureId, u16), // expected signature, argc
+    // VM Parity 2B.1e.1: borrowed closure bytecode ISA.
+    // BorrowLocal is a *borrow handle*, not LoadLocal (which copies a value).
+    // It may only be consumed by a verified MakeClosureRef in 2B.1e.2.
+    BorrowLocal(LocalId),
+    MakeClosureRef(FunctionId, u16), // target, borrowed capture count
 
     // Enum-like
     MakeEnum(ConstId, ConstId, u16), // enum_name, variant_name, payload_count
@@ -90,7 +95,7 @@ pub enum BytecodeInstr {
     AddI64LC(LocalId, ConstId), // LoadLocal a; ConstI64 b; AddI64
 }
 
-pub const BYTECODE_OPCODE_COUNT: usize = 55;
+pub const BYTECODE_OPCODE_COUNT: usize = 57;
 
 impl BytecodeInstr {
     pub fn opcode_id(&self) -> usize {
@@ -150,6 +155,8 @@ impl BytecodeInstr {
             BytecodeInstr::AddI64LC(_, _) => 52,
             BytecodeInstr::MakeClosure(_, _) => 53,
             BytecodeInstr::CallClosure(_, _) => 54,
+            BytecodeInstr::BorrowLocal(_) => 55,
+            BytecodeInstr::MakeClosureRef(_, _) => 56,
         }
     }
 
@@ -210,6 +217,8 @@ impl BytecodeInstr {
             BytecodeInstr::AddI64LC(_, _) => "AddI64LC",
             BytecodeInstr::MakeClosure(_, _) => "MakeClosure",
             BytecodeInstr::CallClosure(_, _) => "CallClosure",
+            BytecodeInstr::BorrowLocal(_) => "BorrowLocal",
+            BytecodeInstr::MakeClosureRef(_, _) => "MakeClosureRef",
         }
     }
 }
@@ -273,6 +282,32 @@ pub fn stack_effect(
             if *capture_count as usize > target.params.len() {
                 return Err(BytecodeError::Message(format!(
                     "closure capture count {} exceeds function parameter count {}",
+                    capture_count,
+                    target.params.len()
+                )));
+            }
+            StackEffect {
+                pops: *capture_count,
+                pushes: 1,
+            }
+        }
+        BytecodeInstr::BorrowLocal(id) => {
+            if id.0 as usize >= func.locals.len() {
+                return Err(BytecodeError::Message(format!(
+                    "borrowed local ${} is out of bounds",
+                    id.0
+                )));
+            }
+            StackEffect { pops: 0, pushes: 1 }
+        }
+        BytecodeInstr::MakeClosureRef(target_id, capture_count) => {
+            let target = module
+                .functions
+                .get(target_id.0 as usize)
+                .ok_or(BytecodeError::InvalidFunctionId(*target_id))?;
+            if usize::from(*capture_count) > target.params.len() {
+                return Err(BytecodeError::Message(format!(
+                    "borrowed closure has {} captures but target accepts {} parameters",
                     capture_count,
                     target.params.len()
                 )));

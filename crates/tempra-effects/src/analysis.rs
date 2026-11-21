@@ -45,6 +45,8 @@ pub enum DirectCapabilitySource {
     Make,
     /// A TIR `MakeStruct` instruction.
     MakeStruct,
+    /// Allocation of a frame-bound borrowed closure environment.
+    BorrowedClosure,
     /// Materialization of a closure capture environment.
     ClosureEnvironment,
     /// A potentially failing division.
@@ -457,6 +459,7 @@ enum ClosureDefinition {
     Load(TirSlotId),
 }
 
+// VM Parity 2B.1f: borrowed closure target propagation.
 impl ClosureTargetIndex {
     fn new(function: &TirFunction) -> Self {
         let mut index = Self {
@@ -466,7 +469,8 @@ impl ClosureTargetIndex {
         for block in &function.blocks {
             for instr in &block.instrs {
                 match instr {
-                    TirInstr::MakeClosure(result, target, _) => {
+                    TirInstr::MakeClosure(result, target, _)
+                    | TirInstr::MakeClosureRef(result, target, _) => {
                         index
                             .definitions
                             .insert(*result, ClosureDefinition::Make(*target));
@@ -966,6 +970,9 @@ fn classify_instruction(
         TirInstr::Const(_, _) => return None,
         TirInstr::Make(_, _, _, _) => (Capability::Alloc, DirectCapabilitySource::Make),
         TirInstr::MakeStruct(_, _, _) => (Capability::Alloc, DirectCapabilitySource::MakeStruct),
+        TirInstr::MakeClosureRef(_, _, _) => {
+            (Capability::Alloc, DirectCapabilitySource::BorrowedClosure)
+        }
         TirInstr::MakeClosure(_, _, captures) if !captures.is_empty() => (
             Capability::Alloc,
             DirectCapabilitySource::ClosureEnvironment,
@@ -1093,7 +1100,8 @@ fn record_instruction_type(
         TirInstr::ArrayPush(result, array, _) => {
             value_types.get(array).cloned().map(|ty| (*result, ty))
         }
-        TirInstr::MakeStruct(_, _, _)
+        TirInstr::MakeClosureRef(_, _, _)
+        | TirInstr::MakeStruct(_, _, _)
         | TirInstr::Get(_, _, _)
         | TirInstr::Set(_, _, _, _)
         | TirInstr::Unwrap(_, _, _, _)

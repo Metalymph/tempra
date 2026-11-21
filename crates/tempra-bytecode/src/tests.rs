@@ -461,7 +461,7 @@ fn closure_isa_roundtrip_reserves_stable_opcode_ids() {
 
     assert_eq!(BytecodeInstr::MakeClosure(target, 0).opcode_id(), 53);
     assert_eq!(BytecodeInstr::CallClosure(signature_id, 1).opcode_id(), 54);
-    assert_eq!(crate::opcode::BYTECODE_OPCODE_COUNT, 55);
+    assert_eq!(crate::opcode::BYTECODE_OPCODE_COUNT, 57);
     let bytes = encode_module(&module).unwrap();
     assert_eq!(bytes, encode_module(&module).unwrap());
     let decoded = decode_artifact(&bytes).unwrap();
@@ -812,4 +812,101 @@ fn closure_typed_bytecode_rejects_previous_cache_format() {
         decode_artifact(&old_version).unwrap_err(),
         BytecodeSerializeError::UnsupportedVersion
     );
+}
+
+// VM Parity 2B.1e.1: the wire format never accepts unverified borrow opcodes.
+#[test]
+fn borrowed_closure_bytecode_opcode_identity_and_fail_closed() {
+    use crate::verify::verify_module;
+
+    let mut module = BytecodeModule::new();
+    let mut main = BytecodeFunction::new("main".into(), vec![], BytecodeType::Unit);
+    main.locals = vec![BytecodeType::Int64];
+    main.max_stack = 1;
+    main.code = vec![
+        BytecodeInstr::BorrowLocal(LocalId(0)),
+        BytecodeInstr::Pop,
+        BytecodeInstr::Return,
+    ];
+    module.add_function(main);
+
+    assert_eq!(BytecodeInstr::BorrowLocal(LocalId(0)).opcode_id(), 55);
+    assert_eq!(
+        BytecodeInstr::MakeClosureRef(FunctionId(0), 1).opcode_id(),
+        56
+    );
+    assert_eq!(crate::opcode::BYTECODE_OPCODE_COUNT, 57);
+    assert!(matches!(
+        verify_module(&module),
+        Err(BytecodeVerifyError::Unsupported(_))
+    ));
+    assert!(encode_module(&module).is_err());
+}
+
+// VM Parity 2B.1e.2: artifact-level non-escape gate.
+#[test]
+fn borrowed_closure_verifier_rejects_return_escape() {
+    use crate::function::BytecodeSignature;
+    use crate::verify::verify_module;
+    let mut module = BytecodeModule::new();
+    let public_sig = module.intern_signature(BytecodeSignature {
+        params: vec![],
+        ret: BytecodeType::Int64,
+    });
+    let ten = module.add_constant(BytecodeConstant::Int64(10));
+    let target = module.add_function(BytecodeFunction::new(
+        "lambda".into(),
+        vec![BytecodeType::Int64],
+        BytecodeType::Int64,
+    ));
+    let mut main = BytecodeFunction::new("main".into(), vec![], BytecodeType::Callable(public_sig));
+    main.locals = vec![BytecodeType::Int64];
+    main.max_stack = 1;
+    main.code = vec![
+        BytecodeInstr::ConstI64(ten),
+        BytecodeInstr::StoreLocal(LocalId(0)),
+        BytecodeInstr::BorrowLocal(LocalId(0)),
+        BytecodeInstr::MakeClosureRef(target, 1),
+        BytecodeInstr::Return,
+    ];
+    module.add_function(main);
+    assert!(matches!(
+        verify_module(&module),
+        Err(BytecodeVerifyError::Unsupported(_))
+    ));
+}
+
+#[test]
+fn borrowed_closure_verifier_rejects_source_reassignment() {
+    use crate::function::BytecodeSignature;
+    use crate::verify::verify_module;
+    let mut module = BytecodeModule::new();
+    module.intern_signature(BytecodeSignature {
+        params: vec![],
+        ret: BytecodeType::Unit,
+    });
+    let ten = module.add_constant(BytecodeConstant::Int64(10));
+    let target = module.add_function(BytecodeFunction::new(
+        "lambda".into(),
+        vec![BytecodeType::Int64],
+        BytecodeType::Unit,
+    ));
+    let mut main = BytecodeFunction::new("main".into(), vec![], BytecodeType::Unit);
+    main.locals = vec![BytecodeType::Int64];
+    main.max_stack = 1;
+    main.code = vec![
+        BytecodeInstr::ConstI64(ten),
+        BytecodeInstr::StoreLocal(LocalId(0)),
+        BytecodeInstr::ConstI64(ten),
+        BytecodeInstr::StoreLocal(LocalId(0)),
+        BytecodeInstr::BorrowLocal(LocalId(0)),
+        BytecodeInstr::MakeClosureRef(target, 1),
+        BytecodeInstr::Pop,
+        BytecodeInstr::Return,
+    ];
+    module.add_function(main);
+    assert!(matches!(
+        verify_module(&module),
+        Err(BytecodeVerifyError::Unsupported(_))
+    ));
 }

@@ -809,3 +809,46 @@ fn lower_tir_callable_signatures_are_reproducible() {
 
     assert_eq!(make(), make());
 }
+
+// VM Parity 2B.1e.1: distinct borrowed-local bytecode, not value captures.
+#[test]
+fn borrowed_closure_bytecode_lowering_keeps_slot_identity() {
+    use tempra_bytecode::opcode::BytecodeInstr;
+    use tempra_bytecode::verify::verify_module;
+    use tempra_tir::builder::ModuleBuilder;
+
+    let mut builder = ModuleBuilder::new();
+    let mut lambda = builder.new_function("lambda", TirType::Int64);
+    let entry = lambda.new_block();
+    lambda.set_current_block(entry);
+    let hidden = lambda.add_param(TirType::Int64);
+    let arg = lambda.add_param(TirType::Int64);
+    let sum = lambda.build_add(hidden, arg).unwrap();
+    lambda.build_ret(Some(sum)).unwrap();
+    let target = lambda.func.id;
+    builder.add_function(lambda.build());
+
+    let mut main = builder.new_function("main", TirType::Int64);
+    let entry = main.new_block();
+    main.set_current_block(entry);
+    let slot = main.build_slot(TirType::Int64, Some("base")).unwrap();
+    let ten = main.build_const(TirConst::Int64(10)).unwrap();
+    main.build_store(slot, ten).unwrap();
+    let closure = main.build_make_closure_ref(target, vec![slot]).unwrap();
+    let five = main.build_const(TirConst::Int64(5)).unwrap();
+    let called = main.build_call_closure(closure, vec![five]).unwrap();
+    main.build_ret(Some(called)).unwrap();
+    builder.add_function(main.build());
+
+    let bc = lower_tir_module(&builder.module).unwrap();
+    let main = bc.functions.iter().find(|f| f.name == "main").unwrap();
+    assert!(main
+        .code
+        .iter()
+        .any(|instr| matches!(instr, BytecodeInstr::BorrowLocal(_))));
+    assert!(main
+        .code
+        .iter()
+        .any(|instr| matches!(instr, BytecodeInstr::MakeClosureRef(_, 1))));
+    verify_module(&bc).unwrap();
+}

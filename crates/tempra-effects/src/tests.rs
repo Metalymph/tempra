@@ -2743,3 +2743,72 @@ fn closure_slot_with_multiple_targets_propagates_all_effects() {
     assert!(required.contains(Capability::Panic));
     assert_eq!(analysis.call_edges().len(), 2);
 }
+
+// VM Parity 2B.1f: borrowed closure target propagation.
+
+#[test]
+fn borrowed_closure_effects_propagate_and_account_alloc() {
+    let owner = function(
+        0,
+        "main",
+        vec![
+            TirInstr::Slot(TirSlotId(0), TirType::Int64),
+            TirInstr::Const(TirValueId(0), TirConst::Int64(10)),
+            TirInstr::Store(TirSlotId(0), TirValueId(0)),
+            TirInstr::MakeClosureRef(TirValueId(1), TirFunctionId(1), vec![TirSlotId(0)]),
+            TirInstr::Slot(
+                TirSlotId(1),
+                TirType::Function(vec![], Box::new(TirType::Unit)),
+            ),
+            TirInstr::Store(TirSlotId(1), TirValueId(1)),
+            TirInstr::Load(TirValueId(2), TirSlotId(1)),
+            TirInstr::CallClosure(TirValueId(3), TirValueId(2), vec![]),
+        ],
+    );
+
+    let mut target = function(
+        1,
+        "closure_body",
+        vec![
+            TirInstr::Const(TirValueId(1), TirConst::Int64(2)),
+            TirInstr::Div(TirValueId(2), TirValueId(0), TirValueId(1)),
+        ],
+    );
+    target.params.push((TirValueId(0), TirType::Int64));
+
+    let report = analyze(&module(vec![owner, target])).unwrap();
+    let summary = report.summary(TirFunctionId(0)).unwrap();
+
+    assert!(summary.direct.contains(Capability::Alloc));
+    assert!(summary.required.contains(Capability::Alloc));
+    assert!(summary.required.contains(Capability::Panic));
+
+    assert_eq!(report.call_edges().len(), 1);
+    assert_eq!(report.call_edges()[0].callee, TirFunctionId(1));
+
+    assert!(report
+        .origins_for(TirFunctionId(0))
+        .any(|origin| origin.source == DirectCapabilitySource::BorrowedClosure));
+}
+
+#[test]
+fn borrowed_closure_effects_reject_unknown_target() {
+    let owner = function(
+        0,
+        "main",
+        vec![
+            TirInstr::MakeClosureRef(TirValueId(0), TirFunctionId(777), vec![TirSlotId(0)]),
+            TirInstr::CallClosure(TirValueId(1), TirValueId(0), vec![]),
+        ],
+    );
+
+    let error = analyze(&module(vec![owner])).unwrap_err();
+
+    assert!(matches!(
+        error,
+        CapabilityAnalysisError::UnknownCallTarget {
+            target: TirFunctionId(777),
+            ..
+        }
+    ));
+}

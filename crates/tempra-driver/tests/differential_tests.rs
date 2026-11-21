@@ -83,6 +83,7 @@ fn normalize_vm(val: VmValue) -> NormalizedValue {
         VmValue::Float64(f) => NormalizedValue::Float(f),
         VmValue::String(s) => NormalizedValue::String(s),
         VmValue::Closure(_) => NormalizedValue::Unsupported("vm_closure".into()),
+        VmValue::BorrowedLocal(_) => NormalizedValue::Unsupported("vm_borrow".into()),
         VmValue::Array(arr) => {
             let inner = arr.iter().map(|v| normalize_vm(v.clone())).collect();
             NormalizedValue::Array(inner)
@@ -792,4 +793,35 @@ fn test_diff_float64_nan_ordering_and_signed_zero() {
     for (source, expected) in cases {
         assert_differential_bool(source, expected);
     }
+}
+
+#[test]
+fn vm_parity_ref_capture_immutable_single() {
+    let source = r#"
+        fn main() -> Int64 {
+            let base = 10
+            let add = fn[ref base](x: Int64) -> Int64 {
+                base + x
+            }
+            return add(5)
+        }
+    "#;
+
+    assert_differential(source);
+}
+
+#[test]
+fn vm_parity_ref_capture_immutable_ordered() {
+    let source = r#"
+        fn main() -> Int64 {
+            let a = 7
+            let b = 4
+            let compute = fn[ref a, ref b](x: Int64) -> Int64 {
+                a * x + b
+            }
+            return compute(3)
+        }
+    "#;
+
+    assert_differential(source);
 }

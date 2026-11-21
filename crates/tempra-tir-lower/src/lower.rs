@@ -2170,14 +2170,34 @@ impl<'a> LowerContext<'a> {
         self.builder.build_load(slot).map_err(Into::into)
     }
 
-    /// Infer a closure's declared function type independently of outer HIR scopes.
-    /// Captures are deliberately rejected by lowering until VM Parity 2B.
+    /// Infer the *public* closure signature, excluding hidden captured slots.
+    /// VM Parity 2B.1c: immutable ref capture lowering (TIR only).
     fn infer_closure_type(&self, closure: &HirClosure) -> Result<Type, TirLowerError> {
-        if !closure.captures.is_empty() {
-            return Err(TirLowerError::UnsupportedExpr(
-                "closure captures are not supported by VM Parity 2A".into(),
-                closure.span,
-            ));
+        for capture in &closure.captures {
+            let HirCapture::Named(named) = capture else {
+                return Err(TirLowerError::UnsupportedExpr(
+                    "recursive self captures require a separate borrow/lifetime gate".into(),
+                    closure.span,
+                ));
+            };
+            if named.mode != HirCaptureMode::Ref {
+                return Err(TirLowerError::UnsupportedExpr(
+                    "only ref captures of immutable let bindings are supported in 2B.1c".into(),
+                    named.span,
+                ));
+            }
+            let Some((_, _, is_mutable)) = self.locals.get(&named.name) else {
+                return Err(TirLowerError::UnknownLocal(named.name.clone(), named.span));
+            };
+            if *is_mutable {
+                return Err(TirLowerError::UnsupportedExpr(
+                    format!(
+                        "ref capture '{}' must originate from immutable let",
+                        named.name
+                    ),
+                    named.span,
+                ));
+            }
         }
         let mut params = Vec::with_capacity(closure.parameters.len());
         for param in &closure.parameters {
@@ -2213,6 +2233,36 @@ impl<'a> LowerContext<'a> {
         let Type::Function(params, ret) = self.infer_closure_type(closure)? else {
             unreachable!("closure inference always returns a function type")
         };
+        // Preserve source declaration order: hidden arguments and borrow slots
+        // must use the same order. These are slot identities, never SSA copies.
+        let mut ref_captures = Vec::with_capacity(closure.captures.len());
+        let mut seen = std::collections::HashSet::new();
+        for capture in &closure.captures {
+            let HirCapture::Named(named) = capture else {
+                unreachable!("infer_closure_type rejected recursive capture")
+            };
+            let (slot, ty, is_mutable) = self
+                .locals
+                .get(&named.name)
+                .ok_or_else(|| TirLowerError::UnknownLocal(named.name.clone(), named.span))?;
+            if named.mode != HirCaptureMode::Ref || *is_mutable {
+                return Err(TirLowerError::UnsupportedExpr(
+                    "only immutable ref captures are supported in 2B.1c".into(),
+                    named.span,
+                ));
+            }
+            if !seen.insert(named.name.clone()) {
+                return Err(TirLowerError::UnsupportedExpr(
+                    format!("duplicate ref capture '{}'", named.name),
+                    named.span,
+                ));
+            }
+            let hir_ty = match self.local_hir_types.get(&named.name) {
+                Some(ty) => ty.clone(),
+                None => unmap_type(ty)?,
+            };
+            ref_captures.push((named.name.clone(), *slot, ty.clone(), hir_ty));
+        }
         let synthetic_name = format!(
             "{}$closure${}${}",
             self.builder.func.name, closure.span.start, closure.span.end
@@ -2233,6 +2283,17 @@ impl<'a> LowerContext<'a> {
             child.module_prefix = self.module_prefix.clone();
             let entry = child.builder.new_block();
             child.builder.set_current_block(entry);
+
+            // Hidden capture parameters precede user-visible call arguments.
+            for (name, _, tir_ty, hir_ty) in &ref_captures {
+                let value = child.builder.add_param(tir_ty.clone());
+                let slot = child.builder.build_slot(tir_ty.clone(), Some(name))?;
+                child.builder.build_store(slot, value)?;
+                child
+                    .locals
+                    .insert(name.clone(), (slot, tir_ty.clone(), false));
+                child.local_hir_types.insert(name.clone(), hir_ty.clone());
+            }
 
             for (parameter, parameter_type) in closure.parameters.iter().zip(params.iter()) {
                 let tir_type = map_type(parameter_type)?;
@@ -2282,9 +2343,16 @@ impl<'a> LowerContext<'a> {
         }
 
         let function_id = self.module_builder.declare_function(&synthetic_name);
-        self.builder
-            .build_make_closure(function_id, vec![])
-            .map_err(Into::into)
+        if ref_captures.is_empty() {
+            self.builder
+                .build_make_closure(function_id, vec![])
+                .map_err(Into::into)
+        } else {
+            let borrowed_slots = ref_captures.iter().map(|(_, slot, _, _)| *slot).collect();
+            self.builder
+                .build_make_closure_ref(function_id, borrowed_slots)
+                .map_err(Into::into)
+        }
     }
 
     pub fn lower_expression(&mut self, expr: &HirExpression) -> Result<TirValueId, TirLowerError> {

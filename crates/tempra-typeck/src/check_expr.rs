@@ -410,9 +410,11 @@ fn resolve_name(
             }
         } else if !has_user_candidates || expects_builtin {
             if name == "None" {
-                return Ok(ResolvedName::BuiltinConstant(Type::Option(Box::new(
-                    Type::Unknown,
-                ))));
+                let option_ty = match expected {
+                    Some(option_ty @ Type::Option(_)) => option_ty.clone(),
+                    _ => Type::Option(Box::new(Type::Unknown)),
+                };
+                return Ok(ResolvedName::BuiltinConstant(option_ty));
             }
             return Ok(ResolvedName::BuiltinFunction(name.to_string()));
         }

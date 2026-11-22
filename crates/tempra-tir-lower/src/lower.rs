@@ -921,6 +921,154 @@ impl<'a> LowerContext<'a> {
         Ok(())
     }
 
+    /// Lower a function or closure body, preserving the value of its final
+    /// expression. A tail expression is consumed by the enclosing return; an
+    /// ordinary expression statement still discards its result.
+    fn lower_body_with_implicit_return(
+        &mut self,
+        block: &HirBlock,
+        return_type: &TirType,
+    ) -> Result<(), TirLowerError> {
+        for (index, stmt) in block.statements.iter().enumerate() {
+            if self.builder.is_terminated() {
+                break;
+            }
+            let is_tail = index + 1 == block.statements.len();
+            if is_tail && *return_type != TirType::Unit {
+                if let HirStatement::Expr(expr) = stmt {
+                    self.lower_implicit_return_expression(expr, return_type)?;
+                    continue;
+                }
+            }
+            self.lower_statement(stmt)?;
+        }
+        Ok(())
+    }
+
+    /// Lower the value position of a function/closure tail directly into Ret.
+    /// Branches are handled per CFG path rather than turning an entire `if`
+    /// into an unconditional Ret after a join, which would lose the value.
+    fn lower_implicit_return_expression(
+        &mut self,
+        expr: &HirExpression,
+        return_type: &TirType,
+    ) -> Result<(), TirLowerError> {
+        match expr {
+            HirExpression::If(if_expr) => {
+                self.lower_if_expression(if_expr, Some(return_type))?;
+            }
+            HirExpression::Block(block) => {
+                let saved_locals = self.locals.clone();
+                let saved_types = self.local_hir_types.clone();
+                let result = self.lower_body_with_implicit_return(block, return_type);
+                self.locals = saved_locals;
+                self.local_hir_types = saved_types;
+                result?;
+            }
+            _ => {
+                let value = self.lower_expression_with_expected_type(expr, return_type)?;
+                if let Some(current) = self.builder.get_current_block() {
+                    if self.block_falls_through(current) {
+                        self.builder.build_ret(Some(value))?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Preserve existing statement-position `if` semantics, but when an `if`
+    /// itself is the final expression of a non-Unit function, make each live
+    /// branch return its own tail. A missing else remains a live fallthrough
+    /// and is rejected by the enclosing MissingReturn check.
+    fn lower_if_expression(
+        &mut self,
+        i: &HirIf,
+        return_type: Option<&TirType>,
+    ) -> Result<TirValueId, TirLowerError> {
+        if let HirExpression::IsPattern(is_pat) = &*i.condition {
+            return self.lower_narrowing_if(i, is_pat, return_type);
+        }
+        let cond = self.lower_expression(&i.condition)?;
+        let then_entry = self.builder.new_block();
+        let else_entry = self.builder.new_block();
+        self.builder.build_condbr(cond, then_entry, else_entry)?;
+
+        let saved_locals = self.locals.clone();
+        let saved_types = self.local_hir_types.clone();
+
+        self.builder.set_current_block(then_entry);
+        let then_result = if let Some(ty) = return_type {
+            self.lower_body_with_implicit_return(&i.then_block, ty)
+        } else {
+            self.lower_block_statements(&i.then_block)
+        };
+        self.locals = saved_locals.clone();
+        self.local_hir_types = saved_types.clone();
+        then_result?;
+        let then_exit = self.builder.get_current_block().unwrap();
+        let then_falls_through = self.block_falls_through(then_exit);
+
+        self.builder.set_current_block(else_entry);
+        let else_result = if let Some(else_expr) = &i.else_branch {
+            match &**else_expr {
+                HirExpression::Block(block) => {
+                    if let Some(ty) = return_type {
+                        self.lower_body_with_implicit_return(block, ty)
+                    } else {
+                        self.lower_block_statements(block)
+                    }
+                }
+                HirExpression::If(_) => {
+                    if let Some(ty) = return_type {
+                        self.lower_implicit_return_expression(else_expr, ty)
+                    } else {
+                        self.lower_expression(else_expr).map(|_| ())
+                    }
+                }
+                _ => Err(TirLowerError::UnsupportedExpr(
+                    "Else is not a block or if".into(),
+                    else_expr.span(),
+                )),
+            }
+        } else {
+            Ok(())
+        };
+        self.locals = saved_locals;
+        self.local_hir_types = saved_types;
+        else_result?;
+        let else_exit = self.builder.get_current_block().unwrap();
+        let else_falls_through = self.block_falls_through(else_exit);
+
+        let join = self.builder.new_block();
+        if then_falls_through {
+            self.builder.set_current_block(then_exit);
+            self.builder.build_br(join)?;
+        }
+        if else_falls_through {
+            self.builder.set_current_block(else_exit);
+            self.builder.build_br(join)?;
+        }
+        self.builder.set_current_block(join);
+
+        if !then_falls_through && !else_falls_through {
+            // Dead continuation: callers must not emit another return here.
+            Ok(TirValueId(0))
+        } else {
+            self.builder.build_const(TirConst::Unit).map_err(Into::into)
+        }
+    }
+
+    fn lower_block_statements(&mut self, block: &HirBlock) -> Result<(), TirLowerError> {
+        for stmt in &block.statements {
+            if self.builder.is_terminated() {
+                break;
+            }
+            self.lower_statement(stmt)?;
+        }
+        Ok(())
+    }
+
     fn lower_block_expr(&mut self, block: &HirBlock) -> Result<TirValueId, TirLowerError> {
         let old_locals = self.locals.clone();
         let mut last_val = None;
@@ -2310,21 +2458,7 @@ impl<'a> LowerContext<'a> {
                     .insert(parameter.name.clone(), parameter_type.clone());
             }
 
-            for (index, stmt) in closure.body.statements.iter().enumerate() {
-                if child.builder.is_terminated() {
-                    break;
-                }
-                let is_tail = index + 1 == closure.body.statements.len();
-                if is_tail && return_type != TirType::Unit {
-                    if let HirStatement::Expr(expr) = stmt {
-                        let result =
-                            child.lower_expression_with_expected_type(expr, &return_type)?;
-                        child.builder.build_ret(Some(result))?;
-                        continue;
-                    }
-                }
-                child.lower_statement(stmt)?;
-            }
+            child.lower_body_with_implicit_return(&closure.body, &return_type)?;
 
             if !child.builder.is_terminated() {
                 if return_type == TirType::Unit {
@@ -2558,69 +2692,7 @@ impl<'a> LowerContext<'a> {
                     }
                 }
             }
-            HirExpression::If(i) => {
-                if let HirExpression::IsPattern(is_pat) = &*i.condition {
-                    return self.lower_narrowing_if(i, is_pat);
-                }
-                let cond = self.lower_expression(&i.condition)?;
-                let mut t_block = self.builder.new_block();
-                let mut f_block = self.builder.new_block();
-
-                self.builder.build_condbr(cond, t_block, f_block)?;
-
-                // Then block
-                self.builder.set_current_block(t_block);
-                for stmt in &i.then_block.statements {
-                    self.lower_statement(stmt)?;
-                }
-                t_block = self.builder.get_current_block().unwrap();
-                let t_falls_through = self.block_falls_through(t_block);
-
-                // Else block
-                self.builder.set_current_block(f_block);
-                if let Some(else_expr) = &i.else_branch {
-                    if let HirExpression::Block(b) = &**else_expr {
-                        for stmt in &b.statements {
-                            self.lower_statement(stmt)?;
-                        }
-                    } else if let HirExpression::If(_nested_if) = &**else_expr {
-                        self.lower_expression(else_expr)?;
-                    } else {
-                        return Err(TirLowerError::UnsupportedExpr(
-                            "Else is not a block or if".into(),
-                            else_expr.span(),
-                        ));
-                    }
-                }
-                f_block = self.builder.get_current_block().unwrap();
-                let f_falls_through = self.block_falls_through(f_block);
-
-                if !t_falls_through && !f_falls_through {
-                    // Neither branch can reach the join. We still create a block so
-                    // that subsequent instructions (which are unreachable) can be
-                    // appended without causing a "block already terminated" error.
-                    // The block has no incoming edges and is therefore unreachable.
-                    let end_block = self.builder.new_block();
-                    self.builder.set_current_block(end_block);
-                    Ok(TirValueId(0))
-                } else {
-                    let end_block = self.builder.new_block();
-
-                    if t_falls_through {
-                        self.builder.set_current_block(t_block);
-                        self.builder.build_br(end_block)?;
-                    }
-                    if f_falls_through {
-                        self.builder.set_current_block(f_block);
-                        self.builder.build_br(end_block)?;
-                    }
-
-                    self.builder.set_current_block(end_block);
-                    self.builder
-                        .build_const(TirConst::Unit)
-                        .map_err(|e| e.into())
-                }
-            }
+            HirExpression::If(i) => self.lower_if_expression(i, None),
             HirExpression::Call(c) => {
                 // Handle .len() method call
                 if let HirExpression::Member(m) = &*c.callee {
@@ -3232,6 +3304,7 @@ impl<'a> LowerContext<'a> {
         &mut self,
         i: &HirIf,
         is_pat: &HirIsPatternExpr,
+        return_type: Option<&TirType>,
     ) -> Result<TirValueId, TirLowerError> {
         let (variant_name, binding_name) = self.extract_simple_pattern(&is_pat.pattern)?;
 
@@ -3256,6 +3329,7 @@ impl<'a> LowerContext<'a> {
 
         // Save locals for scoping
         let old_locals = self.locals.clone();
+        let old_hir_types = self.local_hir_types.clone();
 
         // Then block
         self.builder.set_current_block(t_block);
@@ -3286,21 +3360,26 @@ impl<'a> LowerContext<'a> {
             self.locals.insert(binding, (slot, tir_payload_ty, false));
         }
 
-        for stmt in &i.then_block.statements {
-            self.lower_statement(stmt)?;
+        if let Some(ty) = return_type {
+            self.lower_body_with_implicit_return(&i.then_block, ty)?;
+        } else {
+            self.lower_block_statements(&i.then_block)?;
         }
         t_block = self.builder.get_current_block().unwrap();
         let t_falls_through = self.block_falls_through(t_block);
 
         // Restore locals after then block (bindings should not leak)
         self.locals = old_locals;
+        self.local_hir_types = old_hir_types;
 
         // Else block
         self.builder.set_current_block(f_block);
         if let Some(else_expr) = &i.else_branch {
             if let HirExpression::Block(b) = &**else_expr {
-                for stmt in &b.statements {
-                    self.lower_statement(stmt)?;
+                if let Some(ty) = return_type {
+                    self.lower_body_with_implicit_return(b, ty)?;
+                } else {
+                    self.lower_block_statements(b)?;
                 }
             } else {
                 return Err(TirLowerError::UnsupportedExpr(
@@ -3973,9 +4052,8 @@ fn lower_function_inner(
     }
 
     if let Some(body) = &func.body {
-        for stmt in &body.statements {
-            ctx.lower_statement(stmt)?;
-        }
+        let return_type = ctx.builder.func.return_type.clone();
+        ctx.lower_body_with_implicit_return(body, &return_type)?;
     }
 
     if !ctx.builder.is_terminated() {

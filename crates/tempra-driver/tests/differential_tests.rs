@@ -901,3 +901,110 @@ fn vm_parity_ref_capture_non_escaping_transitive_callback() {
     "#;
     assert_differential(source);
 }
+
+// VM Parity 2B.4 — implicit returns must agree with the HIR interpreter.
+#[test]
+fn vm_parity_implicit_return_scalar() {
+    assert_differential("fn double(x: Int) -> Int { x * 2 } fn main() -> Int { double(17) }");
+}
+
+#[test]
+fn vm_parity_implicit_return_if_value() {
+    assert_differential(
+        r#"
+        fn compute(x: Int) -> Int {
+            if x > 0 { x * 2 } else { 5 }
+        }
+        fn main() -> Int { compute(2) + compute(0) }
+    "#,
+    );
+}
+
+#[test]
+fn vm_parity_implicit_return_nested_if() {
+    assert_differential(
+        r#"
+        fn classify(x: Int) -> Int {
+            if x > 5 {
+                if x > 10 { 100 } else { 50 }
+            } else if x > 0 { 10 } else { 0 }
+        }
+        fn main() -> Int { classify(1) + classify(8) + classify(11) }
+    "#,
+    );
+}
+
+#[test]
+fn vm_parity_implicit_return_mixed_explicit_early_return() {
+    assert_differential(
+        r#"
+        fn check(x: Int) -> Int {
+            if x < 0 { return 7 }
+            x + 1
+        }
+        fn main() -> Int { check(-1) + check(9) }
+    "#,
+    );
+}
+
+#[test]
+fn vm_parity_implicit_return_match() {
+    assert_differential(
+        r#"
+        fn classify(x: Int) -> Int {
+            match x {
+                0 => 10
+                1 => 20
+                _ => 30
+            }
+        }
+        fn main() -> Int { classify(0) + classify(1) + classify(3) }
+    "#,
+    );
+}
+
+#[test]
+fn vm_parity_implicit_return_closure_if() {
+    assert_differential(
+        r#"
+        fn main() -> Int {
+            let convert = fn(x: Int) -> Int {
+                if x > 0 { x + 2 } else { 10 }
+            }
+            convert(3) + convert(0)
+        }
+    "#,
+    );
+}
+
+#[test]
+fn vm_parity_implicit_return_borrowed_callback() {
+    assert_differential(
+        r#"
+        fn invoke(callback: fn() -> Int) -> Int { callback() }
+        fn main() -> Int {
+            let base = 10
+            let get = fn[ref base]() -> Int { base }
+            invoke(get)
+        }
+    "#,
+    );
+}
+
+#[test]
+fn vm_parity_implicit_return_contextual_option() {
+    assert_differential(
+        r#"
+        fn choose(flag: Bool) -> Option(Int) {
+            if flag { Some(7) } else { None }
+        }
+        fn main() -> Int {
+            let result = choose(true)
+            match result {
+                Some(v) => v
+                None => 0
+            }
+        }
+    "#,
+    );
+}

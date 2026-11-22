@@ -385,7 +385,7 @@ fn unreachable_join_after_terminating_if_ok() {
 }
 
 #[test]
-fn if_missing_return_error() {
+fn if_mixed_implicit_and_explicit_returns_ok() {
     let cond = HirExpression::Bool(empty_span(), true);
     let if_expr = HirExpression::If(HirIf {
         span: empty_span(),
@@ -413,11 +413,11 @@ fn if_missing_return_error() {
         vec![HirStatement::Expr(if_expr)],
     );
 
-    let ctx = create_test_ctx();
-    let mut builder = ModuleBuilder::new();
-    let res = lower_function(&func, &ctx, &mut builder, None, None);
-    assert!(res.is_err());
-    assert!(res.unwrap_err().to_string().contains("missing return"));
+    let module = lower_and_verify(&func);
+    assert!(module.functions[0]
+        .blocks
+        .iter()
+        .all(|block| { !matches!(&block.terminator, Some(TirTerminator::Unreachable)) }));
 }
 
 // VM Parity 2A.1: callable signatures must survive HIR <-> TIR conversion.
@@ -704,4 +704,98 @@ fn lower_ref_capture_rejects_mutable_var() {
     let mut builder = ModuleBuilder::new();
     let err = lower_function(&func, &ctx, &mut builder, None, None).unwrap_err();
     assert!(err.to_string().contains("immutable let"));
+}
+
+// VM Parity 2B.4: the final expression must produce the function value.
+#[test]
+fn implicit_return_integer_tail_ok() {
+    let func = create_function(
+        "implicit_tail",
+        HirType::Named(empty_span(), "Int64".into()),
+        vec![HirStatement::Expr(HirExpression::Integer(
+            empty_span(),
+            "42".into(),
+        ))],
+    );
+    let module = lower_and_verify(&func);
+    assert!(matches!(
+        &module.functions[0].blocks[0].terminator,
+        Some(TirTerminator::Ret(Some(_)))
+    ));
+    assert!(format_tir_module(&module).contains("ret %"));
+}
+
+#[test]
+fn implicit_return_if_with_two_value_branches_ok() {
+    let func = create_function(
+        "implicit_if",
+        HirType::Named(empty_span(), "Int64".into()),
+        vec![HirStatement::Expr(if_expr(
+            true,
+            vec![HirStatement::Expr(HirExpression::Integer(
+                empty_span(),
+                "10".into(),
+            ))],
+            Some(vec![HirStatement::Expr(HirExpression::Integer(
+                empty_span(),
+                "20".into(),
+            ))]),
+        ))],
+    );
+    let module = lower_and_verify(&func);
+    assert_eq!(module.functions[0].blocks.len(), 3);
+    assert!(module.functions[0].blocks.iter().all(|block| {
+        matches!(
+            &block.terminator,
+            Some(TirTerminator::CondBr(..)) | Some(TirTerminator::Ret(Some(_)))
+        )
+    }));
+}
+
+#[test]
+fn implicit_return_if_missing_else_is_rejected() {
+    let func = create_function(
+        "implicit_missing_else",
+        HirType::Named(empty_span(), "Int64".into()),
+        vec![HirStatement::Expr(if_expr(
+            true,
+            vec![HirStatement::Expr(HirExpression::Integer(
+                empty_span(),
+                "1".into(),
+            ))],
+            None,
+        ))],
+    );
+    let mut builder = ModuleBuilder::new();
+    let err = lower_function(&func, &create_test_ctx(), &mut builder, None, None).unwrap_err();
+    assert!(err.to_string().contains("missing return"));
+}
+
+#[test]
+fn implicit_return_final_let_is_rejected() {
+    let func = create_function(
+        "implicit_final_let",
+        HirType::Named(empty_span(), "Int64".into()),
+        vec![HirStatement::Let(HirLet {
+            span: empty_span(),
+            name: "x".into(),
+            ty: None,
+            value: HirExpression::Integer(empty_span(), "1".into()),
+        })],
+    );
+    let mut builder = ModuleBuilder::new();
+    let err = lower_function(&func, &create_test_ctx(), &mut builder, None, None).unwrap_err();
+    assert!(err.to_string().contains("missing return"));
+}
+
+#[test]
+fn implicit_return_in_nested_block_ok() {
+    let func = create_function(
+        "implicit_block",
+        HirType::Named(empty_span(), "Int64".into()),
+        vec![HirStatement::Expr(HirExpression::Block(block(vec![
+            HirStatement::Expr(HirExpression::Integer(empty_span(), "9".into())),
+        ])))],
+    );
+    lower_and_verify(&func);
 }

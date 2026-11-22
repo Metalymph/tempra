@@ -4213,3 +4213,25 @@ mod r3_path_sensitive_tests {
         assert_unhandled(&source, 0);
     }
 }
+
+#[test]
+fn test_option_none_contextual_if_tail_typeck() {
+    expect_ok(
+        r#"
+        fn choose(flag: Bool) -> Option(Int) {
+            if flag { Some(7) } else { None }
+        }
+    "#,
+    );
+}
+
+#[test]
+fn test_option_none_contextual_if_mismatch_typeck() {
+    expect_err(
+        r#"
+        fn choose(flag: Bool) -> Option(Int) {
+            if flag { Some("wrong") } else { None }
+        }
+    "#,
+    );
+}

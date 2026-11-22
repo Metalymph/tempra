@@ -1,4 +1,4 @@
-use tempra_driver::{run_source_hir, run_source_vm};
+use tempra_driver::{check_source, run_source_hir, run_source_vm};
 use tempra_interpreter::value::{OptionValue, Value, ValueResult};
 use tempra_vm::value::VmValue;
 
@@ -442,8 +442,18 @@ fn test_diff_nested_terminating_branches() {
 fn test_diff_array_ops() {
     assert_differential("fn main() -> Int64 { let xs = [1, 2, 3]; return xs[1] }");
     assert_differential("fn main() -> Int64 { let xs = [1, 2, 3]; return xs.len() }");
-    assert_differential(
-        "fn main() -> Slice(Int64) { let xs: [Int64] = [1, 2, 3, 4]; return xs[1..3] }",
+}
+
+#[test]
+fn test_diff_reject_escaping_slice_from_local_owner() {
+    let source = "fn main() -> Slice(Int64) { let xs: [Int64] = [1, 2, 3, 4]; return xs[1..3] }";
+    let err = format!(
+        "{:?}",
+        check_source(source).expect_err("borrowed local slice must not escape")
+    );
+    assert!(
+        err.contains("borrow escape"),
+        "unexpected diagnostic: {err}"
     );
 }
 

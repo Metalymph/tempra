@@ -8,6 +8,7 @@
 //! - Specialization metadata is attached directly to call expressions at the call site.
 //! - Inference is strict and coercion-free.
 
+mod borrow_flow;
 pub mod check_expr;
 pub mod check_file;
 pub mod check_item;

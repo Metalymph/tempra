@@ -171,8 +171,15 @@ fn main() {
     expect(s.len() == 3)
 }
 "#;
-    let result = run_source(code);
-    assert!(result.is_ok(), "Expected success, got {:?}", result.err());
+    // Returning a view into a by-value `self` would outlive its owner (§14.8).
+    let err = format!(
+        "{:?}",
+        check_source(code).expect_err("borrowed self must not escape")
+    );
+    assert!(
+        err.contains("borrow escape"),
+        "unexpected diagnostic: {err}"
+    );
 }
 
 #[test]

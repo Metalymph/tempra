@@ -103,13 +103,50 @@ fn test_slice_view_semantics_with_collection() {
         }
         fn main() {
             var xs: Array(Int) = [1, 2, 3];
+
             let ys: Slice(Int) = xs[0..2];
-            xs[0] = 9;
             expect(size[Slice(Int)](ys) == 2);
+            expect(ys[0] == 1);
+
+            // The borrow ends at its last reachable use.
+            xs[0] = 9;
+
+            let zs: Slice(Int) = xs[0..2];
+            expect(size[Slice(Int)](zs) == 2);
+            expect(zs[0] == 9);
+        }
+    "#;
+
+    assert!(test_source(source).is_ok());
+}
+
+#[test]
+fn test_slice_view_owner_mutation_while_live_with_collection_rejected() {
+    let source = r#"
+        fn size(type T: Collection, value: T) -> Int {
+            value.len()
+        }
+        fn main() {
+            var xs: Array(Int) = [1, 2, 3];
+            let ys: Slice(Int) = xs[0..2];
+
+            expect(size[Slice(Int)](ys) == 2);
+
+            // Invalid: ys is used again after this mutation.
+            xs[0] = 9;
             expect(ys[0] == 9);
         }
     "#;
-    assert!(test_source(source).is_ok());
+
+    let err = format!(
+        "{:?}",
+        test_source(source).expect_err("mutation while a shared borrow is live must fail")
+    );
+
+    assert!(
+        err.contains("borrow conflict"),
+        "unexpected diagnostic: {err}"
+    );
 }
 
 #[test]

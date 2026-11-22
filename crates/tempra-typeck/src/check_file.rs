@@ -74,6 +74,15 @@ pub fn check_modules(
     }
 
     if ctx.errors.is_empty() {
+        for m in modules.iter() {
+            ctx.current_module = m.name.clone();
+            let (errors, origins) = crate::borrow_flow::analyze(&*m.file, &ctx);
+            ctx.errors.extend(errors);
+            ctx.facts.borrow_facts.extend(origins);
+        }
+    }
+
+    if ctx.errors.is_empty() {
         Ok(ctx)
     } else {
         Err(ctx.errors)
@@ -173,6 +182,11 @@ fn check_modules_always_impl(
             ctx.scopes.pop_scope();
             ctx.current_is_fallible = false;
         }
+        if ctx.errors.is_empty() {
+            let (errors, origins) = crate::borrow_flow::analyze(&*m.file, &ctx);
+            ctx.errors.extend(errors);
+            ctx.facts.borrow_facts.extend(origins);
+        }
         ctx.module_facts.insert(m.name.clone(), ctx.facts.clone());
     }
 
@@ -209,6 +223,13 @@ fn check_file_internal(file: &mut HirFile, source: Option<String>) -> TypeContex
 
         ctx.scopes.pop_scope();
         ctx.current_is_fallible = false;
+    }
+
+    // Source-level, path-sensitive borrow verification (v0.4 §14 subset).
+    if ctx.errors.is_empty() {
+        let (errors, origins) = crate::borrow_flow::analyze(&*file, &ctx);
+        ctx.errors.extend(errors);
+        ctx.facts.borrow_facts.extend(origins);
     }
 
     // R2.2d: Result provenance analysis after successful typechecking.

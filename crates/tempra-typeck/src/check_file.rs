@@ -56,6 +56,13 @@ pub fn check_modules(
         }
     }
 
+    ctx.borrow_summaries = crate::borrow_summary::infer(
+        &modules
+            .iter()
+            .map(|m| (m.name.as_str(), &*m.file))
+            .collect::<Vec<_>>(),
+    );
+
     // Pass 3: check top-level statements in all modules
     for m in modules.iter_mut() {
         select_module(&mut ctx, m);
@@ -160,6 +167,13 @@ fn check_modules_always_impl(
         ctx.module_facts.insert(m.name.clone(), ctx.facts.clone());
     }
 
+    ctx.borrow_summaries = crate::borrow_summary::infer(
+        &modules
+            .iter()
+            .map(|m| (m.name.as_str(), &*m.file))
+            .collect::<Vec<_>>(),
+    );
+
     // Pass 3: check top-level statements
     for m in modules.iter_mut() {
         ctx.current_module = m.name.clone();
@@ -224,6 +238,8 @@ fn check_file_internal(file: &mut HirFile, source: Option<String>) -> TypeContex
         ctx.scopes.pop_scope();
         ctx.current_is_fallible = false;
     }
+
+    ctx.borrow_summaries = crate::borrow_summary::infer(&[("", &*file)]);
 
     // Source-level, path-sensitive borrow verification (v0.4 §14 subset).
     if ctx.errors.is_empty() {

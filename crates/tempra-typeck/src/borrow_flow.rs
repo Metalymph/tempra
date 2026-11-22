@@ -55,6 +55,9 @@ struct Analyzer<'a> {
     loops: Vec<LoopExit>,
     errors: Vec<TypeError>,
     facts: Vec<BorrowFact>,
+    /// Parameter owner authorized by the inferred return contract, if any.
+    return_source: Option<BindingId>,
+    returns_slice: bool,
 }
 
 impl<'a> Analyzer<'a> {
@@ -67,6 +70,8 @@ impl<'a> Analyzer<'a> {
             loops: Vec::new(),
             errors: Vec::new(),
             facts: Vec::new(),
+            return_source: None,
+            returns_slice: false,
         }
     }
 
@@ -173,6 +178,7 @@ impl<'a> Analyzer<'a> {
                     closure: false,
                 })
             }
+            HirExpression::Call(call) => self.loan_of_call(call),
             HirExpression::Closure(closure) => {
                 let owners = closure
                     .captures
@@ -237,6 +243,40 @@ impl<'a> Analyzer<'a> {
         }
     }
 
+    fn loan_of_call(&mut self, call: &HirCall) -> Option<Loan> {
+        let HirExpression::Name(_, name) = &*call.callee else {
+            return None;
+        };
+        let module = self.ctx.current_module.as_str();
+        let qualified = if module.is_empty() {
+            name.clone()
+        } else {
+            format!("{module}.{name}")
+        };
+        let key = if self.ctx.borrow_summaries.contains_key(&qualified) {
+            qualified
+        } else {
+            name.clone()
+        };
+        let summary = self.ctx.borrow_summaries.get(&key)?;
+        let sig = self.ctx.functions.get(&key)?;
+        let names = sig
+            .params
+            .iter()
+            .map(|p| p.name.clone())
+            .collect::<Vec<_>>();
+        let kinds = sig.params.iter().map(|p| p.kind).collect::<Vec<_>>();
+        let argument = crate::borrow_summary::call_argument(
+            call,
+            summary.return_borrow.parameter_index,
+            &names,
+            &kinds,
+        )?;
+        let mut loan = self.loan_of(argument)?;
+        loan.origin = call.span;
+        Some(loan)
+    }
+
     fn merge_loans(&mut self, left: Option<Loan>, right: Option<Loan>, span: Span) -> Option<Loan> {
         match (left, right) {
             (Some(a), Some(b)) if a.owners == b.owners => Some(a),
@@ -253,15 +293,19 @@ impl<'a> Analyzer<'a> {
     }
 
     fn check_return_loan(&mut self, expr: &HirExpression) {
-        if let Some(loan) = self.loan_of(expr) {
+        let loan = self.loan_of(expr);
+        if self.returns_slice && loan.is_none() {
+            self.error("borrow return provenance unavailable: Slice return has no statically verified owner".into(), expr.span());
+            return;
+        }
+        if let Some(loan) = loan {
             for owner in loan.owners.iter().copied() {
                 let name = self.bindings[owner].name.clone();
                 if loan.closure || !self.bindings[owner].returnable_borrow_source {
                     self.error(format!("borrow escape: cannot return a view or closure borrowed from local owner '{name}'"), expr.span());
-                } else {
-                    // The v0.4 language permits this return, but until a
-                    // ReturnBorrow/BorrowSummary can reach every caller,
-                    // accepting it would not prove the caller's lifetime.
+                } else if self.return_source != Some(owner) {
+                    // A return is valid only when *every* supported return
+                    // path was proven to derive from this exact parameter.
                     self.error(format!("borrow return contract unavailable: returning a view of parameter '{name}' requires a propagated BorrowSummary"), expr.span());
                 }
             }
@@ -381,6 +425,33 @@ impl<'a> Analyzer<'a> {
                 self.expr(&e.right, previous)
             }
             HirExpression::Call(call) => {
+                // A user-defined function returning Slice must publish a
+                // certified return owner before its result can be used.
+                // Unknown/dynamic targets are not silently promoted.
+                if let HirExpression::Name(_, name) = &*call.callee {
+                    let qualified = if self.ctx.current_module.is_empty() {
+                        name.clone()
+                    } else {
+                        format!("{}.{}", self.ctx.current_module, name)
+                    };
+                    let key = if self.ctx.functions.contains_key(&qualified) {
+                        &qualified
+                    } else {
+                        name
+                    };
+                    if self
+                        .ctx
+                        .functions
+                        .get(key)
+                        .is_some_and(|signature| matches!(&signature.return_type, Type::Slice(_)))
+                    {
+                        if !self.ctx.borrow_summaries.contains_key(key) {
+                            self.error(format!("borrow return contract unavailable: function '{name}' returns a Slice without a proven single-owner BorrowSummary"), call.span);
+                        } else if self.loan_of_call(call).is_none() {
+                            self.error(format!("borrow provenance unavailable: cannot identify the owner of returned Slice from '{name}'"), call.span);
+                        }
+                    }
+                }
                 previous = self.expr(&call.callee, previous);
                 for arg in &call.args {
                     let value = match arg {
@@ -722,6 +793,20 @@ pub(crate) fn analyze(file: &HirFile, ctx: &TypeContext) -> (Vec<TypeError>, Vec
                     &p.ty,
                     HirType::Apply(_, callee, _) if matches!(&**callee, HirType::Named(_, name) if name == "Slice")
                 );
+            }
+            let qualified = if ctx.current_module.is_empty() {
+                function.name.clone()
+            } else {
+                format!("{}.{}", ctx.current_module, function.name)
+            };
+            analyzer.returns_slice = function
+                .return_type
+                .as_ref()
+                .is_some_and(crate::borrow_summary::is_slice);
+            if let Some(summary) = ctx.borrow_summaries.get(&qualified) {
+                analyzer.return_source = analyzer.scopes[0]
+                    .get(&function.parameters[summary.return_borrow.parameter_index].name)
+                    .copied();
             }
             let entry = analyzer.noop(Vec::new());
             analyzer.block_with_tail(body, entry, true);

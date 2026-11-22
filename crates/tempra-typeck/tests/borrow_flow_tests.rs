@@ -288,14 +288,13 @@ fn borrow_sequential_slice_calls_ok() {
 }
 
 #[test]
-fn borrow_return_parameter_requires_summary_until_callers_can_verify() {
-    rejected(
+fn borrow_return_parameter_with_summary_ok() {
+    accepted(
         r#"
         fn prefix(data: Slice(Int)) -> Slice(Int) {
             data[0..1]
         }
     "#,
-        "borrow return contract unavailable",
     );
 }
 
@@ -338,5 +337,153 @@ fn borrow_early_return_ends_loan_on_that_path() {
             return data[0]
         }
     "#,
+    );
+}
+
+#[test]
+fn borrowed_return_summary_retains_caller_owner() {
+    rejected(
+        r#"
+        fn prefix(data: Slice(Int)) -> Slice(Int) { data[0..1] }
+        fn main() {
+            var data = [1, 2, 3]
+            let view = prefix(data[0..2])
+            data[0] = 9
+            let x = view[0]
+        }
+    "#,
+        "borrow conflict",
+    );
+}
+
+#[test]
+fn borrowed_return_summary_allows_mutation_after_last_use() {
+    accepted(
+        r#"
+        fn prefix(data: Slice(Int)) -> Slice(Int) { data[0..1] }
+        fn main() {
+            var data = [1, 2, 3]
+            let view = prefix(data[0..2])
+            let x = view[0]
+            data[0] = 9
+        }
+    "#,
+    );
+}
+
+#[test]
+fn borrowed_return_summary_propagates_through_direct_calls() {
+    rejected(
+        r#"
+        fn prefix(data: Slice(Int)) -> Slice(Int) { data[0..1] }
+        fn again(data: Slice(Int)) -> Slice(Int) { prefix(data[0..2]) }
+        fn main() {
+            var data = [1, 2, 3]
+            let view = again(data[0..2])
+            data[0] = 9
+            let x = view[0]
+        }
+    "#,
+        "borrow conflict",
+    );
+}
+
+#[test]
+fn borrowed_return_summary_accepts_last_explicit_return() {
+    accepted(
+        r#"
+        fn prefix(data: Slice(Int)) -> Slice(Int) {
+            return data[0..1]
+        }
+    "#,
+    );
+}
+
+#[test]
+fn borrowed_return_summary_handles_named_arguments() {
+    rejected(
+        r#"
+        fn prefix(data: Slice(Int), limit: Int) -> Slice(Int) { data[0..limit] }
+        fn main() {
+            var data = [1, 2, 3]
+            let view = prefix(limit=1, data=data[0..2])
+            data[0] = 9
+            let x = view[0]
+        }
+    "#,
+        "borrow conflict",
+    );
+}
+
+#[test]
+fn borrowed_return_summary_rejects_ambiguous_owner() {
+    rejected(
+        r#"
+        fn choose(a: Slice(Int), b: Slice(Int), flag: Bool) -> Slice(Int) {
+            if flag { a[0..1] } else { b[0..1] }
+        }
+    "#,
+        "borrow provenance conflict",
+    );
+}
+
+#[test]
+fn borrowed_return_summary_tracks_binding_shadowing() {
+    accepted(
+        r#"
+        fn prefix(data: Slice(Int)) -> Slice(Int) { data[0..1] }
+        fn main() {
+            var data = [1, 2, 3]
+            let view = prefix(data[0..2])
+            if true {
+                var data = [4, 5, 6]
+                data[0] = 9
+            }
+            let x = view[0]
+        }
+    "#,
+    );
+}
+
+#[test]
+fn borrowed_return_summary_is_exposed_in_context() {
+    use tempra_typeck::borrow_summary::{BorrowAccess, ReturnBorrow};
+    let source = r#"
+        fn prefix(data: Slice(Int), count: Int) -> Slice(Int) {
+            data[0..count]
+        }
+    "#;
+    let ast = parse_source(source).unwrap();
+    let mut file = lower_file(source, &ast);
+    let ctx = check_file_with_context(&mut file).unwrap();
+    let summary = &ctx.borrow_summaries["prefix"];
+    assert_eq!(
+        summary.return_borrow,
+        ReturnBorrow {
+            parameter_index: 0,
+            mode: BorrowAccess::Read,
+        }
+    );
+    assert_eq!(
+        summary.parameter_accesses,
+        vec![BorrowAccess::Read, BorrowAccess::Value]
+    );
+}
+
+#[test]
+fn borrowed_return_summary_unknown_provenance_fails_closed() {
+    rejected(
+        r#"
+        fn unproven(data: Slice(Int)) -> Slice(Int) {
+            var other = data
+            other[0..1]
+        }
+        fn main() {
+            var data = [1, 2, 3]
+            let view = unproven(data[0..2])
+            let x = view[0]
+        }
+    "#,
+        "borrow return contract unavailable",
     );
 }

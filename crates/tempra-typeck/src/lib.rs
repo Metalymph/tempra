@@ -9,6 +9,7 @@
 //! - Inference is strict and coercion-free.
 
 mod borrow_flow;
+pub mod borrow_summary;
 pub mod check_expr;
 pub mod check_file;
 pub mod check_item;

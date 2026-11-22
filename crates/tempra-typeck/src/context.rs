@@ -156,6 +156,8 @@ pub struct InterfaceMethodRequirementInfo {
 #[derive(Clone)]
 pub struct TypeContext {
     pub functions: HashMap<String, FunctionSignature>,
+    /// Proven, single-source borrowed-return contracts (§14.9), keyed by qualified name.
+    pub borrow_summaries: std::collections::BTreeMap<String, crate::borrow_summary::BorrowSummary>,
     pub structs: HashMap<String, StructInfo>,
     pub enums: HashMap<String, EnumInfo>,
     pub interfaces: HashMap<String, InterfaceInfo>,
@@ -201,6 +203,7 @@ impl TypeContext {
     pub fn new() -> Self {
         let mut ctx = Self {
             functions: HashMap::new(),
+            borrow_summaries: std::collections::BTreeMap::new(),
             structs: HashMap::new(),
             enums: HashMap::new(),
             interfaces: HashMap::new(),

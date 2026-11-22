@@ -62,6 +62,12 @@ pub fn check_modules(
             .map(|m| (m.name.as_str(), &*m.file))
             .collect::<Vec<_>>(),
     );
+    ctx.callback_summaries = crate::callback_contract::infer(
+        &modules
+            .iter()
+            .map(|m| (m.name.as_str(), &*m.file))
+            .collect::<Vec<_>>(),
+    );
 
     // Pass 3: check top-level statements in all modules
     for m in modules.iter_mut() {
@@ -173,6 +179,12 @@ fn check_modules_always_impl(
             .map(|m| (m.name.as_str(), &*m.file))
             .collect::<Vec<_>>(),
     );
+    ctx.callback_summaries = crate::callback_contract::infer(
+        &modules
+            .iter()
+            .map(|m| (m.name.as_str(), &*m.file))
+            .collect::<Vec<_>>(),
+    );
 
     // Pass 3: check top-level statements
     for m in modules.iter_mut() {
@@ -240,6 +252,7 @@ fn check_file_internal(file: &mut HirFile, source: Option<String>) -> TypeContex
     }
 
     ctx.borrow_summaries = crate::borrow_summary::infer(&[("", &*file)]);
+    ctx.callback_summaries = crate::callback_contract::infer(&[("", &*file)]);
 
     // Source-level, path-sensitive borrow verification (v0.4 §14 subset).
     if ctx.errors.is_empty() {

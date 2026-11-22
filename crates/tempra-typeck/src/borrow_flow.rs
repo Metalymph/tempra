@@ -31,6 +31,7 @@ struct Loan {
     owners: BTreeSet<BindingId>,
     origin: Span,
     closure: bool,
+    exclusive_owners: BTreeSet<BindingId>,
 }
 
 #[derive(Default)]
@@ -167,6 +168,7 @@ impl<'a> Analyzer<'a> {
                         owners: BTreeSet::from([id]),
                         origin: *span,
                         closure: false,
+                        exclusive_owners: BTreeSet::new(),
                     })
                 })
             }),
@@ -176,34 +178,41 @@ impl<'a> Analyzer<'a> {
                     owners: BTreeSet::from([owner]),
                     origin: slice.span,
                     closure: false,
+                    exclusive_owners: BTreeSet::new(),
                 })
             }
             HirExpression::Call(call) => self.loan_of_call(call),
             HirExpression::Closure(closure) => {
-                let owners = closure
-                    .captures
-                    .iter()
-                    .filter_map(|capture| {
-                        if let HirCapture::Named(named) = capture {
-                            if matches!(named.mode, HirCaptureMode::Ref | HirCaptureMode::Inout) {
-                                return self.lookup(&named.name);
-                            }
-                        }
-                        None
-                    })
-                    .flat_map(|id| {
-                        self.bindings[id]
-                            .loan
-                            .as_ref()
-                            .map(|loan| loan.owners.iter().copied().collect::<Vec<_>>())
-                            .unwrap_or_else(|| vec![id])
-                    })
-                    .collect::<BTreeSet<_>>();
+                let mut owners = BTreeSet::new();
+                let mut exclusive_owners = BTreeSet::new();
+                for capture in &closure.captures {
+                    let HirCapture::Named(named) = capture else {
+                        continue;
+                    };
+                    if !matches!(named.mode, HirCaptureMode::Ref | HirCaptureMode::Inout) {
+                        continue;
+                    }
+                    let Some(id) = self.lookup(&named.name) else {
+                        continue;
+                    };
+                    let origins = self.bindings[id]
+                        .loan
+                        .as_ref()
+                        .map_or_else(|| BTreeSet::from([id]), |loan| loan.owners.clone());
+                    if named.mode == HirCaptureMode::Inout {
+                        exclusive_owners.extend(origins.iter().copied());
+                    }
+                    if let Some(loan) = &self.bindings[id].loan {
+                        exclusive_owners.extend(loan.exclusive_owners.iter().copied());
+                    }
+                    owners.extend(origins);
+                }
                 if owners.is_empty() {
                     None
                 } else {
                     Some(Loan {
                         owners,
+                        exclusive_owners,
                         origin: closure.span,
                         closure: true,
                     })
@@ -247,6 +256,9 @@ impl<'a> Analyzer<'a> {
         let HirExpression::Name(_, name) = &*call.callee else {
             return None;
         };
+        if self.lookup(name).is_some() {
+            return None;
+        };
         let module = self.ctx.current_module.as_str();
         let qualified = if module.is_empty() {
             name.clone()
@@ -279,7 +291,11 @@ impl<'a> Analyzer<'a> {
 
     fn merge_loans(&mut self, left: Option<Loan>, right: Option<Loan>, span: Span) -> Option<Loan> {
         match (left, right) {
-            (Some(a), Some(b)) if a.owners == b.owners => Some(a),
+            (Some(a), Some(b))
+                if a.owners == b.owners && a.exclusive_owners == b.exclusive_owners =>
+            {
+                Some(a)
+            }
             (Some(_), Some(_)) | (Some(_), None) | (None, Some(_)) => {
                 self.error(
                     "borrow provenance conflict: branch results have no common borrowed owner"
@@ -326,19 +342,38 @@ impl<'a> Analyzer<'a> {
         self.node(previous, node)
     }
 
-    fn call_accesses(&mut self, call: &HirCall) -> Vec<(BindingId, bool, Span)> {
-        let HirExpression::Name(_, callee) = &*call.callee else {
-            return Vec::new();
+    fn direct_callee(&self, call: &HirCall) -> Option<(String, FunctionSignature)> {
+        let HirExpression::Name(_, name) = &*call.callee else {
+            return None;
         };
-        let qualified = format!("{}.{}", self.ctx.current_module, callee);
-        let sig: FunctionSignature = match self
-            .ctx
-            .functions
-            .get(&qualified)
-            .or_else(|| self.ctx.functions.get(callee))
-        {
-            Some(sig) => sig.clone(),
-            None => return Vec::new(),
+        // Do not treat a local closure/parameter with a global function's name
+        // as that global function: the provenance contract would be unrelated.
+        if self.lookup(name).is_some() {
+            return None;
+        }
+        let qualified = if self.ctx.current_module.is_empty() {
+            name.clone()
+        } else {
+            format!("{}.{}", self.ctx.current_module, name)
+        };
+        if let Some(sig) = self.ctx.functions.get(&qualified) {
+            Some((qualified, sig.clone()))
+        } else {
+            self.ctx
+                .functions
+                .get(name)
+                .map(|sig| (name.clone(), sig.clone()))
+        }
+    }
+
+    fn callback_loan(&mut self, expr: &HirExpression) -> Option<Loan> {
+        let loan = self.loan_of(expr)?;
+        loan.closure.then_some(loan)
+    }
+
+    fn call_accesses(&mut self, call: &HirCall) -> Vec<(BindingId, bool, Span)> {
+        let Some((_, sig)) = self.direct_callee(call) else {
+            return Vec::new();
         };
         let mut positional = 0usize;
         let mut accesses = Vec::<(BindingId, bool, Span)>::new();
@@ -366,26 +401,35 @@ impl<'a> Analyzer<'a> {
             let Some(param) = sig.params.get(index) else {
                 continue;
             };
-            // Only borrowed Slice access participates in this owner-level check.
-            if !matches!(&param.ty, Type::Slice(_)) {
-                continue;
+            let mut current = Vec::<(BindingId, bool, Span)>::new();
+            if matches!(&param.ty, Type::Slice(_)) {
+                if let Some(owner) = self.source_owner(expr) {
+                    current.push((owner, param.is_inout, expr.span()));
+                }
+            } else if matches!(&param.ty, Type::Function(_, _)) {
+                // A callback can access captured owners while the call is in
+                // progress. It must conflict with simultaneous exclusive
+                // slices/callbacks of the same owner.
+                if let Some(loan) = self.callback_loan(expr) {
+                    for owner in loan.owners {
+                        current.push((owner, loan.exclusive_owners.contains(&owner), expr.span()));
+                    }
+                }
             }
-            let Some(owner) = self.source_owner(expr) else {
-                continue;
-            };
-            if accesses
-                .iter()
-                .any(|(other, exclusive, _)| *other == owner && (*exclusive || param.is_inout))
-            {
-                self.error(
-                    format!(
-                        "borrow alias: conflicting simultaneous accesses to '{}'",
-                        self.bindings[owner].name
-                    ),
-                    expr.span(),
-                );
+            for (owner, exclusive, span) in current {
+                if accesses.iter().any(|(other, earlier_exclusive, _)| {
+                    *other == owner && (*earlier_exclusive || exclusive)
+                }) {
+                    self.error(
+                        format!(
+                            "borrow alias: conflicting simultaneous accesses to '{}'",
+                            self.bindings[owner].name,
+                        ),
+                        span,
+                    );
+                }
+                accesses.push((owner, exclusive, span));
             }
-            accesses.push((owner, param.is_inout, expr.span()));
         }
         accesses
     }
@@ -425,52 +469,62 @@ impl<'a> Analyzer<'a> {
                 self.expr(&e.right, previous)
             }
             HirExpression::Call(call) => {
-                // A user-defined function returning Slice must publish a
-                // certified return owner before its result can be used.
-                // Unknown/dynamic targets are not silently promoted.
-                if let HirExpression::Name(_, name) = &*call.callee {
-                    let qualified = if self.ctx.current_module.is_empty() {
-                        name.clone()
-                    } else {
-                        format!("{}.{}", self.ctx.current_module, name)
-                    };
-                    let key = if self.ctx.functions.contains_key(&qualified) {
-                        &qualified
-                    } else {
-                        name
-                    };
-                    if self
-                        .ctx
-                        .functions
-                        .get(key)
-                        .is_some_and(|signature| matches!(&signature.return_type, Type::Slice(_)))
-                    {
-                        if !self.ctx.borrow_summaries.contains_key(key) {
+                // A direct Slice-returning function needs a certified
+                // provenance contract; local callable aliases are not direct.
+                if let Some((key, signature)) = self.direct_callee(call) {
+                    if matches!(&signature.return_type, Type::Slice(_)) {
+                        if !self.ctx.borrow_summaries.contains_key(&key) {
+                            let name = match &*call.callee {
+                                HirExpression::Name(_, name) => name.as_str(),
+                                _ => "<dynamic>",
+                            };
                             self.error(format!("borrow return contract unavailable: function '{name}' returns a Slice without a proven single-owner BorrowSummary"), call.span);
                         } else if self.loan_of_call(call).is_none() {
-                            self.error(format!("borrow provenance unavailable: cannot identify the owner of returned Slice from '{name}'"), call.span);
+                            self.error("borrow provenance unavailable: cannot identify the owner of returned Slice".into(), call.span);
                         }
                     }
                 }
                 previous = self.expr(&call.callee, previous);
+                let direct = self.direct_callee(call);
+                let mut position = 0usize;
                 for arg in &call.args {
-                    let value = match arg {
-                        HirCallArgument::Positional(value) => value,
-                        HirCallArgument::Named(named) => &named.value,
+                    let (value, index) = match arg {
+                        HirCallArgument::Positional(value) => {
+                            if let Some((_, sig)) = &direct {
+                                while sig
+                                    .params
+                                    .get(position)
+                                    .is_some_and(|p| p.kind == ParameterKind::Type)
+                                {
+                                    position += 1;
+                                }
+                            }
+                            let index = position;
+                            position += 1;
+                            (value, Some(index))
+                        }
+                        HirCallArgument::Named(named) => {
+                            let index = direct.as_ref().and_then(|(_, sig)| {
+                                sig.params.iter().position(|p| p.name == named.name)
+                            });
+                            (&named.value, index)
+                        }
                     };
-                    // In the absence of proven non-escape metadata, a
-                    // borrowed closure cannot be forwarded to a callee.
-                    let borrowed_callback = match value {
-                        HirExpression::Name(_, name) => self.lookup(name)
-                            .and_then(|id| self.bindings[id].loan.as_ref())
-                            .is_some_and(|loan| loan.closure),
-                        HirExpression::Closure(closure) => closure.captures.iter().any(|c| {
-                            matches!(c, HirCapture::Named(n) if matches!(n.mode, HirCaptureMode::Ref | HirCaptureMode::Inout))
-                        }),
-                        _ => false,
-                    };
+                    let borrowed_callback = self.callback_loan(value).is_some();
                     if borrowed_callback {
-                        self.error("borrow callback escape cannot be excluded without a non-escaping callee contract".into(), value.span());
+                        let proven = direct.as_ref().is_some_and(|(key, sig)| {
+                            index.is_some_and(|i| {
+                                sig.params
+                                    .get(i)
+                                    .is_some_and(|p| matches!(&p.ty, Type::Function(_, _)))
+                                    && self.ctx.callback_summaries.get(key).is_some_and(|summary| {
+                                        summary.non_escaping_parameters.contains(&i)
+                                    })
+                            })
+                        });
+                        if !proven {
+                            self.error("borrow callback escape cannot be excluded without a non-escaping callee contract".into(), value.span());
+                        }
                     }
                     previous = self.expr(value, previous);
                 }

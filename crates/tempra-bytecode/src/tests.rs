@@ -840,7 +840,11 @@ fn borrowed_closure_bytecode_opcode_identity_and_fail_closed() {
         verify_module(&module),
         Err(BytecodeVerifyError::Unsupported(_))
     ));
-    assert!(encode_module(&module).is_err());
+    let bytes = encode_module(&module).unwrap();
+    assert!(matches!(
+        decode_and_verify_artifact(&bytes),
+        Err(BytecodeSerializeError::VerifyError(_))
+    ));
 }
 
 // VM Parity 2B.1e.2: artifact-level non-escape gate.
@@ -1186,5 +1190,179 @@ fn verifier_rechecks_widened_stack_types_after_cfg_merge() {
             expected: BytecodeType::Callable(_),
             found: BytecodeType::Any,
         })
+    ));
+}
+
+// VM borrowed callback completion: a bytecode artifact must prove that every
+// direct forwarding edge invokes (rather than returns/stores/exports) its
+// borrowed callback, independently of source-level callback summaries.
+fn borrowed_callback_module() -> BytecodeModule {
+    use crate::function::BytecodeSignature;
+    let mut module = BytecodeModule::new();
+    let signature = module.intern_signature(BytecodeSignature {
+        params: vec![BytecodeType::Int64],
+        ret: BytecodeType::Int64,
+    });
+    let base = module.add_constant(BytecodeConstant::Int64(10));
+    let step = module.add_constant(BytecodeConstant::Int64(5));
+
+    let mut lambda = BytecodeFunction::new(
+        "borrowed_body".into(),
+        vec![BytecodeType::Int64, BytecodeType::Int64],
+        BytecodeType::Int64,
+    );
+    lambda.locals = lambda.params.clone();
+    lambda.max_stack = 2;
+    lambda.code = vec![
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::LoadLocal(LocalId(1)),
+        BytecodeInstr::AddI64,
+        BytecodeInstr::Return,
+    ];
+    let body_id = module.add_function(lambda);
+
+    let mut invoke = BytecodeFunction::new(
+        "invoke".into(),
+        vec![BytecodeType::Callable(signature), BytecodeType::Int64],
+        BytecodeType::Int64,
+    );
+    invoke.locals = invoke.params.clone();
+    invoke.max_stack = 2;
+    invoke.code = vec![
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::LoadLocal(LocalId(1)),
+        BytecodeInstr::CallClosure(signature, 1),
+        BytecodeInstr::Return,
+    ];
+    let invoke_id = module.add_function(invoke);
+
+    let mut twice = BytecodeFunction::new(
+        "twice".into(),
+        vec![BytecodeType::Callable(signature), BytecodeType::Int64],
+        BytecodeType::Int64,
+    );
+    twice.locals = twice.params.clone();
+    twice.max_stack = 3;
+    twice.code = vec![
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::LoadLocal(LocalId(1)),
+        BytecodeInstr::Call(invoke_id, 2),
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::LoadLocal(LocalId(1)),
+        BytecodeInstr::Call(invoke_id, 2),
+        BytecodeInstr::AddI64,
+        BytecodeInstr::Return,
+    ];
+    let twice_id = module.add_function(twice);
+
+    let mut main = BytecodeFunction::new("main".into(), vec![], BytecodeType::Int64);
+    main.locals = vec![BytecodeType::Int64, BytecodeType::Callable(signature)];
+    main.max_stack = 2;
+    main.code = vec![
+        BytecodeInstr::ConstI64(base),
+        BytecodeInstr::StoreLocal(LocalId(0)),
+        BytecodeInstr::BorrowLocal(LocalId(0)),
+        BytecodeInstr::MakeClosureRef(body_id, 1),
+        BytecodeInstr::StoreLocal(LocalId(1)),
+        BytecodeInstr::LoadLocal(LocalId(1)),
+        BytecodeInstr::ConstI64(step),
+        BytecodeInstr::Call(twice_id, 2),
+        BytecodeInstr::Return,
+    ];
+    module.add_function(main);
+    module
+}
+
+#[test]
+fn borrowed_callback_transitive_bytecode_roundtrip_and_determinism() {
+    use crate::verify::verify_module;
+    let module = borrowed_callback_module();
+    verify_module(&module).unwrap();
+    let encoded = encode_module(&module).unwrap();
+    let decoded = decode_and_verify_artifact(&encoded).unwrap();
+    assert_eq!(encode_module(&decoded.module).unwrap(), encoded);
+    assert_eq!(encode_module(&module).unwrap(), encoded);
+    assert!(decoded.module.functions[3]
+        .code
+        .iter()
+        .any(|op| matches!(op, BytecodeInstr::BorrowLocal(LocalId(0)))));
+}
+
+#[test]
+fn borrowed_callback_rejects_aggregation_in_direct_callee() {
+    use crate::verify::verify_module;
+    let mut module = borrowed_callback_module();
+    let ten = module.add_constant(BytecodeConstant::Int64(10));
+    // A callable parameter is placed inside an aggregate. This would hide
+    // the borrowed frame dependency from the direct call boundary.
+    module.functions[1].code = vec![
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::MakeTuple(1),
+        BytecodeInstr::Pop,
+        BytecodeInstr::ConstI64(ten),
+        BytecodeInstr::Return,
+    ];
+    assert!(matches!(
+        verify_module(&module),
+        Err(BytecodeVerifyError::Unsupported(_))
+    ));
+    let encoded = encode_module(&module).unwrap();
+    assert!(matches!(
+        decode_and_verify_artifact(&encoded),
+        Err(BytecodeSerializeError::VerifyError(_))
+    ));
+}
+
+#[test]
+fn borrowed_callback_rejects_unverified_indirect_forward() {
+    use crate::function::BytecodeSignature;
+    use crate::verify::verify_module;
+    let mut module = borrowed_callback_module();
+    let callback_type = module.functions[1].params[0];
+    let higher_order_signature = module.intern_signature(BytecodeSignature {
+        params: vec![callback_type],
+        ret: BytecodeType::Int64,
+    });
+    let ten = module.add_constant(BytecodeConstant::Int64(10));
+    let mut unknown = BytecodeFunction::new(
+        "indirect_target".into(),
+        vec![callback_type],
+        BytecodeType::Int64,
+    );
+    unknown.locals = unknown.params.clone();
+    unknown.max_stack = 1;
+    unknown.code = vec![BytecodeInstr::ConstI64(ten), BytecodeInstr::Return];
+    let unknown_id = module.add_function(unknown);
+    // invoke() passes the incoming callback as an argument of an indirect
+    // callable. It cannot be proven non-escaping merely because this test's
+    // current closure target happens to be benign.
+    module.functions[1].code = vec![
+        BytecodeInstr::MakeClosure(unknown_id, 0),
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::CallClosure(higher_order_signature, 1),
+        BytecodeInstr::Return,
+    ];
+    assert!(matches!(
+        verify_module(&module),
+        Err(BytecodeVerifyError::Unsupported(_))
+    ));
+}
+
+#[test]
+fn borrowed_callback_rejects_invalid_serialized_handle_and_target() {
+    let mut module = borrowed_callback_module();
+    module.functions[3].code[2] = BytecodeInstr::BorrowLocal(LocalId(u32::MAX));
+    let encoded = encode_module(&module).unwrap();
+    assert!(matches!(
+        decode_and_verify_artifact(&encoded),
+        Err(BytecodeSerializeError::VerifyError(_))
+    ));
+
+    let mut module = borrowed_callback_module();
+    module.functions[3].code[3] = BytecodeInstr::MakeClosureRef(FunctionId(u32::MAX), 1);
+    let encoded = encode_module(&module).unwrap();
+    assert!(matches!(
+        decode_and_verify_artifact(&encoded),
+        Err(BytecodeSerializeError::VerifyError(_))
     ));
 }

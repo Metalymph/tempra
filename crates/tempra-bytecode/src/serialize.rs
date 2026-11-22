@@ -62,7 +62,7 @@ impl From<crate::verify::BytecodeVerifyError> for BytecodeSerializeError {
 }
 
 const MAGIC: &[u8; 4] = b"TMBC";
-const FORMAT_VERSION: u32 = 5;
+const FORMAT_VERSION: u32 = 6;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct BytecodeCacheHeader {
@@ -292,10 +292,15 @@ fn write_instr(w: &mut impl Write, instr: &BytecodeInstr) -> io::Result<()> {
         }
         BytecodeInstr::Return => w.write_all(&[34]),
         BytecodeInstr::Unreachable => w.write_all(&[35]),
-        BytecodeInstr::BorrowLocal(_) | BytecodeInstr::MakeClosureRef(_, _) => Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "borrowed closure instructions cannot be serialized before 2B.1e.2",
-        )),
+        BytecodeInstr::BorrowLocal(id) => {
+            w.write_all(&[55])?;
+            write_u32(w, id.0)
+        }
+        BytecodeInstr::MakeClosureRef(target, captures) => {
+            w.write_all(&[56])?;
+            write_u32(w, target.0)?;
+            w.write_all(&captures.to_le_bytes())
+        }
         BytecodeInstr::MakeClosure(id, captures) => {
             w.write_all(&[53])?;
             write_u32(w, id.0)?;
@@ -593,6 +598,16 @@ fn read_instr(r: &mut impl Read) -> Result<BytecodeInstr, BytecodeSerializeError
             Ok(BytecodeInstr::CallClosure(
                 signature_id,
                 u16::from_le_bytes(argc),
+            ))
+        }
+        55 => Ok(BytecodeInstr::BorrowLocal(LocalId(read_u32(r)?))),
+        56 => {
+            let target_id = FunctionId(read_u32(r)?);
+            let mut capture_count = [0u8; 2];
+            r.read_exact(&mut capture_count)?;
+            Ok(BytecodeInstr::MakeClosureRef(
+                target_id,
+                u16::from_le_bytes(capture_count),
             ))
         }
         36 => {

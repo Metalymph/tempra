@@ -1083,7 +1083,7 @@ fn borrowed_closure_lifetime_rejects_return_through_local_slot() {
 }
 
 #[test]
-fn borrowed_closure_lifetime_rejects_call_argument() {
+fn borrowed_closure_lifetime_accepts_verified_nonescaping_call_argument() {
     let mut module = ModuleBuilder::new();
     let call_ty = TirType::Function(vec![], Box::new(TirType::Unit));
     let mut lambda = module.new_function("borrowed_body", TirType::Unit);
@@ -1113,10 +1113,193 @@ fn borrowed_closure_lifetime_rejects_call_argument() {
     main.build_ret(None).unwrap();
     module.add_function(main.build());
 
+    assert!(verify_module(&module.module).is_ok());
+}
+
+// Add a frame-owning caller with one immutable borrowed callback passed to
+// `target`. The target must prove the callback cannot escape its call frame.
+fn add_borrowed_callback_owner(module: &mut ModuleBuilder, target: TirFunctionId) {
+    let mut body = module.new_function("callback_target_body", TirType::Unit);
+    let entry = body.new_block();
+    body.set_current_block(entry);
+    body.add_param(TirType::Int64);
+    body.build_ret(None).unwrap();
+    let body_id = body.func.id;
+    module.add_function(body.build());
+
+    let mut owner = module.new_function("callback_owner", TirType::Unit);
+    let entry = owner.new_block();
+    owner.set_current_block(entry);
+    let slot = owner.build_slot(TirType::Int64, Some("captured")).unwrap();
+    let value = owner.build_const(TirConst::Int64(42)).unwrap();
+    owner.build_store(slot, value).unwrap();
+    let borrowed = owner.build_make_closure_ref(body_id, vec![slot]).unwrap();
+    owner.build_call(target, vec![borrowed]).unwrap();
+    owner.build_ret(None).unwrap();
+    module.add_function(owner.build());
+}
+
+#[test]
+fn borrowed_closure_lifetime_accepts_direct_and_transitive_verified_callbacks() {
+    let mut module = ModuleBuilder::new();
+    let callback_ty = TirType::Function(vec![], Box::new(TirType::Unit));
+    let mut invoke = module.new_function("invoke_callback", TirType::Unit);
+    let entry = invoke.new_block();
+    invoke.set_current_block(entry);
+    let callback = invoke.add_param(callback_ty.clone());
+    let alias = invoke
+        .build_slot(callback_ty.clone(), Some("callback_alias"))
+        .unwrap();
+    invoke.build_store(alias, callback).unwrap();
+    let loaded = invoke.build_load(alias).unwrap();
+    invoke.build_call_closure(loaded, vec![]).unwrap();
+    invoke.build_ret(None).unwrap();
+    let invoke_id = invoke.func.id;
+    module.add_function(invoke.build());
+
+    let mut forward = module.new_function("forward_callback", TirType::Unit);
+    let entry = forward.new_block();
+    forward.set_current_block(entry);
+    let callback = forward.add_param(callback_ty);
+    forward.build_call(invoke_id, vec![callback]).unwrap();
+    forward.build_call(invoke_id, vec![callback]).unwrap();
+    forward.build_ret(None).unwrap();
+    let forward_id = forward.func.id;
+    module.add_function(forward.build());
+
+    add_borrowed_callback_owner(&mut module, forward_id);
+    assert!(verify_module(&module.module).is_ok());
+}
+
+#[test]
+fn borrowed_closure_lifetime_rejects_escaping_callback_return() {
+    let mut module = ModuleBuilder::new();
+    let callback_ty = TirType::Function(vec![], Box::new(TirType::Unit));
+    let mut escape = module.new_function("return_callback", callback_ty.clone());
+    let entry = escape.new_block();
+    escape.set_current_block(entry);
+    let callback = escape.add_param(callback_ty.clone());
+    let alias = escape
+        .build_slot(callback_ty, Some("escaping_alias"))
+        .unwrap();
+    escape.build_store(alias, callback).unwrap();
+    let loaded = escape.build_load(alias).unwrap();
+    escape.build_ret(Some(loaded)).unwrap();
+    let escape_id = escape.func.id;
+    module.add_function(escape.build());
+
+    add_borrowed_callback_owner(&mut module, escape_id);
     let errors = verify_module(&module.module).unwrap_err();
     assert!(
-        errors.iter().any(|e| matches!(e,
-            VerifierError::GenericError(msg) if msg.contains("escapes its owner frame")
+        errors.iter().any(|error| matches!(error,
+            VerifierError::GenericError(message) if message.contains("escapes its owner frame")
+        )),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn borrowed_closure_lifetime_rejects_callback_embedded_in_aggregate() {
+    let mut module = ModuleBuilder::new();
+    let callback_ty = TirType::Function(vec![], Box::new(TirType::Unit));
+    let mut embed = module.new_function("embed_callback", TirType::Unit);
+    let entry = embed.new_block();
+    embed.set_current_block(entry);
+    let callback = embed.add_param(callback_ty.clone());
+    embed
+        .build_make(TirType::Tuple(vec![callback_ty]), None, vec![callback])
+        .unwrap();
+    embed.build_ret(None).unwrap();
+    let embed_id = embed.func.id;
+    module.add_function(embed.build());
+
+    add_borrowed_callback_owner(&mut module, embed_id);
+    let errors = verify_module(&module.module).unwrap_err();
+    assert!(
+        errors.iter().any(|error| matches!(error,
+            VerifierError::GenericError(message) if message.contains("escapes its owner frame")
+        )),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn borrowed_closure_lifetime_rejects_unproved_recursive_forwarding() {
+    let mut module = ModuleBuilder::new();
+    let callback_ty = TirType::Function(vec![], Box::new(TirType::Unit));
+    let mut recursive = module.new_function("recursive_callback", TirType::Unit);
+    let entry = recursive.new_block();
+    recursive.set_current_block(entry);
+    let callback = recursive.add_param(callback_ty);
+    let recursive_id = recursive.func.id;
+    recursive.build_call(recursive_id, vec![callback]).unwrap();
+    recursive.build_ret(None).unwrap();
+    module.add_function(recursive.build());
+
+    add_borrowed_callback_owner(&mut module, recursive_id);
+    let errors = verify_module(&module.module).unwrap_err();
+    assert!(
+        errors.iter().any(|error| matches!(error,
+            VerifierError::GenericError(message) if message.contains("escapes its owner frame")
+        )),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn borrowed_closure_lifetime_rejects_callback_forwarded_to_indirect_target() {
+    let mut module = ModuleBuilder::new();
+    let callback_ty = TirType::Function(vec![], Box::new(TirType::Unit));
+    let mut invoke = module.new_function("indirect_invoke", TirType::Unit);
+    let entry = invoke.new_block();
+    invoke.set_current_block(entry);
+    invoke.add_param(callback_ty.clone());
+    invoke.build_ret(None).unwrap();
+    let invoke_id = invoke.func.id;
+    module.add_function(invoke.build());
+
+    let mut forward = module.new_function("indirect_forward", TirType::Unit);
+    let entry = forward.new_block();
+    forward.set_current_block(entry);
+    let callback = forward.add_param(callback_ty.clone());
+    let dynamic_target = forward.add_param(TirType::Function(
+        vec![callback_ty.clone()],
+        Box::new(TirType::Unit),
+    ));
+    forward
+        .build_call_closure(dynamic_target, vec![callback])
+        .unwrap();
+    forward.build_ret(None).unwrap();
+    let forward_id = forward.func.id;
+    module.add_function(forward.build());
+
+    // Provide a valid dynamic target; the verifier must still refuse because
+    // the forwarding contract is not statically established.
+    let mut owner = module.new_function("callback_owner", TirType::Unit);
+    let entry = owner.new_block();
+    owner.set_current_block(entry);
+    let slot = owner.build_slot(TirType::Int64, Some("captured")).unwrap();
+    let value = owner.build_const(TirConst::Int64(42)).unwrap();
+    owner.build_store(slot, value).unwrap();
+    let mut body = module.new_function("callback_target_body", TirType::Unit);
+    let body_entry = body.new_block();
+    body.set_current_block(body_entry);
+    body.add_param(TirType::Int64);
+    body.build_ret(None).unwrap();
+    let body_id = body.func.id;
+    module.add_function(body.build());
+    let borrowed = owner.build_make_closure_ref(body_id, vec![slot]).unwrap();
+    let callable = owner.build_make_closure(invoke_id, vec![]).unwrap();
+    owner
+        .build_call(forward_id, vec![borrowed, callable])
+        .unwrap();
+    owner.build_ret(None).unwrap();
+    module.add_function(owner.build());
+
+    let errors = verify_module(&module.module).unwrap_err();
+    assert!(
+        errors.iter().any(|error| matches!(error,
+            VerifierError::GenericError(message) if message.contains("escapes its owner frame")
         )),
         "{errors:?}"
     );

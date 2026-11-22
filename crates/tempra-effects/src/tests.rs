@@ -2812,3 +2812,239 @@ fn borrowed_closure_effects_reject_unknown_target() {
         }
     ));
 }
+
+// VM Parity 2B.3: callback targets must retain their capability requirements
+// when passed through typed function parameters. No unknown callback is pure.
+fn callback_type() -> TirType {
+    TirType::Function(vec![], Box::new(TirType::Unit))
+}
+
+fn callback_invoker(id: usize, target: Option<usize>) -> TirFunction {
+    let mut body = vec![TirInstr::CallClosure(TirValueId(1), TirValueId(0), vec![])];
+    if let Some(forward_to) = target {
+        body = vec![TirInstr::Call(
+            TirValueId(1),
+            TirFunctionId(forward_to),
+            vec![TirValueId(0)],
+        )];
+    }
+    let mut function = function(id, "invoke", body);
+    function.params.push((TirValueId(0), callback_type()));
+    function
+}
+
+#[test]
+fn borrowed_callback_parameter_propagates_effects_to_callers() {
+    let main = function(
+        0,
+        "main",
+        vec![
+            TirInstr::Slot(TirSlotId(0), TirType::Int64),
+            int_const(0, 42),
+            TirInstr::Store(TirSlotId(0), TirValueId(0)),
+            TirInstr::MakeClosureRef(TirValueId(1), TirFunctionId(2), vec![TirSlotId(0)]),
+            TirInstr::Call(TirValueId(2), TirFunctionId(1), vec![TirValueId(1)]),
+        ],
+    );
+    let callback = function(
+        2,
+        "callback",
+        vec![
+            int_const(1, 0),
+            TirInstr::Div(TirValueId(2), TirValueId(0), TirValueId(1)),
+        ],
+    );
+    let report = analyze(&module(vec![main, callback_invoker(1, None), callback])).unwrap();
+    let caller = report.summary(TirFunctionId(0)).unwrap();
+    let callee = report.summary(TirFunctionId(1)).unwrap();
+    assert!(caller.required.contains(Capability::Alloc));
+    assert!(caller.required.contains(Capability::Panic));
+    assert!(callee.required.contains(Capability::Panic));
+    assert!(!callee.direct.contains(Capability::Panic));
+    assert!(report
+        .call_edges()
+        .iter()
+        .any(|edge| { edge.caller == TirFunctionId(1) && edge.callee == TirFunctionId(2) }));
+}
+
+#[test]
+fn borrowed_callback_targets_propagate_through_two_direct_calls() {
+    let main = function(
+        0,
+        "main",
+        vec![
+            TirInstr::MakeClosure(TirValueId(0), TirFunctionId(3), vec![]),
+            TirInstr::Call(TirValueId(1), TirFunctionId(1), vec![TirValueId(0)]),
+        ],
+    );
+    let callback = function(3, "callback", vec![string_const(0, "allocated")]);
+    let report = analyze(&module(vec![
+        main,
+        callback_invoker(1, Some(2)),
+        callback_invoker(2, None),
+        callback,
+    ]))
+    .unwrap();
+    for id in [0, 1, 2] {
+        assert!(report
+            .summary(TirFunctionId(id))
+            .unwrap()
+            .required
+            .contains(Capability::Alloc));
+    }
+    assert!(report
+        .call_edges()
+        .iter()
+        .any(|edge| { edge.caller == TirFunctionId(2) && edge.callee == TirFunctionId(3) }));
+}
+
+#[test]
+fn callback_multiple_known_callers_union_all_capabilities() {
+    let main = function(
+        0,
+        "main",
+        vec![
+            TirInstr::MakeClosure(TirValueId(0), TirFunctionId(2), vec![]),
+            TirInstr::Call(TirValueId(1), TirFunctionId(1), vec![TirValueId(0)]),
+            TirInstr::MakeClosure(TirValueId(2), TirFunctionId(3), vec![]),
+            TirInstr::Call(TirValueId(3), TirFunctionId(1), vec![TirValueId(2)]),
+        ],
+    );
+    let alloc_body = function(2, "alloc", vec![string_const(0, "allocated")]);
+    let panic_body = function(
+        3,
+        "panic",
+        vec![
+            int_const(0, 1),
+            int_const(1, 0),
+            TirInstr::Div(TirValueId(2), TirValueId(0), TirValueId(1)),
+        ],
+    );
+    let report = analyze(&module(vec![
+        main,
+        callback_invoker(1, None),
+        alloc_body,
+        panic_body,
+    ]))
+    .unwrap();
+    let required = report.summary(TirFunctionId(1)).unwrap().required;
+    assert!(required.contains(Capability::Alloc));
+    assert!(required.contains(Capability::Panic));
+}
+
+#[test]
+fn callback_known_and_unknown_sources_still_fail_closed() {
+    let known = function(
+        0,
+        "known",
+        vec![
+            TirInstr::MakeClosure(TirValueId(0), TirFunctionId(3), vec![]),
+            TirInstr::Call(TirValueId(1), TirFunctionId(2), vec![TirValueId(0)]),
+        ],
+    );
+    let mut unknown = function(
+        1,
+        "unbound",
+        vec![TirInstr::Call(
+            TirValueId(1),
+            TirFunctionId(2),
+            vec![TirValueId(0)],
+        )],
+    );
+    unknown.params.push((TirValueId(0), callback_type()));
+    let callback = function(3, "callback", vec![]);
+    let error = analyze(&module(vec![
+        known,
+        unknown,
+        callback_invoker(2, None),
+        callback,
+    ]))
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        CapabilityAnalysisError::UnsupportedIndirectCall {
+            caller: TirFunctionId(2),
+            ..
+        }
+    ));
+}
+
+#[test]
+fn callback_unknown_source_propagates_through_forwarding() {
+    let mut main = function(
+        0,
+        "main",
+        vec![TirInstr::Call(
+            TirValueId(1),
+            TirFunctionId(1),
+            vec![TirValueId(0)],
+        )],
+    );
+    main.params.push((TirValueId(0), callback_type()));
+    let error = analyze(&module(vec![
+        main,
+        callback_invoker(1, Some(2)),
+        callback_invoker(2, None),
+    ]))
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        CapabilityAnalysisError::UnsupportedIndirectCall {
+            caller: TirFunctionId(2),
+            ..
+        }
+    ));
+}
+
+#[test]
+fn callback_parameter_can_be_loaded_from_local_slot() {
+    let mut invoker = function(
+        1,
+        "invoke",
+        vec![
+            TirInstr::Slot(TirSlotId(0), callback_type()),
+            TirInstr::Store(TirSlotId(0), TirValueId(0)),
+            TirInstr::Load(TirValueId(1), TirSlotId(0)),
+            TirInstr::CallClosure(TirValueId(2), TirValueId(1), vec![]),
+        ],
+    );
+    invoker.params.push((TirValueId(0), callback_type()));
+    let main = function(
+        0,
+        "main",
+        vec![
+            TirInstr::MakeClosure(TirValueId(0), TirFunctionId(2), vec![]),
+            TirInstr::Call(TirValueId(1), TirFunctionId(1), vec![TirValueId(0)]),
+        ],
+    );
+    let callback = function(2, "callback", vec![string_const(0, "alloc")]);
+    let report = analyze(&module(vec![main, invoker, callback])).unwrap();
+    assert!(report
+        .summary(TirFunctionId(0))
+        .unwrap()
+        .required
+        .contains(Capability::Alloc));
+}
+
+#[test]
+fn extern_callable_parameter_cannot_hide_callback_effects() {
+    let main = function(
+        0,
+        "main",
+        vec![
+            TirInstr::MakeClosure(TirValueId(0), TirFunctionId(2), vec![]),
+            TirInstr::Call(TirValueId(1), TirFunctionId(1), vec![TirValueId(0)]),
+        ],
+    );
+    let mut external = extern_function(1, "std.callback.invoke");
+    external.params.push((TirValueId(0), callback_type()));
+    let callback = function(2, "callback", vec![string_const(0, "allocated")]);
+    let error = analyze(&module(vec![main, external, callback])).unwrap_err();
+    assert!(matches!(
+        error,
+        CapabilityAnalysisError::UnsupportedIndirectCall {
+            caller: TirFunctionId(0),
+            ..
+        }
+    ));
+}

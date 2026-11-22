@@ -4,7 +4,7 @@ use crate::function::{
     BytecodeFunction, BytecodeSignature, BytecodeType, FunctionId, LocalId, SignatureId,
 };
 use crate::opcode::{stack_effect, BytecodeInstr};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use thiserror::Error;
 
 #[derive(Debug, Error, PartialEq, Clone)]
@@ -765,6 +765,211 @@ fn propagate_borrow_state(
     Ok(())
 }
 
+/// A callback is non-escaping only when its bytecode has no path that
+/// returns, embeds, or forwards it to an unverified destination. This
+/// conservative analysis does not trust caller-supplied effect metadata.
+/// Each direct forwarded call must itself prove the corresponding parameter.
+/// Recursion is rejected until a sound SCC contract is available.
+fn proves_nonescaping_callback_parameter(
+    module: &BytecodeModule,
+    target_id: FunctionId,
+    parameter: usize,
+    visiting: &mut HashSet<(u32, usize)>,
+) -> bool {
+    fn checked(
+        module: &BytecodeModule,
+        target_id: FunctionId,
+        parameter: usize,
+        visiting: &mut HashSet<(u32, usize)>,
+    ) -> Result<(), BytecodeVerifyError> {
+        let func = module
+            .functions
+            .get(target_id.0 as usize)
+            .ok_or(BytecodeVerifyError::InvalidFunctionId(target_id))?;
+        if func.is_extern
+            || func.code.is_empty()
+            || func.params.len() > func.locals.len()
+            || !matches!(func.params.get(parameter), Some(BytecodeType::Callable(_)))
+        {
+            return Err(BytecodeVerifyError::Unsupported(
+                "callee has no verifiable callback parameter".into(),
+            ));
+        }
+        if !visiting.insert((target_id.0, parameter)) {
+            return Err(BytecodeVerifyError::Unsupported(
+                "recursive callback escape analysis requires an explicit contract".into(),
+            ));
+        }
+
+        let result = (|| {
+            // Bool taint tracks all values derived from this callback parameter.
+            // Merge uses OR: if *any* predecessor carries it, the use must be safe.
+            let mut locals = vec![false; func.locals.len()];
+            locals[parameter] = true;
+            let initial = (Vec::<bool>::new(), locals);
+            let mut states = HashMap::new();
+            let mut pending = VecDeque::new();
+            states.insert(0usize, initial);
+            pending.push_back(0usize);
+
+            while let Some(pc) = pending.pop_front() {
+                let (mut stack, mut locals) = states[&pc].clone();
+                let instr = &func.code[pc];
+                let effect = stack_effect(instr, module, func)
+                    .map_err(|e| BytecodeVerifyError::Message(e.to_string()))?;
+                if stack.len() < usize::from(effect.pops) {
+                    return Err(BytecodeVerifyError::StackUnderflow);
+                }
+                match *instr {
+                    BytecodeInstr::LoadLocal(id) => {
+                        stack.push(
+                            *locals
+                                .get(id.0 as usize)
+                                .ok_or(BytecodeVerifyError::InvalidLocalId(id))?,
+                        );
+                    }
+                    BytecodeInstr::StoreLocal(id) => {
+                        let value = stack.pop().ok_or(BytecodeVerifyError::StackUnderflow)?;
+                        *locals
+                            .get_mut(id.0 as usize)
+                            .ok_or(BytecodeVerifyError::InvalidLocalId(id))? = value;
+                    }
+                    BytecodeInstr::Dup => {
+                        let value = *stack.last().ok_or(BytecodeVerifyError::StackUnderflow)?;
+                        stack.push(value);
+                    }
+                    BytecodeInstr::Pop => {
+                        stack.pop();
+                    }
+                    BytecodeInstr::CallClosure(signature_id, argc) => {
+                        for _ in 0..argc {
+                            if stack.pop() != Some(false) {
+                                return Err(BytecodeVerifyError::Unsupported(
+                                    "callback forwarded into an indirect call".into(),
+                                ));
+                            }
+                        }
+                        let callback = stack.pop().ok_or(BytecodeVerifyError::StackUnderflow)?;
+                        let signature = module
+                            .signatures
+                            .get(signature_id.0 as usize)
+                            .ok_or(BytecodeVerifyError::InvalidSignatureId(signature_id))?;
+                        if callback && matches!(signature.ret, BytecodeType::Callable(_)) {
+                            return Err(BytecodeVerifyError::Unsupported(
+                                "borrowed callback could return another callback".into(),
+                            ));
+                        }
+                        stack.extend(std::iter::repeat_n(false, usize::from(effect.pushes)));
+                    }
+                    BytecodeInstr::Call(callee, argc) => {
+                        let target = module
+                            .functions
+                            .get(callee.0 as usize)
+                            .ok_or(BytecodeVerifyError::InvalidFunctionId(callee))?;
+                        if usize::from(argc) != target.params.len() {
+                            return Err(BytecodeVerifyError::Unsupported(
+                                "callback forwarding arity mismatch".into(),
+                            ));
+                        }
+                        let mut forwarded = false;
+                        for index in (0..usize::from(argc)).rev() {
+                            let tainted = stack.pop().ok_or(BytecodeVerifyError::StackUnderflow)?;
+                            if tainted {
+                                forwarded = true;
+                                if !checked(module, callee, index, visiting).is_ok() {
+                                    return Err(BytecodeVerifyError::Unsupported(
+                                        "callback forwarded to an escaping callee".into(),
+                                    ));
+                                }
+                            }
+                        }
+                        if forwarded && matches!(target.ret, BytecodeType::Callable(_)) {
+                            return Err(BytecodeVerifyError::Unsupported(
+                                "callback might be returned by a direct callee".into(),
+                            ));
+                        }
+                        stack.extend(std::iter::repeat_n(false, usize::from(effect.pushes)));
+                    }
+                    BytecodeInstr::Return => {
+                        if stack.iter().any(|value| *value) {
+                            return Err(BytecodeVerifyError::Unsupported(
+                                "callback returned from its frame".into(),
+                            ));
+                        }
+                    }
+                    BytecodeInstr::JumpIfFalse(_) => {
+                        if stack.pop() != Some(false) {
+                            return Err(BytecodeVerifyError::Unsupported(
+                                "callback used as a branch condition".into(),
+                            ));
+                        }
+                    }
+                    BytecodeInstr::Jump(_) | BytecodeInstr::Unreachable => {}
+                    BytecodeInstr::BorrowLocal(id) => {
+                        if *locals
+                            .get(id.0 as usize)
+                            .ok_or(BytecodeVerifyError::InvalidLocalId(id))?
+                        {
+                            return Err(BytecodeVerifyError::Unsupported(
+                                "callback captured through a borrow handle".into(),
+                            ));
+                        }
+                        stack.push(false);
+                    }
+                    _ => {
+                        for _ in 0..effect.pops {
+                            if stack.pop() != Some(false) {
+                                return Err(BytecodeVerifyError::Unsupported(
+                                    "callback escapes through an unsupported instruction".into(),
+                                ));
+                            }
+                        }
+                        stack.extend(std::iter::repeat_n(false, usize::from(effect.pushes)));
+                    }
+                }
+
+                for successor in borrow_successors(pc, func) {
+                    if successor >= func.code.len() {
+                        return Err(BytecodeVerifyError::InvalidJumpTarget(successor));
+                    }
+                    if let Some((old_stack, old_locals)) = states.get_mut(&successor) {
+                        if old_stack.len() != stack.len() || old_locals.len() != locals.len() {
+                            return Err(BytecodeVerifyError::StackHeightMismatch {
+                                expected: old_stack.len(),
+                                found: stack.len(),
+                            });
+                        }
+                        let mut changed = false;
+                        for (old, new) in old_stack.iter_mut().zip(&stack) {
+                            if !*old && *new {
+                                *old = true;
+                                changed = true;
+                            }
+                        }
+                        for (old, new) in old_locals.iter_mut().zip(&locals) {
+                            if !*old && *new {
+                                *old = true;
+                                changed = true;
+                            }
+                        }
+                        if changed {
+                            pending.push_back(successor);
+                        }
+                    } else {
+                        states.insert(successor, (stack.clone(), locals.clone()));
+                        pending.push_back(successor);
+                    }
+                }
+            }
+            Ok(())
+        })();
+        visiting.remove(&(target_id.0, parameter));
+        result
+    }
+
+    checked(module, target_id, parameter, visiting).is_ok()
+}
+
 fn verify_borrowed_frame_contract(
     module: &BytecodeModule,
     func: &BytecodeFunction,
@@ -959,6 +1164,42 @@ fn verify_borrowed_frame_contract(
                     return Err(BytecodeVerifyError::Unsupported(
                         "raw borrow handle is not callable".into(),
                     ));
+                }
+                for _ in 0..effect.pushes {
+                    state.stack.push(BorrowProvenance::Plain);
+                }
+            }
+            BytecodeInstr::Call(target_id, argc) => {
+                // Borrowed closures can cross a direct call boundary only when
+                // the callee bytecode proves that parameter non-escaping. The
+                // proof is independent of (and cannot trust) source metadata.
+                let target = module
+                    .functions
+                    .get(target_id.0 as usize)
+                    .ok_or(BytecodeVerifyError::InvalidFunctionId(target_id))?;
+                if usize::from(argc) != target.params.len() {
+                    return Err(BytecodeVerifyError::CallArityMismatch {
+                        id: target_id,
+                        expected: target.params.len() as u16,
+                        found: argc,
+                    });
+                }
+                for index in (0..usize::from(argc)).rev() {
+                    match state.stack.pop() {
+                        Some(BorrowProvenance::Plain) => {}
+                        Some(BorrowProvenance::BorrowedClosure)
+                            if proves_nonescaping_callback_parameter(
+                                module,
+                                target_id,
+                                index,
+                                &mut HashSet::new(),
+                            ) => {}
+                        _ => {
+                            return Err(BytecodeVerifyError::Unsupported(format!(
+                                "borrowed callback argument {index} has no verified non-escaping contract for @{target_id}"
+                            )));
+                        }
+                    }
                 }
                 for _ in 0..effect.pushes {
                     state.stack.push(BorrowProvenance::Plain);

@@ -705,7 +705,7 @@ fn verify_function_inner(
         }
     }
 
-    errors.extend(verify_borrowed_closure_frame_lifetimes(func));
+    errors.extend(verify_borrowed_closure_frame_lifetimes(func, functions));
 
     if errors.is_empty() {
         Ok(value_types)
@@ -716,8 +716,8 @@ fn verify_function_inner(
 
 // VM Parity 2B.1d: frame-bound borrowed closures.
 // This is a conservative structural proof, not a general lexical borrow checker.
-// A borrowed closure may move through local slots and be called in its owner
-// frame, but it cannot escape through a return, an argument, or an aggregate.
+// A borrowed closure may move through local slots and cross a direct call
+// only when the callee is verified not to let that callback escape.
 // A Store in the entry block may execute repeatedly if the CFG returns to
 // entry. Counted-once syntax is not counted-once execution (v0.4 §14.5).
 fn borrowed_entry_can_repeat(func: &TirFunction, entry: TirBlockId) -> bool {
@@ -747,7 +747,10 @@ fn borrowed_entry_can_repeat(func: &TirFunction, entry: TirBlockId) -> bool {
     false
 }
 
-fn verify_borrowed_closure_frame_lifetimes(func: &TirFunction) -> Vec<VerifierError> {
+fn verify_borrowed_closure_frame_lifetimes(
+    func: &TirFunction,
+    functions: &HashMap<TirFunctionId, &TirFunction>,
+) -> Vec<VerifierError> {
     let mut source_slots = HashSet::new();
     let mut borrowed_values = HashSet::new();
     let mut borrow_sites = Vec::new();
@@ -828,9 +831,8 @@ fn verify_borrowed_closure_frame_lifetimes(func: &TirFunction) -> Vec<VerifierEr
         }
     }
 
-    // Scan in stable function/block/instruction order. All uses other than
-    // local Store/Load and CallClosure-as-callee are forbidden until full
-    // interprocedural lifetime support is available.
+    // Scan in stable function/block/instruction order. A direct callback
+    // argument is permitted only after a separate interprocedural proof.
     for block in &func.blocks {
         for instr in &block.instrs {
             if let TirInstr::MakeClosureRef(_, _, captures) = instr {
@@ -840,7 +842,7 @@ fn verify_borrowed_closure_frame_lifetimes(func: &TirFunction) -> Vec<VerifierEr
                     ));
                 }
             }
-            if instruction_escapes_borrowed_closure(instr, &borrowed_values) {
+            if instruction_escapes_borrowed_closure(instr, &borrowed_values, functions) {
                 errors.push(VerifierError::GenericError(
                     "borrowed closure escapes its owner frame or is used as a non-callee value"
                         .into(),
@@ -859,7 +861,131 @@ fn verify_borrowed_closure_frame_lifetimes(func: &TirFunction) -> Vec<VerifierEr
     errors
 }
 
-fn instruction_escapes_borrowed_closure(instr: &TirInstr, borrowed: &HashSet<TirValueId>) -> bool {
+/// Proves that the indicated function parameter is used only during the call.
+/// The analysis conservatively joins taint from all branches/iterations and
+/// follows direct forwarding calls. Cycles in the call graph require an
+/// explicit future contract; they are rejected rather than assumed safe.
+fn proves_nonescaping_tir_callback_parameter(
+    functions: &HashMap<TirFunctionId, &TirFunction>,
+    function_id: TirFunctionId,
+    parameter_index: usize,
+    visiting: &mut HashSet<(TirFunctionId, usize)>,
+) -> bool {
+    let Some(function) = functions.get(&function_id).copied() else {
+        return false;
+    };
+    if function.is_extern || function.blocks.is_empty() {
+        return false;
+    }
+    let Some((parameter_value, TirType::Function(_, return_type))) =
+        function.params.get(parameter_index)
+    else {
+        return false;
+    };
+    if !visiting.insert((function_id, parameter_index)) {
+        return false;
+    }
+
+    let proven = (|| {
+        // May-taint is intentionally path-insensitive: every possible use
+        // must be safe. Storing into a local slot is allowed; capturing that
+        // slot into a new environment or returning its value is not.
+        let mut values = HashSet::from([*parameter_value]);
+        let mut slots = HashSet::new();
+        loop {
+            let mut changed = false;
+            for block in &function.blocks {
+                for instruction in &block.instrs {
+                    match instruction {
+                        TirInstr::Store(slot, value) if values.contains(value) => {
+                            changed |= slots.insert(*slot);
+                        }
+                        TirInstr::Load(value, slot) if slots.contains(slot) => {
+                            changed |= values.insert(*value);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+
+        for block in &function.blocks {
+            for instruction in &block.instrs {
+                match instruction {
+                    TirInstr::Call(_, target, args) => {
+                        let tainted: Vec<_> = args
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(index, value)| values.contains(value).then_some(index))
+                            .collect();
+                        if tainted.is_empty() {
+                            continue;
+                        }
+                        let Some(callee) = functions.get(target) else {
+                            return false;
+                        };
+                        // A forwarded callback cannot be returned by the
+                        // callee, including through a different local alias.
+                        if matches!(&callee.return_type, TirType::Function(_, _)) {
+                            return false;
+                        }
+                        for index in tainted {
+                            if !proves_nonescaping_tir_callback_parameter(
+                                functions, *target, index, visiting,
+                            ) {
+                                return false;
+                            }
+                        }
+                    }
+                    TirInstr::CallClosure(_, callee, args) => {
+                        if args.iter().any(|value| values.contains(value)) {
+                            return false;
+                        }
+                        // Invoking the callback itself is safe only when it
+                        // cannot return another callback that may escape.
+                        if values.contains(callee)
+                            && matches!(return_type.as_ref(), TirType::Function(_, _))
+                        {
+                            return false;
+                        }
+                    }
+                    TirInstr::MakeClosureRef(_, _, captures) => {
+                        if captures.iter().any(|slot| slots.contains(slot)) {
+                            return false;
+                        }
+                    }
+                    _ => {
+                        if instruction_escapes_borrowed_closure(instruction, &values, functions) {
+                            return false;
+                        }
+                    }
+                }
+            }
+            match &block.terminator {
+                Some(TirTerminator::Ret(Some(value)))
+                | Some(TirTerminator::CondBr(value, _, _))
+                    if values.contains(value) =>
+                {
+                    return false;
+                }
+                _ => {}
+            }
+        }
+        true
+    })();
+
+    visiting.remove(&(function_id, parameter_index));
+    proven
+}
+
+fn instruction_escapes_borrowed_closure(
+    instr: &TirInstr,
+    borrowed: &HashSet<TirValueId>,
+    functions: &HashMap<TirFunctionId, &TirFunction>,
+) -> bool {
     let contains = |value: &TirValueId| borrowed.contains(value);
     match instr {
         TirInstr::Const(_, _)
@@ -867,8 +993,31 @@ fn instruction_escapes_borrowed_closure(instr: &TirInstr, borrowed: &HashSet<Tir
         | TirInstr::Load(_, _)
         | TirInstr::Store(_, _)
         | TirInstr::MakeClosureRef(_, _, _) => false,
+        TirInstr::Call(_, target, args) => {
+            let borrowed_args: Vec<_> = args
+                .iter()
+                .enumerate()
+                .filter_map(|(index, value)| contains(value).then_some(index))
+                .collect();
+            if borrowed_args.is_empty() {
+                return false;
+            }
+            let Some(callee) = functions.get(target) else {
+                return true;
+            };
+            if matches!(&callee.return_type, TirType::Function(_, _)) {
+                return true;
+            }
+            borrowed_args.into_iter().any(|index| {
+                !proves_nonescaping_tir_callback_parameter(
+                    functions,
+                    *target,
+                    index,
+                    &mut HashSet::new(),
+                )
+            })
+        }
         TirInstr::CallClosure(_, _, args)
-        | TirInstr::Call(_, _, args)
         | TirInstr::MakeClosure(_, _, args)
         | TirInstr::Make(_, _, _, args) => args.iter().any(contains),
         TirInstr::MakeStruct(_, _, fields) => fields.iter().any(|(_, value)| contains(value)),

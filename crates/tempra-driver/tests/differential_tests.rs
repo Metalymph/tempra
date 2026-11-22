@@ -872,3 +872,32 @@ fn vm_parity_ref_capture_created_in_conditional_branch() {
     "#;
     assert_differential(source);
 }
+
+#[test]
+fn vm_parity_ref_capture_non_escaping_direct_callback() {
+    let source = r#"
+        fn invoke(callback: fn() -> Int) -> Int { return callback() }
+        fn main() -> Int {
+            let base = 10
+            let get = fn[ref base]() -> Int { base }
+            return invoke(get)
+        }
+    "#;
+    assert_differential(source);
+}
+
+#[test]
+fn vm_parity_ref_capture_non_escaping_transitive_callback() {
+    let source = r#"
+        fn invoke(callback: fn() -> Int) -> Int { return callback() }
+        fn twice(callback: fn() -> Int) -> Int {
+            return invoke(callback) + invoke(callback)
+        }
+        fn main() -> Int {
+            let base = 10
+            let get = fn[ref base]() -> Int { base }
+            return twice(get)
+        }
+    "#;
+    assert_differential(source);
+}

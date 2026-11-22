@@ -1042,6 +1042,86 @@ fn vm_ref_borrow_slot_identity_and_late_dereference() {
         run_function(&module, "main", vec![]).unwrap(),
         VmValue::Int64(15)
     );
-    // In-memory VM support only: serialized artifacts stay fail-closed.
-    assert!(tempra_bytecode::serialize::encode_module(&module).is_err());
+    // Borrowed closures now survive encode -> verified decode -> VM execution.
+    let encoded = tempra_bytecode::serialize::encode_module(&module).unwrap();
+    let decoded = tempra_bytecode::serialize::decode_and_verify_artifact(&encoded).unwrap();
+    assert_eq!(
+        run_function(&decoded.module, "main", vec![]).unwrap(),
+        VmValue::Int64(15)
+    );
+}
+
+#[test]
+fn vm_borrowed_callback_cross_frame_transitive_and_cached() {
+    use tempra_bytecode::function::BytecodeSignature;
+    use tempra_bytecode::serialize::{decode_and_verify_artifact, encode_module};
+    let mut module = BytecodeModule::new();
+    let signature = module.intern_signature(BytecodeSignature {
+        params: vec![],
+        ret: BytecodeType::Int64,
+    });
+    let base = module.add_constant(BytecodeConstant::Int64(7));
+    let mut lambda = BytecodeFunction::new(
+        "capture".into(),
+        vec![BytecodeType::Int64],
+        BytecodeType::Int64,
+    );
+    lambda.locals = lambda.params.clone();
+    lambda.max_stack = 1;
+    lambda.code = vec![BytecodeInstr::LoadLocal(LocalId(0)), BytecodeInstr::Return];
+    let capture_id = module.add_function(lambda);
+    let mut invoke = BytecodeFunction::new(
+        "invoke".into(),
+        vec![BytecodeType::Callable(signature)],
+        BytecodeType::Int64,
+    );
+    invoke.locals = invoke.params.clone();
+    invoke.max_stack = 1;
+    invoke.code = vec![
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::CallClosure(signature, 0),
+        BytecodeInstr::Return,
+    ];
+    let invoke_id = module.add_function(invoke);
+    let mut twice = BytecodeFunction::new(
+        "twice".into(),
+        vec![BytecodeType::Callable(signature)],
+        BytecodeType::Int64,
+    );
+    twice.locals = twice.params.clone();
+    twice.max_stack = 2;
+    twice.code = vec![
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::Call(invoke_id, 1),
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::Call(invoke_id, 1),
+        BytecodeInstr::AddI64,
+        BytecodeInstr::Return,
+    ];
+    let twice_id = module.add_function(twice);
+    let mut main = BytecodeFunction::new("main".into(), vec![], BytecodeType::Int64);
+    main.locals = vec![BytecodeType::Int64, BytecodeType::Callable(signature)];
+    main.max_stack = 1;
+    main.code = vec![
+        BytecodeInstr::ConstI64(base),
+        BytecodeInstr::StoreLocal(LocalId(0)),
+        BytecodeInstr::BorrowLocal(LocalId(0)),
+        BytecodeInstr::MakeClosureRef(capture_id, 1),
+        BytecodeInstr::StoreLocal(LocalId(1)),
+        BytecodeInstr::LoadLocal(LocalId(1)),
+        BytecodeInstr::Call(twice_id, 1),
+        BytecodeInstr::Return,
+    ];
+    module.add_function(main);
+    tempra_bytecode::verify::verify_module(&module).unwrap();
+    let bytes = encode_module(&module).unwrap();
+    let decoded = decode_and_verify_artifact(&bytes).unwrap();
+    assert_eq!(
+        run_function(&module, "main", vec![]).unwrap(),
+        VmValue::Int64(14)
+    );
+    assert_eq!(
+        run_function(&decoded.module, "main", vec![]).unwrap(),
+        VmValue::Int64(14)
+    );
 }

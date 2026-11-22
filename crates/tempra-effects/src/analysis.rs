@@ -451,6 +451,9 @@ struct SummaryState {
 struct ClosureTargetIndex {
     definitions: HashMap<TirValueId, ClosureDefinition>,
     stores: HashMap<TirSlotId, Vec<TirValueId>>,
+    // A callable parameter has no local definition. Its possible targets are
+    // inferred conservatively from direct module-local call sites.
+    parameter_targets: HashMap<TirValueId, Vec<TirFunctionId>>,
 }
 
 #[derive(Clone, Copy)]
@@ -461,10 +464,14 @@ enum ClosureDefinition {
 
 // VM Parity 2B.1f: borrowed closure target propagation.
 impl ClosureTargetIndex {
-    fn new(function: &TirFunction) -> Self {
+    fn new(
+        function: &TirFunction,
+        parameter_targets: Option<&HashMap<TirValueId, Vec<TirFunctionId>>>,
+    ) -> Self {
         let mut index = Self {
             definitions: HashMap::new(),
             stores: HashMap::new(),
+            parameter_targets: parameter_targets.cloned().unwrap_or_default(),
         };
         for block in &function.blocks {
             for instr in &block.instrs {
@@ -524,7 +531,7 @@ impl ClosureTargetIndex {
             Some(ClosureDefinition::Load(slot)) => {
                 self.resolve_slot(*slot, values_on_path, slots_on_path)
             }
-            None => None,
+            None => self.parameter_targets.get(&value).cloned(),
         };
         values_on_path.remove(&value);
         result
@@ -553,6 +560,118 @@ impl ClosureTargetIndex {
         slots_on_path.remove(&slot);
         result
     }
+}
+
+/// Whole-module, conservative may-target inference for callable parameters.
+///
+/// The effect graph must include *every* possible callback target. A direct
+/// call passes closure targets into its callee's function-typed parameters;
+/// those parameters can then be invoked or forwarded by further direct calls.
+/// The monotonically growing target sets reach a finite fixed point, including
+/// for cycles in the direct-call graph.
+///
+/// A missing target at any callsite is **not** treated as an empty/no-effect
+/// callback. Once the known-target fixed point is reached, incomplete bindings
+/// are invalidated transitively, leaving their indirect calls fail-closed.
+/// This analysis is module-local; it does not infer targets from exports,
+/// externs, indirect forwarding or callable values returned by functions.
+fn infer_parameter_closure_targets(
+    functions: &[&TirFunction],
+    function_by_id: &HashMap<TirFunctionId, &TirFunction>,
+) -> HashMap<TirFunctionId, HashMap<TirValueId, Vec<TirFunctionId>>> {
+    let mut targets: HashMap<TirFunctionId, HashMap<TirValueId, Vec<TirFunctionId>>> =
+        HashMap::new();
+
+    // First propagate every provable target. The presence of a known target
+    // never makes an unknown path safe; those paths are handled below.
+    loop {
+        let mut changed = false;
+        for caller in functions {
+            let index = ClosureTargetIndex::new(caller, targets.get(&caller.id));
+            for block in &caller.blocks {
+                for instr in &block.instrs {
+                    let TirInstr::Call(_, callee_id, args) = instr else {
+                        continue;
+                    };
+                    let Some(callee) = function_by_id.get(callee_id) else {
+                        continue; // UnknownCallTarget is reported by analyze().
+                    };
+                    for ((parameter, ty), arg) in callee.params.iter().zip(args.iter()) {
+                        if !matches!(ty, TirType::Function(_, _)) {
+                            continue;
+                        }
+                        let Some(found) = index.targets_for(*arg) else {
+                            continue;
+                        };
+                        let known = targets
+                            .entry(*callee_id)
+                            .or_default()
+                            .entry(*parameter)
+                            .or_default();
+                        for target in found {
+                            if !known.contains(&target) {
+                                known.push(target);
+                                changed = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    // Reject a parameter if *any* contributing callsite is unresolved. This
+    // second fixed point carries unknown provenance through transitive
+    // forwarding (including from a root function with no known callers).
+    let mut incomplete: HashSet<(TirFunctionId, TirValueId)> = HashSet::new();
+    loop {
+        let mut changed = false;
+        for caller in functions {
+            let safe_parameters: HashMap<_, _> = targets
+                .get(&caller.id)
+                .into_iter()
+                .flat_map(|params| params.iter())
+                .filter(|(value, _)| !incomplete.contains(&(caller.id, **value)))
+                .map(|(value, targets)| (*value, targets.clone()))
+                .collect();
+            let index = ClosureTargetIndex::new(caller, Some(&safe_parameters));
+            for block in &caller.blocks {
+                for instr in &block.instrs {
+                    let TirInstr::Call(_, callee_id, args) = instr else {
+                        continue;
+                    };
+                    let Some(callee) = function_by_id.get(callee_id) else {
+                        continue;
+                    };
+                    for ((parameter, ty), arg) in callee.params.iter().zip(args.iter()) {
+                        if matches!(ty, TirType::Function(_, _))
+                            && index.targets_for(*arg).is_none()
+                        {
+                            changed |= incomplete.insert((*callee_id, *parameter));
+                        }
+                    }
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    for (function, parameter) in incomplete {
+        if let Some(params) = targets.get_mut(&function) {
+            params.remove(&parameter);
+        }
+    }
+    for params in targets.values_mut() {
+        for known in params.values_mut() {
+            known.sort_by_key(|target| target.0);
+            known.dedup();
+        }
+    }
+    targets
 }
 
 /// Analyzes direct and transitive capability requirements of a TIR module.
@@ -588,6 +707,8 @@ pub fn analyze(module: &TirModule) -> Result<CapabilityAnalysis, CapabilityAnaly
         .map(|function| (function.id, *function))
         .collect();
 
+    let parameter_closure_targets = infer_parameter_closure_targets(&functions, &function_by_id);
+
     let mut states: Vec<SummaryState> = functions
         .iter()
         .copied()
@@ -622,7 +743,8 @@ pub fn analyze(module: &TirModule) -> Result<CapabilityAnalysis, CapabilityAnaly
             function.params.iter().cloned().collect();
         let mut slot_types: HashMap<TirSlotId, TirType> = HashMap::new();
         let value_index = FunctionValueIndex::new(function);
-        let closure_targets = ClosureTargetIndex::new(function);
+        let closure_targets =
+            ClosureTargetIndex::new(function, parameter_closure_targets.get(&function.id));
         let mut blocks: Vec<_> = function.blocks.iter().collect();
         blocks.sort_by_key(|block| block.id.0);
 
@@ -678,7 +800,17 @@ pub fn analyze(module: &TirModule) -> Result<CapabilityAnalysis, CapabilityAnaly
                     };
                     // Indirect externs need capture-aware argument/fact binding.
                     // Until supported, reject rather than lose resource-specific effects.
-                    if target.is_extern && matches!(instruction, TirInstr::CallClosure(_, _, _)) {
+                    if target.is_extern
+                        && (matches!(instruction, TirInstr::CallClosure(_, _, _))
+                            || target
+                                .params
+                                .iter()
+                                .zip(arguments.iter())
+                                .any(|((_, ty), _)| matches!(ty, TirType::Function(_, _))))
+                    {
+                        // A native extern receiving a callback can invoke it
+                        // outside the module-local target graph. Without a
+                        // trusted extern contract, its effects are unknown.
                         return Err(CapabilityAnalysisError::UnsupportedIndirectCall {
                             caller: function.id,
                             callsite: location,

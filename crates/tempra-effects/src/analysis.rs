@@ -477,7 +477,8 @@ impl ClosureTargetIndex {
             for instr in &block.instrs {
                 match instr {
                     TirInstr::MakeClosure(result, target, _)
-                    | TirInstr::MakeClosureRef(result, target, _) => {
+                    | TirInstr::MakeClosureRef(result, target, _)
+                    | TirInstr::MakeClosureInout(result, target, _) => {
                         index
                             .definitions
                             .insert(*result, ClosureDefinition::Make(*target));
@@ -1102,7 +1103,7 @@ fn classify_instruction(
         TirInstr::Const(_, _) => return None,
         TirInstr::Make(_, _, _, _) => (Capability::Alloc, DirectCapabilitySource::Make),
         TirInstr::MakeStruct(_, _, _) => (Capability::Alloc, DirectCapabilitySource::MakeStruct),
-        TirInstr::MakeClosureRef(_, _, _) => {
+        TirInstr::MakeClosureRef(_, _, _) | TirInstr::MakeClosureInout(_, _, _) => {
             (Capability::Alloc, DirectCapabilitySource::BorrowedClosure)
         }
         TirInstr::MakeClosure(_, _, captures) if !captures.is_empty() => (
@@ -1233,6 +1234,7 @@ fn record_instruction_type(
             value_types.get(array).cloned().map(|ty| (*result, ty))
         }
         TirInstr::MakeClosureRef(_, _, _)
+        | TirInstr::MakeClosureInout(_, _, _)
         | TirInstr::MakeStruct(_, _, _)
         | TirInstr::Get(_, _, _)
         | TirInstr::Set(_, _, _, _)

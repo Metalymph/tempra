@@ -358,7 +358,7 @@ pub fn verify_function_direct(
                 BytecodeInstr::Unreachable => {
                     break; // End of path
                 }
-                BytecodeInstr::BorrowLocal(id) => {
+                BytecodeInstr::BorrowLocal(id) | BytecodeInstr::BorrowLocalMut(id) => {
                     if id.0 as usize >= func.locals.len() {
                         return Err(BytecodeVerifyError::InvalidLocalId(id));
                     }
@@ -367,7 +367,8 @@ pub fn verify_function_direct(
                     }
                     state.stack.push(func.locals[id.0 as usize]);
                 }
-                BytecodeInstr::MakeClosureRef(target_id, capture_count) => {
+                BytecodeInstr::MakeClosureRef(target_id, capture_count)
+                | BytecodeInstr::MakeClosureInout(target_id, capture_count) => {
                     let target = module
                         .functions
                         .get(target_id.0 as usize)
@@ -660,6 +661,7 @@ pub fn verify_function_direct(
 enum BorrowProvenance {
     Plain,
     Handle(LocalId),
+    ExclusiveHandle(LocalId),
     BorrowedClosure,
 }
 
@@ -905,7 +907,7 @@ fn proves_nonescaping_callback_parameter(
                         }
                     }
                     BytecodeInstr::Jump(_) | BytecodeInstr::Unreachable => {}
-                    BytecodeInstr::BorrowLocal(id) => {
+                    BytecodeInstr::BorrowLocal(id) | BytecodeInstr::BorrowLocalMut(id) => {
                         if *locals
                             .get(id.0 as usize)
                             .ok_or(BytecodeVerifyError::InvalidLocalId(id))?
@@ -977,7 +979,10 @@ fn verify_borrowed_frame_contract(
     let has_borrows = func.code.iter().any(|instruction| {
         matches!(
             instruction,
-            BytecodeInstr::BorrowLocal(_) | BytecodeInstr::MakeClosureRef(_, _)
+            BytecodeInstr::BorrowLocal(_)
+                | BytecodeInstr::MakeClosureRef(_, _)
+                | BytecodeInstr::BorrowLocalMut(_)
+                | BytecodeInstr::MakeClosureInout(_, _)
         )
     });
     if !has_borrows {
@@ -995,7 +1000,7 @@ fn verify_borrowed_frame_contract(
     let mut writes: Vec<Vec<usize>> = vec![Vec::new(); func.locals.len()];
     for (pc, instr) in func.code.iter().enumerate() {
         match instr {
-            BytecodeInstr::BorrowLocal(source) => {
+            BytecodeInstr::BorrowLocal(source) | BytecodeInstr::BorrowLocalMut(source) => {
                 let index = source.0 as usize;
                 if index >= source_slots.len() {
                     return Err(BytecodeVerifyError::InvalidLocalId(*source));
@@ -1011,6 +1016,30 @@ fn verify_borrowed_frame_contract(
             }
             _ => {}
         }
+    }
+    // Conservative exclusivity: no read borrow and exclusive borrow of the
+    // same owner in this frame; no second exclusive borrow site.
+    let mut exclusive_sources = HashSet::new();
+    let mut read_sources = HashSet::new();
+    for instruction in &func.code {
+        match instruction {
+            BytecodeInstr::BorrowLocal(source) => {
+                read_sources.insert(source.0);
+            }
+            BytecodeInstr::BorrowLocalMut(source) => {
+                if !exclusive_sources.insert(source.0) {
+                    return Err(BytecodeVerifyError::Unsupported(
+                        "exclusive borrowed source has multiple borrow sites".into(),
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+    if !exclusive_sources.is_disjoint(&read_sources) {
+        return Err(BytecodeVerifyError::Unsupported(
+            "ref and inout borrow the same local in a frame".into(),
+        ));
     }
     for (index, is_source) in source_slots.into_iter().enumerate() {
         if !is_source {
@@ -1067,7 +1096,18 @@ fn verify_borrowed_frame_contract(
                 }
                 state.stack.push(BorrowProvenance::Handle(source));
             }
-            BytecodeInstr::MakeClosureRef(target_id, count) => {
+            BytecodeInstr::BorrowLocalMut(source) => {
+                let index = source.0 as usize;
+                if !state.initialized[index] || state.locals[index] != BorrowProvenance::Plain {
+                    return Err(BytecodeVerifyError::Unsupported(
+                        "exclusive borrowed source must be initialized and own a plain value"
+                            .into(),
+                    ));
+                }
+                state.stack.push(BorrowProvenance::ExclusiveHandle(source));
+            }
+            BytecodeInstr::MakeClosureRef(target_id, count)
+            | BytecodeInstr::MakeClosureInout(target_id, count) => {
                 if count == 0 {
                     return Err(BytecodeVerifyError::Unsupported(
                         "borrowed closure with zero captures is invalid".into(),
@@ -1083,16 +1123,25 @@ fn verify_borrowed_frame_contract(
                             .into(),
                     ));
                 }
+                let exclusive = matches!(instr, BytecodeInstr::MakeClosureInout(_, _));
                 let mut handles = Vec::with_capacity(usize::from(count));
                 for _ in 0..count {
-                    match state.stack.pop() {
-                        Some(BorrowProvenance::Handle(local)) => handles.push(local),
+                    let source = match state.stack.pop() {
+                        Some(BorrowProvenance::Handle(local)) if !exclusive => local,
+                        Some(BorrowProvenance::ExclusiveHandle(local)) if exclusive => local,
                         _ => {
                             return Err(BytecodeVerifyError::Unsupported(
-                                "MakeClosureRef may only consume BorrowLocal handles".into(),
+                                "borrowed closure requires handles of its declared access mode"
+                                    .into(),
                             ));
                         }
+                    };
+                    if exclusive && handles.contains(&source) {
+                        return Err(BytecodeVerifyError::Unsupported(
+                            "exclusive closure captures the same local more than once".into(),
+                        ));
                     }
+                    handles.push(source);
                 }
                 handles.reverse();
                 for (local, expected) in handles.iter().zip(&target.params) {
@@ -1125,7 +1174,10 @@ fn verify_borrowed_frame_contract(
                     .stack
                     .pop()
                     .ok_or(BytecodeVerifyError::StackUnderflow)?;
-                if matches!(value, BorrowProvenance::Handle(_)) {
+                if matches!(
+                    value,
+                    BorrowProvenance::Handle(_) | BorrowProvenance::ExclusiveHandle(_)
+                ) {
                     return Err(BytecodeVerifyError::Unsupported(
                         "borrow handle cannot be stored outside MakeClosureRef".into(),
                     ));
@@ -1138,7 +1190,10 @@ fn verify_borrowed_frame_contract(
                     .stack
                     .last()
                     .ok_or(BytecodeVerifyError::StackUnderflow)?;
-                if matches!(top, BorrowProvenance::Handle(_)) {
+                if matches!(
+                    top,
+                    BorrowProvenance::Handle(_) | BorrowProvenance::ExclusiveHandle(_)
+                ) {
                     return Err(BytecodeVerifyError::Unsupported(
                         "raw borrow handle cannot be duplicated".into(),
                     ));
@@ -1146,7 +1201,10 @@ fn verify_borrowed_frame_contract(
                 state.stack.push(top);
             }
             BytecodeInstr::Pop => {
-                if matches!(state.stack.pop(), Some(BorrowProvenance::Handle(_))) {
+                if matches!(
+                    state.stack.pop(),
+                    Some(BorrowProvenance::Handle(_) | BorrowProvenance::ExclusiveHandle(_))
+                ) {
                     return Err(BytecodeVerifyError::Unsupported(
                         "raw borrow handle cannot be discarded".into(),
                     ));
@@ -1160,7 +1218,10 @@ fn verify_borrowed_frame_contract(
                         ));
                     }
                 }
-                if matches!(state.stack.pop(), Some(BorrowProvenance::Handle(_))) {
+                if matches!(
+                    state.stack.pop(),
+                    Some(BorrowProvenance::Handle(_) | BorrowProvenance::ExclusiveHandle(_))
+                ) {
                     return Err(BytecodeVerifyError::Unsupported(
                         "raw borrow handle is not callable".into(),
                     ));

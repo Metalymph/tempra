@@ -365,7 +365,8 @@ fn verify_function_inner(
                         value_types.insert(*res, None);
                     }
                 }
-                TirInstr::MakeClosureRef(res, target_func, captures) => {
+                TirInstr::MakeClosureRef(res, target_func, captures)
+                | TirInstr::MakeClosureInout(res, target_func, captures) => {
                     // Storage is borrowed, not copied: validate slot identities
                     // and their exact types against hidden leading parameters.
                     if captures.is_empty() {
@@ -757,7 +758,9 @@ fn verify_borrowed_closure_frame_lifetimes(
 
     for block in &func.blocks {
         for (index, instr) in block.instrs.iter().enumerate() {
-            if let TirInstr::MakeClosureRef(result, _, captures) = instr {
+            if let TirInstr::MakeClosureRef(result, _, captures)
+            | TirInstr::MakeClosureInout(result, _, captures) = instr
+            {
                 borrowed_values.insert(*result);
                 for slot in captures {
                     source_slots.insert(*slot);
@@ -835,7 +838,9 @@ fn verify_borrowed_closure_frame_lifetimes(
     // argument is permitted only after a separate interprocedural proof.
     for block in &func.blocks {
         for instr in &block.instrs {
-            if let TirInstr::MakeClosureRef(_, _, captures) = instr {
+            if let TirInstr::MakeClosureRef(_, _, captures)
+            | TirInstr::MakeClosureInout(_, _, captures) = instr
+            {
                 if captures.iter().any(|slot| borrowed_slots.contains(slot)) {
                     errors.push(VerifierError::GenericError(
                         "nested ref capture of a borrowed closure is unsupported".into(),
@@ -952,7 +957,8 @@ fn proves_nonescaping_tir_callback_parameter(
                             return false;
                         }
                     }
-                    TirInstr::MakeClosureRef(_, _, captures) => {
+                    TirInstr::MakeClosureRef(_, _, captures)
+                    | TirInstr::MakeClosureInout(_, _, captures) => {
                         if captures.iter().any(|slot| slots.contains(slot)) {
                             return false;
                         }
@@ -992,7 +998,8 @@ fn instruction_escapes_borrowed_closure(
         | TirInstr::Slot(_, _)
         | TirInstr::Load(_, _)
         | TirInstr::Store(_, _)
-        | TirInstr::MakeClosureRef(_, _, _) => false,
+        | TirInstr::MakeClosureRef(_, _, _)
+        | TirInstr::MakeClosureInout(_, _, _) => false,
         TirInstr::Call(_, target, args) => {
             let borrowed_args: Vec<_> = args
                 .iter()

@@ -602,6 +602,8 @@ fn opcode_ids_are_unique_and_within_bounds() {
         BytecodeInstr::ArrayPush,
         BytecodeInstr::BorrowLocal(LocalId(0)),
         BytecodeInstr::MakeClosureRef(FunctionId(0), 0),
+        BytecodeInstr::BorrowLocalMut(LocalId(0)),
+        BytecodeInstr::MakeClosureInout(FunctionId(0), 0),
         BytecodeInstr::AddI64LL(
             tempra_bytecode::function::LocalId(0),
             tempra_bytecode::function::LocalId(0),
@@ -1123,5 +1125,65 @@ fn vm_borrowed_callback_cross_frame_transitive_and_cached() {
     assert_eq!(
         run_function(&decoded.module, "main", vec![]).unwrap(),
         VmValue::Int64(14)
+    );
+}
+
+// 2B.5.A: the hidden mutable capture stores through its owner's frame slot.
+#[test]
+fn vm_inout_capture_updates_owner_across_calls_and_cache_roundtrip() {
+    use tempra_bytecode::function::BytecodeSignature;
+    use tempra_bytecode::serialize::{decode_and_verify_artifact, encode_module};
+    let mut module = BytecodeModule::new();
+    let signature = module.intern_signature(BytecodeSignature {
+        params: vec![BytecodeType::Int64],
+        ret: BytecodeType::Unit,
+    });
+    let ten = module.add_constant(BytecodeConstant::Int64(10));
+    let five = module.add_constant(BytecodeConstant::Int64(5));
+    let two = module.add_constant(BytecodeConstant::Int64(2));
+    let mut child = BytecodeFunction::new(
+        "mutate_capture".into(),
+        vec![BytecodeType::Int64, BytecodeType::Int64],
+        BytecodeType::Unit,
+    );
+    child.locals = child.params.clone();
+    child.max_stack = 2;
+    child.code = vec![
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::LoadLocal(LocalId(1)),
+        BytecodeInstr::AddI64,
+        BytecodeInstr::StoreLocal(LocalId(0)),
+        BytecodeInstr::Return,
+    ];
+    let child_id = module.add_function(child);
+    let mut main = BytecodeFunction::new("main".into(), vec![], BytecodeType::Int64);
+    main.locals = vec![BytecodeType::Int64, BytecodeType::Callable(signature)];
+    main.max_stack = 2;
+    main.code = vec![
+        BytecodeInstr::ConstI64(ten),
+        BytecodeInstr::StoreLocal(LocalId(0)),
+        BytecodeInstr::BorrowLocalMut(LocalId(0)),
+        BytecodeInstr::MakeClosureInout(child_id, 1),
+        BytecodeInstr::StoreLocal(LocalId(1)),
+        BytecodeInstr::LoadLocal(LocalId(1)),
+        BytecodeInstr::ConstI64(five),
+        BytecodeInstr::CallClosure(signature, 1),
+        BytecodeInstr::LoadLocal(LocalId(1)),
+        BytecodeInstr::ConstI64(two),
+        BytecodeInstr::CallClosure(signature, 1),
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::Return,
+    ];
+    module.add_function(main);
+    tempra_bytecode::verify::verify_module(&module).unwrap();
+    assert_eq!(
+        run_function(&module, "main", vec![]).unwrap(),
+        VmValue::Int64(17)
+    );
+    let bytes = encode_module(&module).unwrap();
+    let restored = decode_and_verify_artifact(&bytes).unwrap();
+    assert_eq!(
+        run_function(&restored.module, "main", vec![]).unwrap(),
+        VmValue::Int64(17)
     );
 }

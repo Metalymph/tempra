@@ -417,6 +417,17 @@ impl FunctionBuilder {
         Ok(id)
     }
 
+    /// Construct an exclusive borrowed closure referencing mutable local slots.
+    pub fn build_make_closure_inout(
+        &mut self,
+        target: TirFunctionId,
+        captures: Vec<TirSlotId>,
+    ) -> Result<TirValueId, TirBuildError> {
+        let id = self.next_value();
+        self.push_instr(TirInstr::MakeClosureInout(id, target, captures))?;
+        Ok(id)
+    }
+
     /// Call a function value, checked against its TIR function signature.
     pub fn build_call_closure(
         &mut self,

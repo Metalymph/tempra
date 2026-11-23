@@ -62,7 +62,7 @@ impl From<crate::verify::BytecodeVerifyError> for BytecodeSerializeError {
 }
 
 const MAGIC: &[u8; 4] = b"TMBC";
-const FORMAT_VERSION: u32 = 6;
+const FORMAT_VERSION: u32 = 7;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct BytecodeCacheHeader {
@@ -298,6 +298,15 @@ fn write_instr(w: &mut impl Write, instr: &BytecodeInstr) -> io::Result<()> {
         }
         BytecodeInstr::MakeClosureRef(target, captures) => {
             w.write_all(&[56])?;
+            write_u32(w, target.0)?;
+            w.write_all(&captures.to_le_bytes())
+        }
+        BytecodeInstr::BorrowLocalMut(id) => {
+            w.write_all(&[57])?;
+            write_u32(w, id.0)
+        }
+        BytecodeInstr::MakeClosureInout(target, captures) => {
+            w.write_all(&[58])?;
             write_u32(w, target.0)?;
             w.write_all(&captures.to_le_bytes())
         }
@@ -601,6 +610,16 @@ fn read_instr(r: &mut impl Read) -> Result<BytecodeInstr, BytecodeSerializeError
             ))
         }
         55 => Ok(BytecodeInstr::BorrowLocal(LocalId(read_u32(r)?))),
+        57 => Ok(BytecodeInstr::BorrowLocalMut(LocalId(read_u32(r)?))),
+        58 => {
+            let target_id = FunctionId(read_u32(r)?);
+            let mut count = [0u8; 2];
+            r.read_exact(&mut count)?;
+            Ok(BytecodeInstr::MakeClosureInout(
+                target_id,
+                u16::from_le_bytes(count),
+            ))
+        }
         56 => {
             let target_id = FunctionId(read_u32(r)?);
             let mut capture_count = [0u8; 2];

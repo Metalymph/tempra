@@ -92,6 +92,15 @@ pub fn disassemble_function(
             BytecodeInstr::MakeClosureRef(id, captures) => {
                 out.push_str(&format!("MakeClosureRef @{} captures={}\n", id.0, captures));
             }
+            BytecodeInstr::BorrowLocalMut(id) => {
+                out.push_str(&format!("BorrowLocalMut ${}\n", id.0));
+            }
+            BytecodeInstr::MakeClosureInout(id, captures) => {
+                out.push_str(&format!(
+                    "MakeClosureInout @{} captures={}\n",
+                    id.0, captures
+                ));
+            }
             BytecodeInstr::MakeClosure(id, captures) => {
                 out.push_str(&format!("MakeClosure @{} captures={}\n", id.0, captures));
             }

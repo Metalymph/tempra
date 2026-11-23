@@ -35,6 +35,7 @@ pub struct Interpreter<'a> {
     pub call_stack: Vec<Frame>,
     next_frame_token: u64,
     borrowed_sources: HashSet<(u64, u32)>,
+    exclusive_sources: HashSet<(u64, u32)>,
     pub(crate) profiling: Option<ProfilingState>,
     pub native_resolver: Option<NativeResolver>,
 
@@ -55,6 +56,7 @@ impl<'a> Interpreter<'a> {
             call_stack: Vec::with_capacity(32),
             next_frame_token: 0,
             borrowed_sources: HashSet::new(),
+            exclusive_sources: HashSet::new(),
             profiling: None,
             native_resolver: None,
             #[cfg(feature = "jit-cranelift")]
@@ -85,6 +87,7 @@ impl<'a> Interpreter<'a> {
             call_stack: Vec::with_capacity(32),
             next_frame_token: 0,
             borrowed_sources: HashSet::new(),
+            exclusive_sources: HashSet::new(),
             profiling,
             native_resolver: None,
             #[cfg(feature = "jit-cranelift")]
@@ -402,6 +405,8 @@ impl<'a> Interpreter<'a> {
             54 => "CallClosure",
             55 => "BorrowLocal",
             56 => "MakeClosureRef",
+            57 => "BorrowLocalMut",
+            58 => "MakeClosureInout",
             _ => "Unknown",
         }
     }
@@ -642,18 +647,56 @@ impl<'a> Interpreter<'a> {
                 }
                 BytecodeInstr::StoreLocal(id) => {
                     let val = self.pop_raw()?;
-                    let frame = self.call_stack.last_mut().ok_or(VmError::MissingReturn)?;
-                    if id.0 as usize >= frame.locals.len() {
-                        return Err(VmError::LocalOutOfBounds(id.0));
+                    let (token, existing) = {
+                        let frame = self.call_stack.last().ok_or(VmError::MissingReturn)?;
+                        let existing = frame
+                            .locals
+                            .get(id.0 as usize)
+                            .ok_or(VmError::LocalOutOfBounds(id.0))?
+                            .clone();
+                        (frame.token, existing)
+                    };
+                    if let Some(VmValue::BorrowedLocal(handle)) = existing {
+                        if !handle.mutable {
+                            return Err(VmError::Message(
+                                "cannot mutate through immutable ref capture".into(),
+                            ));
+                        }
+                        if matches!(val, VmValue::BorrowedLocal(_)) {
+                            return Err(VmError::Message(
+                                "cannot store borrowed handles into exclusive owner".into(),
+                            ));
+                        }
+                        let owner = self
+                            .call_stack
+                            .iter_mut()
+                            .find(|frame| frame.token == handle.owner_frame)
+                            .ok_or_else(|| {
+                                VmError::Message(
+                                    "exclusive borrowed owner frame is no longer alive".into(),
+                                )
+                            })?;
+                        let target = owner
+                            .locals
+                            .get_mut(handle.local_id.0 as usize)
+                            .ok_or(VmError::LocalOutOfBounds(handle.local_id.0))?;
+                        if matches!(target, Some(VmValue::BorrowedLocal(_))) {
+                            return Err(VmError::Message(
+                                "nested exclusive borrowed owner is unsupported".into(),
+                            ));
+                        }
+                        *target = Some(val);
+                        continue;
                     }
-                    if self.borrowed_sources.contains(&(frame.token, id.0))
-                        || matches!(frame.locals[id.0 as usize], Some(VmValue::BorrowedLocal(_)))
-                    {
+                    if self.borrowed_sources.contains(&(token, id.0)) {
                         return Err(VmError::Message(
-                            "cannot overwrite an active immutable borrowed local".into(),
+                            "cannot overwrite an active borrowed owner directly".into(),
                         ));
                     }
-                    frame.locals[id.0 as usize] = Some(val);
+                    self.call_stack
+                        .last_mut()
+                        .ok_or(VmError::MissingReturn)?
+                        .locals[id.0 as usize] = Some(val);
                 }
 
                 BytecodeInstr::Pop => {
@@ -808,7 +851,7 @@ impl<'a> Interpreter<'a> {
                     }
                 }
 
-                BytecodeInstr::BorrowLocal(local) => {
+                BytecodeInstr::BorrowLocal(local) | BytecodeInstr::BorrowLocalMut(local) => {
                     let owner = self.call_stack.last().ok_or(VmError::MissingReturn)?;
                     let value = owner
                         .locals
@@ -822,13 +865,27 @@ impl<'a> Interpreter<'a> {
                         ));
                     }
                     let token = owner.token;
-                    self.borrowed_sources.insert((token, local.0));
+                    let exclusive = matches!(instr, BytecodeInstr::BorrowLocalMut(_));
+                    let key = (token, local.0);
+                    if self.exclusive_sources.contains(&key)
+                        || (exclusive && self.borrowed_sources.contains(&key))
+                    {
+                        return Err(VmError::Message(
+                            "conflicting exclusive borrow of local".into(),
+                        ));
+                    }
+                    if exclusive {
+                        self.exclusive_sources.insert(key);
+                    }
+                    self.borrowed_sources.insert(key);
                     self.push(VmValue::BorrowedLocal(VmBorrow {
                         owner_frame: token,
                         local_id: local,
+                        mutable: exclusive,
                     }))?;
                 }
-                BytecodeInstr::MakeClosureRef(target_id, capture_count) => {
+                BytecodeInstr::MakeClosureRef(target_id, capture_count)
+                | BytecodeInstr::MakeClosureInout(target_id, capture_count) => {
                     let target = self
                         .module
                         .functions
@@ -854,11 +911,15 @@ impl<'a> Interpreter<'a> {
                             VmError::Message("borrowed closure signature missing".into())
                         })?;
                     let owner_token = self.call_stack.last().ok_or(VmError::MissingReturn)?.token;
+                    let exclusive = matches!(instr, BytecodeInstr::MakeClosureInout(_, _));
                     let mut captures = Vec::with_capacity(count);
                     for _ in 0..count {
                         let raw = self.pop_raw()?;
                         match &raw {
-                            VmValue::BorrowedLocal(handle) if handle.owner_frame == owner_token => {
+                            VmValue::BorrowedLocal(handle)
+                                if handle.owner_frame == owner_token
+                                    && handle.mutable == exclusive =>
+                            {
                                 captures.push(raw)
                             }
                             _ => {
@@ -1164,6 +1225,8 @@ impl<'a> Interpreter<'a> {
 
                     if let Some(popped) = self.call_stack.pop() {
                         self.borrowed_sources
+                            .retain(|(frame_id, _)| *frame_id != popped.token);
+                        self.exclusive_sources
                             .retain(|(frame_id, _)| *frame_id != popped.token);
                     }
 

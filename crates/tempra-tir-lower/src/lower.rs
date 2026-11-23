@@ -2328,23 +2328,37 @@ impl<'a> LowerContext<'a> {
                     closure.span,
                 ));
             };
-            if named.mode != HirCaptureMode::Ref {
-                return Err(TirLowerError::UnsupportedExpr(
-                    "only ref captures of immutable let bindings are supported in 2B.1c".into(),
-                    named.span,
-                ));
-            }
             let Some((_, _, is_mutable)) = self.locals.get(&named.name) else {
                 return Err(TirLowerError::UnknownLocal(named.name.clone(), named.span));
             };
-            if *is_mutable {
-                return Err(TirLowerError::UnsupportedExpr(
-                    format!(
-                        "ref capture '{}' must originate from immutable let",
-                        named.name
-                    ),
-                    named.span,
-                ));
+            match named.mode {
+                HirCaptureMode::Ref if !*is_mutable => {}
+                HirCaptureMode::Ref => {
+                    return Err(TirLowerError::UnsupportedExpr(
+                        format!(
+                            "ref capture '{}' must originate from immutable let",
+                            named.name
+                        ),
+                        named.span,
+                    ));
+                }
+                HirCaptureMode::Inout if *is_mutable => {}
+                HirCaptureMode::Inout => {
+                    return Err(TirLowerError::UnsupportedExpr(
+                        format!(
+                            "inout capture '{}' must originate from mutable var",
+                            named.name
+                        ),
+                        named.span,
+                    ));
+                }
+                _ => {
+                    return Err(TirLowerError::UnsupportedExpr(
+                        "VM borrowed captures require ref of immutable or inout of mutable storage"
+                            .into(),
+                        named.span,
+                    ));
+                }
             }
         }
         let mut params = Vec::with_capacity(closure.parameters.len());
@@ -2384,6 +2398,7 @@ impl<'a> LowerContext<'a> {
         // Preserve source declaration order: hidden arguments and borrow slots
         // must use the same order. These are slot identities, never SSA copies.
         let mut ref_captures = Vec::with_capacity(closure.captures.len());
+        let mut exclusive_capture = None;
         let mut seen = std::collections::HashSet::new();
         for capture in &closure.captures {
             let HirCapture::Named(named) = capture else {
@@ -2393,11 +2408,26 @@ impl<'a> LowerContext<'a> {
                 .locals
                 .get(&named.name)
                 .ok_or_else(|| TirLowerError::UnknownLocal(named.name.clone(), named.span))?;
-            if named.mode != HirCaptureMode::Ref || *is_mutable {
-                return Err(TirLowerError::UnsupportedExpr(
-                    "only immutable ref captures are supported in 2B.1c".into(),
-                    named.span,
-                ));
+            match named.mode {
+                HirCaptureMode::Ref if !*is_mutable => {}
+                HirCaptureMode::Inout if *is_mutable => {}
+                _ => {
+                    return Err(TirLowerError::UnsupportedExpr(
+                        "VM borrowed captures require ref of immutable or inout of mutable storage"
+                            .into(),
+                        named.span,
+                    ));
+                }
+            }
+            if let Some(previous) = exclusive_capture {
+                if previous != (named.mode == HirCaptureMode::Inout) {
+                    return Err(TirLowerError::UnsupportedExpr(
+                        "mixed ref/inout captures are not supported by VM Parity 2B.5".into(),
+                        named.span,
+                    ));
+                }
+            } else {
+                exclusive_capture = Some(named.mode == HirCaptureMode::Inout);
             }
             if !seen.insert(named.name.clone()) {
                 return Err(TirLowerError::UnsupportedExpr(
@@ -2437,9 +2467,10 @@ impl<'a> LowerContext<'a> {
                 let value = child.builder.add_param(tir_ty.clone());
                 let slot = child.builder.build_slot(tir_ty.clone(), Some(name))?;
                 child.builder.build_store(slot, value)?;
-                child
-                    .locals
-                    .insert(name.clone(), (slot, tir_ty.clone(), false));
+                child.locals.insert(
+                    name.clone(),
+                    (slot, tir_ty.clone(), exclusive_capture == Some(true)),
+                );
                 child.local_hir_types.insert(name.clone(), hir_ty.clone());
             }
 
@@ -2483,9 +2514,15 @@ impl<'a> LowerContext<'a> {
                 .map_err(Into::into)
         } else {
             let borrowed_slots = ref_captures.iter().map(|(_, slot, _, _)| *slot).collect();
-            self.builder
-                .build_make_closure_ref(function_id, borrowed_slots)
-                .map_err(Into::into)
+            if exclusive_capture == Some(true) {
+                self.builder
+                    .build_make_closure_inout(function_id, borrowed_slots)
+                    .map_err(Into::into)
+            } else {
+                self.builder
+                    .build_make_closure_ref(function_id, borrowed_slots)
+                    .map_err(Into::into)
+            }
         }
     }
 

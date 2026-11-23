@@ -320,6 +320,12 @@ impl VmProfile {
             50 => "ArrayPush",
             51 => "AddI64LL",
             52 => "AddI64LC",
+            53 => "MakeClosure",
+            54 => "CallClosure",
+            55 => "BorrowLocal",
+            56 => "MakeClosureRef",
+            57 => "BorrowLocalMut",
+            58 => "MakeClosureInout",
             _ => "Unknown",
         }
     }

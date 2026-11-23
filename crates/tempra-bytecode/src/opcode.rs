@@ -69,6 +69,10 @@ pub enum BytecodeInstr {
     // It may only be consumed by a verified MakeClosureRef in 2B.1e.2.
     BorrowLocal(LocalId),
     MakeClosureRef(FunctionId, u16), // target, borrowed capture count
+    /// Exclusive borrow handle for an inout capture.
+    BorrowLocalMut(LocalId),
+    /// Closure with exclusively borrowed mutable capture storage.
+    MakeClosureInout(FunctionId, u16),
 
     // Enum-like
     MakeEnum(ConstId, ConstId, u16), // enum_name, variant_name, payload_count
@@ -95,7 +99,7 @@ pub enum BytecodeInstr {
     AddI64LC(LocalId, ConstId), // LoadLocal a; ConstI64 b; AddI64
 }
 
-pub const BYTECODE_OPCODE_COUNT: usize = 57;
+pub const BYTECODE_OPCODE_COUNT: usize = 59;
 
 impl BytecodeInstr {
     pub fn opcode_id(&self) -> usize {
@@ -157,6 +161,8 @@ impl BytecodeInstr {
             BytecodeInstr::CallClosure(_, _) => 54,
             BytecodeInstr::BorrowLocal(_) => 55,
             BytecodeInstr::MakeClosureRef(_, _) => 56,
+            BytecodeInstr::BorrowLocalMut(_) => 57,
+            BytecodeInstr::MakeClosureInout(_, _) => 58,
         }
     }
 
@@ -219,6 +225,8 @@ impl BytecodeInstr {
             BytecodeInstr::CallClosure(_, _) => "CallClosure",
             BytecodeInstr::BorrowLocal(_) => "BorrowLocal",
             BytecodeInstr::MakeClosureRef(_, _) => "MakeClosureRef",
+            BytecodeInstr::BorrowLocalMut(_) => "BorrowLocalMut",
+            BytecodeInstr::MakeClosureInout(_, _) => "MakeClosureInout",
         }
     }
 }
@@ -291,7 +299,7 @@ pub fn stack_effect(
                 pushes: 1,
             }
         }
-        BytecodeInstr::BorrowLocal(id) => {
+        BytecodeInstr::BorrowLocal(id) | BytecodeInstr::BorrowLocalMut(id) => {
             if id.0 as usize >= func.locals.len() {
                 return Err(BytecodeError::Message(format!(
                     "borrowed local ${} is out of bounds",
@@ -300,7 +308,8 @@ pub fn stack_effect(
             }
             StackEffect { pops: 0, pushes: 1 }
         }
-        BytecodeInstr::MakeClosureRef(target_id, capture_count) => {
+        BytecodeInstr::MakeClosureRef(target_id, capture_count)
+        | BytecodeInstr::MakeClosureInout(target_id, capture_count) => {
             let target = module
                 .functions
                 .get(target_id.0 as usize)

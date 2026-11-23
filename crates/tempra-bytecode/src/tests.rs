@@ -461,7 +461,7 @@ fn closure_isa_roundtrip_reserves_stable_opcode_ids() {
 
     assert_eq!(BytecodeInstr::MakeClosure(target, 0).opcode_id(), 53);
     assert_eq!(BytecodeInstr::CallClosure(signature_id, 1).opcode_id(), 54);
-    assert_eq!(crate::opcode::BYTECODE_OPCODE_COUNT, 57);
+    assert_eq!(crate::opcode::BYTECODE_OPCODE_COUNT, 59);
     let bytes = encode_module(&module).unwrap();
     assert_eq!(bytes, encode_module(&module).unwrap());
     let decoded = decode_artifact(&bytes).unwrap();
@@ -835,7 +835,7 @@ fn borrowed_closure_bytecode_opcode_identity_and_fail_closed() {
         BytecodeInstr::MakeClosureRef(FunctionId(0), 1).opcode_id(),
         56
     );
-    assert_eq!(crate::opcode::BYTECODE_OPCODE_COUNT, 57);
+    assert_eq!(crate::opcode::BYTECODE_OPCODE_COUNT, 59);
     assert!(matches!(
         verify_module(&module),
         Err(BytecodeVerifyError::Unsupported(_))
@@ -1364,5 +1364,89 @@ fn borrowed_callback_rejects_invalid_serialized_handle_and_target() {
     assert!(matches!(
         decode_and_verify_artifact(&encoded),
         Err(BytecodeSerializeError::VerifyError(_))
+    ));
+}
+
+// VM Parity 2B.5.A: exclusive borrows cannot be upgraded from immutable handles.
+#[test]
+fn inout_closure_rejects_immutable_handle_upgrade() {
+    use crate::function::BytecodeSignature;
+    use crate::verify::verify_module;
+    let mut module = BytecodeModule::new();
+    let sig = module.intern_signature(BytecodeSignature {
+        params: vec![],
+        ret: BytecodeType::Int64,
+    });
+    let init = module.add_constant(BytecodeConstant::Int64(5));
+    let mut child = BytecodeFunction::new(
+        "child".into(),
+        vec![BytecodeType::Int64],
+        BytecodeType::Int64,
+    );
+    child.locals = child.params.clone();
+    child.max_stack = 1;
+    child.code = vec![BytecodeInstr::LoadLocal(LocalId(0)), BytecodeInstr::Return];
+    let child_id = module.add_function(child);
+    let mut main = BytecodeFunction::new("main".into(), vec![], BytecodeType::Int64);
+    main.locals = vec![BytecodeType::Int64, BytecodeType::Callable(sig)];
+    main.max_stack = 1;
+    main.code = vec![
+        BytecodeInstr::ConstI64(init),
+        BytecodeInstr::StoreLocal(LocalId(0)),
+        BytecodeInstr::BorrowLocal(LocalId(0)),
+        BytecodeInstr::MakeClosureInout(child_id, 1),
+        BytecodeInstr::StoreLocal(LocalId(1)),
+        BytecodeInstr::LoadLocal(LocalId(1)),
+        BytecodeInstr::CallClosure(sig, 0),
+        BytecodeInstr::Return,
+    ];
+    module.add_function(main);
+    assert!(matches!(
+        verify_module(&module),
+        Err(BytecodeVerifyError::Unsupported(_))
+    ));
+    let bytes = encode_module(&module).unwrap();
+    assert!(decode_and_verify_artifact(&bytes).is_err());
+}
+
+#[test]
+fn inout_closure_rejects_repeated_exclusive_borrow_sites() {
+    use crate::function::BytecodeSignature;
+    use crate::verify::verify_module;
+    let mut module = BytecodeModule::new();
+    let sig = module.intern_signature(BytecodeSignature {
+        params: vec![],
+        ret: BytecodeType::Int64,
+    });
+    let init = module.add_constant(BytecodeConstant::Int64(5));
+    let mut child = BytecodeFunction::new(
+        "child".into(),
+        vec![BytecodeType::Int64],
+        BytecodeType::Int64,
+    );
+    child.locals = child.params.clone();
+    child.max_stack = 1;
+    child.code = vec![BytecodeInstr::LoadLocal(LocalId(0)), BytecodeInstr::Return];
+    let child_id = module.add_function(child);
+    let mut main = BytecodeFunction::new("main".into(), vec![], BytecodeType::Int64);
+    main.locals = vec![BytecodeType::Int64, BytecodeType::Callable(sig)];
+    main.max_stack = 1;
+    main.code = vec![
+        BytecodeInstr::ConstI64(init),
+        BytecodeInstr::StoreLocal(LocalId(0)),
+        BytecodeInstr::BorrowLocalMut(LocalId(0)),
+        BytecodeInstr::MakeClosureInout(child_id, 1),
+        BytecodeInstr::StoreLocal(LocalId(1)),
+        BytecodeInstr::BorrowLocalMut(LocalId(0)),
+        BytecodeInstr::MakeClosureInout(child_id, 1),
+        BytecodeInstr::Pop,
+        BytecodeInstr::LoadLocal(LocalId(1)),
+        BytecodeInstr::CallClosure(sig, 0),
+        BytecodeInstr::Return,
+    ];
+    module.add_function(main);
+    assert!(matches!(
+        verify_module(&module),
+        Err(BytecodeVerifyError::Unsupported(_))
     ));
 }

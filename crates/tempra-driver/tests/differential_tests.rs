@@ -1008,3 +1008,38 @@ fn vm_parity_implicit_return_contextual_option() {
     "#,
     );
 }
+
+// VM Parity 2B.5.A: exclusive capture mutates original owner, not a copy.
+#[test]
+fn vm_parity_inout_capture_persistent_mutation() {
+    assert_differential(
+        r#"
+        fn main() -> Int {
+            var total = 10
+            let accumulate = fn[inout total](x: Int) {
+                total = total + x
+            }
+            accumulate(5)
+            accumulate(2)
+            return total
+        }
+    "#,
+    );
+}
+
+#[test]
+fn vm_parity_inout_capture_nested_nonescaping_call() {
+    assert_differential(
+        r#"
+        fn invoke(callback: fn(Int) -> Unit) {
+            callback(3)
+        }
+        fn main() -> Int {
+            var total = 4
+            let inc = fn[inout total](x: Int) { total = total + x }
+            invoke(inc)
+            return total
+        }
+    "#,
+    );
+}

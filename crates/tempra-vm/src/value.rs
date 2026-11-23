@@ -8,6 +8,8 @@ use tempra_bytecode::function::{FunctionId, SignatureId};
 pub struct VmBorrow {
     pub owner_frame: u64,
     pub local_id: tempra_bytecode::function::LocalId,
+    /// An exclusive handle permits writes through its captured alias only.
+    pub mutable: bool,
 }
 
 /// Callable plus ordered captured values. Capture values precede explicit

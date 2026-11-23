@@ -72,6 +72,9 @@ pub enum TirInstr {
     // captured value is copied or moved by this instruction. Borrow lifetimes
     // and non-escaping enforcement belong to the later capture lowering gate.
     MakeClosureRef(TirValueId, TirFunctionId, Vec<TirSlotId>),
+    /// Exclusive, non-owning captured storage. Only mutated through its owner handle.
+    /// A separate instruction prevents read-only borrows from being silently upgraded.
+    MakeClosureInout(TirValueId, TirFunctionId, Vec<TirSlotId>),
     CallClosure(TirValueId, TirValueId, Vec<TirValueId>),
 
     Add(TirValueId, TirValueId, TirValueId),

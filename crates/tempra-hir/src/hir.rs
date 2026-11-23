@@ -356,6 +356,8 @@ pub struct HirCall {
     pub callee: Box<HirExpression>,
     pub type_args: Option<Vec<HirType>>,
     pub args: Vec<HirCallArgument>,
+    /// Exclusive markers preserved from the source call, indexed by argument.
+    pub inout_arguments: Vec<bool>,
 }
 
 #[derive(Debug, Clone)]

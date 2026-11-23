@@ -207,6 +207,7 @@ fn call_known_function_ok() {
         span: empty_span(),
         callee: Box::new(HirExpression::Name(empty_span(), "other".to_string())),
         type_args: None,
+        inout_arguments: vec![],
         args: vec![HirCallArgument::Positional(HirExpression::Integer(
             empty_span(),
             "5".to_string(),
@@ -488,6 +489,7 @@ fn lower_capture_free_closure_as_first_class_value() {
         span,
         callee: Box::new(HirExpression::Name(span, "f".into())),
         type_args: None,
+        inout_arguments: vec![],
         args: vec![HirCallArgument::Positional(HirExpression::Integer(
             span,
             "10".into(),
@@ -649,6 +651,7 @@ fn lower_immutable_ref_capture_preserves_hidden_parameter_order() {
                 span,
                 callee: Box::new(HirExpression::Name(span, "f".into())),
                 type_args: None,
+                inout_arguments: vec![],
                 args: vec![],
             }))),
         ],

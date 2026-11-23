@@ -2731,6 +2731,13 @@ impl<'a> LowerContext<'a> {
             }
             HirExpression::If(i) => self.lower_if_expression(i, None),
             HirExpression::Call(c) => {
+                if c.inout_arguments.iter().any(|exclusive| *exclusive) {
+                    return Err(TirLowerError::UnsupportedExpr(
+                        "exclusive inout call lowering requires verified VM parameter transfer"
+                            .into(),
+                        c.span,
+                    ));
+                }
                 // Handle .len() method call
                 if let HirExpression::Member(m) = &*c.callee {
                     let obj_ty = self.infer_expr_type(&m.object)?;

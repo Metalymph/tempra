@@ -4235,3 +4235,57 @@ fn test_option_none_contextual_if_mismatch_typeck() {
     "#,
     );
 }
+
+#[test]
+fn test_inout_parameter_explicit_mutable_local() {
+    expect_ok(
+        r#"
+        fn increment(inout value: Int) { value = value + 1 }
+        fn main() {
+            var counter = 10
+            increment(inout counter)
+        }
+    "#,
+    );
+}
+
+#[test]
+fn test_inout_parameter_rejects_readonly_and_implicit_calls() {
+    let decl = "fn increment(inout value: Int) { value = value + 1 }";
+    expect_err(&format!(
+        "{decl} fn main() {{ let x = 1; increment(inout x) }}"
+    ));
+    expect_err(&format!("{decl} fn main() {{ var x = 1; increment(x) }}"));
+}
+
+#[test]
+fn test_inout_parameter_rejects_alias_and_non_lvalues() {
+    expect_err(
+        r#"
+        fn update(inout left: Int, right: Int) { left = right }
+        fn main() { var x = 1; update(inout x, x) }
+    "#,
+    );
+    expect_err(
+        r#"
+        fn update(inout left: Int, inout right: Int) { left = right }
+        fn main() { var x = 1; update(inout x, inout x) }
+    "#,
+    );
+    expect_err(
+        r#"
+        fn increment(inout value: Int) { value = value + 1 }
+        fn main() { var x = 1; increment(inout (x + 1)) }
+    "#,
+    );
+}
+
+#[test]
+fn test_inout_marker_rejected_for_value_parameter() {
+    expect_err(
+        r#"
+        fn echo(value: Int) -> Int { value }
+        fn main() { var x = 1; echo(inout x) }
+    "#,
+    );
+}

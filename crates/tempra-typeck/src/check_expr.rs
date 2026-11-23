@@ -2246,6 +2246,17 @@ fn check_call(ctx: &mut TypeContext, expr: &mut HirExpression, expected: Option<
 
     let resolved = resolve_callee(ctx, callee_node, expected);
 
+    if let HirExpression::Call(c) = expr {
+        if c.inout_arguments.iter().any(|exclusive| *exclusive)
+            && !matches!(&resolved, ResolvedCallee::Function(_))
+        {
+            ctx.error(
+                "exclusive inout arguments are supported only for direct declared functions",
+                c.span,
+            );
+        }
+    }
+
     match resolved {
         ResolvedCallee::Function(name) | ResolvedCallee::BuiltinFunction(name) => {
             if let HirExpression::Call(ref mut c) = expr {
@@ -2637,6 +2648,15 @@ fn check_function_call(
     explicit_type_args: Option<Vec<Type>>,
     _expected: Option<&Type>,
 ) -> Type {
+    if c.inout_arguments.iter().any(|exclusive| *exclusive)
+        && !ctx.functions.contains_key(func_name)
+    {
+        ctx.error(
+            "inout arguments require a declared user function with an exclusive parameter",
+            c.span,
+        );
+        return Type::Error;
+    }
     if let Some(builtin_ty) = check_builtin(ctx, func_name, &mut c.args, c.span, _expected) {
         return builtin_ty;
     }
@@ -2652,6 +2672,7 @@ fn check_function_call(
     // Generic Named Argument Matching for user functions
     let mut resolved_args: Vec<Option<&mut HirExpression>> =
         (0..sig.params.len()).map(|_| None).collect();
+    let mut resolved_inout = vec![false; sig.params.len()];
     let mut named_keys = std::collections::HashSet::new();
 
     let num_args = c
@@ -2662,7 +2683,8 @@ fn check_function_call(
     let mut type_params_skipped = 0;
     let mut param_idx = 0;
 
-    for arg in c.args.iter_mut() {
+    for (arg_index, arg) in c.args.iter_mut().enumerate() {
+        let exclusive = c.inout_arguments.get(arg_index).copied().unwrap_or(false);
         match arg {
             HirCallArgument::Positional(e) => {
                 // Determine if we should skip 'type' parameters
@@ -2689,6 +2711,7 @@ fn check_function_call(
                     continue;
                 }
                 resolved_args[param_idx] = Some(e);
+                resolved_inout[param_idx] = exclusive;
                 param_idx += 1;
             }
             HirCallArgument::Named(n) => {
@@ -2710,6 +2733,7 @@ fn check_function_call(
                             );
                         } else {
                             resolved_args[idx] = Some(&mut n.value);
+                            resolved_inout[idx] = exclusive;
                         }
                     }
                     None => {
@@ -2721,6 +2745,69 @@ fn check_function_call(
                             n.value.span(),
                         );
                     }
+                }
+            }
+        }
+    }
+
+    // The caller must explicitly request exclusive access, and the argument
+    // must name mutable local storage. We deliberately reject subviews and
+    // arbitrary lvalues until exclusive Slice(T) lowering is implemented.
+    let mut seen_owners: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
+    for (i, resolved) in resolved_args.iter().enumerate() {
+        let Some(expr) = resolved.as_ref() else {
+            continue;
+        };
+        let exclusive = resolved_inout[i];
+        let param = &sig.params[i];
+        if exclusive != param.is_inout {
+            ctx.error(
+                format!(
+                    "parameter '{}' of '{}' requires {} argument access",
+                    param.name,
+                    func_name,
+                    if param.is_inout { "inout" } else { "by-value" }
+                ),
+                expr.span(),
+            );
+        }
+        if exclusive {
+            match &**expr {
+                HirExpression::Name(_, name) => match ctx.scopes.lookup(name) {
+                    Some(info) if info.is_mutable && !info.is_consumed => {}
+                    _ => ctx.error(
+                        format!("inout argument '{}' requires a live mutable var", name),
+                        expr.span(),
+                    ),
+                },
+                HirExpression::Slice(slice) if matches!(&param.ty, Type::Slice(_)) => {
+                    match slice.object.as_ref() {
+                        HirExpression::Name(_, owner) => match ctx.scopes.lookup(owner) {
+                            Some(info) if info.is_mutable && !info.is_consumed => {}
+                            _ => ctx.error(
+                                format!(
+                                    "inout slice owner '{}' requires a live mutable var",
+                                    owner
+                                ),
+                                expr.span(),
+                            ),
+                        },
+                        _ => ctx.error("inout slice requires a direct mutable owner", expr.span()),
+                    }
+                }
+                _ => ctx.error(
+                    "inout currently requires a mutable local name, not an expression or view",
+                    expr.span(),
+                ),
+            }
+        }
+        if let HirExpression::Name(_, name) = &**expr {
+            if let Some(previous_exclusive) = seen_owners.insert(name.clone(), exclusive) {
+                if exclusive || previous_exclusive {
+                    ctx.error(
+                        format!("simultaneous inout alias of '{}' in one call", name),
+                        expr.span(),
+                    );
                 }
             }
         }

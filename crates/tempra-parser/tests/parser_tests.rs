@@ -187,3 +187,11 @@ fn test_option_type_sugar_parse() {
     "#,
     );
 }
+
+#[test]
+fn test_explicit_inout_argument_syntax() {
+    assert_valid_parse("fn main() { increment(inout counter) }");
+    assert_valid_parse("fn main() { update(target=inout counter) }");
+    assert_invalid_parse("fn main() { update(inout target=counter) }");
+    assert_invalid_parse("fn main() { update(inout) }");
+}

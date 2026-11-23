@@ -902,6 +902,11 @@ impl Interpreter {
                 }
             }
             HirExpression::Call(call) => {
+                if call.inout_arguments.iter().any(|exclusive| *exclusive) {
+                    return Ok(ControlFlow::Crash(
+                        "inout call arguments require exclusive parameter execution; HIR by-value fallback is forbidden".into(),
+                    ));
+                }
                 if let HirExpression::Member(member) = &*call.callee {
                     if let Some((identity, function)) =
                         self.resolve_module_member_function(member, env)

@@ -1276,14 +1276,22 @@ impl<'src> Parser<'src> {
         self.parse_postfix_expression()
     }
 
-    fn parse_call_args(&mut self) -> Result<(Vec<CallArgument>, Token), ParseError> {
+    fn parse_call_args(&mut self) -> Result<(Vec<CallArgument>, Vec<bool>, Token), ParseError> {
         self.expect(TokenKind::LeftParen)?;
         let mut arguments = Vec::new();
+        let mut inout_arguments = Vec::new();
         let mut seen_named = false;
         let mut named_keys = std::collections::HashSet::new();
 
         while !self.at(TokenKind::RightParen) && !self.at(TokenKind::EndOfFile) {
+            let leading_inout = self.eat(TokenKind::Inout);
             if self.at(TokenKind::Identifier) && self.peek(1).kind == TokenKind::Equal {
+                if leading_inout {
+                    return Err(ParseError {
+                        message: "put 'inout' after '=' for named arguments".to_string(),
+                        span: self.current().span,
+                    });
+                }
                 // Named argument
                 seen_named = true;
                 let name = self.expect_identifier()?;
@@ -1297,7 +1305,9 @@ impl<'src> Parser<'src> {
                 }
 
                 self.expect(TokenKind::Equal)?;
+                let is_inout = self.eat(TokenKind::Inout);
                 let value = self.parse_expression()?;
+                inout_arguments.push(is_inout);
                 arguments.push(CallArgument::Named(NamedArgument {
                     span: Span::new(name.span.start, value.span().end),
                     name,
@@ -1312,6 +1322,7 @@ impl<'src> Parser<'src> {
                     });
                 }
                 let value = self.parse_expression()?;
+                inout_arguments.push(leading_inout);
                 arguments.push(CallArgument::Positional(PositionalArgument {
                     span: value.span(),
                     value,
@@ -1322,7 +1333,7 @@ impl<'src> Parser<'src> {
             }
         }
         let end = self.expect(TokenKind::RightParen)?;
-        Ok((arguments, end))
+        Ok((arguments, inout_arguments, end))
     }
 
     fn parse_postfix_expression(&mut self) -> Result<Expression, ParseError> {
@@ -1330,12 +1341,13 @@ impl<'src> Parser<'src> {
 
         loop {
             if self.at(TokenKind::LeftParen) {
-                let (arguments, end) = self.parse_call_args()?;
+                let (arguments, inout_arguments, end) = self.parse_call_args()?;
                 expr = Expression::Call(CallExpr {
                     span: Span::new(expr.span().start, end.span.end),
                     callee: Box::new(expr),
                     type_args: None,
                     arguments,
+                    inout_arguments,
                 });
             } else if self.at(TokenKind::Dot) {
                 self.advance();
@@ -1356,12 +1368,13 @@ impl<'src> Parser<'src> {
                 let saved_pos = self.position;
                 if let Some(type_args) = self.try_parse_specialization_args() {
                     if self.at(TokenKind::LeftParen) {
-                        let (arguments, end) = self.parse_call_args()?;
+                        let (arguments, inout_arguments, end) = self.parse_call_args()?;
                         expr = Expression::Call(CallExpr {
                             span: Span::new(expr.span().start, end.span.end),
                             callee: Box::new(expr),
                             type_args: Some(type_args),
                             arguments,
+                            inout_arguments,
                         });
                         continue;
                     }

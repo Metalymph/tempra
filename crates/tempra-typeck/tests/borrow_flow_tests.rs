@@ -265,7 +265,7 @@ fn borrow_inout_alias_named_arguments_err() {
         }
         fn main() {
             var data = [1, 2, 3]
-            update(first=data[0..1], second=data[1..2])
+            update(first=inout data[0..1], second=data[1..2])
         }
     "#,
         "borrow alias",
@@ -281,7 +281,7 @@ fn borrow_sequential_slice_calls_ok() {
         fn main() {
             var data = [1, 2, 3]
             let x = read(data[0..1])
-            update(data[0..1])
+            update(inout data[0..1])
         }
     "#,
     );
@@ -642,7 +642,7 @@ fn callback_ref_and_inout_slice_same_owner_conflict() {
         fn main() {
             var data = [1, 2, 3]
             let get = fn[ref data]() -> Int { data[0] }
-            let result = touch(get, data[0..1])
+            let result = touch(get, inout data[0..1])
         }
     "#,
         "borrow alias",
@@ -681,4 +681,18 @@ fn callback_nonescape_deterministic_across_rechecks() {
         }
     "#;
     assert_eq!(check(source), check(source));
+}
+
+#[test]
+fn borrow_inout_slice_requires_mutable_owner_err() {
+    rejected(
+        r#"
+        fn update(inout data: Slice(Int)) { data[0] = 9 }
+        fn main() {
+            let data = [1, 2, 3]
+            update(inout data[0..1])
+        }
+    "#,
+        "inout slice owner",
+    );
 }

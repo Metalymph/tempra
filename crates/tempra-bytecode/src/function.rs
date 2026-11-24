@@ -38,6 +38,8 @@ pub enum BytecodeType {
     Any,
     /// An indirect callable whose full signature is in `BytecodeModule::signatures`.
     Callable(SignatureId),
+    /// Internal exclusive slice argument; valid only for direct inout parameters.
+    ExclusiveSlice,
 }
 
 /// Function-valued signature excluding any captured/hidden parameters.
@@ -59,6 +61,7 @@ impl fmt::Display for BytecodeType {
             BytecodeType::String => write!(f, "String"),
             BytecodeType::Any => write!(f, "Any"),
             BytecodeType::Callable(id) => write!(f, "Callable(#{})", id.0),
+            BytecodeType::ExclusiveSlice => write!(f, "ExclusiveSlice"),
         }
     }
 }

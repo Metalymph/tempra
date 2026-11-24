@@ -416,6 +416,10 @@ impl<'a> Interpreter<'a> {
             56 => "MakeClosureRef",
             57 => "BorrowLocalMut",
             58 => "MakeClosureInout",
+            59 => "BorrowSliceMut",
+            60 => "InoutSliceGet",
+            61 => "InoutSliceSet",
+            62 => "InoutSliceLen",
             _ => "Unknown",
         }
     }
@@ -665,7 +669,17 @@ impl<'a> Interpreter<'a> {
                             .clone();
                         (frame.token, existing)
                     };
+                    if matches!(&val, VmValue::BorrowedLocal(handle) if handle.range.is_some()) {
+                        return Err(VmError::Message(
+                            "exclusive slice handle cannot be stored as a value".into(),
+                        ));
+                    }
                     if let Some(VmValue::BorrowedLocal(handle)) = existing {
+                        if handle.range.is_some() {
+                            return Err(VmError::Message(
+                                "exclusive slice parameter cannot be rebound".into(),
+                            ));
+                        }
                         if !handle.mutable {
                             return Err(VmError::Message(
                                 "cannot mutate through immutable ref capture".into(),
@@ -860,6 +874,74 @@ impl<'a> Interpreter<'a> {
                     }
                 }
 
+                BytecodeInstr::BorrowSliceMut(local) => {
+                    let end =
+                        usize::try_from(self.pop_i64()?).map_err(|_| VmError::ExpectedIntIndex)?;
+                    let start =
+                        usize::try_from(self.pop_i64()?).map_err(|_| VmError::ExpectedIntIndex)?;
+                    let handle = self.borrow_slice_mut(local, start, end)?;
+                    self.push(VmValue::BorrowedLocal(handle))?;
+                }
+                BytecodeInstr::InoutSliceGet(local) => {
+                    let index =
+                        usize::try_from(self.pop_i64()?).map_err(|_| VmError::ExpectedIntIndex)?;
+                    let (handle, start, end) = self.exclusive_slice_handle(local)?;
+                    if index >= end - start {
+                        return Err(VmError::IndexOutOfBounds(index));
+                    }
+                    let value = self
+                        .slice_owner(handle)?
+                        .get(start + index)
+                        .cloned()
+                        .ok_or(VmError::IndexOutOfBounds(index))?;
+                    if !is_slice_scalar(&value) {
+                        return Err(VmError::Message(
+                            "exclusive slice element is not a supported scalar".into(),
+                        ));
+                    }
+                    self.push(value)?;
+                }
+                BytecodeInstr::InoutSliceSet(local) => {
+                    let value = self.pop()?;
+                    let index =
+                        usize::try_from(self.pop_i64()?).map_err(|_| VmError::ExpectedIntIndex)?;
+                    let (handle, start, end) = self.exclusive_slice_handle(local)?;
+                    if index >= end - start {
+                        return Err(VmError::IndexOutOfBounds(index));
+                    }
+                    let existing = self
+                        .slice_owner(handle)?
+                        .get(start + index)
+                        .ok_or(VmError::IndexOutOfBounds(index))?;
+                    if !is_slice_scalar(&value)
+                        || std::mem::discriminant(existing) != std::mem::discriminant(&value)
+                    {
+                        return Err(VmError::Message(
+                            "exclusive slice write requires matching scalar element type".into(),
+                        ));
+                    }
+                    let owner = self
+                        .call_stack
+                        .iter_mut()
+                        .find(|frame| frame.token == handle.owner_frame)
+                        .ok_or_else(|| {
+                            VmError::Message("exclusive slice owner is no longer alive".into())
+                        })?;
+                    let Some(Some(VmValue::Array(buffer))) =
+                        owner.locals.get_mut(handle.local_id.0 as usize)
+                    else {
+                        return Err(VmError::ExpectedArrayOrSlice);
+                    };
+                    // The owner slot is updated, never the descriptor or a detached copy.
+                    // Physical COW preserves value semantics for independent array copies.
+                    Rc::make_mut(buffer)[start + index] = value;
+                }
+                BytecodeInstr::InoutSliceLen(local) => {
+                    let (_, start, end) = self.exclusive_slice_handle(local)?;
+                    let len = i64::try_from(end - start)
+                        .map_err(|_| VmError::Message("exclusive slice length overflow".into()))?;
+                    self.push(VmValue::Int64(len))?;
+                }
                 BytecodeInstr::BorrowLocal(local) | BytecodeInstr::BorrowLocalMut(local) => {
                     let owner = self.call_stack.last().ok_or(VmError::MissingReturn)?;
                     let value = owner
@@ -870,7 +952,7 @@ impl<'a> Interpreter<'a> {
                         .ok_or(VmError::LocalNotInitialized(local.0))?;
                     let exclusive = matches!(instr, BytecodeInstr::BorrowLocalMut(_));
                     if let VmValue::BorrowedLocal(handle) = value {
-                        if !exclusive || !handle.mutable {
+                        if !exclusive || !handle.mutable || handle.range.is_some() {
                             return Err(VmError::Message(
                                 "cannot reborrow a read-only or invalid exclusive parameter".into(),
                             ));
@@ -909,6 +991,7 @@ impl<'a> Interpreter<'a> {
                         owner_frame: token,
                         local_id: local,
                         mutable: exclusive,
+                        range: None,
                     }))?;
                 }
                 BytecodeInstr::MakeClosureRef(target_id, capture_count)
@@ -1239,6 +1322,7 @@ impl<'a> Interpreter<'a> {
 
                     let mut locals = vec![None; target_func.locals.len()];
                     let mut acquired_loans = Vec::new();
+                    let mut exclusive_arguments = HashSet::new();
                     let caller_token = self.call_stack.last().ok_or(VmError::MissingReturn)?.token;
                     // Ordinary arguments are materialized by value, while
                     // exclusive parameters preserve the non-owning handle.
@@ -1253,6 +1337,16 @@ impl<'a> Interpreter<'a> {
                             match &raw {
                                 VmValue::BorrowedLocal(handle) if handle.mutable => {
                                     let key = (handle.owner_frame, handle.local_id.0);
+                                    if handle.range.is_some()
+                                        != (target_func.params[i as usize]
+                                            == BytecodeType::ExclusiveSlice)
+                                        || !exclusive_arguments.insert(key)
+                                    {
+                                        return Err(VmError::Message(
+                                            "exclusive argument kind or owner alias mismatch"
+                                                .into(),
+                                        ));
+                                    }
                                     if !self.exclusive_sources.contains(&key)
                                         || !self
                                             .call_stack
@@ -1680,9 +1774,103 @@ impl<'a> Interpreter<'a> {
         Ok(self.next_frame_token)
     }
 
+    fn slice_owner(&self, handle: VmBorrow) -> Result<&Vec<VmValue>, VmError> {
+        if !handle.mutable
+            || !self
+                .exclusive_sources
+                .contains(&(handle.owner_frame, handle.local_id.0))
+        {
+            return Err(VmError::Message(
+                "exclusive slice loan is not active".into(),
+            ));
+        }
+        let owner = self
+            .call_stack
+            .iter()
+            .find(|frame| frame.token == handle.owner_frame)
+            .ok_or_else(|| VmError::Message("exclusive slice owner is no longer alive".into()))?;
+        let Some(Some(VmValue::Array(buffer))) = owner.locals.get(handle.local_id.0 as usize)
+        else {
+            return Err(VmError::ExpectedArrayOrSlice);
+        };
+        Ok(buffer.as_ref())
+    }
+
+    fn exclusive_slice_handle(
+        &self,
+        local: tempra_bytecode::function::LocalId,
+    ) -> Result<(VmBorrow, usize, usize), VmError> {
+        let frame = self.call_stack.last().ok_or(VmError::MissingReturn)?;
+        let Some(Some(VmValue::BorrowedLocal(handle))) = frame.locals.get(local.0 as usize) else {
+            return Err(VmError::Message(
+                "exclusive slice parameter requires a live handle".into(),
+            ));
+        };
+        let Some((start, end)) = handle.range else {
+            return Err(VmError::Message("expected exclusive slice range".into()));
+        };
+        if start > end || end > self.slice_owner(*handle)?.len() {
+            return Err(VmError::Message(
+                "invalid exclusive slice owner bounds".into(),
+            ));
+        }
+        Ok((*handle, start, end))
+    }
+
+    fn borrow_slice_mut(
+        &mut self,
+        local: tempra_bytecode::function::LocalId,
+        start: usize,
+        end: usize,
+    ) -> Result<VmBorrow, VmError> {
+        let frame = self.call_stack.last().ok_or(VmError::MissingReturn)?;
+        let value = frame
+            .locals
+            .get(local.0 as usize)
+            .ok_or(VmError::LocalOutOfBounds(local.0))?
+            .as_ref()
+            .ok_or(VmError::LocalNotInitialized(local.0))?;
+        if matches!(value, VmValue::BorrowedLocal(_)) {
+            let (mut handle, parent_start, parent_end) = self.exclusive_slice_handle(local)?;
+            let len = parent_end - parent_start;
+            if start > end || end > len {
+                return Err(VmError::InvalidSliceRange { start, end, len });
+            }
+            handle.range = Some((parent_start + start, parent_start + end));
+            return Ok(handle);
+        }
+        let VmValue::Array(buffer) = value else {
+            return Err(VmError::ExpectedArrayOrSlice);
+        };
+        let len = buffer.len();
+        if start > end || end > len {
+            return Err(VmError::InvalidSliceRange { start, end, len });
+        }
+        let token = frame.token;
+        let key = (token, local.0);
+        if self.borrowed_sources.contains(&key) || self.exclusive_sources.contains(&key) {
+            return Err(VmError::Message(
+                "conflicting exclusive slice borrow of local".into(),
+            ));
+        }
+        self.exclusive_sources.insert(key);
+        self.borrowed_sources.insert(key);
+        Ok(VmBorrow {
+            owner_frame: token,
+            local_id: local,
+            mutable: true,
+            range: Some((start, end)),
+        })
+    }
+
     fn resolve_borrowed_value(&self, mut value: VmValue) -> Result<VmValue, VmError> {
         let mut depth = 0;
         while let VmValue::BorrowedLocal(handle) = value {
+            if handle.range.is_some() {
+                return Err(VmError::Message(
+                    "exclusive slice descriptor cannot be materialized".into(),
+                ));
+            }
             if depth >= self.call_stack.len() {
                 return Err(VmError::Message("cyclic borrowed local handle".into()));
             }
@@ -1869,4 +2057,15 @@ pub fn run_function_with_resolver(
     let mut interp = Interpreter::with_options(module, options);
     interp.native_resolver = resolver;
     interp.run_function_id(FunctionId(id as u32), args)
+}
+
+fn is_slice_scalar(value: &VmValue) -> bool {
+    matches!(
+        value,
+        VmValue::Int64(_)
+            | VmValue::UInt64(_)
+            | VmValue::UInt8(_)
+            | VmValue::Float64(_)
+            | VmValue::Bool(_)
+    )
 }

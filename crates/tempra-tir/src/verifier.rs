@@ -117,6 +117,23 @@ fn resolve_get_type(
     }
 }
 
+fn is_slice_scalar(ty: &TirType) -> bool {
+    matches!(
+        ty,
+        TirType::Int64 | TirType::UInt64 | TirType::UInt8 | TirType::Float64 | TirType::Bool
+    )
+}
+
+fn exclusive_slice_element(func: &TirFunction, parameter: usize) -> Option<TirType> {
+    if !func.inout_params.get(parameter).copied().unwrap_or(false) {
+        return None;
+    }
+    match &func.params.get(parameter)?.1 {
+        TirType::Slice(inner) if is_slice_scalar(inner) => Some((**inner).clone()),
+        _ => None,
+    }
+}
+
 fn verify_function_inner(
     func: &TirFunction,
     functions: &HashMap<TirFunctionId, &TirFunction>,
@@ -278,6 +295,55 @@ fn verify_function_inner(
                         value_types.insert(*res, None);
                     }
                 }
+                TirInstr::BorrowSliceInout(res, source, start, end) => {
+                    let element = match source {
+                        TirSliceSource::Owner(slot) => match slot_types.get(slot) {
+                            Some(TirType::Array(inner)) if is_slice_scalar(inner) => {
+                                Some((**inner).clone())
+                            }
+                            _ => None,
+                        },
+                        TirSliceSource::Parameter(index) => exclusive_slice_element(func, *index),
+                    };
+                    if element.is_none()
+                        || [start, end]
+                            .iter()
+                            .any(|v| value_types.get(*v) != Some(&Some(TirType::Int64)))
+                    {
+                        errors.push(VerifierError::GenericError(
+                            "invalid exclusive slice source or bounds".into(),
+                        ));
+                    }
+                    value_types.insert(*res, element.map(|ty| TirType::Slice(Box::new(ty))));
+                }
+                TirInstr::InoutSliceGet(res, parameter, index) => {
+                    let element = exclusive_slice_element(func, *parameter);
+                    if element.is_none() || value_types.get(index) != Some(&Some(TirType::Int64)) {
+                        errors.push(VerifierError::GenericError(
+                            "invalid exclusive slice read".into(),
+                        ));
+                    }
+                    value_types.insert(*res, element);
+                }
+                TirInstr::InoutSliceSet(parameter, index, value) => {
+                    let element = exclusive_slice_element(func, *parameter);
+                    if element.is_none()
+                        || value_types.get(index) != Some(&Some(TirType::Int64))
+                        || value_types.get(value) != Some(&element)
+                    {
+                        errors.push(VerifierError::GenericError(
+                            "invalid exclusive slice write".into(),
+                        ));
+                    }
+                }
+                TirInstr::InoutSliceLen(res, parameter) => {
+                    if exclusive_slice_element(func, *parameter).is_none() {
+                        errors.push(VerifierError::GenericError(
+                            "invalid exclusive slice length".into(),
+                        ));
+                    }
+                    value_types.insert(*res, Some(TirType::Int64));
+                }
                 TirInstr::Store(slot, val) => {
                     let val_ty = value_types.get(val);
                     if val_ty.is_none() {
@@ -310,7 +376,7 @@ fn verify_function_inner(
                             {
                                 let is_exclusive_value = func.blocks.iter().any(|block| {
                                     block.instrs.iter().any(|instr| {
-                                    matches!(instr, TirInstr::BorrowInout(value, _) if value == arg)
+                                    matches!(instr, TirInstr::BorrowInout(value, _) | TirInstr::BorrowSliceInout(value, _, _, _) if value == arg)
                                 })
                                 });
                                 if is_exclusive_value
@@ -770,18 +836,54 @@ fn verify_exclusive_call_borrows(
     func: &TirFunction,
     functions: &HashMap<TirFunctionId, &TirFunction>,
 ) -> Vec<VerifierError> {
-    let borrow_sources: HashMap<TirValueId, TirSlotId> = func
+    let borrow_sources: HashMap<TirValueId, TirSliceSource> = func
         .blocks
         .iter()
         .flat_map(|block| &block.instrs)
         .filter_map(|instr| match instr {
-            TirInstr::BorrowInout(value, slot) => Some((*value, *slot)),
+            TirInstr::BorrowInout(value, slot) => Some((*value, TirSliceSource::Owner(*slot))),
+            TirInstr::BorrowSliceInout(value, source, _, _) => Some((*value, *source)),
             _ => None,
         })
         .collect();
     let exclusive: HashSet<TirValueId> = borrow_sources.keys().copied().collect();
     let mut uses: HashMap<TirValueId, usize> = exclusive.iter().map(|v| (*v, 0)).collect();
+    let slice_parameters: HashSet<TirValueId> = func
+        .params
+        .iter()
+        .enumerate()
+        .filter(|(i, (_, ty))| {
+            func.inout_params.get(*i).copied().unwrap_or(false) && matches!(ty, TirType::Slice(_))
+        })
+        .map(|(_, (value, _))| *value)
+        .collect();
+    let slice_borrows: HashSet<TirValueId> = func
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instrs)
+        .filter_map(|instruction| match instruction {
+            TirInstr::BorrowSliceInout(value, _, _, _) => Some(*value),
+            _ => None,
+        })
+        .collect();
     let mut invalid = false;
+    if !slice_parameters.is_empty()
+        && func.params.iter().enumerate().any(|(i, (_, ty))| {
+            if matches!(ty, TirType::Slice(_)) {
+                exclusive_slice_element(func, i).is_none()
+            } else {
+                !is_slice_scalar(ty)
+            }
+        })
+    {
+        invalid = true;
+    }
+    if !slice_parameters.is_empty()
+        && !is_slice_scalar(&func.return_type)
+        && func.return_type != TirType::Unit
+    {
+        invalid = true;
+    }
     for block in &func.blocks {
         for instr in &block.instrs {
             let mut operands: Vec<TirValueId> = Vec::new();
@@ -791,7 +893,11 @@ fn verify_exclusive_call_borrows(
                 | TirInstr::Load(_, _)
                 | TirInstr::BorrowInout(_, _)
                 | TirInstr::MakeClosureRef(_, _, _)
-                | TirInstr::MakeClosureInout(_, _, _) => {}
+                | TirInstr::MakeClosureInout(_, _, _)
+                | TirInstr::InoutSliceLen(_, _) => {}
+                TirInstr::BorrowSliceInout(_, _, start, end) => operands.extend([*start, *end]),
+                TirInstr::InoutSliceGet(_, _, index) => operands.push(*index),
+                TirInstr::InoutSliceSet(_, index, value) => operands.extend([*index, *value]),
                 TirInstr::Make(_, _, _, args) | TirInstr::MakeClosure(_, _, args) => {
                     operands.extend(args.iter().copied())
                 }
@@ -818,7 +924,13 @@ fn verify_exclusive_call_borrows(
                             }
                             *uses.get_mut(value).unwrap() += 1;
                             if !callee.is_some_and(|f| {
-                                !f.is_extern && f.inout_params.get(index).copied().unwrap_or(false)
+                                !f.is_extern
+                                    && f.inout_params.get(index).copied().unwrap_or(false)
+                                    && (slice_borrows.contains(value)
+                                        == matches!(
+                                            f.params.get(index),
+                                            Some((_, TirType::Slice(_)))
+                                        ))
                             }) {
                                 invalid = true;
                             }
@@ -844,13 +956,16 @@ fn verify_exclusive_call_borrows(
                 | TirInstr::Or(_, obj, value) => operands.extend([*obj, *value]),
                 TirInstr::Slice(_, obj, start, end) => operands.extend([*obj, *start, *end]),
             }
-            if operands.iter().any(|value| exclusive.contains(value)) {
+            if operands
+                .iter()
+                .any(|value| exclusive.contains(value) || slice_parameters.contains(value))
+            {
                 invalid = true;
             }
         }
         match &block.terminator {
             Some(TirTerminator::Ret(Some(v))) | Some(TirTerminator::CondBr(v, _, _))
-                if exclusive.contains(v) =>
+                if exclusive.contains(v) || slice_parameters.contains(v) =>
             {
                 invalid = true
             }
@@ -1121,7 +1236,11 @@ fn instruction_escapes_borrowed_closure(
         | TirInstr::BorrowInout(_, _)
         | TirInstr::Store(_, _)
         | TirInstr::MakeClosureRef(_, _, _)
-        | TirInstr::MakeClosureInout(_, _, _) => false,
+        | TirInstr::MakeClosureInout(_, _, _)
+        | TirInstr::InoutSliceLen(_, _) => false,
+        TirInstr::BorrowSliceInout(_, _, start, end) => contains(start) || contains(end),
+        TirInstr::InoutSliceGet(_, _, index) => contains(index),
+        TirInstr::InoutSliceSet(_, index, value) => contains(index) || contains(value),
         TirInstr::Call(_, target, args) => {
             let borrowed_args: Vec<_> = args
                 .iter()

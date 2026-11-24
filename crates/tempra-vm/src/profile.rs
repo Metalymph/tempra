@@ -326,6 +326,10 @@ impl VmProfile {
             56 => "MakeClosureRef",
             57 => "BorrowLocalMut",
             58 => "MakeClosureInout",
+            59 => "BorrowSliceMut",
+            60 => "InoutSliceGet",
+            61 => "InoutSliceSet",
+            62 => "InoutSliceLen",
             _ => "Unknown",
         }
     }

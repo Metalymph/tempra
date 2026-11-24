@@ -86,6 +86,8 @@ pub enum EffectDirectOriginKind {
     ConstantIndexGet,
     /// A dynamic-index access.
     DynamicIndexGet,
+    /// Exclusive slice element write, including possible COW allocation.
+    ExclusiveSliceWrite,
     /// A slice operation.
     Slice,
     /// String byte-view materialization.
@@ -320,6 +322,9 @@ fn project_witness(
             (EffectDirectOriginKind::ConstantIndexGet, None)
         }
         DirectCapabilitySource::DynamicIndexGet => (EffectDirectOriginKind::DynamicIndexGet, None),
+        DirectCapabilitySource::ExclusiveSliceWrite => {
+            (EffectDirectOriginKind::ExclusiveSliceWrite, None)
+        }
         DirectCapabilitySource::Slice => (EffectDirectOriginKind::Slice, None),
         DirectCapabilitySource::Bytes => (EffectDirectOriginKind::Bytes, None),
         DirectCapabilitySource::ArrayPush => (EffectDirectOriginKind::ArrayPush, None),

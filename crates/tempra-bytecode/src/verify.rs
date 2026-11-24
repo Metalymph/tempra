@@ -98,6 +98,13 @@ fn verify_callable_type(
 
 pub fn verify_module(module: &BytecodeModule) -> Result<(), BytecodeVerifyError> {
     for signature in &module.signatures {
+        if signature.params.contains(&BytecodeType::ExclusiveSlice)
+            || signature.ret == BytecodeType::ExclusiveSlice
+        {
+            return Err(BytecodeVerifyError::Unsupported(
+                "exclusive slice cannot occur in callable signature".into(),
+            ));
+        }
         for param in &signature.params {
             verify_callable_type(module, *param)?;
         }
@@ -143,6 +150,7 @@ pub fn verify_function_direct(
             "extern inout calls require a separate trusted ABI".into(),
         ));
     }
+    verify_exclusive_slice_layout(module, func)?;
     if func.code.is_empty() {
         return Ok(());
     }
@@ -368,6 +376,63 @@ pub fn verify_function_direct(
                 BytecodeInstr::Unreachable => {
                     break; // End of path
                 }
+                BytecodeInstr::BorrowSliceMut(id) => {
+                    let ty = func
+                        .locals
+                        .get(id.0 as usize)
+                        .ok_or(BytecodeVerifyError::InvalidLocalId(id))?;
+                    if !matches!(ty, BytecodeType::Any | BytecodeType::ExclusiveSlice)
+                        || !state.locals_init[id.0 as usize]
+                    {
+                        return Err(BytecodeVerifyError::Unsupported(
+                            "invalid exclusive slice source local".into(),
+                        ));
+                    }
+                    for _ in 0..2 {
+                        let found = state.pop_ty()?;
+                        if !matches!(found, BytecodeType::Int64 | BytecodeType::Any) {
+                            return Err(BytecodeVerifyError::StackTypeMismatch {
+                                expected: BytecodeType::Int64,
+                                found,
+                            });
+                        }
+                    }
+                    state.stack.push(BytecodeType::ExclusiveSlice);
+                }
+                BytecodeInstr::InoutSliceGet(_) => {
+                    let found = state.pop_ty()?;
+                    if !matches!(found, BytecodeType::Int64 | BytecodeType::Any) {
+                        return Err(BytecodeVerifyError::StackTypeMismatch {
+                            expected: BytecodeType::Int64,
+                            found,
+                        });
+                    }
+                    state.stack.push(BytecodeType::Any);
+                }
+                BytecodeInstr::InoutSliceSet(_) => {
+                    let value = state.pop_ty()?;
+                    if !matches!(
+                        value,
+                        BytecodeType::Any
+                            | BytecodeType::Int64
+                            | BytecodeType::UInt64
+                            | BytecodeType::UInt8
+                            | BytecodeType::Float64
+                            | BytecodeType::Bool
+                    ) {
+                        return Err(BytecodeVerifyError::Unsupported(
+                            "exclusive slice write requires scalar value".into(),
+                        ));
+                    }
+                    let found = state.pop_ty()?;
+                    if !matches!(found, BytecodeType::Int64 | BytecodeType::Any) {
+                        return Err(BytecodeVerifyError::StackTypeMismatch {
+                            expected: BytecodeType::Int64,
+                            found,
+                        });
+                    }
+                }
+                BytecodeInstr::InoutSliceLen(_) => state.stack.push(BytecodeType::Int64),
                 BytecodeInstr::BorrowLocal(id) | BytecodeInstr::BorrowLocalMut(id) => {
                     if id.0 as usize >= func.locals.len() {
                         return Err(BytecodeVerifyError::InvalidLocalId(id));
@@ -494,8 +559,9 @@ pub fn verify_function_direct(
                         let expected = *expected_ref;
                         let found = state.pop_ty()?;
                         if found != expected
-                            && expected != BytecodeType::Any
-                            && found != BytecodeType::Any
+                            && (expected == BytecodeType::ExclusiveSlice
+                                || found == BytecodeType::ExclusiveSlice
+                                || (expected != BytecodeType::Any && found != BytecodeType::Any))
                         {
                             return Err(BytecodeVerifyError::StackTypeMismatch { expected, found });
                         }
@@ -673,6 +739,7 @@ enum BorrowProvenance {
     Plain,
     Handle(LocalId),
     ExclusiveHandle(LocalId),
+    ExclusiveSliceHandle(LocalId),
     BorrowedClosure,
 }
 
@@ -918,7 +985,9 @@ fn proves_nonescaping_callback_parameter(
                         }
                     }
                     BytecodeInstr::Jump(_) | BytecodeInstr::Unreachable => {}
-                    BytecodeInstr::BorrowLocal(id) | BytecodeInstr::BorrowLocalMut(id) => {
+                    BytecodeInstr::BorrowLocal(id)
+                    | BytecodeInstr::BorrowLocalMut(id)
+                    | BytecodeInstr::BorrowSliceMut(id) => {
                         if *locals
                             .get(id.0 as usize)
                             .ok_or(BytecodeVerifyError::InvalidLocalId(id))?
@@ -926,6 +995,13 @@ fn proves_nonescaping_callback_parameter(
                             return Err(BytecodeVerifyError::Unsupported(
                                 "callback captured through a borrow handle".into(),
                             ));
+                        }
+                        for _ in 0..effect.pops {
+                            if stack.pop() != Some(false) {
+                                return Err(BytecodeVerifyError::Unsupported(
+                                    "callback used as borrow bound".into(),
+                                ));
+                            }
                         }
                         stack.push(false);
                     }
@@ -983,6 +1059,98 @@ fn proves_nonescaping_callback_parameter(
     checked(module, target_id, parameter, visiting).is_ok()
 }
 
+/// Incoming exclusive slices are not ordinary local values. Only the dedicated
+/// opcodes may name their parameter slots, even in unreachable instructions.
+fn verify_exclusive_slice_layout(
+    module: &BytecodeModule,
+    func: &BytecodeFunction,
+) -> Result<(), BytecodeVerifyError> {
+    let exclusive =
+        |local: LocalId| func.locals.get(local.0 as usize) == Some(&BytecodeType::ExclusiveSlice);
+    let slice_error = || {
+        BytecodeVerifyError::Unsupported(
+            "exclusive slice descriptor violates direct parameter contract".into(),
+        )
+    };
+    let is_scalar = |ty: &BytecodeType| {
+        matches!(
+            ty,
+            BytecodeType::Bool
+                | BytecodeType::Int64
+                | BytecodeType::UInt64
+                | BytecodeType::UInt8
+                | BytecodeType::Float64
+        )
+    };
+    if func.ret == BytecodeType::ExclusiveSlice {
+        return Err(slice_error());
+    }
+    if func.params.contains(&BytecodeType::ExclusiveSlice) {
+        if func.is_extern
+            || func.code.is_empty()
+            || (func.ret != BytecodeType::Unit && !is_scalar(&func.ret))
+            || func
+                .params
+                .iter()
+                .any(|ty| *ty != BytecodeType::ExclusiveSlice && !is_scalar(ty))
+        {
+            return Err(slice_error());
+        }
+    }
+    for (index, ty) in func.params.iter().enumerate() {
+        if *ty == BytecodeType::ExclusiveSlice
+            && (!func.inout_params[index] || func.locals.get(index) != Some(ty))
+        {
+            return Err(slice_error());
+        }
+    }
+    for (index, ty) in func.locals.iter().enumerate() {
+        if *ty == BytecodeType::ExclusiveSlice && func.params.get(index) != Some(ty) {
+            return Err(slice_error());
+        }
+    }
+    for instr in &func.code {
+        match *instr {
+            BytecodeInstr::LoadLocal(id)
+            | BytecodeInstr::StoreLocal(id)
+            | BytecodeInstr::BorrowLocal(id)
+            | BytecodeInstr::BorrowLocalMut(id)
+            | BytecodeInstr::AddI64LC(id, _)
+                if exclusive(id) =>
+            {
+                return Err(slice_error())
+            }
+            BytecodeInstr::AddI64LL(a, b) if exclusive(a) || exclusive(b) => {
+                return Err(slice_error())
+            }
+            BytecodeInstr::InoutSliceGet(id)
+            | BytecodeInstr::InoutSliceSet(id)
+            | BytecodeInstr::InoutSliceLen(id)
+                if !exclusive(id) =>
+            {
+                return Err(slice_error())
+            }
+            BytecodeInstr::MakeClosure(target, _)
+            | BytecodeInstr::MakeClosureRef(target, _)
+            | BytecodeInstr::MakeClosureInout(target, _) => {
+                if module
+                    .functions
+                    .get(target.0 as usize)
+                    .is_some_and(|f| f.params.contains(&BytecodeType::ExclusiveSlice))
+                {
+                    return Err(slice_error());
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn pending_exclusive(stack: &[BorrowProvenance], local: LocalId) -> bool {
+    stack.iter().any(|kind| matches!(kind, BorrowProvenance::ExclusiveHandle(id) | BorrowProvenance::ExclusiveSliceHandle(id) if *id == local))
+}
+
 fn verify_borrowed_frame_contract(
     module: &BytecodeModule,
     func: &BytecodeFunction,
@@ -994,7 +1162,11 @@ fn verify_borrowed_frame_contract(
                 | BytecodeInstr::MakeClosureRef(_, _)
                 | BytecodeInstr::BorrowLocalMut(_)
                 | BytecodeInstr::MakeClosureInout(_, _)
-        )
+                | BytecodeInstr::BorrowSliceMut(_)
+                | BytecodeInstr::InoutSliceGet(_)
+                | BytecodeInstr::InoutSliceSet(_)
+                | BytecodeInstr::InoutSliceLen(_)
+        ) || matches!(instruction, BytecodeInstr::Call(target, _) if module.functions.get(target.0 as usize).is_some_and(|f| f.params.contains(&BytecodeType::ExclusiveSlice)))
     });
     if !has_borrows {
         return Ok(());
@@ -1011,7 +1183,9 @@ fn verify_borrowed_frame_contract(
     let mut writes: Vec<Vec<usize>> = vec![Vec::new(); func.locals.len()];
     for (pc, instr) in func.code.iter().enumerate() {
         match instr {
-            BytecodeInstr::BorrowLocal(source) | BytecodeInstr::BorrowLocalMut(source) => {
+            BytecodeInstr::BorrowLocal(source)
+            | BytecodeInstr::BorrowLocalMut(source)
+            | BytecodeInstr::BorrowSliceMut(source) => {
                 let index = source.0 as usize;
                 if index >= source_slots.len() {
                     return Err(BytecodeVerifyError::InvalidLocalId(*source));
@@ -1038,7 +1212,7 @@ fn verify_borrowed_frame_contract(
             BytecodeInstr::BorrowLocal(source) => {
                 read_sources.insert(source.0);
             }
-            BytecodeInstr::BorrowLocalMut(source) => {
+            BytecodeInstr::BorrowLocalMut(source) | BytecodeInstr::BorrowSliceMut(source) => {
                 // Multiple sequential callsites may borrow the same owner.
                 // Concurrent aliasing is checked by CFG handle provenance and
                 // again by the runtime's active exclusive-loan table.
@@ -1117,6 +1291,47 @@ fn verify_borrowed_frame_contract(
                 }
                 state.stack.push(BorrowProvenance::Handle(source));
             }
+            BytecodeInstr::BorrowSliceMut(source) => {
+                let index = source.0 as usize;
+                if !state.initialized[index]
+                    || state.locals[index] != BorrowProvenance::Plain
+                    || pending_exclusive(&state.stack, source)
+                {
+                    return Err(BytecodeVerifyError::Unsupported(
+                        "invalid or duplicate exclusive slice source".into(),
+                    ));
+                }
+                for _ in 0..2 {
+                    if state.stack.pop() != Some(BorrowProvenance::Plain) {
+                        return Err(BytecodeVerifyError::Unsupported(
+                            "exclusive slice bounds must be ordinary values".into(),
+                        ));
+                    }
+                }
+                state
+                    .stack
+                    .push(BorrowProvenance::ExclusiveSliceHandle(source));
+            }
+            BytecodeInstr::InoutSliceGet(source)
+            | BytecodeInstr::InoutSliceSet(source)
+            | BytecodeInstr::InoutSliceLen(source) => {
+                if pending_exclusive(&state.stack, source) {
+                    return Err(BytecodeVerifyError::Unsupported(
+                        "exclusive slice used while its subloan is pending".into(),
+                    ));
+                }
+                for _ in 0..effect.pops {
+                    if state.stack.pop() != Some(BorrowProvenance::Plain) {
+                        return Err(BytecodeVerifyError::Unsupported(
+                            "exclusive slice operands must be ordinary values".into(),
+                        ));
+                    }
+                }
+                state.stack.extend(std::iter::repeat_n(
+                    BorrowProvenance::Plain,
+                    usize::from(effect.pushes),
+                ));
+            }
             BytecodeInstr::BorrowLocalMut(source) => {
                 let index = source.0 as usize;
                 if !state.initialized[index] || state.locals[index] != BorrowProvenance::Plain {
@@ -1125,10 +1340,7 @@ fn verify_borrowed_frame_contract(
                             .into(),
                     ));
                 }
-                if state
-                    .stack
-                    .contains(&BorrowProvenance::ExclusiveHandle(source))
-                {
+                if pending_exclusive(&state.stack, source) {
                     return Err(BytecodeVerifyError::Unsupported(
                         "duplicate simultaneous exclusive borrow of the same local".into(),
                     ));
@@ -1205,10 +1417,7 @@ fn verify_borrowed_frame_contract(
             BytecodeInstr::LoadLocal(local) => {
                 // A pending exclusive call operand forbids ordinary reads
                 // of its source until the direct call consumes the handle.
-                if state
-                    .stack
-                    .contains(&BorrowProvenance::ExclusiveHandle(local))
-                {
+                if pending_exclusive(&state.stack, local) {
                     return Err(BytecodeVerifyError::Unsupported(
                         "cannot read a local while an exclusive argument is pending".into(),
                     ));
@@ -1223,10 +1432,7 @@ fn verify_borrowed_frame_contract(
                 state.stack.push(state.locals[index]);
             }
             BytecodeInstr::StoreLocal(local) => {
-                if state
-                    .stack
-                    .contains(&BorrowProvenance::ExclusiveHandle(local))
-                {
+                if pending_exclusive(&state.stack, local) {
                     return Err(BytecodeVerifyError::Unsupported(
                         "cannot mutate a local while an exclusive argument is pending".into(),
                     ));
@@ -1241,7 +1447,9 @@ fn verify_borrowed_frame_contract(
                     .ok_or(BytecodeVerifyError::StackUnderflow)?;
                 if matches!(
                     value,
-                    BorrowProvenance::Handle(_) | BorrowProvenance::ExclusiveHandle(_)
+                    BorrowProvenance::Handle(_)
+                        | BorrowProvenance::ExclusiveHandle(_)
+                        | BorrowProvenance::ExclusiveSliceHandle(_)
                 ) {
                     return Err(BytecodeVerifyError::Unsupported(
                         "borrow handle cannot be stored outside MakeClosureRef".into(),
@@ -1257,7 +1465,9 @@ fn verify_borrowed_frame_contract(
                     .ok_or(BytecodeVerifyError::StackUnderflow)?;
                 if matches!(
                     top,
-                    BorrowProvenance::Handle(_) | BorrowProvenance::ExclusiveHandle(_)
+                    BorrowProvenance::Handle(_)
+                        | BorrowProvenance::ExclusiveHandle(_)
+                        | BorrowProvenance::ExclusiveSliceHandle(_)
                 ) {
                     return Err(BytecodeVerifyError::Unsupported(
                         "raw borrow handle cannot be duplicated".into(),
@@ -1268,7 +1478,11 @@ fn verify_borrowed_frame_contract(
             BytecodeInstr::Pop => {
                 if matches!(
                     state.stack.pop(),
-                    Some(BorrowProvenance::Handle(_) | BorrowProvenance::ExclusiveHandle(_))
+                    Some(
+                        BorrowProvenance::Handle(_)
+                            | BorrowProvenance::ExclusiveHandle(_)
+                            | BorrowProvenance::ExclusiveSliceHandle(_)
+                    )
                 ) {
                     return Err(BytecodeVerifyError::Unsupported(
                         "raw borrow handle cannot be discarded".into(),
@@ -1285,7 +1499,11 @@ fn verify_borrowed_frame_contract(
                 }
                 if matches!(
                     state.stack.pop(),
-                    Some(BorrowProvenance::Handle(_) | BorrowProvenance::ExclusiveHandle(_))
+                    Some(
+                        BorrowProvenance::Handle(_)
+                            | BorrowProvenance::ExclusiveHandle(_)
+                            | BorrowProvenance::ExclusiveSliceHandle(_)
+                    )
                 ) {
                     return Err(BytecodeVerifyError::Unsupported(
                         "raw borrow handle is not callable".into(),
@@ -1314,7 +1532,10 @@ fn verify_borrowed_frame_contract(
                     let exclusive = target.inout_params.get(index).copied().unwrap_or(false);
                     let argument = state.stack.pop();
                     match (exclusive, argument) {
-                        (true, Some(BorrowProvenance::ExclusiveHandle(_))) => {}
+                        (true, Some(BorrowProvenance::ExclusiveHandle(_)))
+                            if target.params[index] != BytecodeType::ExclusiveSlice => {}
+                        (true, Some(BorrowProvenance::ExclusiveSliceHandle(_)))
+                            if target.params[index] == BytecodeType::ExclusiveSlice => {}
                         (false, Some(BorrowProvenance::Plain)) => {}
                         (false, Some(BorrowProvenance::BorrowedClosure))
                             if proves_nonescaping_callback_parameter(

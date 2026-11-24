@@ -755,6 +755,9 @@ fn check_assignment(ctx: &mut TypeContext, b: &mut HirBinary) -> Type {
         TargetKind::Name(span, name) => {
             let info = ctx.scopes.lookup(&name).cloned();
             if let Some(info) = info {
+                if matches!(&info.ty, Type::Slice(_)) && info.is_parameter && info.is_mutable {
+                    ctx.error("cannot rebind an inout Slice parameter", span);
+                }
                 if !info.is_mutable {
                     if info.is_capture {
                         ctx.error(format!("cannot assign to ref capture '{}'", name), span);
@@ -800,6 +803,9 @@ fn check_assignment(ctx: &mut TypeContext, b: &mut HirBinary) -> Type {
                 let object_ty = check_expression(ctx, &mut idx.object, None);
                 let index_ty = check_expression(ctx, &mut idx.index, None);
                 check_receiver_mutable(ctx, &idx.object, b.span);
+                if matches!(&object_ty, Type::Slice(_)) {
+                    check_exclusive_slice_write(ctx, &idx.object, b.span);
+                }
 
                 if object_ty == Type::String {
                     ctx.error(
@@ -887,6 +893,9 @@ fn check_assignment(ctx: &mut TypeContext, b: &mut HirBinary) -> Type {
                 let start_ty = check_expression(ctx, &mut slc.start, None);
                 let end_ty = check_expression(ctx, &mut slc.end, None);
                 check_receiver_mutable(ctx, &slc.object, b.span);
+                if matches!(&object_ty, Type::Slice(_)) {
+                    check_exclusive_slice_write(ctx, &slc.object, b.span);
+                }
 
                 if !start_ty.is_integer() && start_ty != Type::Error {
                     ctx.error(
@@ -2751,8 +2760,8 @@ fn check_function_call(
     }
 
     // The caller must explicitly request exclusive access, and the argument
-    // must name mutable local storage. We deliberately reject subviews and
-    // arbitrary lvalues until exclusive Slice(T) lowering is implemented.
+    // must name mutable local storage or a direct subview of an authorized
+    // owner. A mutable binding containing a read-only Slice is not an owner.
     let mut seen_owners: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
     for (i, resolved) in resolved_args.iter().enumerate() {
         let Some(expr) = resolved.as_ref() else {
@@ -2774,7 +2783,10 @@ fn check_function_call(
         if exclusive {
             match &**expr {
                 HirExpression::Name(_, name) => match ctx.scopes.lookup(name) {
-                    Some(info) if info.is_mutable && !info.is_consumed => {}
+                    Some(info)
+                        if info.is_mutable
+                            && !info.is_consumed
+                            && (!matches!(&info.ty, Type::Slice(_)) || info.is_parameter) => {}
                     _ => ctx.error(
                         format!("inout argument '{}' requires a live mutable var", name),
                         expr.span(),
@@ -2783,7 +2795,12 @@ fn check_function_call(
                 HirExpression::Slice(slice) if matches!(&param.ty, Type::Slice(_)) => {
                     match slice.object.as_ref() {
                         HirExpression::Name(_, owner) => match ctx.scopes.lookup(owner) {
-                            Some(info) if info.is_mutable && !info.is_consumed => {}
+                            Some(info)
+                                if info.is_mutable
+                                    && !info.is_consumed
+                                    && (matches!(&info.ty, Type::Array(_))
+                                        || (matches!(&info.ty, Type::Slice(_))
+                                            && info.is_parameter)) => {}
                             _ => ctx.error(
                                 format!(
                                     "inout slice owner '{}' requires a live mutable var",
@@ -3283,6 +3300,24 @@ fn check_slice(ctx: &mut TypeContext, s: &mut HirSlice) -> Type {
 }
 
 /// Phase 7: Check that the receiver expression is mutable (for index/slice assignment).
+// Slice(T) is read-only even if its descriptor lives in a var binding.
+// Only a declared inout parameter currently grants mutation of its elements.
+fn check_exclusive_slice_write(ctx: &mut TypeContext, expr: &HirExpression, span: Span) {
+    let authorized = match expr {
+        HirExpression::Name(_, name) => ctx
+            .scopes
+            .lookup(name)
+            .is_some_and(|info| info.is_mutable && info.is_parameter && !info.is_consumed),
+        _ => false,
+    };
+    if !authorized {
+        ctx.error(
+            "cannot mutate read-only Slice; use an inout Slice parameter",
+            span,
+        );
+    }
+}
+
 fn check_receiver_mutable(ctx: &mut TypeContext, expr: &HirExpression, span: Span) {
     match expr {
         HirExpression::Name(_, name) => {

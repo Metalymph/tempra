@@ -49,6 +49,14 @@ pub enum TirKey {
     Index(usize),
 }
 
+/// Origin of an exclusive array view. Parameter indices refer to an incoming
+/// exclusive slice, not to a value materialized from it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TirSliceSource {
+    Owner(TirSlotId),
+    Parameter(usize),
+}
+
 #[derive(Debug, Clone)]
 pub enum TirInstr {
     Const(TirValueId, TirConst),
@@ -64,6 +72,12 @@ pub enum TirInstr {
     /// Materialize an exclusive storage operand only at a verified direct call.
     /// It must not be used as an ordinary SSA value or escape the call.
     BorrowInout(TirValueId, TirSlotId),
+    /// Exclusive subview consumed by a direct call; bounds are relative to source.
+    BorrowSliceInout(TirValueId, TirSliceSource, TirValueId, TirValueId),
+    /// Access an element or length of an incoming exclusive slice parameter.
+    InoutSliceGet(TirValueId, usize, TirValueId),
+    InoutSliceSet(usize, TirValueId, TirValueId),
+    InoutSliceLen(TirValueId, usize),
     Store(TirSlotId, TirValueId),
 
     Call(TirValueId, TirFunctionId, Vec<TirValueId>),

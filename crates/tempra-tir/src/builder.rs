@@ -115,6 +115,42 @@ impl FunctionBuilder {
         Ok(id)
     }
 
+    pub fn build_borrow_slice_inout(
+        &mut self,
+        source: TirSliceSource,
+        start: TirValueId,
+        end: TirValueId,
+    ) -> Result<TirValueId, TirBuildError> {
+        let id = self.next_value();
+        self.push_instr(TirInstr::BorrowSliceInout(id, source, start, end))?;
+        Ok(id)
+    }
+
+    pub fn build_inout_slice_get(
+        &mut self,
+        parameter: usize,
+        index: TirValueId,
+    ) -> Result<TirValueId, TirBuildError> {
+        let id = self.next_value();
+        self.push_instr(TirInstr::InoutSliceGet(id, parameter, index))?;
+        Ok(id)
+    }
+
+    pub fn build_inout_slice_set(
+        &mut self,
+        parameter: usize,
+        index: TirValueId,
+        value: TirValueId,
+    ) -> Result<(), TirBuildError> {
+        self.push_instr(TirInstr::InoutSliceSet(parameter, index, value))
+    }
+
+    pub fn build_inout_slice_len(&mut self, parameter: usize) -> Result<TirValueId, TirBuildError> {
+        let id = self.next_value();
+        self.push_instr(TirInstr::InoutSliceLen(id, parameter))?;
+        Ok(id)
+    }
+
     pub fn new_block(&mut self) -> TirBlockId {
         let id = TirBlockId(self.func.next_block_id);
         self.func.next_block_id += 1;

@@ -604,6 +604,10 @@ fn opcode_ids_are_unique_and_within_bounds() {
         BytecodeInstr::MakeClosureRef(FunctionId(0), 0),
         BytecodeInstr::BorrowLocalMut(LocalId(0)),
         BytecodeInstr::MakeClosureInout(FunctionId(0), 0),
+        BytecodeInstr::BorrowSliceMut(LocalId(0)),
+        BytecodeInstr::InoutSliceGet(LocalId(0)),
+        BytecodeInstr::InoutSliceSet(LocalId(0)),
+        BytecodeInstr::InoutSliceLen(LocalId(0)),
         BytecodeInstr::AddI64LL(
             tempra_bytecode::function::LocalId(0),
             tempra_bytecode::function::LocalId(0),
@@ -1288,5 +1292,128 @@ fn vm_inout_verifier_rejects_owner_read_while_exclusive_argument_pending() {
     // still-pending exclusive borrow.
     main.code.insert(3, BytecodeInstr::LoadLocal(LocalId(0)));
     main.code.insert(4, BytecodeInstr::Pop);
+    assert!(tempra_bytecode::verify::verify_module(&module).is_err());
+}
+
+/// Bytecode-level fixture: exclusive subview mutations detach owning copies,
+/// and sequential calls release the loan without releasing the owner.
+fn vm_exclusive_slice_module() -> BytecodeModule {
+    let mut module = BytecodeModule::new();
+    let ten = module.add_constant(BytecodeConstant::Int64(10));
+    let twenty = module.add_constant(BytecodeConstant::Int64(20));
+    let thirty = module.add_constant(BytecodeConstant::Int64(30));
+    let zero = module.add_constant(BytecodeConstant::Int64(0));
+    let one = module.add_constant(BytecodeConstant::Int64(1));
+    let three = module.add_constant(BytecodeConstant::Int64(3));
+    let ninety_nine = module.add_constant(BytecodeConstant::Int64(99));
+    let mut mutate = BytecodeFunction::new(
+        "mutate".into(),
+        vec![BytecodeType::ExclusiveSlice],
+        BytecodeType::Unit,
+    );
+    mutate.inout_params = vec![true];
+    mutate.locals = mutate.params.clone();
+    mutate.max_stack = 2;
+    mutate.code = vec![
+        BytecodeInstr::ConstI64(zero),
+        BytecodeInstr::ConstI64(ninety_nine),
+        BytecodeInstr::InoutSliceSet(LocalId(0)),
+        BytecodeInstr::Return,
+    ];
+    let target = module.add_function(mutate);
+    let mut main = BytecodeFunction::new("main".into(), vec![], BytecodeType::Int64);
+    main.locals = vec![BytecodeType::Any, BytecodeType::Any];
+    main.max_stack = 3;
+    main.code = vec![
+        BytecodeInstr::ConstI64(ten),
+        BytecodeInstr::ConstI64(twenty),
+        BytecodeInstr::ConstI64(thirty),
+        BytecodeInstr::MakeArray(3),
+        BytecodeInstr::StoreLocal(LocalId(0)),
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::StoreLocal(LocalId(1)),
+        BytecodeInstr::ConstI64(one),
+        BytecodeInstr::ConstI64(three),
+        BytecodeInstr::BorrowSliceMut(LocalId(0)),
+        BytecodeInstr::Call(target, 1),
+        BytecodeInstr::ConstI64(one),
+        BytecodeInstr::ConstI64(three),
+        BytecodeInstr::BorrowSliceMut(LocalId(0)),
+        BytecodeInstr::Call(target, 1),
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::ConstI64(one),
+        BytecodeInstr::GetIndex,
+        BytecodeInstr::LoadLocal(LocalId(1)),
+        BytecodeInstr::ConstI64(one),
+        BytecodeInstr::GetIndex,
+        BytecodeInstr::AddI64,
+        BytecodeInstr::Return,
+    ];
+    module.add_function(main);
+    module
+}
+
+#[test]
+fn vm_exclusive_slice_roundtrip_and_copy_isolation() {
+    use tempra_bytecode::serialize::{decode_and_verify_artifact, encode_module};
+    let module = vm_exclusive_slice_module();
+    tempra_bytecode::verify::verify_module(&module).unwrap();
+    assert_eq!(
+        run_function(&module, "main", vec![]).unwrap(),
+        VmValue::Int64(119)
+    );
+    let restored = decode_and_verify_artifact(&encode_module(&module).unwrap()).unwrap();
+    assert_eq!(
+        restored.module.functions[0].params,
+        vec![BytecodeType::ExclusiveSlice]
+    );
+    assert_eq!(
+        run_function(&restored.module, "main", vec![]).unwrap(),
+        VmValue::Int64(119)
+    );
+}
+
+#[test]
+fn vm_exclusive_slice_rejects_raw_handle_duplication() {
+    let mut module = vm_exclusive_slice_module();
+    module.functions[1].code.insert(10, BytecodeInstr::Dup);
+    module.functions[1].code.insert(11, BytecodeInstr::Pop);
+    assert!(tempra_bytecode::verify::verify_module(&module).is_err());
+}
+
+#[test]
+fn vm_exclusive_slice_rejects_descriptor_materialization() {
+    let mut module = vm_exclusive_slice_module();
+    module.functions[0]
+        .code
+        .insert(0, BytecodeInstr::LoadLocal(LocalId(0)));
+    module.functions[0].code.insert(1, BytecodeInstr::Pop);
+    assert!(tempra_bytecode::verify::verify_module(&module).is_err());
+}
+
+#[test]
+fn vm_exclusive_slice_rejects_ordinary_slice_argument() {
+    let mut module = vm_exclusive_slice_module();
+    module.functions[1]
+        .code
+        .insert(7, BytecodeInstr::LoadLocal(LocalId(0)));
+    module.functions[1].code[10] = BytecodeInstr::Slice;
+    assert!(tempra_bytecode::verify::verify_module(&module).is_err());
+}
+
+#[test]
+fn vm_exclusive_slice_rejects_missing_inout_flag() {
+    let mut module = vm_exclusive_slice_module();
+    module.functions[0].inout_params[0] = false;
+    assert!(tempra_bytecode::verify::verify_module(&module).is_err());
+}
+
+#[test]
+fn vm_exclusive_slice_rejects_simultaneous_owner_borrows() {
+    let mut module = vm_exclusive_slice_module();
+    let main = &mut module.functions[1];
+    let second_borrow = main.code[7..10].to_vec();
+    main.code.splice(10..10, second_borrow);
+    main.code.insert(13, BytecodeInstr::Call(FunctionId(0), 1));
     assert!(tempra_bytecode::verify::verify_module(&module).is_err());
 }

@@ -1098,14 +1098,68 @@ fn vm_parity_inout_parameter_named_call() {
 }
 
 #[test]
-fn vm_parity_inout_slice_remains_fail_closed_until_buffer_model() {
+fn vm_parity_inout_slice_preserves_owner_and_independent_copy() {
     let source = r#"
-        fn mutate(inout data: Slice(Int)) { data[0] = 9 }
-        fn main() {
-            var data = [1, 2, 3]
-            mutate(inout data[0..2])
+        fn mutate(inout data: Slice(Int)) { data[0] = 99 }
+        fn main() -> Int {
+            var data = [10, 20, 30]
+            let before = data
+            mutate(inout data[1..3])
+            data[1] + before[1]
         }
     "#;
-    assert!(run_source_vm(source, &[]).is_err());
-    assert!(run_source_hir(source, &[]).is_err());
+    assert_differential(source);
+    assert_eq!(run_source_vm(source, &[]).unwrap(), VmValue::Int64(119));
+}
+
+#[test]
+fn vm_parity_inout_slice_nested_subview_and_sequential_calls() {
+    let source = r#"
+        fn increment(inout view: Slice(Int)) { view[0] = view[0] + 1 }
+        fn update(inout view: Slice(Int)) {
+            increment(inout view[1..2])
+            increment(inout view[1..2])
+        }
+        fn main() -> Int {
+            var data = [10, 20, 30, 40]
+            update(inout data[1..4])
+            data[2]
+        }
+    "#;
+    assert_differential(source);
+    assert_eq!(run_source_vm(source, &[]).unwrap(), VmValue::Int64(32));
+}
+
+#[test]
+fn vm_parity_inout_slice_length_and_read_after_write() {
+    let source = r#"
+        fn update(inout view: Slice(Int)) -> Int {
+            view[0] = view[0] + 5
+            view[0] + view.len()
+        }
+        fn main() -> Int {
+            var data = [10, 20, 30]
+            update(inout data[1..3])
+        }
+    "#;
+    assert_differential(source);
+    assert_eq!(run_source_vm(source, &[]).unwrap(), VmValue::Int64(27));
+}
+
+#[test]
+fn vm_parity_inout_slice_out_of_range_write() {
+    let source = r#"
+        fn mutate(inout data: Slice(Int)) { data[1] = 99 }
+        fn main() {
+            var data = [10, 20, 30]
+            mutate(inout data[1..2])
+        }
+    "#;
+    let hir = format!("{:?}", run_source_hir(source, &[]).unwrap_err());
+    let vm = format!("{:?}", run_source_vm(source, &[]).unwrap_err());
+    assert!(hir.to_lowercase().contains("out of bounds"), "{hir}");
+    assert!(
+        vm.contains("IndexOutOfBounds") || vm.to_lowercase().contains("out of bounds"),
+        "{vm}"
+    );
 }

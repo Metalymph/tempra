@@ -62,7 +62,7 @@ impl From<crate::verify::BytecodeVerifyError> for BytecodeSerializeError {
 }
 
 const MAGIC: &[u8; 4] = b"TMBC";
-const FORMAT_VERSION: u32 = 8;
+const FORMAT_VERSION: u32 = 9;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct BytecodeCacheHeader {
@@ -230,6 +230,7 @@ fn write_type(w: &mut impl Write, ty: &BytecodeType) -> io::Result<()> {
         BytecodeType::Any => 6,
         BytecodeType::UInt8 => 7,
         BytecodeType::Callable(_) => 8,
+        BytecodeType::ExclusiveSlice => 9,
     };
     w.write_all(&[tag])?;
     if let BytecodeType::Callable(id) = ty {
@@ -311,6 +312,13 @@ fn write_instr(w: &mut impl Write, instr: &BytecodeInstr) -> io::Result<()> {
         }
         BytecodeInstr::BorrowLocalMut(id) => {
             w.write_all(&[57])?;
+            write_u32(w, id.0)
+        }
+        BytecodeInstr::BorrowSliceMut(id)
+        | BytecodeInstr::InoutSliceGet(id)
+        | BytecodeInstr::InoutSliceSet(id)
+        | BytecodeInstr::InoutSliceLen(id) => {
+            w.write_all(&[instr.opcode_id() as u8])?;
             write_u32(w, id.0)
         }
         BytecodeInstr::MakeClosureInout(target, captures) => {
@@ -560,6 +568,7 @@ fn read_type(r: &mut impl Read) -> Result<BytecodeType, BytecodeSerializeError> 
         6 => Ok(BytecodeType::Any),
         7 => Ok(BytecodeType::UInt8),
         8 => Ok(BytecodeType::Callable(SignatureId(read_u32(r)?))),
+        9 => Ok(BytecodeType::ExclusiveSlice),
         _ => Err(BytecodeSerializeError::InvalidTag),
     }
 }
@@ -630,6 +639,10 @@ fn read_instr(r: &mut impl Read) -> Result<BytecodeInstr, BytecodeSerializeError
         }
         55 => Ok(BytecodeInstr::BorrowLocal(LocalId(read_u32(r)?))),
         57 => Ok(BytecodeInstr::BorrowLocalMut(LocalId(read_u32(r)?))),
+        59 => Ok(BytecodeInstr::BorrowSliceMut(LocalId(read_u32(r)?))),
+        60 => Ok(BytecodeInstr::InoutSliceGet(LocalId(read_u32(r)?))),
+        61 => Ok(BytecodeInstr::InoutSliceSet(LocalId(read_u32(r)?))),
+        62 => Ok(BytecodeInstr::InoutSliceLen(LocalId(read_u32(r)?))),
         58 => {
             let target_id = FunctionId(read_u32(r)?);
             let mut count = [0u8; 2];

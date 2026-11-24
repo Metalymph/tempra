@@ -2936,6 +2936,15 @@ impl Interpreter {
                 "inout call requires runtime parameters and a defined function".into(),
             ));
         }
+        if function.parameters.iter().any(|param| {
+            param.is_inout
+                && matches!(
+                    self.resolve_hir_type(&param.ty),
+                    tempra_hir::types::Type::Slice(_)
+                )
+        }) {
+            return self.eval_explicit_slice_call(call, env, &identity, &function);
+        }
         let mut positional_values = Vec::new();
         let mut named_values = HashMap::new();
         let mut next_pos = 0usize;
@@ -3020,6 +3029,236 @@ impl Interpreter {
             positional_values,
             named_values,
         )
+    }
+
+    /// The reference interpreter uses its existing array storage, with COW
+    /// on the root owner before forming a view. Evaluate every argument first
+    /// so a nested argument evaluation cannot invalidate a prepared view.
+    #[inline(never)]
+    fn eval_explicit_slice_call(
+        &mut self,
+        call: &HirCall,
+        env: &mut RuntimeEnv,
+        identity: &str,
+        function: &HirFunction,
+    ) -> Result<ControlFlow, crate::interpreter::InterpreterEvalError> {
+        use crate::value::{SliceParent, SliceValue};
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        use tempra_hir::types::Type;
+        enum Argument {
+            Scalar(Value),
+            ExclusiveScalar(String),
+            View(String, Option<(usize, usize)>),
+        }
+        fn scalar(value: &Value) -> bool {
+            matches!(
+                value,
+                Value::Int64(_)
+                    | Value::UInt64(_)
+                    | Value::UInt8(_)
+                    | Value::Float64(_)
+                    | Value::Bool(_)
+            )
+        }
+        fn scalar_type(ty: &Type) -> bool {
+            matches!(
+                ty,
+                Type::Int
+                    | Type::Int8
+                    | Type::Int16
+                    | Type::Int32
+                    | Type::Int64
+                    | Type::UInt8
+                    | Type::UInt16
+                    | Type::UInt32
+                    | Type::UInt64
+                    | Type::Float32
+                    | Type::Float64
+                    | Type::Bool
+            )
+        }
+        let parameter_types: Vec<_> = function
+            .parameters
+            .iter()
+            .map(|p| self.resolve_hir_type(&p.ty))
+            .collect();
+        let return_type = function
+            .return_type
+            .as_ref()
+            .map(|ty| self.resolve_hir_type(ty))
+            .unwrap_or(Type::Unit);
+        if (!scalar_type(&return_type) && return_type != Type::Unit)
+            || function
+                .parameters
+                .iter()
+                .zip(&parameter_types)
+                .any(|(param, ty)| match ty {
+                    Type::Slice(inner) => !param.is_inout || !scalar_type(inner),
+                    _ => !scalar_type(ty),
+                })
+        {
+            return Ok(ControlFlow::Crash("exclusive slice execution currently requires scalar elements, scalar/exclusive-slice parameters and scalar/Unit return".into()));
+        }
+        let mut prepared = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut next_pos = 0usize;
+        for (argument_index, argument) in call.args.iter().enumerate() {
+            let (index, expression, name) = match argument {
+                HirCallArgument::Positional(expr) => {
+                    let index = next_pos;
+                    next_pos += 1;
+                    (index, expr, None)
+                }
+                HirCallArgument::Named(named) => {
+                    let Some(index) = function
+                        .parameters
+                        .iter()
+                        .position(|p| p.name == named.name)
+                    else {
+                        return Err("unknown exclusive slice call parameter".into());
+                    };
+                    (index, &named.value, Some(named.name.clone()))
+                }
+            };
+            let Some(param) = function.parameters.get(index) else {
+                return Err("invalid exclusive slice call parameter index".into());
+            };
+            if !seen.insert(index)
+                || param.is_inout
+                    != call
+                        .inout_arguments
+                        .get(argument_index)
+                        .copied()
+                        .unwrap_or(false)
+            {
+                return Err("duplicate or mismatched exclusive slice call parameter".into());
+            }
+            let argument = if param.is_inout && matches!(&parameter_types[index], Type::Slice(_)) {
+                match expression {
+                    HirExpression::Slice(view) => {
+                        let HirExpression::Name(_, owner) = view.object.as_ref() else {
+                            return Err("exclusive slice requires direct owner".into());
+                        };
+                        let start = match self.eval_expression_internal(&view.start, env)? {
+                            ControlFlow::Value(Value::Int64(value)) => usize::try_from(value)
+                                .map_err(|_| "exclusive slice bound must be nonnegative")?,
+                            ControlFlow::Value(_) => {
+                                return Err("exclusive slice bounds must be Int64".into())
+                            }
+                            flow => return Ok(flow),
+                        };
+                        let end = match self.eval_expression_internal(&view.end, env)? {
+                            ControlFlow::Value(Value::Int64(value)) => usize::try_from(value)
+                                .map_err(|_| "exclusive slice bound must be nonnegative")?,
+                            ControlFlow::Value(_) => {
+                                return Err("exclusive slice bounds must be Int64".into())
+                            }
+                            flow => return Ok(flow),
+                        };
+                        Argument::View(owner.clone(), Some((start, end)))
+                    }
+                    HirExpression::Name(_, owner) => Argument::View(owner.clone(), None),
+                    _ => {
+                        return Err(
+                            "exclusive slice requires direct owner or incoming parameter".into(),
+                        )
+                    }
+                }
+            } else if param.is_inout {
+                let HirExpression::Name(_, owner) = expression else {
+                    return Err("inout scalar requires direct owner".into());
+                };
+                Argument::ExclusiveScalar(owner.clone())
+            } else {
+                match self.eval_expression_internal(expression, env)? {
+                    ControlFlow::Value(value) if scalar(&value) => Argument::Scalar(value),
+                    ControlFlow::Value(_) => {
+                        return Err("exclusive slice call ordinary arguments must be scalar".into())
+                    }
+                    flow => return Ok(flow),
+                }
+            };
+            prepared.push((name, argument));
+        }
+        let mut cells = std::collections::HashSet::new();
+        let mut buffers = std::collections::HashSet::new();
+        let mut positional_values = Vec::new();
+        let mut named_values = HashMap::new();
+        for (name, argument) in prepared {
+            let value = match argument {
+                Argument::Scalar(value) => value,
+                Argument::ExclusiveScalar(owner) => {
+                    let Some(Value::Cell(cell)) = env.get_raw(&owner) else {
+                        return Err("inout scalar requires mutable owner".into());
+                    };
+                    if !cells.insert(Rc::as_ptr(&cell)) || !scalar(&cell.borrow()) {
+                        return Err("invalid or duplicate inout scalar owner".into());
+                    }
+                    Value::Cell(cell)
+                }
+                Argument::View(owner, bounds) => {
+                    let Some(Value::Cell(cell)) = env.get_raw(&owner) else {
+                        return Err("exclusive slice requires mutable owner".into());
+                    };
+                    if !cells.insert(Rc::as_ptr(&cell)) {
+                        return Err("simultaneous inout alias".into());
+                    }
+                    let (parent, start, end) = {
+                        let mut storage = cell.borrow_mut();
+                        match &mut *storage {
+                            Value::Array(array) => {
+                                let Some((start, end)) = bounds else {
+                                    return Err(
+                                        "array borrow requires explicit slice bounds".into()
+                                    );
+                                };
+                                let len = array.borrow().len();
+                                if start > end || end > len {
+                                    return Err(format!("exclusive slice bounds out of range: [{start}..{end}] for length {len}").into());
+                                }
+                                if !array.borrow()[start..end].iter().all(scalar) {
+                                    return Err("exclusive slice elements must be scalar".into());
+                                }
+                                // Detach independent owning copies, but preserve the owner cell.
+                                let _ = Rc::make_mut(array);
+                                (array.clone(), start, end)
+                            }
+                            Value::Slice(view) => {
+                                let SliceParent::Values(parent) = &view.parent else {
+                                    return Err("exclusive byte-string view is unsupported".into());
+                                };
+                                let len = view.len();
+                                let (start, end) = bounds.unwrap_or((0, len));
+                                if start > end || end > len || view.end > parent.borrow().len() {
+                                    return Err("exclusive subview bounds out of range".into());
+                                }
+                                (parent.clone(), view.start + start, view.start + end)
+                            }
+                            _ => {
+                                return Err(
+                                    "exclusive slice requires an array or incoming view".into()
+                                )
+                            }
+                        }
+                    };
+                    if !buffers.insert(Rc::as_ptr(&parent)) {
+                        return Err("simultaneous exclusive slice buffer alias".into());
+                    }
+                    Value::Cell(Rc::new(RefCell::new(Value::Slice(SliceValue {
+                        parent: SliceParent::Values(parent),
+                        start,
+                        end,
+                    }))))
+                }
+            };
+            if let Some(name) = name {
+                named_values.insert(name, value);
+            } else {
+                positional_values.push(value);
+            }
+        }
+        self.bind_and_call_user_function(call, identity, function, positional_values, named_values)
     }
 
     fn bind_and_call_user_function(

@@ -306,6 +306,9 @@ fn defined_value(instruction: &TirInstr) -> Option<(TirValueId, Option<&TirConst
         | TirInstr::Unwrap(value, _, _, _)
         | TirInstr::Load(value, _)
         | TirInstr::BorrowInout(value, _)
+        | TirInstr::BorrowSliceInout(value, _, _, _)
+        | TirInstr::InoutSliceGet(value, _, _)
+        | TirInstr::InoutSliceLen(value, _)
         | TirInstr::MakeClosureRef(value, _, _)
         | TirInstr::MakeClosureInout(value, _, _)
         | TirInstr::Call(value, _, _)
@@ -327,7 +330,7 @@ fn defined_value(instruction: &TirInstr) -> Option<(TirValueId, Option<&TirConst
         | TirInstr::Size(value, _)
         | TirInstr::Bytes(value, _)
         | TirInstr::ArrayPush(value, _, _) => Some((*value, None)),
-        TirInstr::Slot(_, _) | TirInstr::Store(_, _) => None,
+        TirInstr::Slot(_, _) | TirInstr::Store(_, _) | TirInstr::InoutSliceSet(_, _, _) => None,
     }
 }
 

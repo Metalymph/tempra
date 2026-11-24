@@ -73,6 +73,13 @@ pub enum BytecodeInstr {
     BorrowLocalMut(LocalId),
     /// Closure with exclusively borrowed mutable capture storage.
     MakeClosureInout(FunctionId, u16),
+    /// Bounds on stack (start, end); borrow an array owner or reborrow an incoming view.
+    BorrowSliceMut(LocalId),
+    /// Index on stack; read an incoming exclusive slice element.
+    InoutSliceGet(LocalId),
+    /// Index and value on stack; mutate the original owner via an incoming view.
+    InoutSliceSet(LocalId),
+    InoutSliceLen(LocalId),
 
     // Enum-like
     MakeEnum(ConstId, ConstId, u16), // enum_name, variant_name, payload_count
@@ -99,7 +106,7 @@ pub enum BytecodeInstr {
     AddI64LC(LocalId, ConstId), // LoadLocal a; ConstI64 b; AddI64
 }
 
-pub const BYTECODE_OPCODE_COUNT: usize = 59;
+pub const BYTECODE_OPCODE_COUNT: usize = 63;
 
 impl BytecodeInstr {
     pub fn opcode_id(&self) -> usize {
@@ -163,6 +170,10 @@ impl BytecodeInstr {
             BytecodeInstr::MakeClosureRef(_, _) => 56,
             BytecodeInstr::BorrowLocalMut(_) => 57,
             BytecodeInstr::MakeClosureInout(_, _) => 58,
+            BytecodeInstr::BorrowSliceMut(_) => 59,
+            BytecodeInstr::InoutSliceGet(_) => 60,
+            BytecodeInstr::InoutSliceSet(_) => 61,
+            BytecodeInstr::InoutSliceLen(_) => 62,
         }
     }
 
@@ -227,6 +238,10 @@ impl BytecodeInstr {
             BytecodeInstr::MakeClosureRef(_, _) => "MakeClosureRef",
             BytecodeInstr::BorrowLocalMut(_) => "BorrowLocalMut",
             BytecodeInstr::MakeClosureInout(_, _) => "MakeClosureInout",
+            BytecodeInstr::BorrowSliceMut(_) => "BorrowSliceMut",
+            BytecodeInstr::InoutSliceGet(_) => "InoutSliceGet",
+            BytecodeInstr::InoutSliceSet(_) => "InoutSliceSet",
+            BytecodeInstr::InoutSliceLen(_) => "InoutSliceLen",
         }
     }
 }
@@ -299,6 +314,10 @@ pub fn stack_effect(
                 pushes: 1,
             }
         }
+        BytecodeInstr::BorrowSliceMut(_) => StackEffect { pops: 2, pushes: 1 },
+        BytecodeInstr::InoutSliceGet(_) => StackEffect { pops: 1, pushes: 1 },
+        BytecodeInstr::InoutSliceSet(_) => StackEffect { pops: 2, pushes: 0 },
+        BytecodeInstr::InoutSliceLen(_) => StackEffect { pops: 0, pushes: 1 },
         BytecodeInstr::BorrowLocal(id) | BytecodeInstr::BorrowLocalMut(id) => {
             if id.0 as usize >= func.locals.len() {
                 return Err(BytecodeError::Message(format!(

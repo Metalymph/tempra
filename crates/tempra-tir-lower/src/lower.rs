@@ -284,6 +284,7 @@ pub struct LowerContext<'a> {
     /// (SlotId, Type, is_mutable)
     pub locals: HashMap<String, (TirSlotId, TirType, bool)>,
     pub local_hir_types: HashMap<String, Type>,
+    exclusive_slice_slots: HashMap<TirSlotId, usize>,
 }
 
 impl<'a> LowerContext<'a> {
@@ -303,7 +304,71 @@ impl<'a> LowerContext<'a> {
             module_prefix: None,
             locals: HashMap::new(),
             local_hir_types: HashMap::new(),
+            exclusive_slice_slots: HashMap::new(),
         }
+    }
+
+    fn exclusive_slice_parameter(&self, expr: &HirExpression) -> Option<usize> {
+        let HirExpression::Name(_, name) = expr else {
+            return None;
+        };
+        let (slot, _, _) = self.locals.get(name)?;
+        self.exclusive_slice_slots.get(slot).copied()
+    }
+
+    fn lower_exclusive_slice_argument(
+        &mut self,
+        expr: &HirExpression,
+    ) -> Result<TirValueId, TirLowerError> {
+        let (owner, bounds) = match expr {
+            HirExpression::Slice(view) => (
+                view.object.as_ref(),
+                Some((view.start.as_ref(), view.end.as_ref())),
+            ),
+            HirExpression::Name(_, _) => (expr, None),
+            _ => {
+                return Err(TirLowerError::UnsupportedExpr(
+                    "exclusive slice requires a direct owner or parameter".into(),
+                    expr.span(),
+                ))
+            }
+        };
+        let source = if let Some(parameter) = self.exclusive_slice_parameter(owner) {
+            TirSliceSource::Parameter(parameter)
+        } else {
+            let HirExpression::Name(_, name) = owner else {
+                return Err(TirLowerError::UnsupportedExpr(
+                    "exclusive slice requires a direct owner".into(),
+                    expr.span(),
+                ));
+            };
+            let (slot, ty, mutable) = self
+                .locals
+                .get(name)
+                .cloned()
+                .ok_or_else(|| TirLowerError::UnknownLocal(name.clone(), expr.span()))?;
+            if !mutable
+                || !matches!(&ty, TirType::Array(inner) if matches!(inner.as_ref(), TirType::Int64 | TirType::UInt64 | TirType::UInt8 | TirType::Float64 | TirType::Bool))
+                || bounds.is_none()
+            {
+                return Err(TirLowerError::UnsupportedExpr(
+                    "exclusive slice requires a mutable scalar array with explicit bounds".into(),
+                    expr.span(),
+                ));
+            }
+            TirSliceSource::Owner(slot)
+        };
+        let (start, end) = if let Some((start, end)) = bounds {
+            (self.lower_expression(start)?, self.lower_expression(end)?)
+        } else if let TirSliceSource::Parameter(parameter) = source {
+            (
+                self.builder.build_const(TirConst::Int64(0))?,
+                self.builder.build_inout_slice_len(parameter)?,
+            )
+        } else {
+            unreachable!()
+        };
+        Ok(self.builder.build_borrow_slice_inout(source, start, end)?)
     }
 
     /// Resolves a top-level function name using the module currently being
@@ -2569,6 +2634,12 @@ impl<'a> LowerContext<'a> {
                         .map_err(|e| e.into());
                 }
                 if let Some((slot, _ty, _)) = self.locals.get(name) {
+                    if self.exclusive_slice_slots.contains_key(slot) {
+                        return Err(TirLowerError::UnsupportedExpr(
+                            "exclusive slice descriptor cannot be materialized as a value".into(),
+                            *span,
+                        ));
+                    }
                     self.builder.build_load(*slot).map_err(|e| e.into())
                 } else {
                     let keys: Vec<_> = self.locals.keys().cloned().collect();
@@ -2580,6 +2651,15 @@ impl<'a> LowerContext<'a> {
             }
             HirExpression::Binary(b) => {
                 if b.op == HirBinaryOp::Assign {
+                    if let HirExpression::Index(index) = &*b.left {
+                        if let Some(parameter) = self.exclusive_slice_parameter(&index.object) {
+                            let value = self.lower_expression(&b.right)?;
+                            let index = self.lower_expression(&index.index)?;
+                            self.builder
+                                .build_inout_slice_set(parameter, index, value)?;
+                            return Ok(self.builder.build_const(TirConst::Unit)?);
+                        }
+                    }
                     if let HirExpression::Name(span, name) = &*b.left {
                         let (slot, _ty, mutable) = if let Some(info) = self.locals.get(name) {
                             info.clone()
@@ -2587,6 +2667,12 @@ impl<'a> LowerContext<'a> {
                             return Err(TirLowerError::UnknownLocal(name.clone(), *span));
                         };
 
+                        if self.exclusive_slice_slots.contains_key(&slot) {
+                            return Err(TirLowerError::UnsupportedStmt(
+                                "cannot rebind an exclusive slice parameter".into(),
+                                *span,
+                            ));
+                        }
                         if !mutable {
                             return Err(TirLowerError::UnsupportedStmt(
                                 "cannot assign to let binding".into(),
@@ -2746,6 +2832,9 @@ impl<'a> LowerContext<'a> {
                     let obj_ty = self.infer_expr_type(&m.object)?;
                     if c.args.is_empty() {
                         if m.field == "len" {
+                            if let Some(parameter) = self.exclusive_slice_parameter(&m.object) {
+                                return Ok(self.builder.build_inout_slice_len(parameter)?);
+                            }
                             if matches!(obj_ty, Type::Array(_) | Type::Slice(_) | Type::String) {
                                 let obj = self.lower_expression(&m.object)?;
                                 return self.builder.build_len(obj).map_err(|e| e.into());
@@ -3201,7 +3290,11 @@ impl<'a> LowerContext<'a> {
                                     c.span,
                                 ));
                             }
-                            let value = if required_inout {
+                            let value = if required_inout
+                                && matches!(&sig.params[parameter_index].ty, Type::Slice(_))
+                            {
+                                self.lower_exclusive_slice_argument(expr)?
+                            } else if required_inout {
                                 let HirExpression::Name(_, owner) = expr else {
                                     return Err(TirLowerError::UnsupportedExpr(
                                         "VM inout Slice views require exclusive buffer lowering"
@@ -3353,6 +3446,10 @@ impl<'a> LowerContext<'a> {
                     .map_err(|e| e.into())
             }
             HirExpression::Index(i) => {
+                if let Some(parameter) = self.exclusive_slice_parameter(&i.object) {
+                    let index = self.lower_expression(&i.index)?;
+                    return Ok(self.builder.build_inout_slice_get(parameter, index)?);
+                }
                 let obj_ty = self.infer_expr_type(&i.object)?;
                 if matches!(obj_ty, Type::String) {
                     return Err(TirLowerError::UnsupportedExpr(
@@ -3380,6 +3477,11 @@ impl<'a> LowerContext<'a> {
                     .map_err(|e| e.into())
             }
             HirExpression::Member(m) => {
+                if m.field == "len" {
+                    if let Some(parameter) = self.exclusive_slice_parameter(&m.object) {
+                        return Ok(self.builder.build_inout_slice_len(parameter)?);
+                    }
+                }
                 let obj_ty = self.infer_expr_type(&m.object)?;
                 if m.field == "len"
                     && matches!(obj_ty, Type::Array(_) | Type::Slice(_) | Type::String)
@@ -4189,7 +4291,12 @@ fn lower_function_inner(
         };
 
         let slot = ctx.builder.build_slot(tir_ty.clone(), Some(&p.name))?;
-        ctx.builder.build_store(slot, val_id)?;
+        if p.is_inout && matches!(&tir_ty, TirType::Slice(_)) {
+            ctx.exclusive_slice_slots
+                .insert(slot, ctx.builder.func.params.len() - 1);
+        } else {
+            ctx.builder.build_store(slot, val_id)?;
+        }
         // Parameters are immutable by default in Phase 12.2 lowering
         ctx.locals
             .insert(p.name.clone(), (slot, tir_ty, p.is_inout));

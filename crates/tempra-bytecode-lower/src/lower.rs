@@ -48,7 +48,8 @@ pub fn lower_tir_module(module: &TirModule) -> Result<BytecodeModule, BytecodeLo
         let params = tir_func
             .params
             .iter()
-            .map(|(_, ty)| map_type(ty, &bc_module))
+            .enumerate()
+            .map(|(index, (_, ty))| map_parameter_type(tir_func, index, ty, &bc_module))
             .collect::<Result<Vec<_>, _>>()?;
         let ret = map_type(&tir_func.return_type, &bc_module)?;
         let mut bc_func = BytecodeFunction::new(tir_func.name.clone(), params, ret);
@@ -96,7 +97,8 @@ fn lower_function(
     let params = tir_func
         .params
         .iter()
-        .map(|(_, ty)| map_type(ty, bc_module))
+        .enumerate()
+        .map(|(index, (_, ty))| map_parameter_type(tir_func, index, ty, bc_module))
         .collect::<Result<Vec<_>, _>>()?;
     let ret = map_type(&tir_func.return_type, bc_module)?;
 
@@ -114,6 +116,7 @@ fn lower_function(
         bc_func,
         value_to_local: HashMap::new(),
         inout_sources: HashMap::new(),
+        slice_sources: HashMap::new(),
         slot_to_local: HashMap::new(),
         slot_types: HashMap::new(),
         value_types: HashMap::new(),
@@ -142,6 +145,7 @@ struct FunctionLowerer<'a> {
     bc_func: BytecodeFunction,
     value_to_local: HashMap<TirValueId, LocalId>,
     inout_sources: HashMap<TirValueId, TirSlotId>,
+    slice_sources: HashMap<TirValueId, (TirSliceSource, TirValueId, TirValueId)>,
     slot_to_local: HashMap<TirSlotId, LocalId>,
     slot_types: HashMap<TirSlotId, BytecodeType>,
     value_types: HashMap<TirValueId, BytecodeType>,
@@ -181,6 +185,8 @@ impl<'a> FunctionLowerer<'a> {
             for instr in &block.instrs {
                 if let TirInstr::BorrowInout(value, slot) = instr {
                     self.inout_sources.insert(*value, *slot);
+                } else if let TirInstr::BorrowSliceInout(value, source, start, end) = instr {
+                    self.slice_sources.insert(*value, (*source, *start, *end));
                 }
             }
         }
@@ -202,9 +208,9 @@ impl<'a> FunctionLowerer<'a> {
         let mut local_types = vec![BytecodeType::Unit; next_local as usize];
 
         // Map params types
-        for (val_id, ty) in &self.tir_func.params {
+        for (val_id, _) in &self.tir_func.params {
             if let Some(local) = self.value_to_local.get(val_id) {
-                local_types[local.0 as usize] = map_type(ty, self.bc_module)?;
+                local_types[local.0 as usize] = self.bc_func.params[local.0 as usize];
             }
         }
 
@@ -297,8 +303,22 @@ impl<'a> FunctionLowerer<'a> {
                 }
                 self.store_res(*res)?;
             }
-            TirInstr::BorrowInout(_, _) => {
+            TirInstr::BorrowInout(_, _) | TirInstr::BorrowSliceInout(_, _, _, _) => {
                 // Emitted at the callsite by load_val, not stored into a local.
+            }
+            TirInstr::InoutSliceGet(res, parameter, index) => {
+                self.load_val(*index)?;
+                self.emit(BytecodeInstr::InoutSliceGet(LocalId(*parameter as u32)));
+                self.store_res(*res)?;
+            }
+            TirInstr::InoutSliceSet(parameter, index, value) => {
+                self.load_val(*index)?;
+                self.load_val(*value)?;
+                self.emit(BytecodeInstr::InoutSliceSet(LocalId(*parameter as u32)));
+            }
+            TirInstr::InoutSliceLen(res, parameter) => {
+                self.emit(BytecodeInstr::InoutSliceLen(LocalId(*parameter as u32)));
+                self.store_res(*res)?;
             }
             TirInstr::Load(res, slot) => {
                 let local = self
@@ -721,6 +741,19 @@ impl<'a> FunctionLowerer<'a> {
     }
 
     fn load_val(&mut self, id: TirValueId) -> Result<(), BytecodeLowerError> {
+        if let Some((source, start, end)) = self.slice_sources.get(&id).copied() {
+            let local = match source {
+                TirSliceSource::Owner(slot) => *self
+                    .slot_to_local
+                    .get(&slot)
+                    .ok_or_else(|| BytecodeLowerError::UnknownSlot(format!("${}", slot.0)))?,
+                TirSliceSource::Parameter(index) => LocalId(index as u32),
+            };
+            self.load_val(start)?;
+            self.load_val(end)?;
+            self.emit(BytecodeInstr::BorrowSliceMut(local));
+            return Ok(());
+        }
         if let Some(slot) = self.inout_sources.get(&id) {
             let local = *self
                 .slot_to_local
@@ -854,7 +887,11 @@ impl<'a> FunctionLowerer<'a> {
 fn get_instr_res_id(instr: &TirInstr) -> Option<TirValueId> {
     match instr {
         TirInstr::Const(id, _) => Some(*id),
-        TirInstr::Load(id, _) | TirInstr::BorrowInout(id, _) => Some(*id),
+        TirInstr::Load(id, _)
+        | TirInstr::BorrowInout(id, _)
+        | TirInstr::BorrowSliceInout(id, _, _, _)
+        | TirInstr::InoutSliceGet(id, _, _)
+        | TirInstr::InoutSliceLen(id, _) => Some(*id),
         TirInstr::Add(id, _, _)
         | TirInstr::Sub(id, _, _)
         | TirInstr::Mul(id, _, _)
@@ -905,6 +942,20 @@ fn intern_tir_type(
 }
 
 /// Map only previously interned callable signatures; never assign an ID here.
+fn map_parameter_type(
+    function: &TirFunction,
+    index: usize,
+    ty: &TirType,
+    module: &BytecodeModule,
+) -> Result<BytecodeType, BytecodeLowerError> {
+    if function.inout_params.get(index).copied().unwrap_or(false) && matches!(ty, TirType::Slice(_))
+    {
+        Ok(BytecodeType::ExclusiveSlice)
+    } else {
+        map_type(ty, module)
+    }
+}
+
 fn map_type(ty: &TirType, module: &BytecodeModule) -> Result<BytecodeType, BytecodeLowerError> {
     match ty {
         TirType::Unit => Ok(BytecodeType::Unit),

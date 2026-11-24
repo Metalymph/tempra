@@ -461,7 +461,7 @@ fn closure_isa_roundtrip_reserves_stable_opcode_ids() {
 
     assert_eq!(BytecodeInstr::MakeClosure(target, 0).opcode_id(), 53);
     assert_eq!(BytecodeInstr::CallClosure(signature_id, 1).opcode_id(), 54);
-    assert_eq!(crate::opcode::BYTECODE_OPCODE_COUNT, 59);
+    assert_eq!(crate::opcode::BYTECODE_OPCODE_COUNT, 63);
     let bytes = encode_module(&module).unwrap();
     assert_eq!(bytes, encode_module(&module).unwrap());
     let decoded = decode_artifact(&bytes).unwrap();
@@ -835,7 +835,7 @@ fn borrowed_closure_bytecode_opcode_identity_and_fail_closed() {
         BytecodeInstr::MakeClosureRef(FunctionId(0), 1).opcode_id(),
         56
     );
-    assert_eq!(crate::opcode::BYTECODE_OPCODE_COUNT, 59);
+    assert_eq!(crate::opcode::BYTECODE_OPCODE_COUNT, 63);
     assert!(matches!(
         verify_module(&module),
         Err(BytecodeVerifyError::Unsupported(_))
@@ -1449,4 +1449,13 @@ fn inout_closure_rejects_repeated_exclusive_borrow_sites() {
         verify_module(&module),
         Err(BytecodeVerifyError::Unsupported(_))
     ));
+}
+
+#[test]
+fn mutable_slice_isa_reserves_stable_opcode_ids() {
+    assert_eq!(BytecodeInstr::BorrowSliceMut(LocalId(0)).opcode_id(), 59);
+    assert_eq!(BytecodeInstr::InoutSliceGet(LocalId(0)).opcode_id(), 60);
+    assert_eq!(BytecodeInstr::InoutSliceSet(LocalId(0)).opcode_id(), 61);
+    assert_eq!(BytecodeInstr::InoutSliceLen(LocalId(0)).opcode_id(), 62);
+    assert_eq!(crate::opcode::BYTECODE_OPCODE_COUNT, 63);
 }

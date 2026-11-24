@@ -63,6 +63,8 @@ pub enum DirectCapabilitySource {
     ConstantIndexGet,
     /// A dynamic-index `GetIndex` operation.
     DynamicIndexGet,
+    /// Exclusive slice element write: bounds check and possible COW allocation.
+    ExclusiveSliceWrite,
     /// A potentially failing slice operation.
     Slice,
     /// Materialization of a string's byte view in the current runtime.
@@ -771,6 +773,7 @@ pub fn analyze(module: &TirModule) -> Result<CapabilityAnalysis, CapabilityAnaly
 
                 record_instruction_type(
                     instruction,
+                    function,
                     &function_by_id,
                     &mut value_types,
                     &mut slot_types,
@@ -1096,6 +1099,20 @@ fn classify_instruction(
     instruction: &TirInstr,
     value_types: &HashMap<TirValueId, TirType>,
 ) -> Option<(CapabilitySet, DirectCapabilitySource)> {
+    if matches!(instruction, TirInstr::BorrowSliceInout(_, _, _, _)) {
+        return Some((
+            CapabilitySet::singleton(Capability::Panic)
+                .union(CapabilitySet::singleton(Capability::Alloc)),
+            DirectCapabilitySource::Slice,
+        ));
+    }
+    if matches!(instruction, TirInstr::InoutSliceSet(_, _, _)) {
+        return Some((
+            CapabilitySet::singleton(Capability::Panic)
+                .union(CapabilitySet::singleton(Capability::Alloc)),
+            DirectCapabilitySource::ExclusiveSliceWrite,
+        ));
+    }
     let (capability, source) = match instruction {
         TirInstr::Const(_, TirConst::String(_)) => {
             (Capability::Alloc, DirectCapabilitySource::StringConstant)
@@ -1147,7 +1164,13 @@ fn classify_instruction(
             )
         }
         TirInstr::Div(_, _, _) => (Capability::Panic, DirectCapabilitySource::Division),
-        TirInstr::GetIndex(_, _, _) => (Capability::Panic, DirectCapabilitySource::DynamicIndexGet),
+        TirInstr::GetIndex(_, _, _) | TirInstr::InoutSliceGet(_, _, _) => {
+            (Capability::Panic, DirectCapabilitySource::DynamicIndexGet)
+        }
+        TirInstr::BorrowSliceInout(_, _, _, _) => {
+            (Capability::Panic, DirectCapabilitySource::Slice)
+        }
+        TirInstr::InoutSliceSet(_, _, _) | TirInstr::InoutSliceLen(_, _) => return None,
         TirInstr::Slice(_, _, _, _) => (Capability::Panic, DirectCapabilitySource::Slice),
         TirInstr::Bytes(_, _) => (Capability::Alloc, DirectCapabilitySource::Bytes),
         TirInstr::ArrayPush(_, _, _) => (Capability::Alloc, DirectCapabilitySource::ArrayPush),
@@ -1175,6 +1198,7 @@ fn classify_instruction(
 
 fn record_instruction_type(
     instruction: &TirInstr,
+    function: &TirFunction,
     functions: &HashMap<TirFunctionId, &TirFunction>,
     value_types: &mut HashMap<TirValueId, TirType>,
     slot_types: &mut HashMap<TirSlotId, TirType>,
@@ -1231,11 +1255,17 @@ fn record_instruction_type(
         | TirInstr::And(result, _, _)
         | TirInstr::Or(result, _, _)
         | TirInstr::Not(result, _) => Some((*result, TirType::Bool)),
-        TirInstr::Len(result, _) | TirInstr::Size(result, _) => Some((*result, TirType::Int64)),
+        TirInstr::Len(result, _)
+        | TirInstr::Size(result, _)
+        | TirInstr::InoutSliceLen(result, _) => Some((*result, TirType::Int64)),
         TirInstr::Bytes(result, _) => Some((*result, TirType::Slice(Box::new(TirType::UInt8)))),
         TirInstr::ArrayPush(result, array, _) => {
             value_types.get(array).cloned().map(|ty| (*result, ty))
         }
+        TirInstr::InoutSliceGet(result, parameter, _) => match function.params.get(*parameter) {
+            Some((_, TirType::Slice(inner))) => Some((*result, (**inner).clone())),
+            _ => None,
+        },
         TirInstr::MakeClosureRef(_, _, _)
         | TirInstr::MakeClosureInout(_, _, _)
         | TirInstr::MakeStruct(_, _, _)
@@ -1244,7 +1274,9 @@ fn record_instruction_type(
         | TirInstr::Unwrap(_, _, _, _)
         | TirInstr::Store(_, _)
         | TirInstr::GetIndex(_, _, _)
-        | TirInstr::Slice(_, _, _, _) => None,
+        | TirInstr::Slice(_, _, _, _)
+        | TirInstr::BorrowSliceInout(_, _, _, _)
+        | TirInstr::InoutSliceSet(_, _, _) => None,
     };
 
     if let Some((value, ty)) = result {

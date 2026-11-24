@@ -656,7 +656,8 @@ impl<'a> Interpreter<'a> {
                             .ok_or(VmError::LocalNotInitialized(id.0))?
                             .clone()
                     };
-                    self.push(val)?;
+                    let value = self.resolve_borrowed_value(val)?;
+                    self.push(value)?;
                 }
                 BytecodeInstr::StoreLocal(id) => {
                     let val = self.pop_raw()?;
@@ -669,9 +670,9 @@ impl<'a> Interpreter<'a> {
                             .clone();
                         (frame.token, existing)
                     };
-                    if matches!(&val, VmValue::BorrowedLocal(handle) if handle.range.is_some()) {
+                    if matches!(&val, VmValue::BorrowedLocal(_)) {
                         return Err(VmError::Message(
-                            "exclusive slice handle cannot be stored as a value".into(),
+                            "raw borrow handle cannot be stored as a value".into(),
                         ));
                     }
                     if let Some(VmValue::BorrowedLocal(handle)) = existing {
@@ -685,9 +686,12 @@ impl<'a> Interpreter<'a> {
                                 "cannot mutate through immutable ref capture".into(),
                             ));
                         }
-                        if matches!(val, VmValue::BorrowedLocal(_)) {
+                        if !self
+                            .exclusive_sources
+                            .contains(&(handle.owner_frame, handle.local_id.0))
+                        {
                             return Err(VmError::Message(
-                                "cannot store borrowed handles into exclusive owner".into(),
+                                "exclusive borrowed owner loan is no longer active".into(),
                             ));
                         }
                         let owner = self
@@ -1138,6 +1142,40 @@ impl<'a> Interpreter<'a> {
                     }
                     if local_count < supplied {
                         return Err(VmError::LocalOutOfBounds(local_count as u32));
+                    }
+                    let target = &self.module.functions[closure.function_id.0 as usize];
+                    let count = closure.captures.len();
+                    let signature = self
+                        .module
+                        .signatures
+                        .get(signature_id.0 as usize)
+                        .ok_or_else(|| VmError::Message("invalid closure signature".into()))?;
+                    if target.params[count..] != signature.params[..]
+                        || target.ret != signature.ret
+                        || target.inout_params[count..].iter().any(|access| *access)
+                        || closure
+                            .captures
+                            .iter()
+                            .enumerate()
+                            .any(|(index, capture)| match capture {
+                                VmValue::BorrowedLocal(handle) => {
+                                    let key = (handle.owner_frame, handle.local_id.0);
+                                    handle.range.is_some()
+                                        || handle.mutable != target.inout_params[index]
+                                        || !self.borrowed_sources.contains(&key)
+                                        || (handle.mutable
+                                            && !self.exclusive_sources.contains(&key))
+                                        || !self
+                                            .call_stack
+                                            .iter()
+                                            .any(|frame| frame.token == handle.owner_frame)
+                                }
+                                _ => target.inout_params[index],
+                            })
+                    {
+                        return Err(VmError::Message(
+                            "closure access/signature contract mismatch".into(),
+                        ));
                     }
                     let mut locals = vec![None; local_count];
                     // Captured parameters are hidden, ordered before the
@@ -1863,34 +1901,41 @@ impl<'a> Interpreter<'a> {
         })
     }
 
-    fn resolve_borrowed_value(&self, mut value: VmValue) -> Result<VmValue, VmError> {
-        let mut depth = 0;
-        while let VmValue::BorrowedLocal(handle) = value {
-            if handle.range.is_some() {
-                return Err(VmError::Message(
-                    "exclusive slice descriptor cannot be materialized".into(),
-                ));
-            }
-            if depth >= self.call_stack.len() {
-                return Err(VmError::Message("cyclic borrowed local handle".into()));
-            }
-            let frame = self
-                .call_stack
-                .iter()
-                .find(|frame| frame.token == handle.owner_frame)
-                .ok_or_else(|| {
-                    VmError::Message("borrowed owner frame is no longer alive".into())
-                })?;
-            value = frame
-                .locals
-                .get(handle.local_id.0 as usize)
-                .ok_or(VmError::LocalOutOfBounds(handle.local_id.0))?
-                .as_ref()
-                .ok_or(VmError::LocalNotInitialized(handle.local_id.0))?
-                .clone();
-            depth += 1;
+    /// Read a borrowed place as a value, never as another transferable handle.
+    fn resolve_borrowed_value(&self, value: VmValue) -> Result<VmValue, VmError> {
+        let VmValue::BorrowedLocal(handle) = value else {
+            return Ok(value);
+        };
+        if handle.range.is_some() {
+            return Err(VmError::Message(
+                "exclusive slice descriptor cannot be materialized".into(),
+            ));
         }
-        Ok(value)
+        let key = (handle.owner_frame, handle.local_id.0);
+        if !self.borrowed_sources.contains(&key)
+            || (handle.mutable && !self.exclusive_sources.contains(&key))
+        {
+            return Err(VmError::Message(
+                "borrowed owner loan is no longer active".into(),
+            ));
+        }
+        let frame = self
+            .call_stack
+            .iter()
+            .find(|frame| frame.token == handle.owner_frame)
+            .ok_or_else(|| VmError::Message("borrowed owner frame is no longer alive".into()))?;
+        let value = frame
+            .locals
+            .get(handle.local_id.0 as usize)
+            .ok_or(VmError::LocalOutOfBounds(handle.local_id.0))?
+            .as_ref()
+            .ok_or(VmError::LocalNotInitialized(handle.local_id.0))?;
+        if matches!(value, VmValue::BorrowedLocal(_)) {
+            return Err(VmError::Message(
+                "borrowed handle must name an original owner".into(),
+            ));
+        }
+        Ok(value.clone())
     }
 
     #[inline(always)]
@@ -1906,7 +1951,12 @@ impl<'a> Interpreter<'a> {
     #[inline(always)]
     fn pop(&mut self) -> Result<VmValue, VmError> {
         let value = self.pop_raw()?;
-        self.resolve_borrowed_value(value)
+        if matches!(&value, VmValue::BorrowedLocal(_)) {
+            return Err(VmError::Message(
+                "raw borrow handle used as an ordinary operand".into(),
+            ));
+        }
+        Ok(value)
     }
 
     #[inline(always)]

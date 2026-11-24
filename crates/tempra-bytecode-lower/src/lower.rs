@@ -179,6 +179,17 @@ impl<'a> FunctionLowerer<'a> {
             }
         }
 
+        // Verified BindInout aliases the slot to the parameter's original local.
+        // LoadLocal and StoreLocal can now have ordinary value semantics without
+        // an implicit raw-handle copy in the function prologue.
+        for block in &self.tir_func.blocks {
+            for instr in &block.instrs {
+                if let TirInstr::BindInout(slot, parameter) = instr {
+                    self.slot_to_local.insert(*slot, LocalId(*parameter as u32));
+                }
+            }
+        }
+
         // Record exclusive source identities; never materialize their handles
         // into SSA temporary locals. Emission happens at the direct call only.
         for block in &self.tir_func.blocks {
@@ -462,7 +473,7 @@ impl<'a> FunctionLowerer<'a> {
                     self.store_res(*res)?;
                 }
             }
-            TirInstr::Slot(_, _) => {}
+            TirInstr::Slot(_, _) | TirInstr::BindInout(_, _) => {}
             TirInstr::MakeClosureRef(res, func_id, captured_slots) => {
                 let target = self.function_ids.get(func_id).copied().ok_or(
                     BytecodeLowerError::MissingFunctionMapping {

@@ -502,6 +502,16 @@ impl FunctionBuilder {
         Ok(slot)
     }
 
+    /// Associate a slot with its exclusive incoming parameter, without a value copy.
+    pub fn build_bind_inout(
+        &mut self,
+        slot: TirSlotId,
+        parameter: usize,
+    ) -> Result<(), TirBuildError> {
+        self.push_instr(TirInstr::BindInout(slot, parameter))?;
+        Ok(())
+    }
+
     pub fn build_store(&mut self, slot: TirSlotId, val: TirValueId) -> Result<(), TirBuildError> {
         self.push_instr(TirInstr::Store(slot, val))?;
         Ok(())

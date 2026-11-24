@@ -998,7 +998,7 @@ fn vm_closure_as_function_parameter() {
 }
 
 // VM Parity 2B.1e.2: MakeClosureRef retains a frame-local handle, not a
-// captured copy. A lifted hidden capture may move through a local before use.
+// captured copy. Loading the hidden capture materializes its current value.
 #[test]
 fn vm_ref_borrow_slot_identity_and_late_dereference() {
     use tempra_bytecode::function::BytecodeSignature;
@@ -1150,6 +1150,7 @@ fn vm_inout_capture_updates_owner_across_calls_and_cache_roundtrip() {
         vec![BytecodeType::Int64, BytecodeType::Int64],
         BytecodeType::Unit,
     );
+    child.inout_params = vec![true, false];
     child.locals = child.params.clone();
     child.max_stack = 2;
     child.code = vec![
@@ -1416,4 +1417,59 @@ fn vm_exclusive_slice_rejects_simultaneous_owner_borrows() {
     main.code.splice(10..10, second_borrow);
     main.code.insert(13, BytecodeInstr::Call(FunctionId(0), 1));
     assert!(tempra_bytecode::verify::verify_module(&module).is_err());
+}
+
+#[test]
+fn a1_vm_inout_read_is_a_value_snapshot() {
+    let mut module = vm_inout_scalar_module();
+    let twenty = module.add_constant(BytecodeConstant::Int64(20));
+    let child = &mut module.functions[0];
+    child.ret = BytecodeType::Int64;
+    child.locals.push(BytecodeType::Int64);
+    child.code = vec![
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::StoreLocal(LocalId(1)),
+        BytecodeInstr::ConstI64(twenty),
+        BytecodeInstr::StoreLocal(LocalId(0)),
+        BytecodeInstr::LoadLocal(LocalId(1)),
+        BytecodeInstr::Return,
+    ];
+    let main = &mut module.functions[1];
+    main.code.drain(4..6);
+    main.code.insert(5, BytecodeInstr::AddI64);
+    tempra_bytecode::verify::verify_module(&module).unwrap();
+    assert_eq!(
+        run_function(&module, "main", vec![]).unwrap(),
+        VmValue::Int64(30)
+    );
+}
+
+#[test]
+fn a1_verifier_rejects_plain_calls_even_without_any_borrow_opcode() {
+    let mut module = vm_inout_scalar_module();
+    let main = module.functions.last_mut().unwrap();
+    main.code[2] = BytecodeInstr::LoadLocal(LocalId(0));
+    main.code[4] = BytecodeInstr::LoadLocal(LocalId(0));
+    let error = tempra_bytecode::verify::verify_module(&module).unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("violates the verified inout/non-escape contract"));
+    let bytes = tempra_bytecode::serialize::encode_module(&module).unwrap();
+    assert!(tempra_bytecode::serialize::decode_and_verify_artifact(&bytes).is_err());
+}
+
+#[test]
+fn a1_verifier_rejects_pending_exclusive_fused_local_reads() {
+    let module = vm_inout_scalar_module();
+    for read in [
+        BytecodeInstr::AddI64LL(LocalId(0), LocalId(0)),
+        BytecodeInstr::AddI64LC(LocalId(0), tempra_bytecode::constant::ConstId(0)),
+    ] {
+        let mut invalid = module.clone();
+        let main = invalid.functions.last_mut().unwrap();
+        main.code.insert(3, read);
+        main.code.insert(4, BytecodeInstr::Pop);
+        let error = tempra_bytecode::verify::verify_module(&invalid).unwrap_err();
+        assert!(error.to_string().contains("exclusive argument is pending"));
+    }
 }

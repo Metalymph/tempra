@@ -68,6 +68,9 @@ pub enum TirInstr {
     Unwrap(TirValueId, TirValueId, String, u16),
 
     Slot(TirSlotId, TirType),
+    /// Bind a declared slot to an incoming non-slice inout parameter's storage.
+    /// This is a place binding, not a copy of the parameter's value.
+    BindInout(TirSlotId, usize),
     Load(TirValueId, TirSlotId),
     /// Materialize an exclusive storage operand only at a verified direct call.
     /// It must not be used as an ordinary SSA value or escape the call.

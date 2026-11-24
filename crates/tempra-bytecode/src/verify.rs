@@ -151,6 +151,15 @@ pub fn verify_function_direct(
         ));
     }
     verify_exclusive_slice_layout(module, func)?;
+    if func.inout_params.iter().enumerate().any(|(index, access)| {
+        *access
+            && (func.locals.get(index) != func.params.get(index)
+                || matches!(func.params[index], BytecodeType::Callable(_)))
+    }) {
+        return Err(BytecodeVerifyError::Unsupported(
+            "inout parameter requires a matching non-callable local slot".into(),
+        ));
+    }
     if func.code.is_empty() {
         return Ok(());
     }
@@ -454,6 +463,8 @@ pub fn verify_function_direct(
                             "borrowed closure requires a nonempty valid capture prefix".into(),
                         ));
                     }
+                    let exclusive = matches!(instr, BytecodeInstr::MakeClosureInout(_, _));
+                    verify_closure_access(target, hidden_count, exclusive, !exclusive)?;
                     let public_signature = crate::function::BytecodeSignature {
                         params: target.params[hidden_count..].to_vec(),
                         ret: target.ret,
@@ -489,6 +500,7 @@ pub fn verify_function_direct(
                             target.params.len()
                         )));
                     }
+                    verify_closure_access(target, hidden_count, false, false)?;
                     let public_signature = BytecodeSignature {
                         params: target.params[hidden_count..].to_vec(),
                         ret: target.ret,
@@ -910,6 +922,17 @@ fn proves_nonescaping_callback_parameter(
                     }
                     BytecodeInstr::StoreLocal(id) => {
                         let value = stack.pop().ok_or(BytecodeVerifyError::StackUnderflow)?;
+                        if value
+                            && func
+                                .inout_params
+                                .get(id.0 as usize)
+                                .copied()
+                                .unwrap_or(false)
+                        {
+                            return Err(BytecodeVerifyError::Unsupported(
+                                "callback escapes through an inout parameter".into(),
+                            ));
+                        }
                         *locals
                             .get_mut(id.0 as usize)
                             .ok_or(BytecodeVerifyError::InvalidLocalId(id))? = value;
@@ -1147,6 +1170,40 @@ fn verify_exclusive_slice_layout(
     Ok(())
 }
 
+/// The current callable ABI contains only public by-value arguments. Hidden
+/// exclusive captures must agree with the target's direct parameter metadata.
+fn verify_closure_access(
+    target: &BytecodeFunction,
+    hidden: usize,
+    exclusive: bool,
+    read_capture: bool,
+) -> Result<(), BytecodeVerifyError> {
+    if target.inout_params.len() != target.params.len()
+        || hidden > target.params.len()
+        || target
+            .inout_params
+            .iter()
+            .enumerate()
+            .any(|(index, access)| *access != (exclusive && index < hidden))
+        || target.params.contains(&BytecodeType::ExclusiveSlice)
+    {
+        return Err(BytecodeVerifyError::Unsupported(
+            "closure capture access must match target metadata; public inout is unsupported".into(),
+        ));
+    }
+    if read_capture
+        && target.code.iter().any(|instr| {
+            matches!(instr, BytecodeInstr::StoreLocal(id) | BytecodeInstr::BorrowLocalMut(id)
+            | BytecodeInstr::BorrowSliceMut(id) if (id.0 as usize) < hidden)
+        })
+    {
+        return Err(BytecodeVerifyError::Unsupported(
+            "ref closure target cannot mutate or exclusively reborrow a hidden capture".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn pending_exclusive(stack: &[BorrowProvenance], local: LocalId) -> bool {
     stack.iter().any(|kind| matches!(kind, BorrowProvenance::ExclusiveHandle(id) | BorrowProvenance::ExclusiveSliceHandle(id) if *id == local))
 }
@@ -1155,19 +1212,24 @@ fn verify_borrowed_frame_contract(
     module: &BytecodeModule,
     func: &BytecodeFunction,
 ) -> Result<(), BytecodeVerifyError> {
-    let has_borrows = func.code.iter().any(|instruction| {
-        matches!(
-            instruction,
+    let has_borrows = func.inout_params.iter().any(|access| *access)
+        || func.code.iter().any(|instruction| match instruction {
             BytecodeInstr::BorrowLocal(_)
-                | BytecodeInstr::MakeClosureRef(_, _)
-                | BytecodeInstr::BorrowLocalMut(_)
-                | BytecodeInstr::MakeClosureInout(_, _)
-                | BytecodeInstr::BorrowSliceMut(_)
-                | BytecodeInstr::InoutSliceGet(_)
-                | BytecodeInstr::InoutSliceSet(_)
-                | BytecodeInstr::InoutSliceLen(_)
-        ) || matches!(instruction, BytecodeInstr::Call(target, _) if module.functions.get(target.0 as usize).is_some_and(|f| f.params.contains(&BytecodeType::ExclusiveSlice)))
-    });
+            | BytecodeInstr::MakeClosureRef(_, _)
+            | BytecodeInstr::BorrowLocalMut(_)
+            | BytecodeInstr::MakeClosureInout(_, _)
+            | BytecodeInstr::BorrowSliceMut(_)
+            | BytecodeInstr::InoutSliceGet(_)
+            | BytecodeInstr::InoutSliceSet(_)
+            | BytecodeInstr::InoutSliceLen(_) => true,
+            BytecodeInstr::Call(target, _) => {
+                module.functions.get(target.0 as usize).is_some_and(|f| {
+                    f.inout_params.iter().any(|access| *access)
+                        || f.params.contains(&BytecodeType::ExclusiveSlice)
+                })
+            }
+            _ => false,
+        });
     if !has_borrows {
         return Ok(());
     }
@@ -1387,6 +1449,11 @@ fn verify_borrowed_frame_contract(
                 handles.reverse();
                 if exclusive {
                     for source in &handles {
+                        if (source.0 as usize) < func.params.len() {
+                            return Err(BytecodeVerifyError::Unsupported(
+                                "exclusive reborrow into a closure is not yet supported".into(),
+                            ));
+                        }
                         let sites = exclusive_borrow_sites.get(source).ok_or_else(|| {
                             BytecodeVerifyError::Unsupported(
                                 "exclusive closure capture has no borrow site".into(),
@@ -1431,6 +1498,22 @@ fn verify_borrowed_frame_contract(
                 }
                 state.stack.push(state.locals[index]);
             }
+            BytecodeInstr::AddI64LL(a, b) => {
+                if pending_exclusive(&state.stack, a) || pending_exclusive(&state.stack, b) {
+                    return Err(BytecodeVerifyError::Unsupported(
+                        "cannot read a local while an exclusive argument is pending".into(),
+                    ));
+                }
+                state.stack.push(BorrowProvenance::Plain);
+            }
+            BytecodeInstr::AddI64LC(a, _) => {
+                if pending_exclusive(&state.stack, a) {
+                    return Err(BytecodeVerifyError::Unsupported(
+                        "cannot read a local while an exclusive argument is pending".into(),
+                    ));
+                }
+                state.stack.push(BorrowProvenance::Plain);
+            }
             BytecodeInstr::StoreLocal(local) => {
                 if pending_exclusive(&state.stack, local) {
                     return Err(BytecodeVerifyError::Unsupported(
@@ -1452,7 +1535,14 @@ fn verify_borrowed_frame_contract(
                         | BorrowProvenance::ExclusiveSliceHandle(_)
                 ) {
                     return Err(BytecodeVerifyError::Unsupported(
-                        "borrow handle cannot be stored outside MakeClosureRef".into(),
+                        "borrow handle cannot be stored as an ordinary value".into(),
+                    ));
+                }
+                if func.inout_params.get(index).copied().unwrap_or(false)
+                    && value != BorrowProvenance::Plain
+                {
+                    return Err(BytecodeVerifyError::Unsupported(
+                        "borrowed callable cannot escape through an inout parameter".into(),
                     ));
                 }
                 state.initialized[index] = true;

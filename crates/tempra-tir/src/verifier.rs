@@ -142,6 +142,11 @@ fn verify_function_inner(
 ) -> Result<HashMap<TirValueId, Option<TirType>>, Vec<VerifierError>> {
     let mut errors = Vec::new();
 
+    if !func.inout_params.is_empty() && func.inout_params.len() != func.params.len() {
+        return Err(vec![VerifierError::GenericError(
+            "inout parameter metadata must match function arity".into(),
+        )]);
+    }
     if func.blocks.is_empty() {
         // Declaration only, nothing more to verify here
         return Ok(HashMap::new());
@@ -287,6 +292,9 @@ fn verify_function_inner(
                 TirInstr::Slot(slot, ty) => {
                     slot_types.insert(*slot, ty.clone());
                 }
+                TirInstr::BindInout(_, _) => {
+                    // The complete entry/slot/parameter contract is checked below.
+                }
                 TirInstr::Load(res, slot) | TirInstr::BorrowInout(res, slot) => {
                     if let Some(ty) = slot_types.get(slot) {
                         value_types.insert(*res, Some(ty.clone()));
@@ -410,6 +418,11 @@ fn verify_function_inner(
                 }
                 TirInstr::MakeClosure(res, target_func, captures) => {
                     if let Some(f) = functions.get(target_func) {
+                        if f.inout_params.iter().any(|access| *access) {
+                            errors.push(VerifierError::GenericError(
+                                "ordinary closure target cannot have inout parameters".into(),
+                            ));
+                        }
                         if captures.len() > f.params.len() {
                             errors.push(VerifierError::GenericError(format!(
                                 "closure capture count exceeds target parameter count for {:?}",
@@ -469,6 +482,16 @@ fn verify_function_inner(
                             )));
                             value_types.insert(*res, None);
                         } else {
+                            let exclusive = matches!(instr, TirInstr::MakeClosureInout(_, _, _));
+                            if f.params.iter().enumerate().any(|(index, (_, ty))| {
+                                let expected = exclusive && index < captures.len();
+                                let actual = f.inout_params.get(index).copied().unwrap_or(false);
+                                expected != actual || (actual && matches!(ty, TirType::Slice(_)))
+                            }) {
+                                errors.push(VerifierError::GenericError(
+                                    "closure capture access must match hidden parameter modes; public inout is unsupported".into(),
+                                ));
+                            }
                             let mut seen = std::collections::HashSet::new();
                             for (slot, (_, expected)) in captures.iter().zip(f.params.iter()) {
                                 if !seen.insert(*slot) {
@@ -789,6 +812,7 @@ fn verify_function_inner(
 
     errors.extend(verify_borrowed_closure_frame_lifetimes(func, functions));
     errors.extend(verify_exclusive_call_borrows(func, functions));
+    errors.extend(verify_inout_bindings(func));
 
     if errors.is_empty() {
         Ok(value_types)
@@ -830,6 +854,51 @@ fn borrowed_entry_can_repeat(func: &TirFunction, entry: TirBlockId) -> bool {
     false
 }
 
+/// An incoming exclusive place is bound once, immediately after its slot
+/// declaration in the entry block. No ordinary Store can create that alias.
+fn verify_inout_bindings(func: &TirFunction) -> Vec<VerifierError> {
+    let Some(entry) = func.blocks.first() else {
+        return Vec::new();
+    };
+    let mut bound_slots = HashSet::new();
+    let mut bound_parameters = HashSet::new();
+    let mut errors = Vec::new();
+    for block in &func.blocks {
+        for (index, instr) in block.instrs.iter().enumerate() {
+            let TirInstr::BindInout(slot, parameter) = instr else {
+                continue;
+            };
+            let parameter_type = func.params.get(*parameter).map(|(_, ty)| ty);
+            let adjacent = index.checked_sub(1).and_then(|i| block.instrs.get(i));
+            let matches_slot = matches!(adjacent, Some(TirInstr::Slot(id, ty))
+                if id == slot && Some(ty) == parameter_type);
+            let declarations = func
+                .blocks
+                .iter()
+                .flat_map(|b| &b.instrs)
+                .filter(|i| matches!(i, TirInstr::Slot(id, _) if id == slot))
+                .count();
+            if block.id != entry.id
+                || borrowed_entry_can_repeat(func, entry.id)
+                || !matches_slot
+                || declarations != 1
+                || !func.inout_params.get(*parameter).copied().unwrap_or(false)
+                || matches!(
+                    parameter_type,
+                    None | Some(TirType::Slice(_) | TirType::Function(_, _))
+                )
+                || !bound_slots.insert(*slot)
+                || !bound_parameters.insert(*parameter)
+            {
+                errors.push(VerifierError::GenericError(
+                    "invalid inout place binding: requires one matching entry slot per exclusive parameter".into(),
+                ));
+            }
+        }
+    }
+    errors
+}
+
 /// Exclusive SSA operands have only one legal consumer: a direct call's
 /// corresponding `inout` parameter. No assignment, return or alias is legal.
 fn verify_exclusive_call_borrows(
@@ -848,6 +917,13 @@ fn verify_exclusive_call_borrows(
         .collect();
     let exclusive: HashSet<TirValueId> = borrow_sources.keys().copied().collect();
     let mut uses: HashMap<TirValueId, usize> = exclusive.iter().map(|v| (*v, 0)).collect();
+    let exclusive_parameters: HashSet<TirValueId> = func
+        .params
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| func.inout_params.get(*i).copied().unwrap_or(false))
+        .map(|(_, (value, _))| *value)
+        .collect();
     let slice_parameters: HashSet<TirValueId> = func
         .params
         .iter()
@@ -890,6 +966,7 @@ fn verify_exclusive_call_borrows(
             match instr {
                 TirInstr::Const(_, _)
                 | TirInstr::Slot(_, _)
+                | TirInstr::BindInout(_, _)
                 | TirInstr::Load(_, _)
                 | TirInstr::BorrowInout(_, _)
                 | TirInstr::MakeClosureRef(_, _, _)
@@ -958,14 +1035,14 @@ fn verify_exclusive_call_borrows(
             }
             if operands
                 .iter()
-                .any(|value| exclusive.contains(value) || slice_parameters.contains(value))
+                .any(|value| exclusive.contains(value) || exclusive_parameters.contains(value))
             {
                 invalid = true;
             }
         }
         match &block.terminator {
             Some(TirTerminator::Ret(Some(v))) | Some(TirTerminator::CondBr(v, _, _))
-                if exclusive.contains(v) || slice_parameters.contains(v) =>
+                if exclusive.contains(v) || exclusive_parameters.contains(v) =>
             {
                 invalid = true
             }
@@ -1070,6 +1147,19 @@ fn verify_borrowed_closure_frame_lifetimes(
         }
     }
 
+    // A slot bound to incoming inout storage is not a local callback sink.
+    // Storing a borrowed closure into it would escape into the caller.
+    if func
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instrs)
+        .any(|instr| matches!(instr, TirInstr::BindInout(slot, _) if borrowed_slots.contains(slot)))
+    {
+        errors.push(VerifierError::GenericError(
+            "borrowed closure cannot escape through an inout place".into(),
+        ));
+    }
+
     // Scan in stable function/block/instruction order. A direct callback
     // argument is permitted only after a separate interprocedural proof.
     for block in &func.blocks {
@@ -1153,6 +1243,15 @@ fn proves_nonescaping_tir_callback_parameter(
             }
         }
 
+        if function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instrs)
+            .any(|instr| matches!(instr, TirInstr::BindInout(slot, _) if slots.contains(slot)))
+        {
+            return false;
+        }
+
         for block in &function.blocks {
             for instruction in &block.instrs {
                 match instruction {
@@ -1232,6 +1331,7 @@ fn instruction_escapes_borrowed_closure(
     match instr {
         TirInstr::Const(_, _)
         | TirInstr::Slot(_, _)
+        | TirInstr::BindInout(_, _)
         | TirInstr::Load(_, _)
         | TirInstr::BorrowInout(_, _)
         | TirInstr::Store(_, _)

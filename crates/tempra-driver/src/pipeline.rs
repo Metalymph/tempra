@@ -1496,7 +1496,7 @@ mod enforcement_cache_tests {
         let header = crate::cache::read_cache_artifact(&path).unwrap().header;
         assert_eq!(
             header.compiler_fingerprint,
-            format!("tempra-{}-semantics-15", env!("CARGO_PKG_VERSION"))
+            format!("tempra-{}-semantics-16", env!("CARGO_PKG_VERSION"))
         );
         assert_eq!(header.source_hash, pure_hash);
         let bytes = fs::read(&path).unwrap();
@@ -1697,6 +1697,56 @@ mod enforcement_cache_tests {
             );
             assert_eq!(fs::read(&path).unwrap(), canonical_bytes);
         }
+    }
+
+    #[test]
+    fn a1_matching_current_cache_cannot_bypass_scalar_inout_contract() {
+        use tempra_bytecode::constant::BytecodeConstant;
+        use tempra_bytecode::function::{BytecodeFunction, BytecodeType};
+        use tempra_bytecode::opcode::BytecodeInstr;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("invalid-inout.tbc");
+        let source = "fn main() -> Int64 { return 42 }";
+        let hash = crate::cache::compute_source_hash(source);
+        compile_to_bytecode_with_analysis(source, &path).unwrap();
+        let canonical = fs::read(&path).unwrap();
+        let mut invalid = crate::cache::read_cache_artifact(&path).unwrap();
+        let mut target = BytecodeFunction::new(
+            "exclusive_target".into(),
+            vec![BytecodeType::Int64],
+            BytecodeType::Unit,
+        );
+        target.inout_params[0] = true;
+        target.locals = target.params.clone();
+        target.code = vec![BytecodeInstr::Return];
+        let target_id = invalid.module.add_function(target);
+        let value = invalid.module.add_constant(BytecodeConstant::Int64(42));
+        invalid.module.functions[0].code = vec![
+            BytecodeInstr::ConstI64(value),
+            BytecodeInstr::Call(target_id, 1),
+            BytecodeInstr::ConstI64(value),
+            BytecodeInstr::Return,
+        ];
+        invalid.module.functions[0].max_stack = 1;
+        crate::cache::write_cache_artifact(&path, &invalid).unwrap();
+        let decoded =
+            tempra_bytecode::serialize::decode_artifact(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(
+            decoded.header.compiler_fingerprint,
+            crate::cache::compiler_fingerprint()
+        );
+        let error = tempra_bytecode::verify::verify_module(&decoded.module).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("violates the verified inout/non-escape contract"));
+        assert!(crate::cache::read_compatible_module(&path, &hash).is_none());
+        let rebuilt = load_or_compile_cached_module(source, &path).unwrap();
+        assert_eq!(
+            tempra_vm::run_function(&rebuilt, "main", vec![]).unwrap(),
+            VmValue::Int64(42)
+        );
+        assert_eq!(fs::read(&path).unwrap(), canonical);
     }
 
     const VALID: &str = "@deny(io) fn main() -> Int64 { return 10 / 2 }";
@@ -2001,7 +2051,7 @@ fn main() -> Int64 { return select[Both](Both {}) }
         let current_artifact = crate::cache::read_cache_artifact(&path).unwrap();
         assert_eq!(
             current_artifact.header.compiler_fingerprint,
-            format!("tempra-{}-semantics-15", env!("CARGO_PKG_VERSION"))
+            format!("tempra-{}-semantics-16", env!("CARGO_PKG_VERSION"))
         );
         let current_bytes = fs::read(&path).unwrap();
         assert_ne!(current_bytes, stale_bytes);
@@ -2073,7 +2123,7 @@ fn main() -> Int64 { return select[Both](Both {}) }
         let current_artifact = crate::cache::read_cache_artifact(&current_path).unwrap();
         assert_eq!(
             current_artifact.header.compiler_fingerprint,
-            format!("tempra-{}-semantics-15", env!("CARGO_PKG_VERSION"))
+            format!("tempra-{}-semantics-16", env!("CARGO_PKG_VERSION"))
         );
 
         std::thread::sleep(std::time::Duration::from_millis(100));
@@ -2152,7 +2202,7 @@ fn main() -> Int64 { return select[Both](Both {}) }
                 .unwrap()
                 .header
                 .compiler_fingerprint,
-            format!("tempra-{}-semantics-15", env!("CARGO_PKG_VERSION"))
+            format!("tempra-{}-semantics-16", env!("CARGO_PKG_VERSION"))
         );
 
         std::thread::sleep(std::time::Duration::from_millis(100));
@@ -2206,7 +2256,7 @@ fn main() -> Int64 { return select[Both](Both {}) }
         let current = crate::cache::read_cache_artifact(&path).unwrap();
         assert_eq!(
             current.header.compiler_fingerprint,
-            format!("tempra-{}-semantics-15", env!("CARGO_PKG_VERSION"))
+            format!("tempra-{}-semantics-16", env!("CARGO_PKG_VERSION"))
         );
         assert_eq!(current.header.source_hash, source_hash);
     }
@@ -2219,7 +2269,7 @@ fn main() -> Int64 { return select[Both](Both {}) }
         let artifact = crate::cache::read_cache_artifact(&path).unwrap();
         assert_eq!(
             artifact.header.compiler_fingerprint,
-            format!("tempra-{}-semantics-15", env!("CARGO_PKG_VERSION"))
+            format!("tempra-{}-semantics-16", env!("CARGO_PKG_VERSION"))
         );
         let before = fs::read(&path).unwrap();
         let modified = fs::metadata(&path).unwrap().modified().unwrap();
@@ -2276,7 +2326,7 @@ fn main() -> Int64 { return select[Both](Both {}) }
         let canonical_artifact = crate::cache::read_cache_artifact(&cold_path).unwrap();
         assert_eq!(
             canonical_artifact.header.compiler_fingerprint,
-            format!("tempra-{}-semantics-15", env!("CARGO_PKG_VERSION"))
+            format!("tempra-{}-semantics-16", env!("CARGO_PKG_VERSION"))
         );
 
         let modified = fs::metadata(&cold_path).unwrap().modified().unwrap();

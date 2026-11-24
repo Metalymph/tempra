@@ -1503,3 +1503,62 @@ fn exclusive_inout_tir_verifier_accepts_only_matching_direct_call() {
     module.module.functions[0].inout_params = vec![false];
     assert!(verify_module(&module.module).is_err());
 }
+
+#[test]
+fn a1_inout_binding_is_explicit_and_unique() {
+    let mut module = ModuleBuilder::new();
+    let mut func = module.new_function("update", TirType::Unit);
+    let block = func.new_block();
+    func.set_current_block(block);
+    let incoming = func.add_inout_param(TirType::Int64);
+    let slot = func.build_slot(TirType::Int64, Some("owner")).unwrap();
+    func.build_bind_inout(slot, 0).unwrap();
+    let value = func.build_const(TirConst::Int64(42)).unwrap();
+    func.build_store(slot, value).unwrap();
+    func.build_ret(None).unwrap();
+    module.add_function(func.build());
+    assert!(verify_module(&module.module).is_ok());
+
+    let mut invalid = module.module.clone();
+    invalid.functions[0].inout_params[0] = false;
+    assert!(verify_module(&invalid).is_err());
+
+    let mut invalid = module.module.clone();
+    invalid.functions[0].blocks[0].instrs[1] = TirInstr::Store(slot, incoming);
+    assert!(verify_module(&invalid).is_err());
+
+    let mut invalid = module.module.clone();
+    let other = TirSlotId(slot.0 + 1);
+    invalid.functions[0].blocks[0].instrs.extend([
+        TirInstr::Slot(other, TirType::Int64),
+        TirInstr::BindInout(other, 0),
+    ]);
+    assert!(verify_module(&invalid).is_err());
+
+    let mut invalid = module.module.clone();
+    invalid.functions[0].blocks[0].instrs[1] = TirInstr::BindInout(slot, 99);
+    assert!(verify_module(&invalid).is_err());
+
+    let mut invalid = module.module.clone();
+    invalid.functions[0].blocks[0].terminator = Some(TirTerminator::Br(block));
+    assert!(verify_module(&invalid).is_err());
+}
+
+#[test]
+fn a1_tir_rejects_inout_public_callable_parameter() {
+    let mut module = ModuleBuilder::new();
+    let mut target = module.new_function("target", TirType::Unit);
+    let block = target.new_block();
+    target.set_current_block(block);
+    target.add_inout_param(TirType::Int64);
+    target.build_ret(None).unwrap();
+    let target_id = target.func.id;
+    module.add_function(target.build());
+    let mut main = module.new_function("main", TirType::Unit);
+    let block = main.new_block();
+    main.set_current_block(block);
+    main.build_make_closure(target_id, vec![]).unwrap();
+    main.build_ret(None).unwrap();
+    module.add_function(main.build());
+    assert!(verify_module(&module.module).is_err());
+}

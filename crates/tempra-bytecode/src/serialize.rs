@@ -62,7 +62,8 @@ impl From<crate::verify::BytecodeVerifyError> for BytecodeSerializeError {
 }
 
 const MAGIC: &[u8; 4] = b"TMBC";
-const FORMAT_VERSION: u32 = 9;
+// v10: LoadLocal materializes values; raw handle copies are no longer legal.
+const FORMAT_VERSION: u32 = 10;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct BytecodeCacheHeader {

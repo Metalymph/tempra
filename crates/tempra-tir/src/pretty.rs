@@ -109,6 +109,9 @@ pub fn format_instr(instr: &TirInstr) -> String {
             format!("%{} = unwrap %{} as {}.{}", res.0, target.0, variant, idx)
         }
         TirInstr::Slot(slot, ty) => format!("slot ${}: {}", slot.0, format_type(ty)),
+        TirInstr::BindInout(slot, parameter) => {
+            format!("bind_inout ${}, arg{}", slot.0, parameter)
+        }
         TirInstr::Load(res, slot) => format!("%{} = load ${}", res.0, slot.0),
         TirInstr::BorrowInout(res, slot) => format!("%{} = borrow_inout ${}", res.0, slot.0),
         TirInstr::BorrowSliceInout(res, source, start, end) => format!(

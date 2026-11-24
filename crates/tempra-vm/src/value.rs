@@ -2,7 +2,7 @@ use std::fmt;
 use std::rc::Rc;
 use tempra_bytecode::function::{FunctionId, SignatureId};
 
-/// A non-owning handle to an immutable local in an active VM frame.
+/// A non-owning read-only or exclusive handle to an owner in an active VM frame.
 /// No pointer to a frame or `Rc` ownership is kept by the handle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VmBorrow {

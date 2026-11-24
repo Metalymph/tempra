@@ -1176,6 +1176,7 @@ fn classify_instruction(
         TirInstr::ArrayPush(_, _, _) => (Capability::Alloc, DirectCapabilitySource::ArrayPush),
         TirInstr::Tag(_, _)
         | TirInstr::Slot(_, _)
+        | TirInstr::BindInout(_, _)
         | TirInstr::Load(_, _)
         | TirInstr::BorrowInout(_, _)
         | TirInstr::Store(_, _)
@@ -1272,6 +1273,7 @@ fn record_instruction_type(
         | TirInstr::Get(_, _, _)
         | TirInstr::Set(_, _, _, _)
         | TirInstr::Unwrap(_, _, _, _)
+        | TirInstr::BindInout(_, _)
         | TirInstr::Store(_, _)
         | TirInstr::GetIndex(_, _, _)
         | TirInstr::Slice(_, _, _, _)

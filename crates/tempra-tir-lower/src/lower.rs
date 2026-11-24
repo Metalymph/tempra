@@ -2529,9 +2529,19 @@ impl<'a> LowerContext<'a> {
 
             // Hidden capture parameters precede user-visible call arguments.
             for (name, _, tir_ty, hir_ty) in &ref_captures {
-                let value = child.builder.add_param(tir_ty.clone());
+                let exclusive = exclusive_capture == Some(true);
+                let value = if exclusive {
+                    child.builder.add_inout_param(tir_ty.clone())
+                } else {
+                    child.builder.add_param(tir_ty.clone())
+                };
                 let slot = child.builder.build_slot(tir_ty.clone(), Some(name))?;
-                child.builder.build_store(slot, value)?;
+                if exclusive {
+                    let parameter = child.builder.func.params.len() - 1;
+                    child.builder.build_bind_inout(slot, parameter)?;
+                } else {
+                    child.builder.build_store(slot, value)?;
+                }
                 child.locals.insert(
                     name.clone(),
                     (slot, tir_ty.clone(), exclusive_capture == Some(true)),
@@ -4294,6 +4304,9 @@ fn lower_function_inner(
         if p.is_inout && matches!(&tir_ty, TirType::Slice(_)) {
             ctx.exclusive_slice_slots
                 .insert(slot, ctx.builder.func.params.len() - 1);
+        } else if p.is_inout {
+            let parameter = ctx.builder.func.params.len() - 1;
+            ctx.builder.build_bind_inout(slot, parameter)?;
         } else {
             ctx.builder.build_store(slot, val_id)?;
         }

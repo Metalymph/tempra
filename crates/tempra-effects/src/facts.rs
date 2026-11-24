@@ -330,7 +330,10 @@ fn defined_value(instruction: &TirInstr) -> Option<(TirValueId, Option<&TirConst
         | TirInstr::Size(value, _)
         | TirInstr::Bytes(value, _)
         | TirInstr::ArrayPush(value, _, _) => Some((*value, None)),
-        TirInstr::Slot(_, _) | TirInstr::Store(_, _) | TirInstr::InoutSliceSet(_, _, _) => None,
+        TirInstr::Slot(_, _)
+        | TirInstr::BindInout(_, _)
+        | TirInstr::Store(_, _)
+        | TirInstr::InoutSliceSet(_, _, _) => None,
     }
 }
 

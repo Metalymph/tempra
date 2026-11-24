@@ -28,6 +28,16 @@ This yields redundant loads and stores but makes scheduling and debugging straig
 
 `TirSlotId` for explicit mutable slots maps to a distinct local range from temporaries. Source immutability and `inout` exclusivity must be preserved through the mapping.
 
+### Exclusive parameter places (A1 implementation)
+
+For the ownership-aware VM, `BindInout(slot, parameter_index)` explicitly binds
+an incoming non-slice exclusive parameter to a storage slot. The binding is
+verified in the entry block and lowers to the corresponding parameter local,
+not to `LoadLocal` followed by `StoreLocal`. Ordinary `Load` and `Store` operate
+on the value at that place; only the explicit borrow instructions transfer an
+exclusive handle. Hidden mutable closure captures use the same binding and
+parameter access metadata. Public `inout` callable arguments remain unsupported.
+
 ### 2.1 Demonstration
 
 ```text

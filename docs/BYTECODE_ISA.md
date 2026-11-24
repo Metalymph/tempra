@@ -83,6 +83,15 @@ In tables, `[a, b] → [c]` shows the top-of-stack input suffix (left to right) 
 - `Pop`/slot overwrite/return/unwind must not leak or double-release owned resources.
 - Existing opcodes alone do not establish these guarantees. An ownership-aware TIR/bytecode representation, metadata, or an equivalent verified protocol must supply them. **No new concrete opcode is mandated here.**
 
+**A1 ownership-aware implementation contract:** `LoadLocal` reads a value at
+the time of the instruction, including when the slot is an incoming scalar
+borrow. It must not put a raw borrow handle on the operand stack. `StoreLocal`
+assigns a value (through an exclusive incoming place when applicable); it cannot
+bind or copy a raw handle. `BorrowLocal`, `BorrowLocalMut` and `BorrowSliceMut`
+are the explicit handle producers. The verifier checks the matching capture or
+direct-call consumer. The serialized format version is incremented when this
+contract changes because old code may rely on implicit handle copying.
+
 ### 3.3 Arithmetic — existing v0 families
 
 | Type | Add | Sub | Mul | Div |

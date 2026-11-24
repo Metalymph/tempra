@@ -1163,3 +1163,75 @@ fn vm_parity_inout_slice_out_of_range_write() {
         "{vm}"
     );
 }
+
+#[test]
+fn vm_parity_a1_inout_parameter_snapshot() {
+    let source = r#"
+        fn update(inout value: Int) -> Int {
+            let before = value
+            value = 20
+            before
+        }
+        fn main() -> Int {
+            var number = 10
+            let before = update(inout number)
+            number + before
+        }
+    "#;
+    assert_differential(source);
+    assert_eq!(run_source_vm(source, &[]).unwrap(), VmValue::Int64(30));
+}
+
+#[test]
+fn vm_parity_a1_inout_parameter_copy_mutation() {
+    let source = r#"
+        fn update(inout value: Int) -> Int {
+            var independent = value
+            independent = independent + 7
+            value = value + 1
+            independent
+        }
+        fn main() -> Int {
+            var number = 10
+            let independent = update(inout number)
+            number + independent
+        }
+    "#;
+    assert_differential(source);
+    assert_eq!(run_source_vm(source, &[]).unwrap(), VmValue::Int64(28));
+}
+
+#[test]
+fn vm_parity_a1_inout_capture_snapshot() {
+    let source = r#"
+        fn main() -> Int {
+            var total = 10
+            let update = fn[inout total]() -> Int {
+                let before = total
+                total = 20
+                before
+            }
+            let before = update()
+            before + total
+        }
+    "#;
+    assert_differential(source);
+    assert_eq!(run_source_vm(source, &[]).unwrap(), VmValue::Int64(30));
+}
+
+#[test]
+fn vm_parity_a1_ref_capture_copy_mutation() {
+    let source = r#"
+        fn main() -> Int {
+            let base = 10
+            let compute = fn[ref base]() -> Int {
+                var independent = base
+                independent = independent + 3
+                independent + base
+            }
+            compute()
+        }
+    "#;
+    assert_differential(source);
+    assert_eq!(run_source_vm(source, &[]).unwrap(), VmValue::Int64(23));
+}

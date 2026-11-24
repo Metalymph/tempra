@@ -866,3 +866,35 @@ fn borrowed_closure_bytecode_lowering_keeps_slot_identity() {
         .any(|instr| matches!(instr, BytecodeInstr::MakeClosureRef(_, 1))));
     verify_module(&bc).unwrap();
 }
+
+#[test]
+fn a1_inout_binding_uses_parameter_storage_not_a_value_copy() {
+    use tempra_bytecode::function::LocalId;
+    use tempra_bytecode::opcode::BytecodeInstr;
+    use tempra_tir::builder::ModuleBuilder;
+
+    let mut module = ModuleBuilder::new();
+    let mut update = module.new_function("update", TirType::Unit);
+    let block = update.new_block();
+    update.set_current_block(block);
+    update.add_inout_param(TirType::Int64);
+    let slot = update.build_slot(TirType::Int64, Some("owner")).unwrap();
+    update.build_bind_inout(slot, 0).unwrap();
+    let value = update.build_const(TirConst::Int64(42)).unwrap();
+    update.build_store(slot, value).unwrap();
+    update.build_ret(None).unwrap();
+    module.add_function(update.build());
+
+    let bytecode = lower_tir_module(&module.module).unwrap();
+    verify_module(&bytecode).unwrap();
+    let update = &bytecode.functions[0];
+    assert_eq!(update.inout_params, vec![true]);
+    assert_eq!(
+        update.code,
+        vec![
+            BytecodeInstr::ConstI64(tempra_bytecode::constant::ConstId(0)),
+            BytecodeInstr::StoreLocal(LocalId(0)),
+            BytecodeInstr::Return,
+        ]
+    );
+}

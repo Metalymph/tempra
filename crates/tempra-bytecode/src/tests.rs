@@ -1383,6 +1383,7 @@ fn inout_closure_rejects_immutable_handle_upgrade() {
         vec![BytecodeType::Int64],
         BytecodeType::Int64,
     );
+    child.inout_params = vec![true];
     child.locals = child.params.clone();
     child.max_stack = 1;
     child.code = vec![BytecodeInstr::LoadLocal(LocalId(0)), BytecodeInstr::Return];
@@ -1424,6 +1425,7 @@ fn inout_closure_rejects_repeated_exclusive_borrow_sites() {
         vec![BytecodeType::Int64],
         BytecodeType::Int64,
     );
+    child.inout_params = vec![true];
     child.locals = child.params.clone();
     child.max_stack = 1;
     child.code = vec![BytecodeInstr::LoadLocal(LocalId(0)), BytecodeInstr::Return];
@@ -1458,4 +1460,121 @@ fn mutable_slice_isa_reserves_stable_opcode_ids() {
     assert_eq!(BytecodeInstr::InoutSliceSet(LocalId(0)).opcode_id(), 61);
     assert_eq!(BytecodeInstr::InoutSliceLen(LocalId(0)).opcode_id(), 62);
     assert_eq!(crate::opcode::BYTECODE_OPCODE_COUNT, 63);
+}
+
+/// Construct a typed closure with independently chosen target access metadata.
+fn a1_callable_access_fixture(mode: u8, access: Vec<bool>) -> BytecodeModule {
+    use crate::function::BytecodeSignature;
+    let mut module = BytecodeModule::new();
+    module.intern_signature(BytecodeSignature {
+        params: vec![BytecodeType::Int64],
+        ret: BytecodeType::Unit,
+    });
+    let init = module.add_constant(BytecodeConstant::Int64(10));
+    let mut target = BytecodeFunction::new(
+        "target".into(),
+        vec![BytecodeType::Int64, BytecodeType::Int64],
+        BytecodeType::Unit,
+    );
+    target.inout_params = access;
+    target.locals = target.params.clone();
+    target.code = vec![BytecodeInstr::Return];
+    let target_id = module.add_function(target);
+    let mut main = BytecodeFunction::new("main".into(), vec![], BytecodeType::Unit);
+    main.locals = vec![BytecodeType::Int64];
+    main.max_stack = 1;
+    let (source, construct) = match mode {
+        0 => (
+            BytecodeInstr::LoadLocal(LocalId(0)),
+            BytecodeInstr::MakeClosure(target_id, 1),
+        ),
+        1 => (
+            BytecodeInstr::BorrowLocal(LocalId(0)),
+            BytecodeInstr::MakeClosureRef(target_id, 1),
+        ),
+        2 => (
+            BytecodeInstr::BorrowLocalMut(LocalId(0)),
+            BytecodeInstr::MakeClosureInout(target_id, 1),
+        ),
+        _ => unreachable!(),
+    };
+    main.code = vec![
+        BytecodeInstr::ConstI64(init),
+        BytecodeInstr::StoreLocal(LocalId(0)),
+        source,
+        construct,
+        BytecodeInstr::Pop,
+        BytecodeInstr::Return,
+    ];
+    module.add_function(main);
+    module
+}
+
+#[test]
+fn a1_callable_access_metadata_must_match_constructor() {
+    use crate::verify::verify_module;
+    for (mode, access, valid) in [
+        (0, vec![false, false], true),
+        (1, vec![false, false], true),
+        (2, vec![true, false], true),
+        (0, vec![true, false], false),
+        (1, vec![true, false], false),
+        (2, vec![false, false], false),
+        (0, vec![false, true], false),
+        (1, vec![false, true], false),
+        (2, vec![true, true], false),
+    ] {
+        let module = a1_callable_access_fixture(mode, access);
+        let result = verify_module(&module);
+        if valid {
+            result.unwrap();
+        } else {
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("closure capture access"));
+        }
+        let bytes = encode_module(&module).unwrap();
+        assert_eq!(decode_and_verify_artifact(&bytes).is_ok(), valid);
+    }
+}
+
+#[test]
+fn a1_ref_hidden_parameter_cannot_be_written() {
+    let mut module = a1_callable_access_fixture(1, vec![false, false]);
+    let target = &mut module.functions[0];
+    target.max_stack = 1;
+    target.code = vec![
+        BytecodeInstr::ConstI64(crate::constant::ConstId(0)),
+        BytecodeInstr::StoreLocal(LocalId(0)),
+        BytecodeInstr::Return,
+    ];
+    let error = crate::verify::verify_module(&module).unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("ref closure target cannot mutate"));
+}
+
+#[test]
+fn a1_raw_borrow_cannot_be_stored_as_ordinary_value() {
+    let mut module = a1_callable_access_fixture(2, vec![true, false]);
+    let main = &mut module.functions[1];
+    main.locals.push(BytecodeType::Int64);
+    main.code.truncate(3);
+    main.code
+        .extend([BytecodeInstr::StoreLocal(LocalId(1)), BytecodeInstr::Return]);
+    let error = crate::verify::verify_module(&module).unwrap_err();
+    assert!(error.to_string().contains("borrow handle cannot be stored"));
+}
+
+#[test]
+fn a1_previous_loadlocal_format_is_rejected() {
+    let module = a1_callable_access_fixture(2, vec![true, false]);
+    let mut bytes = encode_module(&module).unwrap();
+    assert_eq!(&bytes[4..8], &10_u32.to_le_bytes());
+    bytes[4..8].copy_from_slice(&9_u32.to_le_bytes());
+    assert!(matches!(
+        decode_artifact(&bytes),
+        Err(BytecodeSerializeError::UnsupportedVersion)
+    ));
 }

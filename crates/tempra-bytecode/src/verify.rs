@@ -133,6 +133,16 @@ pub fn verify_function_direct(
     {
         verify_callable_type(module, *ty)?;
     }
+    if func.inout_params.len() != func.params.len() {
+        return Err(BytecodeVerifyError::Unsupported(
+            "inout parameter access metadata does not match function arity".into(),
+        ));
+    }
+    if func.is_extern && func.inout_params.iter().any(|value| *value) {
+        return Err(BytecodeVerifyError::Unsupported(
+            "extern inout calls require a separate trusted ABI".into(),
+        ));
+    }
     if func.code.is_empty() {
         return Ok(());
     }
@@ -478,7 +488,8 @@ pub fn verify_function_direct(
                             found: argc,
                         });
                     }
-                    // Check argument types
+                    // Check argument types; access-mode correspondence is
+                    // independently certified by the borrow provenance verifier.
                     for expected_ref in target.params.iter().rev() {
                         let expected = *expected_ref;
                         let found = state.pop_ty()?;
@@ -683,7 +694,7 @@ fn borrow_successors(pc: usize, func: &BytecodeFunction) -> Vec<usize> {
 
 // A single static StoreLocal is not necessarily a single *dynamic* write:
 // executing it again via a back-edge would invalidate an existing loan.
-fn borrow_source_store_can_repeat(func: &BytecodeFunction, store_pc: usize) -> bool {
+fn borrow_instruction_can_repeat(func: &BytecodeFunction, store_pc: usize) -> bool {
     let mut pending = borrow_successors(store_pc, func);
     let mut seen = vec![false; func.code.len()];
     while let Some(pc) = pending.pop() {
@@ -1021,17 +1032,18 @@ fn verify_borrowed_frame_contract(
     // same owner in this frame; no second exclusive borrow site.
     let mut exclusive_sources = HashSet::new();
     let mut read_sources = HashSet::new();
-    for instruction in &func.code {
+    let mut exclusive_borrow_sites: HashMap<LocalId, Vec<usize>> = HashMap::new();
+    for (pc, instruction) in func.code.iter().enumerate() {
         match instruction {
             BytecodeInstr::BorrowLocal(source) => {
                 read_sources.insert(source.0);
             }
             BytecodeInstr::BorrowLocalMut(source) => {
-                if !exclusive_sources.insert(source.0) {
-                    return Err(BytecodeVerifyError::Unsupported(
-                        "exclusive borrowed source has multiple borrow sites".into(),
-                    ));
-                }
+                // Multiple sequential callsites may borrow the same owner.
+                // Concurrent aliasing is checked by CFG handle provenance and
+                // again by the runtime's active exclusive-loan table.
+                exclusive_sources.insert(source.0);
+                exclusive_borrow_sites.entry(*source).or_default().push(pc);
             }
             _ => {}
         }
@@ -1045,10 +1057,20 @@ fn verify_borrowed_frame_contract(
         if !is_source {
             continue;
         }
+        // An inout parameter is already an exclusive loan from its caller.
+        // Reborrowing it for a direct inout call does not require a fresh
+        // single-write local owner. Read borrows are not upgraded here.
+        if index < func.params.len()
+            && func.inout_params[index]
+            && exclusive_sources.contains(&(index as u32))
+            && !read_sources.contains(&(index as u32))
+        {
+            continue;
+        }
         if index < func.params.len()
             || matches!(func.locals[index], BytecodeType::Callable(_))
             || writes[index].len() != 1
-            || borrow_source_store_can_repeat(func, writes[index][0])
+            || borrow_instruction_can_repeat(func, writes[index][0])
         {
             return Err(BytecodeVerifyError::Unsupported(format!(
                 "borrowed source local ${index} requires one non-repeating initialization outside a cycle"
@@ -1069,7 +1091,6 @@ fn verify_borrowed_frame_contract(
     let mut worklist = VecDeque::new();
     states.insert(0, initial);
     worklist.push_back(0);
-    let mut saw_make_closure_ref = false;
 
     while let Some(pc) = worklist.pop_front() {
         let mut state = states
@@ -1102,6 +1123,14 @@ fn verify_borrowed_frame_contract(
                     return Err(BytecodeVerifyError::Unsupported(
                         "exclusive borrowed source must be initialized and own a plain value"
                             .into(),
+                    ));
+                }
+                if state
+                    .stack
+                    .contains(&BorrowProvenance::ExclusiveHandle(source))
+                {
+                    return Err(BytecodeVerifyError::Unsupported(
+                        "duplicate simultaneous exclusive borrow of the same local".into(),
                     ));
                 }
                 state.stack.push(BorrowProvenance::ExclusiveHandle(source));
@@ -1144,6 +1173,25 @@ fn verify_borrowed_frame_contract(
                     handles.push(source);
                 }
                 handles.reverse();
+                if exclusive {
+                    for source in &handles {
+                        let sites = exclusive_borrow_sites.get(source).ok_or_else(|| {
+                            BytecodeVerifyError::Unsupported(
+                                "exclusive closure capture has no borrow site".into(),
+                            )
+                        })?;
+
+                        // Direct inout calls may borrow sequentially.
+                        // Exclusive closure captures require a stronger
+                        // non-repeating contract until liveness is proven.
+                        if sites.len() != 1 || borrow_instruction_can_repeat(func, pc) {
+                            return Err(BytecodeVerifyError::Unsupported(
+                                "exclusive closure capture requires one non-repeating borrow site"
+                                    .into(),
+                            ));
+                        }
+                    }
+                }
                 for (local, expected) in handles.iter().zip(&target.params) {
                     if func.locals[local.0 as usize] != *expected {
                         return Err(BytecodeVerifyError::StackTypeMismatch {
@@ -1152,10 +1200,19 @@ fn verify_borrowed_frame_contract(
                         });
                     }
                 }
-                saw_make_closure_ref = true;
                 state.stack.push(BorrowProvenance::BorrowedClosure);
             }
             BytecodeInstr::LoadLocal(local) => {
+                // A pending exclusive call operand forbids ordinary reads
+                // of its source until the direct call consumes the handle.
+                if state
+                    .stack
+                    .contains(&BorrowProvenance::ExclusiveHandle(local))
+                {
+                    return Err(BytecodeVerifyError::Unsupported(
+                        "cannot read a local while an exclusive argument is pending".into(),
+                    ));
+                }
                 let index = local.0 as usize;
                 if index >= state.locals.len() {
                     return Err(BytecodeVerifyError::InvalidLocalId(local));
@@ -1166,6 +1223,14 @@ fn verify_borrowed_frame_contract(
                 state.stack.push(state.locals[index]);
             }
             BytecodeInstr::StoreLocal(local) => {
+                if state
+                    .stack
+                    .contains(&BorrowProvenance::ExclusiveHandle(local))
+                {
+                    return Err(BytecodeVerifyError::Unsupported(
+                        "cannot mutate a local while an exclusive argument is pending".into(),
+                    ));
+                }
                 let index = local.0 as usize;
                 if index >= state.locals.len() {
                     return Err(BytecodeVerifyError::InvalidLocalId(local));
@@ -1246,9 +1311,12 @@ fn verify_borrowed_frame_contract(
                     });
                 }
                 for index in (0..usize::from(argc)).rev() {
-                    match state.stack.pop() {
-                        Some(BorrowProvenance::Plain) => {}
-                        Some(BorrowProvenance::BorrowedClosure)
+                    let exclusive = target.inout_params.get(index).copied().unwrap_or(false);
+                    let argument = state.stack.pop();
+                    match (exclusive, argument) {
+                        (true, Some(BorrowProvenance::ExclusiveHandle(_))) => {}
+                        (false, Some(BorrowProvenance::Plain)) => {}
+                        (false, Some(BorrowProvenance::BorrowedClosure))
                             if proves_nonescaping_callback_parameter(
                                 module,
                                 target_id,
@@ -1257,7 +1325,7 @@ fn verify_borrowed_frame_contract(
                             ) => {}
                         _ => {
                             return Err(BytecodeVerifyError::Unsupported(format!(
-                                "borrowed callback argument {index} has no verified non-escaping contract for @{target_id}"
+                                "argument {index} violates the verified inout/non-escape contract for @{target_id}"
                             )));
                         }
                     }
@@ -1310,11 +1378,6 @@ fn verify_borrowed_frame_contract(
         }
     }
 
-    if !saw_make_closure_ref {
-        return Err(BytecodeVerifyError::Unsupported(
-            "BorrowLocal without a reachable MakeClosureRef is unsupported".into(),
-        ));
-    }
     Ok(())
 }
 

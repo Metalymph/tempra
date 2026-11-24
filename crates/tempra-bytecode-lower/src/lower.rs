@@ -53,6 +53,11 @@ pub fn lower_tir_module(module: &TirModule) -> Result<BytecodeModule, BytecodeLo
         let ret = map_type(&tir_func.return_type, &bc_module)?;
         let mut bc_func = BytecodeFunction::new(tir_func.name.clone(), params, ret);
         bc_func.is_extern = tir_func.is_extern;
+        bc_func.inout_params = if tir_func.inout_params.is_empty() {
+            vec![false; tir_func.params.len()]
+        } else {
+            tir_func.inout_params.clone()
+        };
         let bytecode_id = bc_module.add_function(bc_func);
         if function_ids.insert(tir_func.id, bytecode_id).is_some() {
             return Err(BytecodeLowerError::DuplicateTirFunctionId {
@@ -97,12 +102,18 @@ fn lower_function(
 
     let mut bc_func = BytecodeFunction::new(tir_func.name.clone(), params, ret);
     bc_func.is_extern = tir_func.is_extern;
+    bc_func.inout_params = if tir_func.inout_params.is_empty() {
+        vec![false; tir_func.params.len()]
+    } else {
+        tir_func.inout_params.clone()
+    };
 
     let mut lowerer = FunctionLowerer {
         tir_func,
         bc_module,
         bc_func,
         value_to_local: HashMap::new(),
+        inout_sources: HashMap::new(),
         slot_to_local: HashMap::new(),
         slot_types: HashMap::new(),
         value_types: HashMap::new(),
@@ -130,6 +141,7 @@ struct FunctionLowerer<'a> {
     bc_module: &'a mut BytecodeModule,
     bc_func: BytecodeFunction,
     value_to_local: HashMap<TirValueId, LocalId>,
+    inout_sources: HashMap<TirValueId, TirSlotId>,
     slot_to_local: HashMap<TirSlotId, LocalId>,
     slot_types: HashMap<TirSlotId, BytecodeType>,
     value_types: HashMap<TirValueId, BytecodeType>,
@@ -159,6 +171,16 @@ impl<'a> FunctionLowerer<'a> {
                     self.slot_to_local.insert(*id, LocalId(next_local));
                     self.slot_types.insert(*id, map_type(ty, self.bc_module)?);
                     next_local += 1;
+                }
+            }
+        }
+
+        // Record exclusive source identities; never materialize their handles
+        // into SSA temporary locals. Emission happens at the direct call only.
+        for block in &self.tir_func.blocks {
+            for instr in &block.instrs {
+                if let TirInstr::BorrowInout(value, slot) = instr {
+                    self.inout_sources.insert(*value, *slot);
                 }
             }
         }
@@ -274,6 +296,9 @@ impl<'a> FunctionLowerer<'a> {
                     }
                 }
                 self.store_res(*res)?;
+            }
+            TirInstr::BorrowInout(_, _) => {
+                // Emitted at the callsite by load_val, not stored into a local.
             }
             TirInstr::Load(res, slot) => {
                 let local = self
@@ -696,6 +721,14 @@ impl<'a> FunctionLowerer<'a> {
     }
 
     fn load_val(&mut self, id: TirValueId) -> Result<(), BytecodeLowerError> {
+        if let Some(slot) = self.inout_sources.get(&id) {
+            let local = *self
+                .slot_to_local
+                .get(slot)
+                .ok_or_else(|| BytecodeLowerError::UnknownSlot(format!("${}", slot.0)))?;
+            self.emit(BytecodeInstr::BorrowLocalMut(local));
+            return Ok(());
+        }
         let local = self
             .value_to_local
             .get(&id)
@@ -766,7 +799,7 @@ impl<'a> FunctionLowerer<'a> {
                 TirConst::Float64(_) => Ok(BytecodeType::Float64),
                 TirConst::String(_) => Ok(BytecodeType::String),
             },
-            TirInstr::Load(_, slot_id) => self
+            TirInstr::Load(_, slot_id) | TirInstr::BorrowInout(_, slot_id) => self
                 .slot_types
                 .get(slot_id)
                 .cloned()
@@ -821,7 +854,7 @@ impl<'a> FunctionLowerer<'a> {
 fn get_instr_res_id(instr: &TirInstr) -> Option<TirValueId> {
     match instr {
         TirInstr::Const(id, _) => Some(*id),
-        TirInstr::Load(id, _) => Some(*id),
+        TirInstr::Load(id, _) | TirInstr::BorrowInout(id, _) => Some(*id),
         TirInstr::Add(id, _, _)
         | TirInstr::Sub(id, _, _)
         | TirInstr::Mul(id, _, _)

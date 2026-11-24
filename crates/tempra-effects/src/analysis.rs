@@ -1154,6 +1154,7 @@ fn classify_instruction(
         TirInstr::Tag(_, _)
         | TirInstr::Slot(_, _)
         | TirInstr::Load(_, _)
+        | TirInstr::BorrowInout(_, _)
         | TirInstr::Store(_, _)
         | TirInstr::Call(_, _, _)
         | TirInstr::Add(_, _, _)
@@ -1196,7 +1197,9 @@ fn record_instruction_type(
             slot_types.insert(*slot, ty.clone());
             None
         }
-        TirInstr::Load(result, slot) => slot_types.get(slot).cloned().map(|ty| (*result, ty)),
+        TirInstr::Load(result, slot) | TirInstr::BorrowInout(result, slot) => {
+            slot_types.get(slot).cloned().map(|ty| (*result, ty))
+        }
         TirInstr::MakeClosure(result, target, captures) => functions.get(target).map(|function| {
             let params = function
                 .params

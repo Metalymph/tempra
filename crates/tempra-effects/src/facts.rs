@@ -305,6 +305,7 @@ fn defined_value(instruction: &TirInstr) -> Option<(TirValueId, Option<&TirConst
         | TirInstr::Tag(value, _)
         | TirInstr::Unwrap(value, _, _, _)
         | TirInstr::Load(value, _)
+        | TirInstr::BorrowInout(value, _)
         | TirInstr::MakeClosureRef(value, _, _)
         | TirInstr::MakeClosureInout(value, _, _)
         | TirInstr::Call(value, _, _)

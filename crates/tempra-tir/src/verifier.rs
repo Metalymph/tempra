@@ -270,7 +270,7 @@ fn verify_function_inner(
                 TirInstr::Slot(slot, ty) => {
                     slot_types.insert(*slot, ty.clone());
                 }
-                TirInstr::Load(res, slot) => {
+                TirInstr::Load(res, slot) | TirInstr::BorrowInout(res, slot) => {
                     if let Some(ty) = slot_types.get(slot) {
                         value_types.insert(*res, Some(ty.clone()));
                     } else {
@@ -305,7 +305,22 @@ fn verify_function_inner(
                     }
                     if let Some(f) = functions.get(target_func) {
                         if args.len() == f.params.len() {
-                            for (arg, (_param_val, param_ty)) in args.iter().zip(&f.params) {
+                            for (index, (arg, (_param_val, param_ty))) in
+                                args.iter().zip(&f.params).enumerate()
+                            {
+                                let is_exclusive_value = func.blocks.iter().any(|block| {
+                                    block.instrs.iter().any(|instr| {
+                                    matches!(instr, TirInstr::BorrowInout(value, _) if value == arg)
+                                })
+                                });
+                                if is_exclusive_value
+                                    != f.inout_params.get(index).copied().unwrap_or(false)
+                                {
+                                    errors.push(VerifierError::GenericError(
+                                        "exclusive call argument must match inout parameter access"
+                                            .into(),
+                                    ));
+                                }
                                 if let Some(Some(a_ty)) = value_types.get(arg) {
                                     if a_ty != param_ty {
                                         errors.push(VerifierError::TypeMismatch {
@@ -707,6 +722,7 @@ fn verify_function_inner(
     }
 
     errors.extend(verify_borrowed_closure_frame_lifetimes(func, functions));
+    errors.extend(verify_exclusive_call_borrows(func, functions));
 
     if errors.is_empty() {
         Ok(value_types)
@@ -746,6 +762,111 @@ fn borrowed_entry_can_repeat(func: &TirFunction, entry: TirBlockId) -> bool {
         }
     }
     false
+}
+
+/// Exclusive SSA operands have only one legal consumer: a direct call's
+/// corresponding `inout` parameter. No assignment, return or alias is legal.
+fn verify_exclusive_call_borrows(
+    func: &TirFunction,
+    functions: &HashMap<TirFunctionId, &TirFunction>,
+) -> Vec<VerifierError> {
+    let borrow_sources: HashMap<TirValueId, TirSlotId> = func
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instrs)
+        .filter_map(|instr| match instr {
+            TirInstr::BorrowInout(value, slot) => Some((*value, *slot)),
+            _ => None,
+        })
+        .collect();
+    let exclusive: HashSet<TirValueId> = borrow_sources.keys().copied().collect();
+    let mut uses: HashMap<TirValueId, usize> = exclusive.iter().map(|v| (*v, 0)).collect();
+    let mut invalid = false;
+    for block in &func.blocks {
+        for instr in &block.instrs {
+            let mut operands: Vec<TirValueId> = Vec::new();
+            match instr {
+                TirInstr::Const(_, _)
+                | TirInstr::Slot(_, _)
+                | TirInstr::Load(_, _)
+                | TirInstr::BorrowInout(_, _)
+                | TirInstr::MakeClosureRef(_, _, _)
+                | TirInstr::MakeClosureInout(_, _, _) => {}
+                TirInstr::Make(_, _, _, args) | TirInstr::MakeClosure(_, _, args) => {
+                    operands.extend(args.iter().copied())
+                }
+                TirInstr::MakeStruct(_, _, fields) => {
+                    operands.extend(fields.iter().map(|(_, value)| *value))
+                }
+                TirInstr::Get(_, obj, _)
+                | TirInstr::Tag(_, obj)
+                | TirInstr::Unwrap(_, obj, _, _)
+                | TirInstr::Not(_, obj)
+                | TirInstr::Len(_, obj)
+                | TirInstr::Size(_, obj)
+                | TirInstr::Bytes(_, obj) => operands.push(*obj),
+                TirInstr::Store(_, value) => operands.push(*value),
+                TirInstr::Call(_, target, args) => {
+                    let callee = functions.get(target);
+                    let mut borrowed_slots = HashSet::new();
+                    for (index, value) in args.iter().enumerate() {
+                        if exclusive.contains(value) {
+                            // Two independent SSA handles to one owner may not
+                            // coexist in the same direct call.
+                            if !borrowed_slots.insert(borrow_sources[value]) {
+                                invalid = true;
+                            }
+                            *uses.get_mut(value).unwrap() += 1;
+                            if !callee.is_some_and(|f| {
+                                !f.is_extern && f.inout_params.get(index).copied().unwrap_or(false)
+                            }) {
+                                invalid = true;
+                            }
+                        }
+                    }
+                    operands.extend(args.iter().copied().filter(|v| !exclusive.contains(v)));
+                }
+                TirInstr::CallClosure(_, callable, args) => {
+                    operands.push(*callable);
+                    operands.extend(args.iter().copied());
+                }
+                TirInstr::Set(_, obj, _, value)
+                | TirInstr::ArrayPush(_, obj, value)
+                | TirInstr::GetIndex(_, obj, value)
+                | TirInstr::Add(_, obj, value)
+                | TirInstr::Sub(_, obj, value)
+                | TirInstr::Mul(_, obj, value)
+                | TirInstr::Div(_, obj, value)
+                | TirInstr::Eq(_, obj, value)
+                | TirInstr::Lt(_, obj, value)
+                | TirInstr::Gt(_, obj, value)
+                | TirInstr::And(_, obj, value)
+                | TirInstr::Or(_, obj, value) => operands.extend([*obj, *value]),
+                TirInstr::Slice(_, obj, start, end) => operands.extend([*obj, *start, *end]),
+            }
+            if operands.iter().any(|value| exclusive.contains(value)) {
+                invalid = true;
+            }
+        }
+        match &block.terminator {
+            Some(TirTerminator::Ret(Some(v))) | Some(TirTerminator::CondBr(v, _, _))
+                if exclusive.contains(v) =>
+            {
+                invalid = true
+            }
+            _ => {}
+        }
+    }
+    if uses.values().any(|count| *count != 1) {
+        invalid = true;
+    }
+    if invalid {
+        vec![VerifierError::GenericError(
+            "inout borrow must be consumed exactly once by a verified direct call".into(),
+        )]
+    } else {
+        Vec::new()
+    }
 }
 
 fn verify_borrowed_closure_frame_lifetimes(
@@ -997,6 +1118,7 @@ fn instruction_escapes_borrowed_closure(
         TirInstr::Const(_, _)
         | TirInstr::Slot(_, _)
         | TirInstr::Load(_, _)
+        | TirInstr::BorrowInout(_, _)
         | TirInstr::Store(_, _)
         | TirInstr::MakeClosureRef(_, _, _)
         | TirInstr::MakeClosureInout(_, _, _) => false,

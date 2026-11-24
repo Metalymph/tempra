@@ -61,6 +61,9 @@ pub enum TirInstr {
 
     Slot(TirSlotId, TirType),
     Load(TirValueId, TirSlotId),
+    /// Materialize an exclusive storage operand only at a verified direct call.
+    /// It must not be used as an ordinary SSA value or escape the call.
+    BorrowInout(TirValueId, TirSlotId),
     Store(TirSlotId, TirValueId),
 
     Call(TirValueId, TirFunctionId, Vec<TirValueId>),
@@ -117,6 +120,8 @@ pub struct TirFunction {
     pub id: TirFunctionId,
     pub name: String,
     pub params: Vec<(TirValueId, TirType)>,
+    /// Access modes, one per runtime parameter. Never a user-visible type.
+    pub inout_params: Vec<bool>,
     pub return_type: TirType,
     pub is_extern: bool,
     pub blocks: Vec<TirBlock>,

@@ -903,9 +903,7 @@ impl Interpreter {
             }
             HirExpression::Call(call) => {
                 if call.inout_arguments.iter().any(|exclusive| *exclusive) {
-                    return Ok(ControlFlow::Crash(
-                        "inout call arguments require exclusive parameter execution; HIR by-value fallback is forbidden".into(),
-                    ));
+                    return self.eval_explicit_inout_call(call, env);
                 }
                 if let HirExpression::Member(member) = &*call.callee {
                     if let Some((identity, function)) =
@@ -2905,6 +2903,123 @@ impl Interpreter {
             }
             _ => None,
         }
+    }
+
+    // Keep exclusive call setup outside the recursive expression evaluator.
+    #[inline(never)]
+    fn eval_explicit_inout_call(
+        &mut self,
+        call: &HirCall,
+        env: &mut RuntimeEnv,
+    ) -> Result<ControlFlow, crate::interpreter::InterpreterEvalError> {
+        // Explicit scalar inout calls share the caller's mutable
+        // Cell, never a detached value. Only verified user functions
+        // with a statically-known direct target may take this path.
+        let HirExpression::Name(_, function_name) = call.callee.as_ref() else {
+            return Ok(ControlFlow::Crash(
+                "exclusive inout call requires a direct function".into(),
+            ));
+        };
+        let Some((identity, function)) = self.resolve_user_function(function_name) else {
+            return Ok(ControlFlow::Crash(
+                "exclusive inout call target is not a defined user function".into(),
+            ));
+        };
+        if function.is_extern
+            || call.args.len() != function.parameters.len()
+            || function
+                .parameters
+                .iter()
+                .any(|param| param.kind != ParameterKind::Runtime)
+        {
+            return Ok(ControlFlow::Crash(
+                "inout call requires runtime parameters and a defined function".into(),
+            ));
+        }
+        let mut positional_values = Vec::new();
+        let mut named_values = HashMap::new();
+        let mut next_pos = 0usize;
+        let mut exclusive_cells = Vec::new();
+        for (index, argument) in call.args.iter().enumerate() {
+            let (target_index, expression, name) = match argument {
+                HirCallArgument::Positional(expr) => {
+                    let param = next_pos;
+                    next_pos += 1;
+                    (param, expr, None)
+                }
+                HirCallArgument::Named(named) => {
+                    let Some(param) = function
+                        .parameters
+                        .iter()
+                        .position(|p| p.name == named.name)
+                    else {
+                        return Ok(ControlFlow::Crash("unknown named inout parameter".into()));
+                    };
+                    (param, &named.value, Some(named.name.clone()))
+                }
+            };
+            if target_index >= function.parameters.len() {
+                return Ok(ControlFlow::Crash("invalid inout parameter index".into()));
+            }
+            let exclusive = call.inout_arguments.get(index).copied().unwrap_or(false);
+            if exclusive != function.parameters[target_index].is_inout {
+                return Ok(ControlFlow::Crash("inout call access mode mismatch".into()));
+            }
+            let value = if exclusive {
+                let HirExpression::Name(_, binding) = expression else {
+                    return Ok(ControlFlow::Crash(
+                        "inout Slice execution requires exclusive buffer support".into(),
+                    ));
+                };
+                match env.get_raw(binding) {
+                    Some(Value::Cell(cell)) => {
+                        // B2 executes only scalar owners. Arrays,
+                        // slices, structs and closures need a
+                        // separate exclusive storage model.
+                        if !matches!(
+                            &*cell.borrow(),
+                            Value::Int64(_)
+                                | Value::UInt64(_)
+                                | Value::UInt8(_)
+                                | Value::Float64(_)
+                                | Value::Bool(_)
+                        ) {
+                            return Ok(ControlFlow::Crash(
+                                "inout execution currently supports mutable scalars only".into(),
+                            ));
+                        }
+                        let address = std::rc::Rc::as_ptr(&cell);
+                        if exclusive_cells.contains(&address) {
+                            return Ok(ControlFlow::Crash("simultaneous inout alias".into()));
+                        }
+                        exclusive_cells.push(address);
+                        Value::Cell(cell)
+                    }
+                    _ => {
+                        return Ok(ControlFlow::Crash(
+                            "inout requires a live mutable scalar owner".into(),
+                        ))
+                    }
+                }
+            } else {
+                match self.eval_expression_internal(expression, env)? {
+                    ControlFlow::Value(value) => value,
+                    flow => return Ok(flow),
+                }
+            };
+            if let Some(name) = name {
+                named_values.insert(name, value);
+            } else {
+                positional_values.push(value);
+            }
+        }
+        self.bind_and_call_user_function(
+            call,
+            &identity,
+            &function,
+            positional_values,
+            named_values,
+        )
     }
 
     fn bind_and_call_user_function(

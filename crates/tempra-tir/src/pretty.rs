@@ -110,6 +110,7 @@ pub fn format_instr(instr: &TirInstr) -> String {
         }
         TirInstr::Slot(slot, ty) => format!("slot ${}: {}", slot.0, format_type(ty)),
         TirInstr::Load(res, slot) => format!("%{} = load ${}", res.0, slot.0),
+        TirInstr::BorrowInout(res, slot) => format!("%{} = borrow_inout ${}", res.0, slot.0),
         TirInstr::Store(slot, val) => format!("store ${}, %{}", slot.0, val.0),
         TirInstr::Call(res, func, args) => {
             format!("%{} = call @{} ({})", res.0, func.0, format_args(args))

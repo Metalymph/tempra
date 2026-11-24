@@ -1043,3 +1043,69 @@ fn vm_parity_inout_capture_nested_nonescaping_call() {
     "#,
     );
 }
+
+#[test]
+fn vm_parity_inout_parameter_repeated_mutation() {
+    let source = r#"
+        fn increment(inout value: Int) {
+            value = value + 1
+        }
+        fn main() -> Int {
+            var counter = 10
+            increment(inout counter)
+            increment(inout counter)
+            counter
+        }
+    "#;
+    assert_differential(source);
+    assert_eq!(run_source_vm(source, &[]).unwrap(), VmValue::Int64(12));
+}
+
+#[test]
+fn vm_parity_inout_parameter_nested_reborrow() {
+    let source = r#"
+        fn increment(inout value: Int) {
+            value = value + 1
+        }
+        fn twice(inout value: Int) {
+            increment(inout value)
+            increment(inout value)
+        }
+        fn main() -> Int {
+            var counter = 10
+            twice(inout counter)
+            counter
+        }
+    "#;
+    assert_differential(source);
+    assert_eq!(run_source_vm(source, &[]).unwrap(), VmValue::Int64(12));
+}
+
+#[test]
+fn vm_parity_inout_parameter_named_call() {
+    let source = r#"
+        fn increment(inout value: Int) {
+            value = value + 1
+        }
+        fn main() -> Int {
+            var counter = 10
+            increment(value=inout counter)
+            counter
+        }
+    "#;
+    assert_differential(source);
+    assert_eq!(run_source_vm(source, &[]).unwrap(), VmValue::Int64(11));
+}
+
+#[test]
+fn vm_parity_inout_slice_remains_fail_closed_until_buffer_model() {
+    let source = r#"
+        fn mutate(inout data: Slice(Int)) { data[0] = 9 }
+        fn main() {
+            var data = [1, 2, 3]
+            mutate(inout data[0..2])
+        }
+    "#;
+    assert!(run_source_vm(source, &[]).is_err());
+    assert!(run_source_hir(source, &[]).is_err());
+}

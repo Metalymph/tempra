@@ -62,7 +62,7 @@ impl From<crate::verify::BytecodeVerifyError> for BytecodeSerializeError {
 }
 
 const MAGIC: &[u8; 4] = b"TMBC";
-const FORMAT_VERSION: u32 = 7;
+const FORMAT_VERSION: u32 = 8;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct BytecodeCacheHeader {
@@ -173,6 +173,14 @@ pub fn encode_artifact(
         write_u32(&mut buf, f.params.len() as u32)?;
         for p in &f.params {
             write_type(&mut buf, p)?;
+        }
+        if f.inout_params.len() != f.params.len() {
+            return Err(BytecodeSerializeError::Message(
+                "inout access flags must match function arity".into(),
+            ));
+        }
+        for access in &f.inout_params {
+            buf.write_all(&[u8::from(*access)])?;
         }
 
         write_type(&mut buf, &f.ret)?;
@@ -467,10 +475,21 @@ pub fn decode_artifact(bytes: &[u8]) -> Result<BytecodeCacheArtifact, BytecodeSe
         for _ in 0..param_len {
             params.push(read_type(&mut cursor)?);
         }
+        let mut inout_params = Vec::with_capacity(param_len as usize);
+        for _ in 0..param_len {
+            let mut access = [0u8; 1];
+            cursor.read_exact(&mut access)?;
+            match access[0] {
+                0 => inout_params.push(false),
+                1 => inout_params.push(true),
+                _ => return Err(BytecodeSerializeError::InvalidTag),
+            }
+        }
 
         let ret = read_type(&mut cursor)?;
 
         let mut f = BytecodeFunction::new(name, params, ret);
+        f.inout_params = inout_params;
 
         let local_len = read_u32(&mut cursor)?;
         for _ in 0..local_len {

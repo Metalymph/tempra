@@ -1476,3 +1476,30 @@ fn borrowed_closure_lifetime_accepts_separate_branch_calls() {
     module.add_function(main.build());
     assert!(verify_module(&module.module).is_ok());
 }
+
+#[test]
+fn exclusive_inout_tir_verifier_accepts_only_matching_direct_call() {
+    let mut module = ModuleBuilder::new();
+    let mut inc = module.new_function("increment", TirType::Unit);
+    let b = inc.new_block();
+    inc.set_current_block(b);
+    inc.add_inout_param(TirType::Int64);
+    inc.build_ret(None).unwrap();
+    let inc_id = inc.func.id;
+    module.add_function(inc.build());
+
+    let mut main = module.new_function("main", TirType::Unit);
+    let b = main.new_block();
+    main.set_current_block(b);
+    let slot = main.build_slot(TirType::Int64, Some("x")).unwrap();
+    let x = main.build_const(TirConst::Int64(1)).unwrap();
+    main.build_store(slot, x).unwrap();
+    let handle = main.build_borrow_inout(slot).unwrap();
+    main.build_call(inc_id, vec![handle]).unwrap();
+    main.build_ret(None).unwrap();
+    module.add_function(main.build());
+    assert!(verify_module(&module.module).is_ok());
+
+    module.module.functions[0].inout_params = vec![false];
+    assert!(verify_module(&module.module).is_err());
+}

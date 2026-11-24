@@ -67,6 +67,9 @@ impl fmt::Display for BytecodeType {
 pub struct BytecodeFunction {
     pub name: String,
     pub params: Vec<BytecodeType>,
+    /// Access modes for direct calls, indexed by parameter. An inout parameter
+    /// receives a non-owning exclusive frame handle, never an ordinary copy.
+    pub inout_params: Vec<bool>,
     pub ret: BytecodeType,
     pub is_extern: bool,
     pub locals: Vec<BytecodeType>,
@@ -76,9 +79,11 @@ pub struct BytecodeFunction {
 
 impl BytecodeFunction {
     pub fn new(name: String, params: Vec<BytecodeType>, ret: BytecodeType) -> Self {
+        let inout_params = vec![false; params.len()];
         Self {
             name,
             params,
+            inout_params,
             ret,
             is_extern: false,
             locals: Vec::new(),

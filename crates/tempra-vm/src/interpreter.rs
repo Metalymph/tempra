@@ -26,6 +26,9 @@ pub struct Frame {
     pub ip: usize,
     pub locals: Vec<Option<VmValue>>,
     pub stack: Vec<VmValue>,
+    /// Transient exclusive owner loans acquired by the caller for this frame.
+    /// Release them on every normal return, including nested calls.
+    pub inout_loans: Vec<(u64, u32)>,
 }
 
 pub type NativeResolver = fn(&str, &str) -> Option<fn(&[VmValue]) -> Result<VmValue, String>>;
@@ -113,6 +116,11 @@ impl<'a> Interpreter<'a> {
             .get(function_id.0 as usize)
             .ok_or_else(|| VmError::UnknownFunction(function_id.to_string()))?;
 
+        if func.inout_params.iter().any(|is_inout| *is_inout) {
+            return Err(VmError::Message(
+                "inout entry arguments require a live caller frame".into(),
+            ));
+        }
         if func.params.len() != args.len() {
             return Err(VmError::WrongArity {
                 expected: func.params.len() as u16,
@@ -231,6 +239,7 @@ impl<'a> Interpreter<'a> {
             ip: 0,
             locals,
             stack: Vec::with_capacity(initial_max_stack),
+            inout_loans: Vec::new(),
         };
 
         self.call_stack.push(initial_frame);
@@ -859,13 +868,31 @@ impl<'a> Interpreter<'a> {
                         .ok_or(VmError::LocalOutOfBounds(local.0))?
                         .as_ref()
                         .ok_or(VmError::LocalNotInitialized(local.0))?;
-                    if matches!(value, VmValue::BorrowedLocal(_)) {
-                        return Err(VmError::Message(
-                            "nested borrowed locals are not supported".into(),
-                        ));
+                    let exclusive = matches!(instr, BytecodeInstr::BorrowLocalMut(_));
+                    if let VmValue::BorrowedLocal(handle) = value {
+                        if !exclusive || !handle.mutable {
+                            return Err(VmError::Message(
+                                "cannot reborrow a read-only or invalid exclusive parameter".into(),
+                            ));
+                        }
+                        let handle = *handle;
+                        let key = (handle.owner_frame, handle.local_id.0);
+                        if !self.exclusive_sources.contains(&key)
+                            || !self
+                                .call_stack
+                                .iter()
+                                .any(|frame| frame.token == handle.owner_frame)
+                        {
+                            return Err(VmError::Message(
+                                "exclusive reborrow owner is not active".into(),
+                            ));
+                        }
+                        // The parent call retains the loan. No second owner
+                        // token is acquired or released by this nested call.
+                        self.push(VmValue::BorrowedLocal(handle))?;
+                        continue;
                     }
                     let token = owner.token;
-                    let exclusive = matches!(instr, BytecodeInstr::BorrowLocalMut(_));
                     let key = (token, local.0);
                     if self.exclusive_sources.contains(&key)
                         || (exclusive && self.borrowed_sources.contains(&key))
@@ -1045,6 +1072,10 @@ impl<'a> Interpreter<'a> {
                         .as_ref()
                         .map(|p| p.options.jit_enabled)
                         .unwrap_or(false)
+                        && !self.module.functions[target_id.0 as usize]
+                            .inout_params
+                            .iter()
+                            .any(|access| *access)
                     {
                         // ── Heap-aware JIT call ──────────────────────────────────────────
                         if let Some(jit_fn) = self.jit_cache_heap.get(&target_id).copied() {
@@ -1207,13 +1238,55 @@ impl<'a> Interpreter<'a> {
                     }
 
                     let mut locals = vec![None; target_func.locals.len()];
-                    // Pop arguments directly into locals in reverse order (right-to-left)
+                    let mut acquired_loans = Vec::new();
+                    let caller_token = self.call_stack.last().ok_or(VmError::MissingReturn)?.token;
+                    // Ordinary arguments are materialized by value, while
+                    // exclusive parameters preserve the non-owning handle.
                     for i in (0..argc).rev() {
-                        locals[i as usize] = Some(self.pop()?);
+                        let value = if target_func
+                            .inout_params
+                            .get(i as usize)
+                            .copied()
+                            .unwrap_or(false)
+                        {
+                            let raw = self.pop_raw()?;
+                            match &raw {
+                                VmValue::BorrowedLocal(handle) if handle.mutable => {
+                                    let key = (handle.owner_frame, handle.local_id.0);
+                                    if !self.exclusive_sources.contains(&key)
+                                        || !self
+                                            .call_stack
+                                            .iter()
+                                            .any(|frame| frame.token == handle.owner_frame)
+                                    {
+                                        return Err(VmError::Message(
+                                            "invalid or expired exclusive inout handle".into(),
+                                        ));
+                                    }
+                                    if handle.owner_frame == caller_token {
+                                        acquired_loans.push(key);
+                                    }
+                                }
+                                _ => {
+                                    return Err(VmError::Message(
+                                        "inout parameter requires an exclusive borrow handle"
+                                            .into(),
+                                    ))
+                                }
+                            }
+                            raw
+                        } else {
+                            self.pop()?
+                        };
+                        locals[i as usize] = Some(value);
                     }
 
                     let callee_max_stack = target_func.max_stack as usize;
                     self.push_interpreted_frame(target_id, locals, callee_max_stack)?;
+                    self.call_stack
+                        .last_mut()
+                        .ok_or(VmError::MissingReturn)?
+                        .inout_loans = acquired_loans;
                 }
 
                 BytecodeInstr::Return => {
@@ -1224,6 +1297,10 @@ impl<'a> Interpreter<'a> {
                     };
 
                     if let Some(popped) = self.call_stack.pop() {
+                        for key in &popped.inout_loans {
+                            self.exclusive_sources.remove(key);
+                            self.borrowed_sources.remove(key);
+                        }
                         self.borrowed_sources
                             .retain(|(frame_id, _)| *frame_id != popped.token);
                         self.exclusive_sources
@@ -1584,6 +1661,7 @@ impl<'a> Interpreter<'a> {
             ip: 0,
             locals,
             stack: Vec::with_capacity(max_stack),
+            inout_loans: Vec::new(),
         });
         Ok(())
     }

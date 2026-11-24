@@ -2731,13 +2731,16 @@ impl<'a> LowerContext<'a> {
             }
             HirExpression::If(i) => self.lower_if_expression(i, None),
             HirExpression::Call(c) => {
-                if c.inout_arguments.iter().any(|exclusive| *exclusive) {
+                if c.inout_arguments.iter().any(|value| *value)
+                    && !matches!(c.callee.as_ref(), HirExpression::Name(_, _))
+                {
                     return Err(TirLowerError::UnsupportedExpr(
-                        "exclusive inout call lowering requires verified VM parameter transfer"
-                            .into(),
+                        "inout VM calls require a direct named function".into(),
                         c.span,
                     ));
                 }
+                // Scalar inout arguments are lowered below, at the direct-call site.
+                // Slice views remain unsupported until buffer-level borrow execution exists.
                 // Handle .len() method call
                 if let HirExpression::Member(m) = &*c.callee {
                     let obj_ty = self.infer_expr_type(&m.object)?;
@@ -3115,6 +3118,13 @@ impl<'a> LowerContext<'a> {
                                 c.span,
                             ));
                         }
+                        if c.inout_arguments.iter().any(|value| *value) {
+                            return Err(TirLowerError::UnsupportedExpr(
+                                "exclusive indirect callback call requires a verified contract"
+                                    .into(),
+                                c.span,
+                            ));
+                        }
                         let callee = self.builder.build_load(slot)?;
                         let mut args = Vec::with_capacity(c.args.len());
                         for (argument, expected_type) in c.args.iter().zip(params.iter()) {
@@ -3145,14 +3155,95 @@ impl<'a> LowerContext<'a> {
                             ));
                         }
 
-                        let mut arg_values = Vec::new();
-                        for arg in &c.args {
-                            let arg_expr = match arg {
-                                HirCallArgument::Positional(e) => e,
-                                HirCallArgument::Named(n) => &n.value,
+                        // Evaluate arguments in *source* order, then arrange SSA
+                        // values by parameter position for the direct call.
+                        // Reordering evaluation of named arguments would change
+                        // observable effects and is not allowed.
+                        let mut ordered: Vec<Option<TirValueId>> = vec![None; sig.params.len()];
+                        let mut next_pos = 0usize;
+                        for (source_index, argument) in c.args.iter().enumerate() {
+                            let (parameter_index, expr) = match argument {
+                                HirCallArgument::Positional(expr) => {
+                                    let index = next_pos;
+                                    next_pos += 1;
+                                    (index, expr)
+                                }
+                                HirCallArgument::Named(named) => {
+                                    let Some(index) =
+                                        sig.params.iter().position(|p| p.name == named.name)
+                                    else {
+                                        return Err(TirLowerError::UnsupportedExpr(
+                                            "unknown named inout call parameter".into(),
+                                            c.span,
+                                        ));
+                                    };
+                                    (index, &named.value)
+                                }
                             };
-                            arg_values.push(self.lower_expression(arg_expr)?);
+                            if parameter_index >= ordered.len()
+                                || ordered[parameter_index].is_some()
+                            {
+                                return Err(TirLowerError::UnsupportedExpr(
+                                    "duplicate or invalid direct-call argument".into(),
+                                    c.span,
+                                ));
+                            }
+                            let required_inout = sig.params[parameter_index].is_inout;
+                            let explicit_inout = c
+                                .inout_arguments
+                                .get(source_index)
+                                .copied()
+                                .unwrap_or(false);
+                            if required_inout != explicit_inout {
+                                return Err(TirLowerError::UnsupportedExpr(
+                                    "inout call marker does not match the parameter contract"
+                                        .into(),
+                                    c.span,
+                                ));
+                            }
+                            let value = if required_inout {
+                                let HirExpression::Name(_, owner) = expr else {
+                                    return Err(TirLowerError::UnsupportedExpr(
+                                        "VM inout Slice views require exclusive buffer lowering"
+                                            .into(),
+                                        c.span,
+                                    ));
+                                };
+                                let (slot, slot_type, mutable) =
+                                    self.locals.get(owner).cloned().ok_or_else(|| {
+                                        TirLowerError::UnknownLocal(owner.clone(), c.span)
+                                    })?;
+                                if !mutable
+                                    || !matches!(
+                                        slot_type,
+                                        TirType::Int64
+                                            | TirType::Bool
+                                            | TirType::UInt64
+                                            | TirType::UInt8
+                                            | TirType::Float64
+                                    )
+                                {
+                                    return Err(TirLowerError::UnsupportedExpr(
+                                        "VM inout calls currently support mutable scalar owners only".into(), c.span,
+                                    ));
+                                }
+                                self.builder.build_borrow_inout(slot)?
+                            } else {
+                                self.lower_expression(expr)?
+                            };
+                            ordered[parameter_index] = Some(value);
                         }
+                        let arg_values = ordered
+                            .into_iter()
+                            .map(|item| {
+                                item.ok_or_else(|| {
+                                    TirLowerError::UnsupportedExpr(
+                                        "missing direct-call argument".into(),
+                                        c.span,
+                                    )
+                                })
+                            })
+                            .collect::<Result<Vec<_>, _>>()?;
 
                         let func_id = self.module_builder.declare_function(&resolved_name);
                         return self
@@ -4058,7 +4149,11 @@ fn lower_function_inner(
             }
             let ty = resolve_hir_type(&p.ty, type_ctx, self_ty.as_ref(), &generic_subs)?;
             let tir_ty = map_type(&ty)?;
-            builder.add_param(tir_ty);
+            if p.is_inout {
+                builder.add_inout_param(tir_ty);
+            } else {
+                builder.add_param(tir_ty);
+            }
         }
         if builder.func.return_type == TirType::Unit {
             builder.build_ret(None)?;
@@ -4087,12 +4182,17 @@ fn lower_function_inner(
         }
         let ty = resolve_hir_type(&p.ty, type_ctx, self_ty.as_ref(), &generic_subs)?;
         let tir_ty = map_type(&ty)?;
-        let val_id = ctx.builder.add_param(tir_ty.clone());
+        let val_id = if p.is_inout {
+            ctx.builder.add_inout_param(tir_ty.clone())
+        } else {
+            ctx.builder.add_param(tir_ty.clone())
+        };
 
         let slot = ctx.builder.build_slot(tir_ty.clone(), Some(&p.name))?;
         ctx.builder.build_store(slot, val_id)?;
         // Parameters are immutable by default in Phase 12.2 lowering
-        ctx.locals.insert(p.name.clone(), (slot, tir_ty, false));
+        ctx.locals
+            .insert(p.name.clone(), (slot, tir_ty, p.is_inout));
     }
 
     if let Some(body) = &func.body {

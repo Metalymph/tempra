@@ -58,6 +58,7 @@ impl ModuleBuilder {
                 params: params.into_iter().map(|t| (TirValueId(0), t)).collect(), // Dummy value IDs for params in decl
                 return_type,
                 is_extern: false,
+                inout_params: Vec::new(),
                 blocks: Vec::new(),
                 next_value_id: 0,
                 next_block_id: 0,
@@ -82,6 +83,7 @@ impl FunctionBuilder {
                 params: Vec::new(),
                 return_type,
                 is_extern: false,
+                inout_params: Vec::new(),
                 blocks: Vec::new(),
                 next_value_id: 0,
                 next_block_id: 0,
@@ -95,7 +97,22 @@ impl FunctionBuilder {
     pub fn add_param(&mut self, ty: TirType) -> TirValueId {
         let id = self.next_value();
         self.func.params.push((id, ty));
+        self.func.inout_params.push(false);
         id
+    }
+
+    /// Adds a parameter whose storage must be borrowed exclusively by callers.
+    pub fn add_inout_param(&mut self, ty: TirType) -> TirValueId {
+        let id = self.add_param(ty);
+        *self.func.inout_params.last_mut().unwrap() = true;
+        id
+    }
+
+    /// A typed borrow handle that can only flow into an exclusive call argument.
+    pub fn build_borrow_inout(&mut self, slot: TirSlotId) -> Result<TirValueId, TirBuildError> {
+        let id = self.next_value();
+        self.push_instr(TirInstr::BorrowInout(id, slot))?;
+        Ok(id)
     }
 
     pub fn new_block(&mut self) -> TirBlockId {

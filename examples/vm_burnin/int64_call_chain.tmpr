@@ -12,7 +12,7 @@ fn level1(a: Int64) -> Int64 {
 
 fn main() -> Int64 {
     var total = 0
-    // Run multiple times to trigger JIT
+
     for i in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] {
         total = total + level1(i)
     }

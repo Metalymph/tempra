@@ -10,7 +10,7 @@ use std::path::PathBuf;
 /// Describes which output target the compiler should produce.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Target {
-    /// Emit a native binary via Cranelift.
+    /// Native AOT target (planned).
     Native,
     /// Emit a `.wasm` module via the Wasm backend.
     Wasm32Wasi,

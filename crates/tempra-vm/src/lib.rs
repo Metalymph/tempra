@@ -4,8 +4,6 @@ pub mod profile;
 pub mod value;
 
 #[cfg(test)]
-mod jit_tests;
-#[cfg(test)]
 mod tests;
 
 pub use error::VmError;

@@ -520,7 +520,7 @@ Names are illustrative fixture groups, **not** a claim that tests or files alrea
 - K2 established deterministic specialization, module ordering, explicit stdlib input and bounded cross-process reproducibility in the documented bytecode scope.
 - K3/K4 improved arithmetic parity, cache trust and specialized effect enforcement without making the HIR kernel an eternal language requirement.
 - The Memory & Ownership v0.4 decision adds one normative memory model for all phases, including comptime, with conservative effects and unique resources.
-- The proposed removal of JIT and Cranelift is a separate implementation operation; this document removes them from the forward execution plan but does not assert repository code removal.
+- JIT and Cranelift retirement is independent of comptime migration; neither runtime-native compilation nor a JIT backend is part of the comptime implementation plan.
 - The VM-first migration remains pending certification; its rollout must preserve the semantic contracts above.
 
 ## 20. Final principle

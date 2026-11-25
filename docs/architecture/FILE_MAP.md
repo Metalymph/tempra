@@ -195,12 +195,10 @@ Frontend-only `check` is **not** the current capability/memory execution certifi
 | `crates/tempra-wasm-host/` | Wasm host scaffold | Runtime hosting, **not** Wasm emission |
 | `crates/tempra-component-host/` | Component host scaffold | Separate from compiler backend |
 | `crates/tempra-linker/` | Linker scaffold | Future verified native output |
-| `crates/tempra-jit-cranelift/` | Legacy JIT code still present on remote `main` | **Remove** in separate implementation cleanup; archive docs |
-| `crates/tempra-backend-cranelift/` | Legacy native-backend scaffold still present on remote `main` | **Remove** in separate implementation cleanup; **not** Tempra Native's backend |
 
 **Tempra Native LLVM AOT:** approved future direction, **not** represented as a verified/implemented LLVM backend crate on the inspected repository tree. Do not invent `crates/tempra-backend-llvm/` as an existing path. Tempra Native's zero-GC/ARC objective is not proven and must not be presented as a shipping guarantee.
 
-JIT and Cranelift historical prototype notes belong in `docs/archive/jit/`. Merely moving documentation **does not remove Cargo dependencies, feature flags, CLI switches, tests or CI references**; that work is separate.
+JIT and Cranelift historical prototype notes belong in `docs/archive/jit/`. The retirement change also removes the compiler/runtime code, Cargo dependencies, feature flags, CLI switches and dedicated CI jobs.
 
 ## 10. Where to make upcoming changes
 
@@ -214,7 +212,7 @@ JIT and Cranelift historical prototype notes belong in `docs/archive/jit/`. Mere
 | Improve Tempra Script stack execution | `tempra-vm`, `tempra-bytecode-lower` | Bytecode VM/ISA; benchmark before optimization |
 | Move `comptime` to VM | `tempra-typeck`, `tempra-interpreter/comptime.rs`, VM | Comptime Spec and K1 parity obligations |
 | Record K5/K6 | `docs/roadmap/k5.md` and benchmark harness | Exact commit/environment/raw data, no invented speedups |
-| Remove JIT/Cranelift implementation | Cargo workspace, JIT/Cranelift crates, CLI/tests/CI/Just recipes | Dedicated code-removal PR; keep history archived |
+| Remove JIT/Cranelift implementation | Cargo workspace, JIT/Cranelift crates, CLI/tests/CI/Just recipes | Retirement change; validate workspace and keep history archived |
 | Develop Tempra Native | New backend design, only after requirements/gates | LLVM AOT target, Memory v0.4; no assumed RC-free proof |
 
 ## 11. Repository maintenance and verification

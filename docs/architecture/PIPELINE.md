@@ -205,7 +205,7 @@ verified source semantics / TIR + semantic side tables
 
 Tempra Script's intended memory management is ARC **NO-CYCLE**, with safe-language acyclicity and checked borrows. Tempra Native aims for LLVM-generated native values without GC/ARC where provable; **zero reference counting is a goal, not an established guarantee**. Dedicated Wasm code generation is distinct from Wasm hosting and from Tempra Native.
 
-**No JIT/Cranelift execution or AOT path is part of the target.** The inspected `main` still contains legacy crates, features and tests. Code removal must be verified in a separate implementation change. Historical documents reside in `docs/archive/`.
+**No JIT/Cranelift execution or AOT path is part of the target.** The retirement change removes the legacy crates, features and execution paths; build and test validation remain explicit gates. Historical documents reside in `docs/archive/`.
 
 ## 11. Error, diagnostic and unsupported-feature policy
 

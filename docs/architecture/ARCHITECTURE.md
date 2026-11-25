@@ -24,7 +24,7 @@ Architectural descriptions cannot override normative language rules:
 
 ### Baseline being described
 
-The inspected GitHub `main` snapshot still runs `tempra run` through the HIR interpreter by default, offers an experimental bytecode VM, and contains legacy Cranelift/JIT code. The user's local `feature/k5-compiler-timings` branch may be ahead of `main` and must be audited before the documentation PR is merged. The diagrams below explicitly separate this **observed historical implementation baseline** from the **approved future architecture**.
+The current runtime still defaults to HIR execution, with an experimental bytecode VM. The legacy JIT/Cranelift code has been removed by the retirement change; VM-first execution remains separately gated.
 
 ## 2. Design principles
 
@@ -184,7 +184,7 @@ The module system retains qualified module identity; compiled specializations an
 
 A dedicated Wasm/WASI code-generation path is separate and remains incomplete in the inspected baseline; Wasm hosting and Wasm backend emission are not interchangeable. Neither target is an Tempra Script scripting release prerequisite. There is **no planned Cranelift-based AOT backend** and **no planned JIT**.
 
-Legacy `tempra-jit-cranelift` and `tempra-backend-cranelift` crates still exist on the inspected `main` tree. Their **code removal is separate from this documentation migration**: deleting Cargo feature flags, CLI switches, tests, benchmarks, CI jobs and dependencies must be performed and verified in the implementation PR. Historical prototype documentation remains under [`docs/archive/jit/`](../archive/jit/).
+The legacy JIT and native backend scaffold have been removed from the workspace, VM, driver, CLI and CI. Historical design notes remain archived; the retirement change requires its own build and test validation.
 
 ## 11. Semantic milestones and release gates
 
@@ -213,7 +213,7 @@ The Tempra Script release plan additionally requires representative default-VM s
 4. Validate broad/specialized effects with fresh build, cache hit/miss, profile mode and unsupported-path denial.
 5. Prove that older cache revisions cannot skip changed semantics; retain K2's determinism tests.
 6. Gate `comptime` migration independently, including fuel, effect policy, specialization and values with ownership obligations.
-7. Remove JIT and Cranelift code from the **implementation** and verify dependency/CI/CLI cleanup separately.
+7. Keep the retired JIT and Cranelift paths absent; verify the dependency/CI/CLI gate.
 8. Update [Pipeline](PIPELINE.md), [File Map](FILE_MAP.md), [VM Coverage](../VM_COVERAGE.md) and roadmap statuses only with collected test evidence.
 
 **Architectural invariant:** one language memory model, one supported scripting runtime, verified semantic boundaries and independently validated backends.

@@ -10,12 +10,9 @@ fn main() {
         || matches!(&cli.command, Commands::Timings(args) if args.json);
 
     let result = match cli.command {
-        Commands::Run(args) => commands::run::run_command(
-            args.path,
-            args.args,
-            args.experimental_vm,
-            args.experimental_jit,
-        ),
+        Commands::Run(args) => {
+            commands::run::run_command(args.path, args.args, args.experimental_vm)
+        }
         Commands::Check(args) => commands::check::check_command(args.path, args.json),
         Commands::Diagnostics(args) => {
             commands::diagnostics::diagnostics_command(args.path, args.json)

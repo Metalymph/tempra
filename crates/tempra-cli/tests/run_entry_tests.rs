@@ -29,10 +29,6 @@ impl Drop for TestDir {
 }
 
 fn run_source(source: &str, experimental_vm: bool) -> Output {
-    run_source_with_flags(source, experimental_vm, false)
-}
-
-fn run_source_with_flags(source: &str, experimental_vm: bool, experimental_jit: bool) -> Output {
     let dir = TestDir::new();
     let path = dir.path().join("app.tmpr");
     std::fs::write(&path, source).unwrap();
@@ -41,9 +37,6 @@ fn run_source_with_flags(source: &str, experimental_vm: bool, experimental_jit: 
     command.arg("run");
     if experimental_vm {
         command.arg("--experimental-vm");
-    }
-    if experimental_jit {
-        command.arg("--experimental-jit");
     }
     command.arg(&path);
     command.output().unwrap()
@@ -165,21 +158,6 @@ fn main_unsupported_return_type_is_rejected_in_hir_and_vm() {
 }
 
 #[test]
-#[cfg(feature = "jit-cranelift")]
-fn entry_results_are_applied_in_experimental_jit_mode() {
-    let output = run_source_with_flags("pub fn main() -> Int64 { return 7 }", true, true);
-    assert_eq!(output.status.code(), Some(7), "stderr: {}", stderr(&output));
-
-    let output = run_source_with_flags(
-        "pub fn main() -> Result(Int64, String) { return Err(\"boom\") }",
-        true,
-        true,
-    );
-    assert_eq!(output.status.code(), Some(1), "stderr: {}", stderr(&output));
-    assert_eq!(stderr(&output), "error: Uncaught error: boom\n");
-}
-
-#[test]
 fn specialized_contracts_never_reach_cli_execution() {
     let dir = TestDir::new();
     let blocked = dir.path().join("blocked.txt");
@@ -234,4 +212,14 @@ pub fn main() -> Int64 {{
     let output = run_source(&valid, true);
     assert_success(&output);
     assert!(allowed.exists(), "a valid VM CLI program must execute");
+}
+
+#[test]
+fn removed_execution_flag_is_rejected() {
+    let output = Command::new(env!("CARGO_BIN_EXE_tempra"))
+        .args(["run", "--experimental-jit", "unused.tmpr"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("unexpected argument"));
 }

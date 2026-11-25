@@ -12,4 +12,3 @@ fn main() -> Int64 {
     return total
 }
 // Expected: 50
-// Note: process_string should be rejected by JIT.

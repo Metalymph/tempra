@@ -69,9 +69,9 @@ optimization rather than a safety substitute.
 **Forward target supersedes historical backend planning:** no JIT, LLVM as the
 first Tempra Native native codegen, and LLVM/Wasm evaluation later. Historical
 Cranelift AOT or dedicated Wasm proposals below remain recorded history,
-not the active product decision. Old default HIR interpreter, TIR interpreter
-and JIT remain **present today** and may only be retired after documented
-VM parity, comptime-staging and regression gates. `@deny`/`@pure`, Result,
+not the active product decision. The old default HIR interpreter and TIR interpreter remain present and may only
+be retired after documented VM parity, comptime-staging and regression gates.
+The JIT is removed independently of those gates. `@deny`/`@pure`, Result,
 ownership and deterministic diagnostics must never be bypassed during migration.
 
 S1–S4 product gates still apply: formatter/linter/LSP/MCP must be usable
@@ -99,8 +99,8 @@ Naming alone does not change the bytecode trust revision or source semantics.
 Tempra has a working lexer, parser, AST-to-HIR lowering, typechecker, HIR
 interpreter, module graph, native standard-library bridge, and language tooling.
 TIR, TIR verification, bytecode lowering and the bytecode VM exist with a
-smaller supported language subset. A historical Cranelift JIT prototype remains
-in the inspected source tree pending removal; it is not a target runtime. MIR,
+smaller supported language subset. The historical Cranelift JIT is retired;
+it is not a target runtime. MIR,
 general-purpose optimization, native AOT, and dedicated Wasm emission remain
 incomplete scaffolds.
 
@@ -788,7 +788,7 @@ engineering tracks are explicit and do not weaken the semantic dependency chain.
 | Tempra Native | Milestone A (LLVM AOT) | Future distribution after Script maturity; source tree contains legacy scaffolds, not a working LLVM backend. |
 | Wasm / WASI | Planned | Dedicated Wasm emission and host crates remain scaffolds; Wasm does not depend on the discarded Cranelift backend. Gate: verified output, hosting, contracts and memory parity. |
 | Tempra Script | Experimental VM path; future default | Bytecode VM with a narrower documented subset and cache; K3 parity and default-promotion gate remain open. |
-| Legacy JIT removal | Pending code cleanup | Historical Cranelift JIT prototype is excluded from Script and Native; remove crates, features, dependencies, CLI paths, tests and CI references in a separate engineering PR. |
+| Legacy JIT removal | Retirement change | Crates, features, dependencies, CLI paths and CI jobs removed; validate workspace and cross-platform CI. Historical notes remain archived. |
 | Type-system hardening | Planned / ongoing | Multiple valid interfaces for one associated type still use deterministic first-match (K2.4 debt); module/file `extend` lowering is limited. Gate: specified selection rules, diagnostics and tests. |
 | Comptime specialization | Planned | Full HIR specialization and runtime erasure are not implemented; `SpecializationKey` names remain temporary. Gate: deterministic specialization, runtime erasure, code-size control. |
 | Standard library | Implemented MVP, expanding | `std.fs`, `std.path`, `std.strings`, `std.io`; coverage differs between HIR and VM. Gate: stable APIs, backend parity, tests. |

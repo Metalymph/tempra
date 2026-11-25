@@ -20,7 +20,6 @@ members = [
   "crates/tempra-backend-wasm",
   "crates/tempra-wasm-host",
   "crates/tempra-component-host",
-  "crates/tempra-backend-cranelift",
   "crates/tempra-linker",
   "crates/tempra-package",
   "crates/tempra-repl",
@@ -33,7 +32,6 @@ members = [
   "crates/tempra-tir-interp",
   "crates/tempra-bytecode",
   "crates/tempra-bytecode-lower", "crates/tempra-vm",
-  "crates/tempra-jit-cranelift",
 ]
 resolver = "2"
 
@@ -69,7 +67,6 @@ tempra-stdlib = { path = "crates/tempra-stdlib" }
 tempra-backend-wasm = { path = "crates/tempra-backend-wasm" }
 tempra-wasm-host = { path = "crates/tempra-wasm-host" }
 tempra-component-host = { path = "crates/tempra-component-host" }
-tempra-backend-cranelift = { path = "crates/tempra-backend-cranelift" }
 tempra-linker = { path = "crates/tempra-linker" }
 tempra-package = { path = "crates/tempra-package" }
 tempra-repl = { path = "crates/tempra-repl" }

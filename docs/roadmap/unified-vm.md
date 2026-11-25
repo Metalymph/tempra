@@ -47,11 +47,11 @@ process or nondeterministic privileges from the runtime VM's broader host API.
 
 ## JIT removal order
 
-Audit `tempra-jit-cranelift`, `tempra-backend-cranelift`, CLI experimental flags,
-Cargo features, `justfile` jobs, integration tests and docs. Separate the
-**JIT implementation** from historical native backend scaffolds; no blanket
-delete before impact analysis. Remove JIT code/dependencies and revise coverage
-in a dedicated PR; keep the available VM execution path valid throughout.
+The retirement change removes the experimental JIT, its obsolete native backend
+scaffold, Cargo features/dependencies, CLI switch, dedicated CI jobs and test
+harness. Keep VM profiling, native externs, and the HIR/VM differential tests.
+Validate dependency closure and cross-platform CI before merging. Do not defer
+this removal to VM-only execution or comptime migration.
 
 ## Acceptance
 

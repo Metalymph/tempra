@@ -9,16 +9,6 @@ use tempra_bytecode::function::{BytecodeSignature, BytecodeType, FunctionId, Sig
 use tempra_bytecode::opcode::BytecodeInstr;
 use tempra_bytecode::verify::verify_module;
 
-#[cfg(feature = "jit-cranelift")]
-use std::collections::HashMap;
-#[cfg(feature = "jit-cranelift")]
-use tempra_jit_cranelift::helpers::JitRuntimeContext;
-#[cfg(feature = "jit-cranelift")]
-use tempra_jit_cranelift::{
-    compile_function_heap_aware, is_heap_requiring, JitEngine, JitFunctionI64,
-    JitFunctionI64HeapAware, JitRuntimeError,
-};
-
 pub struct Frame {
     /// Unique lifetime identity; never reused within this interpreter.
     pub token: u64,
@@ -41,15 +31,6 @@ pub struct Interpreter<'a> {
     exclusive_sources: HashSet<(u64, u32)>,
     pub(crate) profiling: Option<ProfilingState>,
     pub native_resolver: Option<NativeResolver>,
-
-    #[cfg(feature = "jit-cranelift")]
-    pub(crate) jit_engine: Option<JitEngine>,
-    /// Cache for pure-Int64 JIT functions (no heap params/locals).
-    #[cfg(feature = "jit-cranelift")]
-    pub(crate) jit_cache: HashMap<FunctionId, JitFunctionI64>,
-    /// Cache for heap-aware JIT functions (String/Array params or Len/Size/GetIndex opcodes).
-    #[cfg(feature = "jit-cranelift")]
-    pub(crate) jit_cache_heap: HashMap<FunctionId, JitFunctionI64HeapAware>,
 }
 
 impl<'a> Interpreter<'a> {
@@ -62,27 +43,14 @@ impl<'a> Interpreter<'a> {
             exclusive_sources: HashSet::new(),
             profiling: None,
             native_resolver: None,
-            #[cfg(feature = "jit-cranelift")]
-            jit_engine: None,
-            #[cfg(feature = "jit-cranelift")]
-            jit_cache: HashMap::new(),
-            #[cfg(feature = "jit-cranelift")]
-            jit_cache_heap: HashMap::new(),
         }
     }
 
     pub fn with_options(module: &'a BytecodeModule, options: VmOptions) -> Self {
-        let profiling = if options.profiling || options.jit_enabled {
+        let profiling = if options.profiling {
             Some(ProfilingState::new(module.functions.len(), options))
         } else {
             None
-        };
-
-        #[cfg(feature = "jit-cranelift")]
-        let (jit_engine, jit_cache) = if options.jit_enabled {
-            (Some(JitEngine::new()), HashMap::new())
-        } else {
-            (None, HashMap::new())
         };
 
         Self {
@@ -93,12 +61,6 @@ impl<'a> Interpreter<'a> {
             exclusive_sources: HashSet::new(),
             profiling,
             native_resolver: None,
-            #[cfg(feature = "jit-cranelift")]
-            jit_engine,
-            #[cfg(feature = "jit-cranelift")]
-            jit_cache,
-            #[cfg(feature = "jit-cranelift")]
-            jit_cache_heap: HashMap::new(),
         }
     }
 
@@ -128,103 +90,6 @@ impl<'a> Interpreter<'a> {
             });
         }
 
-        #[cfg(feature = "jit-cranelift")]
-        if self
-            .profiling
-            .as_ref()
-            .map(|p| p.options.jit_enabled)
-            .unwrap_or(false)
-        {
-            // ── Heap-aware JIT dispatch ──────────────────────────────────────────
-            if let Some(jit_fn) = self.jit_cache_heap.get(&function_id).copied() {
-                let mut ctx = JitRuntimeContext::new();
-                let mut i64_args: Vec<i64> = Vec::with_capacity(args.len());
-                let mut marshal_ok = true;
-                for arg in &args {
-                    match vm_value_to_jit_handle(arg, &mut ctx) {
-                        Some(h) => i64_args.push(h),
-                        None => {
-                            marshal_ok = false;
-                            break;
-                        }
-                    }
-                }
-
-                if !marshal_ok {
-                    // Unsupported value at the native boundary: fall back to the
-                    // interpreter. This is not a native runtime failure.
-                    if let Some(ref mut prof) = self.profiling {
-                        let stats = &mut prof.stats[function_id.0 as usize];
-                        stats.jit_fallback_calls += 1;
-                        stats.jit_heap_fallbacks += 1;
-                    }
-                } else {
-                    let before_helpers = ctx.helper_calls;
-                    let before_allocs = ctx.allocation_count();
-
-                    let start_native = std::time::Instant::now();
-                    let result =
-                        jit_fn.call_with_ctx(&mut ctx as *mut JitRuntimeContext, &i64_args);
-                    let elapsed = start_native.elapsed().as_nanos() as u64;
-
-                    if let Some(ref mut prof) = self.profiling {
-                        let stats = &mut prof.stats[function_id.0 as usize];
-                        stats.jit_runtime_calls += 1;
-                        stats.jit_heap_runtime_calls += 1;
-                        stats.jit_heap_helper_calls += ctx.helper_calls - before_helpers;
-                        stats.jit_heap_handle_allocations += ctx.allocation_count() - before_allocs;
-                        stats.jit_heap_context_objects += ctx.object_count() as u64;
-                        stats.jit_heap_handle_cache_hits += ctx.cache_hits;
-                        stats.jit_heap_handle_cache_misses += ctx.cache_misses;
-                        stats.jit_total_native_time_ns += elapsed;
-                        if result.is_err() {
-                            stats.jit_heap_errors += 1;
-                        }
-                    }
-
-                    match result {
-                        Ok(res) => return Ok(VmValue::Int64(res)),
-                        Err(error) => return Err(jit_runtime_error_to_vm(error)),
-                    }
-                }
-            }
-            // ── Pure-i64 JIT dispatch ────────────────────────────────────────────
-            else if let Some(jit_fn) = self.jit_cache.get(&function_id).copied() {
-                let mut i64_args = Vec::with_capacity(args.len());
-                let mut compatible = true;
-                for arg in &args {
-                    if let VmValue::Int64(i) = arg {
-                        i64_args.push(*i);
-                    } else {
-                        compatible = false;
-                        break;
-                    }
-                }
-
-                if !compatible {
-                    // Unsupported value at the native boundary: fall back to the
-                    // interpreter. This is not a native runtime failure.
-                    if let Some(ref mut prof) = self.profiling {
-                        prof.stats[function_id.0 as usize].jit_fallback_calls += 1;
-                    }
-                } else {
-                    let start_native = std::time::Instant::now();
-                    let result = jit_fn.call_i64(&i64_args);
-                    let elapsed = start_native.elapsed().as_nanos() as u64;
-
-                    if let Some(ref mut prof) = self.profiling {
-                        prof.stats[function_id.0 as usize].jit_runtime_calls += 1;
-                        prof.stats[function_id.0 as usize].jit_total_native_time_ns += elapsed;
-                    }
-
-                    match result {
-                        Ok(res) => return Ok(VmValue::Int64(res)),
-                        Err(error) => return Err(jit_runtime_error_to_vm(error)),
-                    }
-                }
-            }
-        }
-
         // Initialize locals
         let mut locals = vec![None; func.locals.len()];
         for (i, arg) in args.into_iter().enumerate() {
@@ -246,9 +111,6 @@ impl<'a> Interpreter<'a> {
 
         if let Some(ref mut prof) = self.profiling {
             prof.stats[function_id.0 as usize].call_count += 1;
-
-            #[cfg(feature = "jit-cranelift")]
-            self.maybe_compile_jit(function_id);
         }
 
         self.execute()
@@ -323,29 +185,6 @@ impl<'a> Interpreter<'a> {
                 backedge_count: s.backedge_count,
                 is_hot,
                 top_opcodes: top_opcodes_named,
-                jit_compile_attempts: s.jit_compile_attempts,
-                jit_compile_successes: s.jit_compile_successes,
-                jit_compile_failures: s.jit_compile_failures,
-                jit_runtime_calls: s.jit_runtime_calls,
-                jit_fallback_calls: s.jit_fallback_calls,
-                jit_rejection_reason: s.jit_rejection_reason.clone(),
-                jit_compile_time_ns: s.jit_compile_time_ns,
-                jit_total_native_time_ns: s.jit_total_native_time_ns,
-                jit_rejected_count: s.jit_rejected_count,
-                jit_heap_runtime_calls: s.jit_heap_runtime_calls,
-                jit_heap_helper_calls: s.jit_heap_helper_calls,
-                jit_heap_handle_allocations: s.jit_heap_handle_allocations,
-                jit_heap_context_objects: s.jit_heap_context_objects,
-                jit_heap_fallbacks: s.jit_heap_fallbacks,
-                jit_heap_errors: s.jit_heap_errors,
-                jit_heap_handle_cache_hits: s.jit_heap_handle_cache_hits,
-                jit_heap_handle_cache_misses: s.jit_heap_handle_cache_misses,
-                jit_skipped_below_threshold: s.jit_skipped_below_threshold,
-                jit_skipped_too_small: s.jit_skipped_too_small,
-                jit_skipped_retry_limit: s.jit_skipped_retry_limit,
-                jit_permanent_rejections: s.jit_permanent_rejections,
-                jit_retryable_failures: s.jit_retryable_failures,
-                jit_is_permanently_rejected: s.jit_is_permanently_rejected,
             });
         }
 
@@ -421,163 +260,6 @@ impl<'a> Interpreter<'a> {
             61 => "InoutSliceSet",
             62 => "InoutSliceLen",
             _ => "Unknown",
-        }
-    }
-
-    #[cfg(feature = "jit-cranelift")]
-    fn maybe_compile_jit(&mut self, function_id: FunctionId) {
-        // Skip if already compiled (either cache)
-        if self.jit_cache.contains_key(&function_id)
-            || self.jit_cache_heap.contains_key(&function_id)
-        {
-            return;
-        }
-
-        let mut attempt_needed = false;
-        if let Some(ref mut prof) = self.profiling {
-            let stats = &mut prof.stats[function_id.0 as usize];
-
-            if !prof.options.jit_enabled {
-                return;
-            }
-
-            if stats.jit_is_permanently_rejected {
-                return;
-            }
-
-            let is_hot = stats.call_count >= prof.options.hot_call_threshold
-                || stats.backedge_count >= prof.options.hot_backedge_threshold;
-            if !is_hot {
-                stats.jit_skipped_below_threshold += 1;
-                return;
-            }
-
-            let func_len = self.module.functions[function_id.0 as usize].code.len() as u64;
-            if func_len < prof.options.jit_min_instruction_count {
-                stats.jit_skipped_too_small += 1;
-                return;
-            }
-
-            if stats.jit_compile_failures >= prof.options.jit_retry_limit as u64 {
-                stats.jit_skipped_retry_limit += 1;
-                return;
-            }
-
-            attempt_needed = true;
-        }
-
-        if !attempt_needed {
-            return;
-        }
-
-        let start_time = std::time::Instant::now();
-
-        let eligibility = tempra_jit_cranelift::explain_jit_eligibility(self.module, function_id);
-        if let Some(ref mut prof) = self.profiling {
-            prof.stats[function_id.0 as usize].jit_compile_attempts += 1;
-            if !matches!(eligibility, tempra_jit_cranelift::JitEligibility::Eligible) {
-                prof.stats[function_id.0 as usize].jit_rejection_reason =
-                    Some(eligibility.to_string());
-                prof.stats[function_id.0 as usize].jit_rejected_count += 1;
-                prof.stats[function_id.0 as usize].jit_permanent_rejections += 1;
-                prof.stats[function_id.0 as usize].jit_is_permanently_rejected = true;
-                let elapsed = start_time.elapsed().as_nanos() as u64;
-                prof.stats[function_id.0 as usize].jit_compile_time_ns += elapsed;
-                return;
-            }
-        }
-
-        // Determine compile path: heap-aware or pure-i64
-        let heap_required = is_heap_requiring(&self.module.functions[function_id.0 as usize]);
-
-        if let Some(ref mut engine) = self.jit_engine {
-            let mut compiling = std::collections::HashSet::new();
-
-            if heap_required {
-                // ── Heap-aware compile path ───────────────────────────────────────
-                match compile_function_heap_aware(
-                    engine,
-                    self.module,
-                    function_id,
-                    &mut self.jit_cache_heap,
-                    &mut compiling,
-                ) {
-                    Ok(compiled) => {
-                        self.jit_cache_heap.insert(function_id, compiled);
-                        let elapsed = start_time.elapsed().as_nanos() as u64;
-                        if let Some(ref mut prof) = self.profiling {
-                            prof.stats[function_id.0 as usize].jit_compile_successes += 1;
-                            prof.stats[function_id.0 as usize].jit_compile_time_ns += elapsed;
-                        }
-                    }
-                    Err(e) => {
-                        let elapsed = start_time.elapsed().as_nanos() as u64;
-                        if let Some(ref mut prof) = self.profiling {
-                            prof.stats[function_id.0 as usize].jit_compile_failures += 1;
-                            prof.stats[function_id.0 as usize].jit_rejection_reason =
-                                Some(format!("Heap compile failed: {:?}", e));
-                            prof.stats[function_id.0 as usize].jit_compile_time_ns += elapsed;
-                            let failures = prof.stats[function_id.0 as usize].jit_compile_failures;
-                            if failures >= prof.options.jit_retry_limit as u64 {
-                                prof.stats[function_id.0 as usize].jit_is_permanently_rejected =
-                                    true;
-                                prof.stats[function_id.0 as usize].jit_permanent_rejections += 1;
-                            } else {
-                                prof.stats[function_id.0 as usize].jit_retryable_failures += 1;
-                            }
-                        }
-                    }
-                }
-            } else {
-                // ── Pure-i64 compile path ─────────────────────────────────────────
-                let old_keys: Vec<tempra_bytecode::function::FunctionId> =
-                    self.jit_cache.keys().copied().collect();
-                match tempra_jit_cranelift::compile_function_i64(
-                    engine,
-                    self.module,
-                    function_id,
-                    &mut self.jit_cache,
-                    &mut compiling,
-                ) {
-                    Ok(compiled) => {
-                        self.jit_cache.insert(function_id, compiled);
-                        let elapsed = start_time.elapsed().as_nanos() as u64;
-                        if let Some(ref mut prof) = self.profiling {
-                            for new_key in self.jit_cache.keys() {
-                                if !old_keys.contains(new_key) && *new_key != function_id {
-                                    prof.stats[new_key.0 as usize].jit_compile_attempts += 1;
-                                    prof.stats[new_key.0 as usize].jit_compile_successes += 1;
-                                }
-                            }
-                            prof.stats[function_id.0 as usize].jit_compile_successes += 1;
-                            prof.stats[function_id.0 as usize].jit_compile_time_ns += elapsed;
-                        }
-                    }
-                    Err(e) => {
-                        let elapsed = start_time.elapsed().as_nanos() as u64;
-                        if let Some(ref mut prof) = self.profiling {
-                            prof.stats[function_id.0 as usize].jit_compile_failures += 1;
-                            prof.stats[function_id.0 as usize].jit_rejection_reason =
-                                Some(format!("Compilation failed: {:?}", e));
-                            prof.stats[function_id.0 as usize].jit_compile_time_ns += elapsed;
-                            let failures = prof.stats[function_id.0 as usize].jit_compile_failures;
-                            if failures >= prof.options.jit_retry_limit as u64 {
-                                prof.stats[function_id.0 as usize].jit_is_permanently_rejected =
-                                    true;
-                                prof.stats[function_id.0 as usize].jit_permanent_rejections += 1;
-                            } else {
-                                prof.stats[function_id.0 as usize].jit_retryable_failures += 1;
-                            }
-                        }
-                    }
-                }
-            }
-        } else {
-            if let Some(ref mut prof) = self.profiling {
-                prof.stats[function_id.0 as usize].jit_compile_failures += 1;
-                prof.stats[function_id.0 as usize].jit_rejection_reason =
-                    Some("JIT engine not available".into());
-            }
         }
     }
 
@@ -855,9 +537,6 @@ impl<'a> Interpreter<'a> {
                         if offset.0 <= current_ip {
                             let stats = &mut prof.stats[frame_func_id.0 as usize];
                             stats.backedge_count += 1;
-
-                            #[cfg(feature = "jit-cranelift")]
-                            self.maybe_compile_jit(frame_func_id);
                         }
                     }
                     self.call_stack.last_mut().ok_or(VmError::MissingReturn)?.ip = offset.0;
@@ -869,9 +548,6 @@ impl<'a> Interpreter<'a> {
                             if offset.0 <= current_ip {
                                 let stats = &mut prof.stats[frame_func_id.0 as usize];
                                 stats.backedge_count += 1;
-
-                                #[cfg(feature = "jit-cranelift")]
-                                self.maybe_compile_jit(frame_func_id);
                             }
                         }
                         self.call_stack.last_mut().ok_or(VmError::MissingReturn)?.ip = offset.0;
@@ -1183,142 +859,9 @@ impl<'a> Interpreter<'a> {
                     for (index, value) in closure.captures.into_iter().chain(args).enumerate() {
                         locals[index] = Some(value);
                     }
-                    // Always execute the target in the bytecode VM, never JIT.
                     self.push_interpreted_frame(closure.function_id, locals, max_stack)?;
                 }
                 BytecodeInstr::Call(target_id, argc) => {
-                    #[cfg(feature = "jit-cranelift")]
-                    if self
-                        .profiling
-                        .as_ref()
-                        .map(|p| p.options.jit_enabled)
-                        .unwrap_or(false)
-                        && !self.module.functions[target_id.0 as usize]
-                            .inout_params
-                            .iter()
-                            .any(|access| *access)
-                    {
-                        // ── Heap-aware JIT call ──────────────────────────────────────────
-                        if let Some(jit_fn) = self.jit_cache_heap.get(&target_id).copied() {
-                            let mut args = Vec::with_capacity(argc as usize);
-                            for _ in 0..argc {
-                                args.push(self.pop()?);
-                            }
-                            args.reverse();
-
-                            let mut ctx = JitRuntimeContext::new();
-                            let mut i64_args: Vec<i64> = Vec::with_capacity(argc as usize);
-                            let mut marshal_ok = true;
-                            for arg in &args {
-                                match vm_value_to_jit_handle(arg, &mut ctx) {
-                                    Some(h) => i64_args.push(h),
-                                    None => {
-                                        marshal_ok = false;
-                                        break;
-                                    }
-                                }
-                            }
-
-                            if marshal_ok {
-                                let before_helpers = ctx.helper_calls;
-                                let before_allocs = ctx.allocation_count();
-
-                                let start_native = std::time::Instant::now();
-                                let result = jit_fn
-                                    .call_with_ctx(&mut ctx as *mut JitRuntimeContext, &i64_args);
-                                let elapsed = start_native.elapsed().as_nanos() as u64;
-
-                                if let Some(ref mut prof) = self.profiling {
-                                    let stats = &mut prof.stats[target_id.0 as usize];
-                                    stats.jit_runtime_calls += 1;
-                                    stats.jit_heap_runtime_calls += 1;
-                                    stats.jit_heap_helper_calls +=
-                                        ctx.helper_calls - before_helpers;
-                                    stats.jit_heap_handle_allocations +=
-                                        ctx.allocation_count() - before_allocs;
-                                    stats.jit_heap_context_objects += ctx.object_count() as u64;
-                                    stats.jit_heap_handle_cache_hits += ctx.cache_hits;
-                                    stats.jit_heap_handle_cache_misses += ctx.cache_misses;
-                                    stats.jit_total_native_time_ns += elapsed;
-                                    if result.is_err() {
-                                        stats.jit_heap_errors += 1;
-                                    }
-                                }
-
-                                match result {
-                                    Ok(res) => {
-                                        self.push(VmValue::Int64(res))?;
-                                        continue;
-                                    }
-                                    Err(error) => return Err(jit_runtime_error_to_vm(error)),
-                                }
-                            }
-
-                            // Unsupported value at the native boundary: fall back to
-                            // the interpreter. This is not a native runtime failure.
-                            if let Some(ref mut prof) = self.profiling {
-                                let stats = &mut prof.stats[target_id.0 as usize];
-                                stats.jit_fallback_calls += 1;
-                                stats.jit_heap_fallbacks += 1;
-                            }
-                            // Put args back on stack for the interpreter.
-                            for arg in args {
-                                self.push(arg)?;
-                            }
-                        }
-                        // ── Pure-i64 JIT call ────────────────────────────────────────────
-                        else if let Some(jit_fn) = self.jit_cache.get(&target_id).copied() {
-                            let mut args = Vec::with_capacity(argc as usize);
-                            for _ in 0..argc {
-                                args.push(self.pop()?);
-                            }
-                            args.reverse();
-
-                            let mut i64_args = Vec::with_capacity(argc as usize);
-                            let mut compatible = true;
-                            for arg in &args {
-                                if let VmValue::Int64(i) = arg {
-                                    i64_args.push(*i);
-                                } else {
-                                    compatible = false;
-                                    break;
-                                }
-                            }
-
-                            if compatible {
-                                let start_native = std::time::Instant::now();
-                                let result = jit_fn.call_i64(&i64_args);
-                                let elapsed = start_native.elapsed().as_nanos() as u64;
-
-                                if let Some(ref mut prof) = self.profiling {
-                                    let stats = &mut prof.stats[target_id.0 as usize];
-                                    stats.jit_runtime_calls += 1;
-                                    stats.jit_total_native_time_ns += elapsed;
-                                }
-
-                                match result {
-                                    Ok(res) => {
-                                        self.push(VmValue::Int64(res))?;
-                                        continue;
-                                    }
-                                    Err(error) => return Err(jit_runtime_error_to_vm(error)),
-                                }
-                            }
-
-                            // Unsupported value at the native boundary: fall back to
-                            // the interpreter. This is not a native runtime failure.
-                            if let Some(ref mut prof) = self.profiling {
-                                prof.stats[target_id.0 as usize].jit_fallback_calls += 1;
-                            }
-                            // Put args back on stack for the interpreter.
-                            for arg in args {
-                                self.push(arg)?;
-                            }
-                        } else {
-                            self.maybe_compile_jit(target_id);
-                        }
-                    }
-
                     let target_func = self
                         .module
                         .functions
@@ -1775,7 +1318,7 @@ impl<'a> Interpreter<'a> {
 
     /// Enters a verified bytecode function using the same frame lifecycle for
     /// direct and indirect calls. The caller has already populated parameter
-    /// locals and handled native/JIT dispatch where applicable.
+    /// locals and handled native extern dispatch where applicable.
     #[inline]
     fn push_interpreted_frame(
         &mut self,
@@ -2001,53 +1544,6 @@ impl<'a> Interpreter<'a> {
                 found: other.type_name().into(),
             }),
         }
-    }
-}
-
-/// Converts a native JIT failure into a VM error.
-///
-/// Native runtime failures are returned to the caller and never trigger VM
-/// fallback: by the time the native wrapper reports an error, the function has
-/// already started executing and re-running it in the interpreter would
-/// duplicate side effects.
-#[cfg(feature = "jit-cranelift")]
-fn jit_runtime_error_to_vm(error: JitRuntimeError) -> VmError {
-    match error {
-        JitRuntimeError::Int64Arithmetic(error) => VmError::Int64Arithmetic(error),
-        other => VmError::Native(other.to_string()),
-    }
-}
-
-/// Marshals a `VmValue` into an i64 suitable for passing to a heap-aware JIT function.
-///
-/// - `VmValue::Int64(i)`  → the integer itself, no allocation needed.
-/// - `VmValue::String(s)` → allocates a string handle in `ctx`, returns handle as i64.
-/// - `VmValue::Array(arr)` where every element is `Int64` → allocates an array handle
-///   containing `JitHeapScalar::Int64` elements, returns handle as i64.
-///
-/// Returns `None` for any type that cannot be represented across the JIT boundary
-/// (Bool, UInt64, Float64, Slice, Enum, Struct, heterogeneous arrays). The caller
-/// must fall back to the interpreter in that case.
-#[cfg(feature = "jit-cranelift")]
-fn vm_value_to_jit_handle(value: &VmValue, ctx: &mut JitRuntimeContext) -> Option<i64> {
-    match value {
-        VmValue::Int64(i) => Some(*i),
-        VmValue::String(s) => {
-            let handle = ctx.alloc_or_get_string(s);
-            Some(handle.0 as i64)
-        }
-        VmValue::Array(arr) => {
-            let mut values = Vec::with_capacity(arr.len());
-            for elem in arr.iter() {
-                match elem {
-                    VmValue::Int64(i) => values.push(*i),
-                    _ => return None, // heterogeneous or unsupported element type
-                }
-            }
-            let handle = ctx.alloc_or_get_array_int64(&values);
-            Some(handle.0 as i64)
-        }
-        _ => None,
     }
 }
 

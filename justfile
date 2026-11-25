@@ -169,42 +169,6 @@ install-tools:
 perf-vm:
     cargo test -p tempra-driver --test perf_baseline -- --ignored --nocapture
 
-# Run JIT burn-in stability tests
-jit-burnin:
-    cargo test -p tempra-driver --test jit_burnin_tests --features jit-cranelift -- --nocapture
-
-# Run JIT burn-in including ignored stress tests
-jit-burnin-all:
-    cargo test -p tempra-driver --test jit_burnin_tests --features jit-cranelift -- --nocapture --include-ignored
-
-# --------------------------------------------------
-# HEAP-AWARE JIT
-# --------------------------------------------------
-
-# Run heap-aware JIT integration tests
-jit-heap:
-    cargo test -p tempra-driver --test heap_jit_source_tests --features jit-cranelift
-
-# Run heap-aware JIT CLI smoke tests (exit code 0 = pass)
-jit-heap-smoke:
-    cargo run -p tempra-cli --features jit-cranelift -- run examples/jit_heap/string_len.tmpr --experimental-vm --experimental-jit
-    cargo run -p tempra-cli --features jit-cranelift -- run examples/jit_heap/string_size.tmpr --experimental-vm --experimental-jit
-    cargo run -p tempra-cli --features jit-cranelift -- run examples/jit_heap/array_len.tmpr --experimental-vm --experimental-jit
-    cargo run -p tempra-cli --features jit-cranelift -- run examples/jit_heap/array_get.tmpr --experimental-vm --experimental-jit
-    cargo run -p tempra-cli --features jit-cranelift -- run examples/jit_heap/mixed_heap_int.tmpr --experimental-vm --experimental-jit
-
-# Run heap-aware JIT performance harness
-jit-heap-perf:
-    cargo test -p tempra-driver --test heap_jit_perf --features jit-cranelift -- --ignored --nocapture
-
-# Phase 17 JIT verification gate: runs formatting, compiler checks, workspace test suite, heap JIT tests and CLI smoke tests
-jit-phase17:
-    cargo fmt --all -- --check
-    cargo check --workspace --features jit-cranelift
-    cargo test --workspace --features jit-cranelift
-    just jit-heap
-    just jit-heap-smoke
-
 # Run all tooling and diagnostics integration tests
 tooling-check:
     cargo test -p tempra-driver --test tooling_integration_tests
@@ -214,9 +178,9 @@ tooling-check:
 
 # Run smoke test for CLI diagnostics and symbol extraction commands
 tooling-smoke:
-    cargo run -p tempra-cli -- check --json examples/jit_heap/string_len.tmpr
-    cargo run -p tempra-cli -- diagnostics --json examples/jit_heap/string_len.tmpr
-    cargo run -p tempra-cli -- symbols --json examples/jit_heap/string_len.tmpr
+    cargo run -p tempra-cli -- check --json examples/vm_heap/string_len.tmpr
+    cargo run -p tempra-cli -- diagnostics --json examples/vm_heap/string_len.tmpr
+    cargo run -p tempra-cli -- symbols --json examples/vm_heap/string_len.tmpr
 
 # --------------------------------------------------
 # LSP SERVER

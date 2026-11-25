@@ -79,7 +79,6 @@ def facts() -> dict[str, bool]:
         path = ROOT / relative
         return path.read_text() if path.exists() else ""
     p = read("crates/tempra-driver/src/pipeline.rs")
-    cli = read("crates/tempra-cli/src/app.rs")
     repl = read("crates/tempra-repl/src/repl.rs")
     tests = read("crates/tempra-driver/tests/experimental_vm_tests.rs")
     return {
@@ -87,7 +86,6 @@ def facts() -> dict[str, bool]:
         "vm_source_executor_present": "run_source_vm(" in p,
         "vm_main_requirement_marker": "requires main()" in p,
         "vm_cli_args_rejection_marker": "CLI arguments are not yet supported" in p,
-        "jit_cli_option_marker": "experimental_jit" in cli,
         "repl_interpreter_reference": "tempra_interpreter" in repl,
         "tir_interpreter_crate_present": (ROOT / "crates/tempra-tir-interp").exists(),
         "weak_vm_accepts_unsupported_test": "may succeed" in tests and "UnsupportedExperimentalVm" in tests,

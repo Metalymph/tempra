@@ -51,9 +51,9 @@ Source → Lexer → Parser → typed HIR → TIR → verification
 
 ### Retired design direction — JIT and Cranelift
 
-The architectural decision is to **remove**, not merely freeze, the experimental Cranelift JIT and Cranelift backend direction. Their historical documents are preserved under [`archive/jit/`](archive/jit/).
+The experimental Cranelift JIT and Cranelift native backend scaffold are retired. Historical documents are preserved under [`docs/archive/jit/`](docs/archive/jit/).
 
-**Documentation archival is not code removal.** Until the separate implementation change has actually removed JIT/Cranelift crates, features, CLI options, tests, commands, CI references, and dependencies, documentation must state that the old code may still exist. No current production or forward-looking design should describe the JIT as an active target.
+The removal eliminates the runtime dispatch tier, Cargo features, CLI switch and dedicated CI jobs. VM profiling remains available for measurement only. No JIT or Cranelift backend is part of the forward architecture.
 
 ## 3. Documentation map
 
@@ -104,7 +104,7 @@ The items below are **documentation and implementation alignment requirements**,
 5. **Async/actors:** no live dynamic borrow across suspension; task-owned values and actor isolation use the single memory model. Actor-handle identity and lifetime remain **DEFERRED POST NO-CYCLE**.
 6. **Allocation effects:** verify the conservative `@deny(alloc)` contract against physical copying, COW, buffer compaction, closure environments, and runtime allocation. Do not let backend-specific optimizations define source-level validity.
 7. **Comptime authority:** verify that migration from HIR evaluation to VM evaluation preserves type, ownership, deterministic execution, effects, termination/fuel budgets, and semantic cache invalidation.
-8. **JIT and Cranelift removal:** archive the documents now; remove runtime/compiler code and references in a separate verified implementation change. Replace forward-looking AOT references with LLVM only where the roadmap has approved that direction.
+8. **JIT and Cranelift removal:** historical documentation remains archived; the removal has its own workspace and CI validation gate. The planned native AOT direction is LLVM.
 9. **Implementation status:** update coverage, feature flags, CLI examples, test commands, and performance claims only against the exact commit and test results after VM parity.
 10. **Links and references:** check links after historical files move to `archive/`; no living normative file should link to archived content as if it were current.
 

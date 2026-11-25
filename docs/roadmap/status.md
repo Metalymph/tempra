@@ -11,7 +11,7 @@ One language, two distributions:
 - **Tempra Script:** scripting-first deployment through the verified stack-bytecode VM. This is the **target default**, not yet a verified migration of the historical HIR-default path.
 - **Tempra Native:** native LLVM ahead-of-time compilation, planned after Script reaches the required maturity and semantic gates.
 
-The source syntax, type system, value semantics, [Memory & Ownership v0.4](../Tempra_Memory_Ownership_v0.4.md), and capability contracts are shared. These are **not two dialects or separate languages**. There is no JIT target. Historical Cranelift code remains subject to an independent removal change.
+The source syntax, type system, value semantics, [Memory & Ownership v0.4](../Tempra_Memory_Ownership_v0.4.md), and capability contracts are shared. These are **not two dialects or separate languages**. There is no JIT target. The Cranelift code-removal change is independent of the remaining VM parity and ownership milestones.
 
 ## Implementation and release gates
 

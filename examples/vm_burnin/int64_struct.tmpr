@@ -17,4 +17,3 @@ fn main() -> Int64 {
     return total
 }
 // Expected: 300
-// Note: process_point should be rejected by JIT.

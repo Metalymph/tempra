@@ -69,7 +69,7 @@ The compiler may retain narrowly scoped evaluators or testing facilities during 
 
 **Decision:** Remove the experimental JIT and Cranelift, rather than merely freeze further JIT development. Neither is an optimization stage, dispatch tier, requirement or fallback of the target Tempra Script runtime.
 
-The older Cranelift-JIT descriptions and test procedures are preserved in [`archive/jit/`](archive/jit/). Their availability does not make them normative. **Moving documentation does not remove code**: crates, Cargo features, options, CLI flags, tests, benches and CI references must be removed or migrated by a separately validated implementation change. Until then, references to those facilities describe *legacy code only*.
+The older Cranelift-JIT descriptions and test procedures are preserved in [`archive/jit/`](archive/jit/). Their availability does not make them normative. The retirement change removes or migrates the crates, Cargo features, options, CLI flags, tests, benchmarks and CI references. The build, dependency and test gate must still validate the resulting tree.
 
 Tempra Native is a **separate planned LLVM AOT backend**, subject to the same memory/effect contracts; this document does not specify LLVM code generation.
 
@@ -345,7 +345,7 @@ The historical VM provides optional call, instruction and loop-backedge counters
 - detecting regressions across compiler versions;
 - informing later *VM-only* optimizations.
 
-The historic `hot` label or thresholds may remain a profiling display field if the implementation retains them, but **must not trigger native compilation** in the target. Remove JIT compilation counters, JIT rejection/fallback statistics and feature-switch documentation from the living VM specification after the implementation cleanup. Preserve their history in the archive.
+The `hot` label and thresholds are VM profiling telemetry only; they do not trigger native compilation. JIT compilation, rejection and fallback counters have been removed; their history remains in the archive.
 
 K5/K6 performance gates require pinned commit, compiler/build profile, OS/CPU, workload, measurement method and raw results. This document asserts no benchmark numbers or performance superiority over Python, JavaScript or native code.
 

@@ -5,9 +5,9 @@ use std::time::Duration;
 
 use tempra_driver::{
     compile_file_to_bytecode_with_analysis, compile_to_bytecode_with_analysis,
-    inspect_effects_file, run_file, run_file_with_experimental_vm_jit, run_source, run_source_hir,
-    run_source_vm, run_source_vm_profiled, DriverError, EffectQueryError,
-    SpecializedContractViolation, SpecializedMatch, VmCompilation,
+    inspect_effects_file, run_file, run_file_vm, run_source, run_source_hir, run_source_vm,
+    run_source_vm_profiled, DriverError, EffectQueryError, SpecializedContractViolation,
+    SpecializedMatch, VmCompilation,
 };
 use tempra_effects::{
     CapabilityAnalysisError, EffectOperation, LocalEffectFact, SpecializedOperationFact,
@@ -208,7 +208,7 @@ fn vm_and_profiling_never_execute_contract_violations() {
     let violating_path = dir.path().join("violating.tmpr");
     fs::write(&violating_path, write_source(&blocked, &blocked)).unwrap();
 
-    let error = run_file_with_experimental_vm_jit(&violating_path, &[], false).unwrap_err();
+    let error = run_file_vm(&violating_path, &[]).unwrap_err();
     assert!(matches!(
         error,
         DriverError::SpecializedContractViolations(ref violations) if violations.len() == 1
@@ -221,7 +221,7 @@ fn vm_and_profiling_never_execute_contract_violations() {
     let allowed = dir.path().join("vm-allowed.txt");
     let valid_path = dir.path().join("valid.tmpr");
     fs::write(&valid_path, write_source(&blocked, &allowed)).unwrap();
-    let value = run_file_with_experimental_vm_jit(&valid_path, &[], false).unwrap();
+    let value = run_file_vm(&valid_path, &[]).unwrap();
     assert_eq!(value, VmValue::Int64(0));
     assert!(
         allowed.exists(),
@@ -265,37 +265,14 @@ pub fn main() -> Int64 { return 42 }
 }
 
 #[test]
-fn jit_options_do_not_bypass_specialized_compile_enforcement() {
-    let dir = tempfile::tempdir().unwrap();
-    let blocked = dir.path().join("jit-blocked.txt");
-    let violating_path = dir.path().join("jit-violating.tmpr");
-    fs::write(&violating_path, write_source(&blocked, &blocked)).unwrap();
-
-    let error = run_file_with_experimental_vm_jit(&violating_path, &[], true).unwrap_err();
-    assert!(matches!(
-        error,
-        DriverError::SpecializedContractViolations(ref violations) if violations.len() == 1
-    ));
-    assert!(!blocked.exists());
-
-    let allowed = dir.path().join("jit-allowed.txt");
-    let valid_path = dir.path().join("jit-valid.tmpr");
-    fs::write(&valid_path, write_source(&blocked, &allowed)).unwrap();
-    let value = run_file_with_experimental_vm_jit(&valid_path, &[], true).unwrap();
-    assert_eq!(value, VmValue::Int64(0));
-    assert!(allowed.exists());
-}
-
-#[test]
-#[cfg(feature = "jit-cranelift")]
-fn jit_compiled_programs_retain_specialized_contracts() {
+fn profiled_vm_programs_retain_specialized_contracts() {
     let source = r#"
 import std.fs;
 
-// k4.6b.2 actual jit valid specialized contract
+// k4.6b.2 profiled VM valid specialized contract
 fn add(a: Int64, b: Int64) -> Int64 { return a + b }
 
-@deny(fs.write(destination: "jit-never.txt"))
+@deny(fs.write(destination: "profiled-vm-never.txt"))
 pub fn main() -> Int64 {
     let xs = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     var sum = 0
@@ -309,7 +286,6 @@ pub fn main() -> Int64 {
 "#;
     let _guard = CacheGuard::for_source(source);
     let mut options = VmOptions::default();
-    options.jit_enabled = true;
     options.profiling = true;
     options.hot_call_threshold = 10;
     options.hot_backedge_threshold = 10;
@@ -320,8 +296,8 @@ pub fn main() -> Int64 {
         profile
             .function_stats
             .iter()
-            .any(|stats| stats.jit_compile_successes > 0),
-        "the JIT-enabled path must actually compile at least one function"
+            .any(|stats| stats.is_hot && stats.call_count > 0),
+        "the profiled VM path must record hot execution"
     );
 }
 
@@ -459,7 +435,7 @@ fn semantics_7_artifact_cannot_certify_numeric_backend_parity() {
 }
 
 #[test]
-fn v02_targets_reject_imported_origins_before_vm_or_jit_execution() {
+fn v02_targets_reject_imported_origins_before_vm_execution() {
     let dir = tempfile::tempdir().unwrap();
     let written = dir.path().join("must-not-exist.txt");
     fs::write(
@@ -477,19 +453,15 @@ fn v02_targets_reject_imported_origins_before_vm_or_jit_execution() {
             format!("import helper; @deny({target}) pub fn main() {{ helper.write() }}"),
         )
         .unwrap();
-        for jit in [false, true] {
-            let violations = expect_specialized_violations(
-                run_file_with_experimental_vm_jit(&path, &[], jit).unwrap_err(),
-            );
-            assert_eq!(violations.len(), 1);
-            assert_eq!(
-                violations[0].classification,
-                SpecializedMatch::DefiniteMatch
-            );
-            assert_eq!(violations[0].witness.calls.len(), 1);
-            assert_eq!(violations[0].witness.origin, violations[0].fact);
-            assert!(!written.exists());
-        }
+        let violations = expect_specialized_violations(run_file_vm(&path, &[]).unwrap_err());
+        assert_eq!(violations.len(), 1);
+        assert_eq!(
+            violations[0].classification,
+            SpecializedMatch::DefiniteMatch
+        );
+        assert_eq!(violations[0].witness.calls.len(), 1);
+        assert_eq!(violations[0].witness.origin, violations[0].fact);
+        assert!(!written.exists());
     }
 }
 
@@ -626,9 +598,7 @@ fn main() -> Int64 { return k46b2_unclassified_native() }
     let _guard = CacheGuard::for_source(UNKNOWN);
     expect_unclassified_extern(run_source_vm(UNKNOWN, &[]).unwrap_err());
     expect_unclassified_extern(run_source_vm_profiled(UNKNOWN, VmOptions::default()).unwrap_err());
-    expect_unclassified_extern(
-        run_file_with_experimental_vm_jit(&source_path, &[], true).unwrap_err(),
-    );
+    expect_unclassified_extern(run_file_vm(&source_path, &[]).unwrap_err());
     match inspect_effects_file(&source_path).unwrap_err() {
         EffectQueryError::Compiler(error) => expect_unclassified_extern(error),
         other => panic!("expected inspection to fail closed, got {other:?}"),

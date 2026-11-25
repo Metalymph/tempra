@@ -503,26 +503,12 @@ pub fn run_file(path: &Path) -> Result<(), DriverError> {
 }
 
 pub fn run_file_with_experimental_vm(path: &Path, args: &[String]) -> Result<(), DriverError> {
-    run_file_with_experimental_vm_jit_entry(path, args, false)
-}
-
-/// Executes a file entry point through the experimental VM/JIT and applies
-/// entry-point result handling. The raw VM value remains available through
-/// [`run_file_with_experimental_vm_jit`].
-pub fn run_file_with_experimental_vm_jit_entry(
-    path: &Path,
-    args: &[String],
-    jit_enabled: bool,
-) -> Result<(), DriverError> {
-    let value = run_file_with_experimental_vm_jit(path, args, jit_enabled)?;
+    let value = run_file_vm(path, args)?;
     normalize_vm_entry_value(value)
 }
 
-pub fn run_file_with_experimental_vm_jit(
-    path: &Path,
-    args: &[String],
-    jit_enabled: bool,
-) -> Result<tempra_vm::value::VmValue, DriverError> {
+/// Executes a file through the bytecode VM and returns its raw entry value.
+pub fn run_file_vm(path: &Path, args: &[String]) -> Result<VmValue, DriverError> {
     if !args.is_empty() {
         return Err(DriverError::UnsupportedExperimentalVm(
             "CLI arguments are not yet supported in experimental VM".into(),
@@ -541,10 +527,7 @@ pub fn run_file_with_experimental_vm_jit(
                 "experimental VM currently requires main()".into(),
             )
         })?;
-    let options = tempra_vm::profile::VmOptions {
-        jit_enabled,
-        ..Default::default()
-    };
+    let options = tempra_vm::profile::VmOptions::default();
     tempra_vm::run_function_with_resolver(
         bc_module,
         main_name,
@@ -770,19 +753,6 @@ pub fn inspect_effects_file_with_config(
     compilation
         .effect_inspection()
         .map_err(crate::EffectQueryError::Projection)
-}
-
-pub fn run_source_with_experimental_vm_jit(
-    source: &str,
-    args: &[String],
-    jit_enabled: bool,
-) -> Result<(), DriverError> {
-    let options = tempra_vm::profile::VmOptions {
-        jit_enabled,
-        ..Default::default()
-    };
-    let value = run_source_vm_with_options(source, args, options)?;
-    normalize_vm_entry_value(value)
 }
 
 pub fn run_file_with_args(path: &Path, args: &[String]) -> Result<(), DriverError> {

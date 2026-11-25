@@ -109,8 +109,7 @@ pub fn main() -> Int64 {
 }
 "#;
 
-#[cfg(feature = "jit-cranelift")]
-const JIT_SOURCE: &str = r#"
+const PROFILED_VM_SOURCE: &str = r#"
 import std.fs;
 
 fn add(a: Int64, b: Int64) -> Int64 { return a + b }
@@ -1036,8 +1035,7 @@ fn independent_processes_have_one_canonical_specialized_violation_report() {
 }
 
 #[test]
-#[cfg(feature = "jit-cranelift")]
-fn native_std_calls_are_not_jit_eligible() {
+fn profiled_vm_executes_native_std_calls() {
     let cases = [
         (
             "std.fs.exists",
@@ -1046,7 +1044,7 @@ import std.fs;
 
 @deny(process.exec(executable: "/never"))
 pub fn main() -> Int64 {
-    if std.fs.exists("jit-native-never-exists.txt") {
+    if std.fs.exists("profiled-vm-never-exists.txt") {
         return 1
     }
     return 0
@@ -1060,7 +1058,7 @@ import std.io;
 
 @deny(fs, io.read)
 pub fn main() -> Int64 {
-    std.io.println("jit-native-io-is-not-compiled")
+    std.io.println("profiled-vm-native-io")
     return 0
 }
 "#,
@@ -1075,10 +1073,8 @@ pub fn main() -> Int64 {
 
         let mut options = VmOptions::default();
         options.profiling = true;
-        options.jit_enabled = true;
         options.hot_call_threshold = 0;
         options.hot_backedge_threshold = 0;
-        options.jit_min_instruction_count = 0;
         let (value, profile) = tempra_vm::Interpreter::run_function_profiled_with_resolver(
             compilation.bytecode(),
             &entry,
@@ -1094,40 +1090,19 @@ pub fn main() -> Int64 {
             .iter()
             .find(|stats| stats.function_name == entry)
             .unwrap_or_else(|| panic!("{name} must retain entry profile data"));
-        assert!(
-            stats.jit_compile_attempts > 0,
-            "{name} entry must reach JIT eligibility"
-        );
-        assert_eq!(
-            stats.jit_compile_successes, 0,
-            "{name} must not be compiled by JIT v1"
-        );
-        assert!(
-            stats.jit_rejected_count > 0,
-            "{name} must be rejected before native execution"
-        );
-        assert_eq!(
-            stats.jit_runtime_calls, 0,
-            "{name} must execute through the interpreter fallback"
-        );
-        let reason = stats.jit_rejection_reason.as_deref().unwrap_or("");
-        assert!(
-            reason.contains("Call target not JIT eligible") || reason.contains("Unsupported type"),
-            "{name} must expose a JIT v1 signature/call-target rejection, got: {reason}"
-        );
+        assert!(stats.call_count > 0);
+        assert!(stats.instruction_count > 0);
     }
 }
 
 #[test]
-#[cfg(feature = "jit-cranelift")]
-fn valid_specialized_program_has_equivalent_vm_and_jit_results() {
+fn valid_specialized_program_has_equivalent_vm_and_profiled_vm_results() {
     let dir = tempfile::tempdir().unwrap();
-    let path = write_source(dir.path(), JIT_SOURCE);
+    let path = write_source(dir.path(), PROFILED_VM_SOURCE);
     let compilation = compile_file_to_bytecode_with_analysis(&path).unwrap();
     let entry = entry_name(&compilation).to_owned();
 
-    let mut vm_options = VmOptions::default();
-    vm_options.profiling = true;
+    let vm_options = VmOptions::default();
     let (vm_value, _) = tempra_vm::Interpreter::run_function_profiled_with_resolver(
         compilation.bytecode(),
         &entry,
@@ -1137,27 +1112,26 @@ fn valid_specialized_program_has_equivalent_vm_and_jit_results() {
     )
     .unwrap();
 
-    let mut jit_options = VmOptions::default();
-    jit_options.profiling = true;
-    jit_options.jit_enabled = true;
-    jit_options.hot_call_threshold = 10;
-    jit_options.hot_backedge_threshold = 10;
-    let (jit_value, profile) = tempra_vm::Interpreter::run_function_profiled_with_resolver(
+    let mut profiled_options = VmOptions::default();
+    profiled_options.profiling = true;
+    profiled_options.hot_call_threshold = 10;
+    profiled_options.hot_backedge_threshold = 10;
+    let (profiled_value, profile) = tempra_vm::Interpreter::run_function_profiled_with_resolver(
         compilation.bytecode(),
         &entry,
         vec![],
-        jit_options,
+        profiled_options,
         None,
     )
     .unwrap();
 
     assert_eq!(vm_value, VmValue::Int64(0));
-    assert_eq!(jit_value, vm_value);
+    assert_eq!(profiled_value, vm_value);
     assert!(
         profile
             .function_stats
             .iter()
-            .any(|stats| stats.jit_compile_successes > 0),
-        "the JIT-enabled path must actually compile at least one function"
+            .any(|stats| stats.is_hot && stats.call_count > 0),
+        "the profiled VM path must record hot execution"
     );
 }

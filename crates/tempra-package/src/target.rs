@@ -1,7 +1,7 @@
 /// The compilation target architecture.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BuildTarget {
-    /// Produce a native binary via the Cranelift backend.
+    /// Produce a native binary (planned AOT target).
     Native,
     /// Produce a `.wasm` module via the Wasm backend.
     Wasm32Wasi,

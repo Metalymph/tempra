@@ -1,0 +1,6 @@
+// expected: 2
+// "hé" has 2 Unicode scalar values (h + é)
+fn main() -> Int64 {
+    let s = "hé"
+    return s.len()
+}

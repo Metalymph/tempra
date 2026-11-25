@@ -49,7 +49,7 @@ Every syntax (parser) and semantic (typechecking) diagnostic can be serialized i
       "labels": [
         {
           "span": {
-            "file": "examples/jit_heap/string_len.tmpr",
+            "file": "examples/vm_heap/string_len.tmpr",
             "start": 54,
             "end": 62
           },
@@ -124,19 +124,19 @@ Three primary commands handle structural output:
 ### A. Code Integrity Check
 Verify both formatting and correctness, returning structured diagnostics upon failure:
 ```bash
-tempra check --json examples/jit_heap/string_len.tmpr
+tempra check --json examples/vm_heap/string_len.tmpr
 ```
 
 ### B. Extended Diagnostics
 Emits only compilation warnings and errors in clean JSON payloads:
 ```bash
-tempra diagnostics --json examples/jit_heap/string_len.tmpr
+tempra diagnostics --json examples/vm_heap/string_len.tmpr
 ```
 
 ### C. Symbol Outlining
 Dumps all structural symbols and their signatures present within the source file:
 ```bash
-tempra symbols --json examples/jit_heap/string_len.tmpr
+tempra symbols --json examples/vm_heap/string_len.tmpr
 ```
 
 ### D. Capability and Effect Inspection (E6)

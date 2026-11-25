@@ -49,6 +49,14 @@ pub enum TirKey {
     Index(usize),
 }
 
+/// Origin of an exclusive array view. Parameter indices refer to an incoming
+/// exclusive slice, not to a value materialized from it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TirSliceSource {
+    Owner(TirSlotId),
+    Parameter(usize),
+}
+
 #[derive(Debug, Clone)]
 pub enum TirInstr {
     Const(TirValueId, TirConst),
@@ -60,10 +68,34 @@ pub enum TirInstr {
     Unwrap(TirValueId, TirValueId, String, u16),
 
     Slot(TirSlotId, TirType),
+    /// Bind a declared slot to an incoming non-slice inout parameter's storage.
+    /// This is a place binding, not a copy of the parameter's value.
+    BindInout(TirSlotId, usize),
     Load(TirValueId, TirSlotId),
+    /// Materialize an exclusive storage operand only at a verified direct call.
+    /// It must not be used as an ordinary SSA value or escape the call.
+    BorrowInout(TirValueId, TirSlotId),
+    /// Exclusive subview consumed by a direct call; bounds are relative to source.
+    BorrowSliceInout(TirValueId, TirSliceSource, TirValueId, TirValueId),
+    /// Access an element or length of an incoming exclusive slice parameter.
+    InoutSliceGet(TirValueId, usize, TirValueId),
+    InoutSliceSet(usize, TirValueId, TirValueId),
+    InoutSliceLen(TirValueId, usize),
     Store(TirSlotId, TirValueId),
 
     Call(TirValueId, TirFunctionId, Vec<TirValueId>),
+    // The referenced function receives captured values first, then call arguments.
+    // The captured environment may be empty and requires no heap allocation.
+    MakeClosure(TirValueId, TirFunctionId, Vec<TirValueId>),
+    // VM Parity 2B.1b: borrowed capture representation (not yet executable).
+    // Unlike MakeClosure, the environment names ORIGINAL storage slots; no
+    // captured value is copied or moved by this instruction. Borrow lifetimes
+    // and non-escaping enforcement belong to the later capture lowering gate.
+    MakeClosureRef(TirValueId, TirFunctionId, Vec<TirSlotId>),
+    /// Exclusive, non-owning captured storage. Only mutated through its owner handle.
+    /// A separate instruction prevents read-only borrows from being silently upgraded.
+    MakeClosureInout(TirValueId, TirFunctionId, Vec<TirSlotId>),
+    CallClosure(TirValueId, TirValueId, Vec<TirValueId>),
 
     Add(TirValueId, TirValueId, TirValueId),
     Sub(TirValueId, TirValueId, TirValueId),
@@ -105,6 +137,8 @@ pub struct TirFunction {
     pub id: TirFunctionId,
     pub name: String,
     pub params: Vec<(TirValueId, TirType)>,
+    /// Access modes, one per runtime parameter. Never a user-visible type.
+    pub inout_params: Vec<bool>,
     pub return_type: TirType,
     pub is_extern: bool,
     pub blocks: Vec<TirBlock>,

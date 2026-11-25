@@ -77,25 +77,21 @@ fn test_run_experimental_vm_requires_main() {
 
 #[test]
 fn test_run_experimental_vm_some_option() {
-    // Test that Some(42) can be constructed and returned via the VM pipeline
-    // Some() lowering requires type context. Test a simpler scenario:
-    // A helper that calls Some is exercised through a let binding.
-    // Verifies that the pipeline either succeeds or fails with a clean strict error.
     let source = r#"
-fn helper(x: Int) -> Int {
-    return x + 1;
-}
-fn main() {
-    var result = helper(41);
+fn main() -> Int64 {
+    let x: Option(Int64) = Some(42)
+    if x is Some(value) {
+        return value
+    } else {
+        return 0
+    }
 }
 "#;
-    // This may succeed (if fully lowerable) or fail cleanly with UnsupportedExperimentalVm
-    let res = run_source_with_experimental_vm(source, &[]);
-    match &res {
-        Ok(_) => {} // Accepted: pipeline succeeded end-to-end
-        Err(tempra_driver::DriverError::UnsupportedExperimentalVm(_)) => {} // Accepted: clean strict error
-        Err(e) => panic!("Unexpected error: {}", e),
-    }
+
+    let value =
+        run_source_vm(source, &[]).expect("VM must execute Some construction and narrowing");
+
+    assert_eq!(value, VmValue::Int64(42));
 }
 
 #[test]

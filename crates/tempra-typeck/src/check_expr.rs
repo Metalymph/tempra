@@ -410,9 +410,11 @@ fn resolve_name(
             }
         } else if !has_user_candidates || expects_builtin {
             if name == "None" {
-                return Ok(ResolvedName::BuiltinConstant(Type::Option(Box::new(
-                    Type::Unknown,
-                ))));
+                let option_ty = match expected {
+                    Some(option_ty @ Type::Option(_)) => option_ty.clone(),
+                    _ => Type::Option(Box::new(Type::Unknown)),
+                };
+                return Ok(ResolvedName::BuiltinConstant(option_ty));
             }
             return Ok(ResolvedName::BuiltinFunction(name.to_string()));
         }
@@ -753,6 +755,9 @@ fn check_assignment(ctx: &mut TypeContext, b: &mut HirBinary) -> Type {
         TargetKind::Name(span, name) => {
             let info = ctx.scopes.lookup(&name).cloned();
             if let Some(info) = info {
+                if matches!(&info.ty, Type::Slice(_)) && info.is_parameter && info.is_mutable {
+                    ctx.error("cannot rebind an inout Slice parameter", span);
+                }
                 if !info.is_mutable {
                     if info.is_capture {
                         ctx.error(format!("cannot assign to ref capture '{}'", name), span);
@@ -798,6 +803,9 @@ fn check_assignment(ctx: &mut TypeContext, b: &mut HirBinary) -> Type {
                 let object_ty = check_expression(ctx, &mut idx.object, None);
                 let index_ty = check_expression(ctx, &mut idx.index, None);
                 check_receiver_mutable(ctx, &idx.object, b.span);
+                if matches!(&object_ty, Type::Slice(_)) {
+                    check_exclusive_slice_write(ctx, &idx.object, b.span);
+                }
 
                 if object_ty == Type::String {
                     ctx.error(
@@ -885,6 +893,9 @@ fn check_assignment(ctx: &mut TypeContext, b: &mut HirBinary) -> Type {
                 let start_ty = check_expression(ctx, &mut slc.start, None);
                 let end_ty = check_expression(ctx, &mut slc.end, None);
                 check_receiver_mutable(ctx, &slc.object, b.span);
+                if matches!(&object_ty, Type::Slice(_)) {
+                    check_exclusive_slice_write(ctx, &slc.object, b.span);
+                }
 
                 if !start_ty.is_integer() && start_ty != Type::Error {
                     ctx.error(
@@ -2244,6 +2255,17 @@ fn check_call(ctx: &mut TypeContext, expr: &mut HirExpression, expected: Option<
 
     let resolved = resolve_callee(ctx, callee_node, expected);
 
+    if let HirExpression::Call(c) = expr {
+        if c.inout_arguments.iter().any(|exclusive| *exclusive)
+            && !matches!(&resolved, ResolvedCallee::Function(_))
+        {
+            ctx.error(
+                "exclusive inout arguments are supported only for direct declared functions",
+                c.span,
+            );
+        }
+    }
+
     match resolved {
         ResolvedCallee::Function(name) | ResolvedCallee::BuiltinFunction(name) => {
             if let HirExpression::Call(ref mut c) = expr {
@@ -2412,6 +2434,12 @@ fn check_call(ctx: &mut TypeContext, expr: &mut HirExpression, expected: Option<
                                 }
                             }
                             let sig = ctx.functions.get(&qualified).cloned().unwrap();
+                            if sig.params.iter().any(|p| p.is_inout) {
+                                ctx.error(
+                                    "inout namespace arguments require a verified call contract",
+                                    c.span,
+                                );
+                            }
                             if sig.visibility == Visibility::Private && ctx.current_module != *ns {
                                 ctx.error(
                                     format!(
@@ -2474,6 +2502,27 @@ fn check_call(ctx: &mut TypeContext, expr: &mut HirExpression, expected: Option<
                 }
 
                 if let Some(sig) = ctx.lookup_method_signature(&receiver_ty, &method) {
+                    if let Some(receiver) = sig.params.first() {
+                        ctx.facts
+                            .receiver_accesses
+                            .insert(c.span, receiver.is_inout);
+                        if receiver.is_inout {
+                            if let HirExpression::Member(member) = &*c.callee {
+                                check_receiver_mutable(ctx, &member.object, member.span);
+                                if matches!(&receiver_ty, Type::Slice(_)) {
+                                    check_exclusive_slice_write(ctx, &member.object, member.span);
+                                }
+                            }
+                        }
+                    }
+                    // Explicit exclusive arguments for methods are not yet
+                    // supported by the call ABI. Never silently pass by value.
+                    if sig.params.iter().skip(1).any(|p| p.is_inout) {
+                        ctx.error(
+                            "inout method arguments require a verified call contract",
+                            c.span,
+                        );
+                    }
                     // Check parameter count (excluding self)
                     if c.args.len() != sig.params.len() - 1 {
                         ctx.error(
@@ -2635,6 +2684,15 @@ fn check_function_call(
     explicit_type_args: Option<Vec<Type>>,
     _expected: Option<&Type>,
 ) -> Type {
+    if c.inout_arguments.iter().any(|exclusive| *exclusive)
+        && !ctx.functions.contains_key(func_name)
+    {
+        ctx.error(
+            "inout arguments require a declared user function with an exclusive parameter",
+            c.span,
+        );
+        return Type::Error;
+    }
     if let Some(builtin_ty) = check_builtin(ctx, func_name, &mut c.args, c.span, _expected) {
         return builtin_ty;
     }
@@ -2650,6 +2708,8 @@ fn check_function_call(
     // Generic Named Argument Matching for user functions
     let mut resolved_args: Vec<Option<&mut HirExpression>> =
         (0..sig.params.len()).map(|_| None).collect();
+    let mut resolved_inout = vec![false; sig.params.len()];
+    let mut parameter_indices = vec![None; c.args.len()];
     let mut named_keys = std::collections::HashSet::new();
 
     let num_args = c
@@ -2660,7 +2720,8 @@ fn check_function_call(
     let mut type_params_skipped = 0;
     let mut param_idx = 0;
 
-    for arg in c.args.iter_mut() {
+    for (arg_index, arg) in c.args.iter_mut().enumerate() {
+        let exclusive = c.inout_arguments.get(arg_index).copied().unwrap_or(false);
         match arg {
             HirCallArgument::Positional(e) => {
                 // Determine if we should skip 'type' parameters
@@ -2686,7 +2747,9 @@ fn check_function_call(
                     );
                     continue;
                 }
+                parameter_indices[arg_index] = Some(param_idx);
                 resolved_args[param_idx] = Some(e);
+                resolved_inout[param_idx] = exclusive;
                 param_idx += 1;
             }
             HirCallArgument::Named(n) => {
@@ -2707,7 +2770,9 @@ fn check_function_call(
                                 n.value.span(),
                             );
                         } else {
+                            parameter_indices[arg_index] = Some(idx);
                             resolved_args[idx] = Some(&mut n.value);
+                            resolved_inout[idx] = exclusive;
                         }
                     }
                     None => {
@@ -2719,6 +2784,81 @@ fn check_function_call(
                             n.value.span(),
                         );
                     }
+                }
+            }
+        }
+    }
+
+    ctx.facts
+        .direct_call_parameters
+        .insert(c.span, (func_name.to_owned(), parameter_indices));
+
+    // The caller must explicitly request exclusive access, and the argument
+    // must name mutable local storage or a direct subview of an authorized
+    // owner. A mutable binding containing a read-only Slice is not an owner.
+    let mut seen_owners: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
+    for (i, resolved) in resolved_args.iter().enumerate() {
+        let Some(expr) = resolved.as_ref() else {
+            continue;
+        };
+        let exclusive = resolved_inout[i];
+        let param = &sig.params[i];
+        if exclusive != param.is_inout {
+            ctx.error(
+                format!(
+                    "parameter '{}' of '{}' requires {} argument access",
+                    param.name,
+                    func_name,
+                    if param.is_inout { "inout" } else { "by-value" }
+                ),
+                expr.span(),
+            );
+        }
+        if exclusive {
+            match &**expr {
+                HirExpression::Name(_, name) => match ctx.scopes.lookup(name) {
+                    Some(info)
+                        if info.is_mutable
+                            && !info.is_consumed
+                            && (!matches!(&info.ty, Type::Slice(_)) || info.is_parameter) => {}
+                    _ => ctx.error(
+                        format!("inout argument '{}' requires a live mutable var", name),
+                        expr.span(),
+                    ),
+                },
+                HirExpression::Slice(slice) if matches!(&param.ty, Type::Slice(_)) => {
+                    match slice.object.as_ref() {
+                        HirExpression::Name(_, owner) => match ctx.scopes.lookup(owner) {
+                            Some(info)
+                                if info.is_mutable
+                                    && !info.is_consumed
+                                    && (matches!(&info.ty, Type::Array(_))
+                                        || (matches!(&info.ty, Type::Slice(_))
+                                            && info.is_parameter)) => {}
+                            _ => ctx.error(
+                                format!(
+                                    "inout slice owner '{}' requires a live mutable var",
+                                    owner
+                                ),
+                                expr.span(),
+                            ),
+                        },
+                        _ => ctx.error("inout slice requires a direct mutable owner", expr.span()),
+                    }
+                }
+                _ => ctx.error(
+                    "inout currently requires a mutable local name, not an expression or view",
+                    expr.span(),
+                ),
+            }
+        }
+        if let HirExpression::Name(_, name) = &**expr {
+            if let Some(previous_exclusive) = seen_owners.insert(name.clone(), exclusive) {
+                if exclusive || previous_exclusive {
+                    ctx.error(
+                        format!("simultaneous inout alias of '{}' in one call", name),
+                        expr.span(),
+                    );
                 }
             }
         }
@@ -2868,6 +3008,36 @@ fn check_function_call(
                     ),
                     c.span,
                 );
+            }
+        }
+    }
+
+    // A generic parameter is not automatically a safe borrowed parameter.
+    // Certify only a concrete Slice specialization of a proven observer body.
+    if let Some((index, method)) = ctx.slice_observers.get(func_name).cloned() {
+        if let Some(param) = sig.params.get(index) {
+            if let Type::GenericParam { id, .. } = &param.ty {
+                let concrete = substitute_generics(ctx, &param.ty, &inferred);
+                let expected_return = match method.as_str() {
+                    "len" => Some(Type::Int),
+                    "is_empty" => Some(Type::Bool),
+                    _ => None,
+                };
+                let collection_constraint = sig
+                    .generic_params
+                    .iter()
+                    .any(|p| p.id == *id && p.constraint.as_deref() == Some("Collection"));
+                if collection_constraint
+                    && !param.is_inout
+                    && matches!(&concrete, Type::Slice(_))
+                    && arg_types.get(index) == Some(&concrete)
+                    && expected_return.as_ref() == Some(&sig.return_type)
+                    && ctx
+                        .lookup_direct_method_signature(&concrete, &method)
+                        .is_none()
+                {
+                    ctx.facts.slice_observer_parameters.insert(c.span, index);
+                }
             }
         }
     }
@@ -3194,6 +3364,24 @@ fn check_slice(ctx: &mut TypeContext, s: &mut HirSlice) -> Type {
 }
 
 /// Phase 7: Check that the receiver expression is mutable (for index/slice assignment).
+// Slice(T) is read-only even if its descriptor lives in a var binding.
+// Only a declared inout parameter currently grants mutation of its elements.
+fn check_exclusive_slice_write(ctx: &mut TypeContext, expr: &HirExpression, span: Span) {
+    let authorized = match expr {
+        HirExpression::Name(_, name) => ctx
+            .scopes
+            .lookup(name)
+            .is_some_and(|info| info.is_mutable && info.is_parameter && !info.is_consumed),
+        _ => false,
+    };
+    if !authorized {
+        ctx.error(
+            "cannot mutate read-only Slice; use an inout Slice parameter",
+            span,
+        );
+    }
+}
+
 fn check_receiver_mutable(ctx: &mut TypeContext, expr: &HirExpression, span: Span) {
     match expr {
         HirExpression::Name(_, name) => {

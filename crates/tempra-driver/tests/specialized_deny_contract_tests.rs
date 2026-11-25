@@ -655,18 +655,16 @@ fn family_violation_is_rejected_before_program_execution() {
     );
     let path = dir.path().join("unsupported.tmpr");
     std::fs::write(&path, source).unwrap();
-    for jit in [false, true] {
-        let Err(DriverError::SpecializedContractViolations(violations)) =
-            tempra_driver::run_file_with_experimental_vm_jit(&path, &[], jit)
-        else {
-            panic!("expected family violation before VM/JIT execution")
-        };
-        assert_eq!(violations.len(), 1);
-        assert_eq!(
-            violations[0].classification,
-            tempra_driver::SpecializedMatch::DefiniteMatch
-        );
-    }
+    let Err(DriverError::SpecializedContractViolations(violations)) =
+        tempra_driver::run_file_vm(&path, &[])
+    else {
+        panic!("expected family violation before VM execution")
+    };
+    assert_eq!(violations.len(), 1);
+    assert_eq!(
+        violations[0].classification,
+        tempra_driver::SpecializedMatch::DefiniteMatch
+    );
     assert!(
         !written.exists(),
         "a program violating a family contract must not execute"

@@ -7,7 +7,6 @@ edition.workspace = true
 name = "tempra"
 path = "src/main.rs"
 
-
 [dependencies]
 tempra-driver.workspace = true
 tempra-session.workspace = true
@@ -19,6 +18,3 @@ tempra-span.workspace = true
 serde_json.workspace = true
 clap.workspace = true
 anyhow.workspace = true
-
-[features]
-jit-cranelift = ["tempra-driver/jit-cranelift"]

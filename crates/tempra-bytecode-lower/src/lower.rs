@@ -1,6 +1,7 @@
 use crate::error::BytecodeLowerError;
 use std::collections::HashMap;
 use tempra_bytecode::constant::BytecodeConstant;
+use tempra_bytecode::function::{BytecodeSignature, SignatureId};
 use tempra_bytecode::opcode::stack_effect;
 use tempra_bytecode::*;
 use tempra_tir::ir::*;
@@ -12,6 +13,34 @@ pub fn lower_tir_module(module: &TirModule) -> Result<BytecodeModule, BytecodeLo
     let mut bc_module = BytecodeModule::new();
     let mut ordered_functions: Vec<_> = module.functions.iter().collect();
     ordered_functions.sort_by_key(|function| function.id.0);
+
+    // VM Parity 2A.5b: canonical pre-interning of callable signatures.
+    // Signatures are interned in sorted function / SSA value order, NEVER in
+    // HashMap iteration order. This preserves K2 reproducibility guarantees.
+    for tir_func in &ordered_functions {
+        for (_, ty) in &tir_func.params {
+            intern_tir_type(ty, &mut bc_module)?;
+        }
+        intern_tir_type(&tir_func.return_type, &mut bc_module)?;
+        for block in &tir_func.blocks {
+            for instr in &block.instrs {
+                match instr {
+                    TirInstr::Slot(_, ty) | TirInstr::Make(_, ty, _, _) => {
+                        intern_tir_type(ty, &mut bc_module)?;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if let Some(types) = verified.functions.get(&tir_func.id) {
+            let mut values: Vec<_> = types.iter().collect();
+            values.sort_by_key(|(id, _)| id.0);
+            for (_, ty) in values {
+                intern_tir_type(ty, &mut bc_module)?;
+            }
+        }
+    }
+
     let mut function_ids = HashMap::with_capacity(ordered_functions.len());
 
     // First pass: assign bytecode identities in canonical TIR identity order.
@@ -19,11 +48,17 @@ pub fn lower_tir_module(module: &TirModule) -> Result<BytecodeModule, BytecodeLo
         let params = tir_func
             .params
             .iter()
-            .map(|(_, ty)| map_type(ty))
+            .enumerate()
+            .map(|(index, (_, ty))| map_parameter_type(tir_func, index, ty, &bc_module))
             .collect::<Result<Vec<_>, _>>()?;
-        let ret = map_type(&tir_func.return_type)?;
+        let ret = map_type(&tir_func.return_type, &bc_module)?;
         let mut bc_func = BytecodeFunction::new(tir_func.name.clone(), params, ret);
         bc_func.is_extern = tir_func.is_extern;
+        bc_func.inout_params = if tir_func.inout_params.is_empty() {
+            vec![false; tir_func.params.len()]
+        } else {
+            tir_func.inout_params.clone()
+        };
         let bytecode_id = bc_module.add_function(bc_func);
         if function_ids.insert(tir_func.id, bytecode_id).is_some() {
             return Err(BytecodeLowerError::DuplicateTirFunctionId {
@@ -62,18 +97,26 @@ fn lower_function(
     let params = tir_func
         .params
         .iter()
-        .map(|(_, ty)| map_type(ty))
+        .enumerate()
+        .map(|(index, (_, ty))| map_parameter_type(tir_func, index, ty, bc_module))
         .collect::<Result<Vec<_>, _>>()?;
-    let ret = map_type(&tir_func.return_type)?;
+    let ret = map_type(&tir_func.return_type, bc_module)?;
 
     let mut bc_func = BytecodeFunction::new(tir_func.name.clone(), params, ret);
     bc_func.is_extern = tir_func.is_extern;
+    bc_func.inout_params = if tir_func.inout_params.is_empty() {
+        vec![false; tir_func.params.len()]
+    } else {
+        tir_func.inout_params.clone()
+    };
 
     let mut lowerer = FunctionLowerer {
         tir_func,
         bc_module,
         bc_func,
         value_to_local: HashMap::new(),
+        inout_sources: HashMap::new(),
+        slice_sources: HashMap::new(),
         slot_to_local: HashMap::new(),
         slot_types: HashMap::new(),
         value_types: HashMap::new(),
@@ -101,6 +144,8 @@ struct FunctionLowerer<'a> {
     bc_module: &'a mut BytecodeModule,
     bc_func: BytecodeFunction,
     value_to_local: HashMap<TirValueId, LocalId>,
+    inout_sources: HashMap<TirValueId, TirSlotId>,
+    slice_sources: HashMap<TirValueId, (TirSliceSource, TirValueId, TirValueId)>,
     slot_to_local: HashMap<TirSlotId, LocalId>,
     slot_types: HashMap<TirSlotId, BytecodeType>,
     value_types: HashMap<TirValueId, BytecodeType>,
@@ -118,7 +163,8 @@ impl<'a> FunctionLowerer<'a> {
         // 1. Map parameters to locals (0..N)
         for (i, (val_id, ty)) in self.tir_func.params.iter().enumerate() {
             self.value_to_local.insert(*val_id, LocalId(i as u32));
-            self.value_types.insert(*val_id, map_type(ty)?);
+            self.value_types
+                .insert(*val_id, map_type(ty, self.bc_module)?);
         }
         let mut next_local = self.tir_func.params.len() as u32;
 
@@ -127,8 +173,31 @@ impl<'a> FunctionLowerer<'a> {
             for instr in &block.instrs {
                 if let TirInstr::Slot(id, ty) = instr {
                     self.slot_to_local.insert(*id, LocalId(next_local));
-                    self.slot_types.insert(*id, map_type(ty)?);
+                    self.slot_types.insert(*id, map_type(ty, self.bc_module)?);
                     next_local += 1;
+                }
+            }
+        }
+
+        // Verified BindInout aliases the slot to the parameter's original local.
+        // LoadLocal and StoreLocal can now have ordinary value semantics without
+        // an implicit raw-handle copy in the function prologue.
+        for block in &self.tir_func.blocks {
+            for instr in &block.instrs {
+                if let TirInstr::BindInout(slot, parameter) = instr {
+                    self.slot_to_local.insert(*slot, LocalId(*parameter as u32));
+                }
+            }
+        }
+
+        // Record exclusive source identities; never materialize their handles
+        // into SSA temporary locals. Emission happens at the direct call only.
+        for block in &self.tir_func.blocks {
+            for instr in &block.instrs {
+                if let TirInstr::BorrowInout(value, slot) = instr {
+                    self.inout_sources.insert(*value, *slot);
+                } else if let TirInstr::BorrowSliceInout(value, source, start, end) = instr {
+                    self.slice_sources.insert(*value, (*source, *start, *end));
                 }
             }
         }
@@ -150,9 +219,9 @@ impl<'a> FunctionLowerer<'a> {
         let mut local_types = vec![BytecodeType::Unit; next_local as usize];
 
         // Map params types
-        for (val_id, ty) in &self.tir_func.params {
+        for (val_id, _) in &self.tir_func.params {
             if let Some(local) = self.value_to_local.get(val_id) {
-                local_types[local.0 as usize] = map_type(ty)?;
+                local_types[local.0 as usize] = self.bc_func.params[local.0 as usize];
             }
         }
 
@@ -174,7 +243,7 @@ impl<'a> FunctionLowerer<'a> {
                 if let Some(id) = get_instr_res_id(instr) {
                     let inferred = match self.verified_value_types.and_then(|types| types.get(&id))
                     {
-                        Some(ty) => map_type(ty)?,
+                        Some(ty) => map_type(ty, self.bc_module)?,
                         None => self.infer_instr_res_type(instr)?,
                     };
                     self.value_types.insert(id, inferred);
@@ -243,6 +312,23 @@ impl<'a> FunctionLowerer<'a> {
                         self.emit(BytecodeInstr::ConstString(id));
                     }
                 }
+                self.store_res(*res)?;
+            }
+            TirInstr::BorrowInout(_, _) | TirInstr::BorrowSliceInout(_, _, _, _) => {
+                // Emitted at the callsite by load_val, not stored into a local.
+            }
+            TirInstr::InoutSliceGet(res, parameter, index) => {
+                self.load_val(*index)?;
+                self.emit(BytecodeInstr::InoutSliceGet(LocalId(*parameter as u32)));
+                self.store_res(*res)?;
+            }
+            TirInstr::InoutSliceSet(parameter, index, value) => {
+                self.load_val(*index)?;
+                self.load_val(*value)?;
+                self.emit(BytecodeInstr::InoutSliceSet(LocalId(*parameter as u32)));
+            }
+            TirInstr::InoutSliceLen(res, parameter) => {
+                self.emit(BytecodeInstr::InoutSliceLen(LocalId(*parameter as u32)));
                 self.store_res(*res)?;
             }
             TirInstr::Load(res, slot) => {
@@ -387,7 +473,117 @@ impl<'a> FunctionLowerer<'a> {
                     self.store_res(*res)?;
                 }
             }
-            TirInstr::Slot(_, _) => {}
+            TirInstr::Slot(_, _) | TirInstr::BindInout(_, _) => {}
+            TirInstr::MakeClosureRef(res, func_id, captured_slots) => {
+                let target = self.function_ids.get(func_id).copied().ok_or(
+                    BytecodeLowerError::MissingFunctionMapping {
+                        caller: self.tir_func.id,
+                        target: *func_id,
+                    },
+                )?;
+                let count = u16::try_from(captured_slots.len()).map_err(|_| {
+                    BytecodeLowerError::UnsupportedInstr(
+                        "borrowed closure capture count exceeds u16".into(),
+                    )
+                })?;
+                for slot in captured_slots {
+                    let local =
+                        self.slot_to_local.get(slot).copied().ok_or_else(|| {
+                            BytecodeLowerError::UnknownSlot(format!("${}", slot.0))
+                        })?;
+                    // A borrow handle is not a copied local value.
+                    self.emit(BytecodeInstr::BorrowLocal(local));
+                }
+                self.emit(BytecodeInstr::MakeClosureRef(target, count));
+                self.store_res(*res)?;
+            }
+            TirInstr::MakeClosureInout(res, func_id, captured_slots) => {
+                let target = self.function_ids.get(func_id).copied().ok_or(
+                    BytecodeLowerError::MissingFunctionMapping {
+                        caller: self.tir_func.id,
+                        target: *func_id,
+                    },
+                )?;
+                let count = u16::try_from(captured_slots.len()).map_err(|_| {
+                    BytecodeLowerError::UnsupportedInstr(
+                        "borrowed closure capture count exceeds u16".into(),
+                    )
+                })?;
+                for slot in captured_slots {
+                    let local =
+                        self.slot_to_local.get(slot).copied().ok_or_else(|| {
+                            BytecodeLowerError::UnknownSlot(format!("${}", slot.0))
+                        })?;
+                    // A borrow handle is not a copied local value.
+                    self.emit(BytecodeInstr::BorrowLocalMut(local));
+                }
+                self.emit(BytecodeInstr::MakeClosureInout(target, count));
+                self.store_res(*res)?;
+            }
+            TirInstr::MakeClosure(res, func_id, captures) => {
+                let target = self.function_ids.get(func_id).copied().ok_or(
+                    BytecodeLowerError::MissingFunctionMapping {
+                        caller: self.tir_func.id,
+                        target: *func_id,
+                    },
+                )?;
+                let count = u16::try_from(captures.len()).map_err(|_| {
+                    BytecodeLowerError::UnsupportedInstr("closure capture count exceeds u16".into())
+                })?;
+                for capture in captures {
+                    self.load_val(*capture)?;
+                }
+                self.emit(BytecodeInstr::MakeClosure(target, count));
+                self.store_res(*res)?;
+            }
+            TirInstr::CallClosure(res, callee, args) => {
+                let signature_id = match self.value_types.get(callee).copied() {
+                    Some(BytecodeType::Callable(id)) => id,
+                    Some(other) => {
+                        return Err(BytecodeLowerError::UnsupportedInstr(format!(
+                            "indirect call requires a typed callable, found {:?}",
+                            other
+                        )));
+                    }
+                    None => {
+                        return Err(BytecodeLowerError::UnknownValue(format!("%{}", callee.0)));
+                    }
+                };
+                let signature = self
+                    .bc_module
+                    .signatures
+                    .get(signature_id.0 as usize)
+                    .ok_or_else(|| {
+                        BytecodeLowerError::UnsupportedInstr(format!(
+                            "missing callable signature #{}",
+                            signature_id.0
+                        ))
+                    })?;
+                if args.len() != signature.params.len() {
+                    return Err(BytecodeLowerError::UnsupportedInstr(format!(
+                        "indirect call arity mismatch: expected {}, found {}",
+                        signature.params.len(),
+                        args.len()
+                    )));
+                }
+                let returns_value = signature.ret != BytecodeType::Unit;
+                let argc = u16::try_from(args.len()).map_err(|_| {
+                    BytecodeLowerError::UnsupportedInstr(
+                        "closure argument count exceeds u16".into(),
+                    )
+                })?;
+                // Stack contract: callable first, then arguments left-to-right.
+                self.load_val(*callee)?;
+                for arg in args {
+                    self.load_val(*arg)?;
+                }
+                self.emit(BytecodeInstr::CallClosure(signature_id, argc));
+                if !returns_value {
+                    // Like static Call, TIR always defines a result, even for Unit.
+                    self.emit(BytecodeInstr::ConstUnit);
+                }
+                self.store_res(*res)?;
+            }
             TirInstr::Make(res, ty, variant, args) => {
                 for arg in args {
                     self.load_val(*arg)?;
@@ -556,6 +752,27 @@ impl<'a> FunctionLowerer<'a> {
     }
 
     fn load_val(&mut self, id: TirValueId) -> Result<(), BytecodeLowerError> {
+        if let Some((source, start, end)) = self.slice_sources.get(&id).copied() {
+            let local = match source {
+                TirSliceSource::Owner(slot) => *self
+                    .slot_to_local
+                    .get(&slot)
+                    .ok_or_else(|| BytecodeLowerError::UnknownSlot(format!("${}", slot.0)))?,
+                TirSliceSource::Parameter(index) => LocalId(index as u32),
+            };
+            self.load_val(start)?;
+            self.load_val(end)?;
+            self.emit(BytecodeInstr::BorrowSliceMut(local));
+            return Ok(());
+        }
+        if let Some(slot) = self.inout_sources.get(&id) {
+            let local = *self
+                .slot_to_local
+                .get(slot)
+                .ok_or_else(|| BytecodeLowerError::UnknownSlot(format!("${}", slot.0)))?;
+            self.emit(BytecodeInstr::BorrowLocalMut(local));
+            return Ok(());
+        }
         let local = self
             .value_to_local
             .get(&id)
@@ -626,7 +843,7 @@ impl<'a> FunctionLowerer<'a> {
                 TirConst::Float64(_) => Ok(BytecodeType::Float64),
                 TirConst::String(_) => Ok(BytecodeType::String),
             },
-            TirInstr::Load(_, slot_id) => self
+            TirInstr::Load(_, slot_id) | TirInstr::BorrowInout(_, slot_id) => self
                 .slot_types
                 .get(slot_id)
                 .cloned()
@@ -681,7 +898,11 @@ impl<'a> FunctionLowerer<'a> {
 fn get_instr_res_id(instr: &TirInstr) -> Option<TirValueId> {
     match instr {
         TirInstr::Const(id, _) => Some(*id),
-        TirInstr::Load(id, _) => Some(*id),
+        TirInstr::Load(id, _)
+        | TirInstr::BorrowInout(id, _)
+        | TirInstr::BorrowSliceInout(id, _, _, _)
+        | TirInstr::InoutSliceGet(id, _, _)
+        | TirInstr::InoutSliceLen(id, _) => Some(*id),
         TirInstr::Add(id, _, _)
         | TirInstr::Sub(id, _, _)
         | TirInstr::Mul(id, _, _)
@@ -692,7 +913,11 @@ fn get_instr_res_id(instr: &TirInstr) -> Option<TirValueId> {
         | TirInstr::And(id, _, _)
         | TirInstr::Or(id, _, _)
         | TirInstr::Not(id, _)
-        | TirInstr::Call(id, _, _) => Some(*id),
+        | TirInstr::Call(id, _, _)
+        | TirInstr::MakeClosure(id, _, _)
+        | TirInstr::MakeClosureRef(id, _, _)
+        | TirInstr::MakeClosureInout(id, _, _)
+        | TirInstr::CallClosure(id, _, _) => Some(*id),
         TirInstr::Make(id, _, _, _)
         | TirInstr::MakeStruct(id, _, _)
         | TirInstr::Get(id, _, _)
@@ -709,7 +934,40 @@ fn get_instr_res_id(instr: &TirInstr) -> Option<TirValueId> {
     }
 }
 
-fn map_type(ty: &TirType) -> Result<BytecodeType, BytecodeLowerError> {
+/// Intern a TIR type using stable, structural first-use order.
+fn intern_tir_type(
+    ty: &TirType,
+    module: &mut BytecodeModule,
+) -> Result<BytecodeType, BytecodeLowerError> {
+    if let TirType::Function(params, ret) = ty {
+        let params = params
+            .iter()
+            .map(|param| intern_tir_type(param, module))
+            .collect::<Result<Vec<_>, _>>()?;
+        let ret = intern_tir_type(ret, module)?;
+        return Ok(BytecodeType::Callable(
+            module.intern_signature(BytecodeSignature { params, ret }),
+        ));
+    }
+    map_type(ty, module)
+}
+
+/// Map only previously interned callable signatures; never assign an ID here.
+fn map_parameter_type(
+    function: &TirFunction,
+    index: usize,
+    ty: &TirType,
+    module: &BytecodeModule,
+) -> Result<BytecodeType, BytecodeLowerError> {
+    if function.inout_params.get(index).copied().unwrap_or(false) && matches!(ty, TirType::Slice(_))
+    {
+        Ok(BytecodeType::ExclusiveSlice)
+    } else {
+        map_type(ty, module)
+    }
+}
+
+fn map_type(ty: &TirType, module: &BytecodeModule) -> Result<BytecodeType, BytecodeLowerError> {
     match ty {
         TirType::Unit => Ok(BytecodeType::Unit),
         TirType::Bool => Ok(BytecodeType::Bool),
@@ -725,6 +983,31 @@ fn map_type(ty: &TirType) -> Result<BytecodeType, BytecodeLowerError> {
         TirType::Struct(_) => Ok(BytecodeType::Any),
         TirType::Enum(_) => Ok(BytecodeType::Any),
         TirType::UInt8 => Ok(BytecodeType::UInt8),
+        TirType::Function(params, ret) => {
+            let mapped_params = params
+                .iter()
+                .map(|param| map_type(param, module))
+                .collect::<Result<Vec<_>, _>>()?;
+            let mapped_ret = map_type(ret, module)?;
+            let signature = BytecodeSignature {
+                params: mapped_params,
+                ret: mapped_ret,
+            };
+            let index = module
+                .signatures
+                .iter()
+                .position(|known| known == &signature)
+                .ok_or_else(|| {
+                    BytecodeLowerError::UnsupportedType(format!(
+                        "callable signature was not interned: {:?}",
+                        ty
+                    ))
+                })?;
+            let id = u32::try_from(index).map_err(|_| {
+                BytecodeLowerError::UnsupportedType("too many callable signatures".into())
+            })?;
+            Ok(BytecodeType::Callable(SignatureId(id)))
+        }
         _ => Err(BytecodeLowerError::UnsupportedType(format!("{:?}", ty))),
     }
 }

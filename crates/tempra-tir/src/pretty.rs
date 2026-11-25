@@ -109,11 +109,62 @@ pub fn format_instr(instr: &TirInstr) -> String {
             format!("%{} = unwrap %{} as {}.{}", res.0, target.0, variant, idx)
         }
         TirInstr::Slot(slot, ty) => format!("slot ${}: {}", slot.0, format_type(ty)),
+        TirInstr::BindInout(slot, parameter) => {
+            format!("bind_inout ${}, arg{}", slot.0, parameter)
+        }
         TirInstr::Load(res, slot) => format!("%{} = load ${}", res.0, slot.0),
+        TirInstr::BorrowInout(res, slot) => format!("%{} = borrow_inout ${}", res.0, slot.0),
+        TirInstr::BorrowSliceInout(res, source, start, end) => format!(
+            "%{} = borrow_slice_inout {:?}, %{}, %{}",
+            res.0, source, start.0, end.0
+        ),
+        TirInstr::InoutSliceGet(res, parameter, index) => format!(
+            "%{} = inout_slice_get arg{}, %{}",
+            res.0, parameter, index.0
+        ),
+        TirInstr::InoutSliceSet(parameter, index, value) => format!(
+            "inout_slice_set arg{}, %{}, %{}",
+            parameter, index.0, value.0
+        ),
+        TirInstr::InoutSliceLen(res, parameter) => {
+            format!("%{} = inout_slice_len arg{}", res.0, parameter)
+        }
         TirInstr::Store(slot, val) => format!("store ${}, %{}", slot.0, val.0),
         TirInstr::Call(res, func, args) => {
             format!("%{} = call @{} ({})", res.0, func.0, format_args(args))
         }
+        TirInstr::MakeClosure(res, func, captures) => format!(
+            "%{} = make_closure @{} captures ({})",
+            res.0,
+            func.0,
+            format_args(captures)
+        ),
+        TirInstr::MakeClosureRef(res, func, captures) => format!(
+            "%{} = make_closure_ref @{} captures ({})",
+            res.0,
+            func.0,
+            captures
+                .iter()
+                .map(|slot| format!("${}", slot.0))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        TirInstr::MakeClosureInout(res, func, captures) => format!(
+            "%{} = make_closure_inout @{} captures ({})",
+            res.0,
+            func.0,
+            captures
+                .iter()
+                .map(|slot| format!("${}", slot.0))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        TirInstr::CallClosure(res, callee, args) => format!(
+            "%{} = call_closure %{} ({})",
+            res.0,
+            callee.0,
+            format_args(args)
+        ),
         TirInstr::Add(res, a, b) => format!("%{} = add %{}, %{}", res.0, a.0, b.0),
         TirInstr::Sub(res, a, b) => format!("%{} = sub %{}, %{}", res.0, a.0, b.0),
         TirInstr::Mul(res, a, b) => format!("%{} = mul %{}, %{}", res.0, a.0, b.0),

@@ -1047,6 +1047,9 @@ pub struct CallExpr {
     pub callee: Box<Expression>,
     pub type_args: Option<Vec<TypeExpr>>,
     pub arguments: Vec<CallArgument>,
+    /// Explicit exclusive access markers, ordered with `arguments`.
+    /// An entry is true only when the caller wrote `inout`.
+    pub inout_arguments: Vec<bool>,
 }
 
 #[derive(Debug, Clone)]

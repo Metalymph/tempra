@@ -292,6 +292,10 @@ pub fn register_items(ctx: &mut TypeContext, items: &[HirItem]) {
                 if f.is_fallible && !matches!(return_type, Type::Result(_, _)) {
                     return_type = Type::Result(Box::new(return_type), Box::new(Type::BuiltinError));
                 }
+                ctx.slice_observers.remove(&qual_name);
+                if let Some(candidate) = crate::borrow_summary::slice_observer_candidate(f) {
+                    ctx.slice_observers.insert(qual_name.clone(), candidate);
+                }
                 ctx.functions.insert(
                     qual_name,
                     FunctionSignature {

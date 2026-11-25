@@ -50,7 +50,10 @@ pub fn map_type(ty: &Type) -> Result<TirType, TirLowerError> {
         Type::Associated(_, _) => Err(TirLowerError::UnsupportedType("Associated".to_string())),
         Type::BuiltinError => Ok(TirType::String),
         Type::Namespace(_) => Err(TirLowerError::UnsupportedType("Namespace".to_string())),
-        Type::Function(_, _) => Err(TirLowerError::UnsupportedType("Function".to_string())),
+        Type::Function(params, ret) => Ok(TirType::Function(
+            params.iter().map(map_type).collect::<Result<Vec<_>, _>>()?,
+            Box::new(map_type(ret)?),
+        )),
         Type::GenericParam { .. } => {
             Err(TirLowerError::UnsupportedType("GenericParam".to_string()))
         }
@@ -87,6 +90,13 @@ pub fn unmap_type(tir_ty: &TirType) -> Result<Type, TirLowerError> {
                 .collect::<Result<Vec<_>, _>>()?,
         )),
         TirType::Struct(name) => Ok(Type::Struct(name.clone(), vec![])),
+        TirType::Function(params, ret) => Ok(Type::Function(
+            params
+                .iter()
+                .map(unmap_type)
+                .collect::<Result<Vec<_>, _>>()?,
+            Box::new(unmap_type(ret)?),
+        )),
         _ => Err(TirLowerError::UnsupportedType(format!("{:?}", tir_ty))),
     }
 }
@@ -212,6 +222,14 @@ fn resolve_hir_type(
                 .map(|elem| resolve_hir_type(elem, _type_ctx, self_ty, generic_subs))
                 .collect::<Result<Vec<_>, _>>()?,
         )),
+        HirType::Function(_, params, ret) => {
+            let params = params
+                .iter()
+                .map(|p| resolve_hir_type(p, _type_ctx, self_ty, generic_subs))
+                .collect::<Result<Vec<_>, _>>()?;
+            let ret = resolve_hir_type(ret, _type_ctx, self_ty, generic_subs)?;
+            Ok(Type::Function(params, Box::new(ret)))
+        }
         HirType::Apply(_, callee, args) => {
             if let HirType::Named(_, name) = &**callee {
                 if name == "Slice" && args.len() == 1 {
@@ -266,6 +284,7 @@ pub struct LowerContext<'a> {
     /// (SlotId, Type, is_mutable)
     pub locals: HashMap<String, (TirSlotId, TirType, bool)>,
     pub local_hir_types: HashMap<String, Type>,
+    exclusive_slice_slots: HashMap<TirSlotId, usize>,
 }
 
 impl<'a> LowerContext<'a> {
@@ -285,7 +304,71 @@ impl<'a> LowerContext<'a> {
             module_prefix: None,
             locals: HashMap::new(),
             local_hir_types: HashMap::new(),
+            exclusive_slice_slots: HashMap::new(),
         }
+    }
+
+    fn exclusive_slice_parameter(&self, expr: &HirExpression) -> Option<usize> {
+        let HirExpression::Name(_, name) = expr else {
+            return None;
+        };
+        let (slot, _, _) = self.locals.get(name)?;
+        self.exclusive_slice_slots.get(slot).copied()
+    }
+
+    fn lower_exclusive_slice_argument(
+        &mut self,
+        expr: &HirExpression,
+    ) -> Result<TirValueId, TirLowerError> {
+        let (owner, bounds) = match expr {
+            HirExpression::Slice(view) => (
+                view.object.as_ref(),
+                Some((view.start.as_ref(), view.end.as_ref())),
+            ),
+            HirExpression::Name(_, _) => (expr, None),
+            _ => {
+                return Err(TirLowerError::UnsupportedExpr(
+                    "exclusive slice requires a direct owner or parameter".into(),
+                    expr.span(),
+                ))
+            }
+        };
+        let source = if let Some(parameter) = self.exclusive_slice_parameter(owner) {
+            TirSliceSource::Parameter(parameter)
+        } else {
+            let HirExpression::Name(_, name) = owner else {
+                return Err(TirLowerError::UnsupportedExpr(
+                    "exclusive slice requires a direct owner".into(),
+                    expr.span(),
+                ));
+            };
+            let (slot, ty, mutable) = self
+                .locals
+                .get(name)
+                .cloned()
+                .ok_or_else(|| TirLowerError::UnknownLocal(name.clone(), expr.span()))?;
+            if !mutable
+                || !matches!(&ty, TirType::Array(inner) if matches!(inner.as_ref(), TirType::Int64 | TirType::UInt64 | TirType::UInt8 | TirType::Float64 | TirType::Bool))
+                || bounds.is_none()
+            {
+                return Err(TirLowerError::UnsupportedExpr(
+                    "exclusive slice requires a mutable scalar array with explicit bounds".into(),
+                    expr.span(),
+                ));
+            }
+            TirSliceSource::Owner(slot)
+        };
+        let (start, end) = if let Some((start, end)) = bounds {
+            (self.lower_expression(start)?, self.lower_expression(end)?)
+        } else if let TirSliceSource::Parameter(parameter) = source {
+            (
+                self.builder.build_const(TirConst::Int64(0))?,
+                self.builder.build_inout_slice_len(parameter)?,
+            )
+        } else {
+            unreachable!()
+        };
+        Ok(self.builder.build_borrow_slice_inout(source, start, end)?)
     }
 
     /// Resolves a top-level function name using the module currently being
@@ -367,18 +450,19 @@ impl<'a> LowerContext<'a> {
                 if name == "None" {
                     return Ok(Type::Option(Box::new(Type::Unknown)));
                 }
-                if let Some(info) = self.type_ctx.scopes.lookup(name) {
-                    Ok(info.ty.clone())
-                } else if let Some(hir_ty) = self.local_hir_types.get(name) {
+                if let Some(hir_ty) = self.local_hir_types.get(name) {
                     Ok(hir_ty.clone())
                 } else if let Some((_, tir_ty, _)) = self.locals.get(name) {
                     unmap_type(tir_ty)
+                } else if let Some(info) = self.type_ctx.scopes.lookup(name) {
+                    Ok(info.ty.clone())
                 } else if self.type_ctx.is_module(name) {
                     Ok(Type::Namespace(name.clone()))
                 } else {
                     Err(TirLowerError::UnknownLocal(name.clone(), *span))
                 }
             }
+            HirExpression::Closure(closure) => self.infer_closure_type(closure),
             HirExpression::Binary(b) => match b.op {
                 HirBinaryOp::Add | HirBinaryOp::Sub | HirBinaryOp::Mul | HirBinaryOp::Div => {
                     self.infer_expr_type(&b.left)
@@ -607,7 +691,9 @@ impl<'a> LowerContext<'a> {
                         }
                         "Ok" | "Err" => Ok(Type::Unknown),
                         _ => {
-                            if let Some((_, sig)) = self.lookup_function(name) {
+                            if let Some(Type::Function(_, ret)) = self.local_hir_types.get(name) {
+                                Ok((**ret).clone())
+                            } else if let Some((_, sig)) = self.lookup_function(name) {
                                 Ok(sig.return_type.clone())
                             } else {
                                 Err(TirLowerError::UnsupportedExpr(
@@ -897,6 +983,154 @@ impl<'a> LowerContext<'a> {
         // 5. Exit block
         self.builder.set_current_block(exit_block);
 
+        Ok(())
+    }
+
+    /// Lower a function or closure body, preserving the value of its final
+    /// expression. A tail expression is consumed by the enclosing return; an
+    /// ordinary expression statement still discards its result.
+    fn lower_body_with_implicit_return(
+        &mut self,
+        block: &HirBlock,
+        return_type: &TirType,
+    ) -> Result<(), TirLowerError> {
+        for (index, stmt) in block.statements.iter().enumerate() {
+            if self.builder.is_terminated() {
+                break;
+            }
+            let is_tail = index + 1 == block.statements.len();
+            if is_tail && *return_type != TirType::Unit {
+                if let HirStatement::Expr(expr) = stmt {
+                    self.lower_implicit_return_expression(expr, return_type)?;
+                    continue;
+                }
+            }
+            self.lower_statement(stmt)?;
+        }
+        Ok(())
+    }
+
+    /// Lower the value position of a function/closure tail directly into Ret.
+    /// Branches are handled per CFG path rather than turning an entire `if`
+    /// into an unconditional Ret after a join, which would lose the value.
+    fn lower_implicit_return_expression(
+        &mut self,
+        expr: &HirExpression,
+        return_type: &TirType,
+    ) -> Result<(), TirLowerError> {
+        match expr {
+            HirExpression::If(if_expr) => {
+                self.lower_if_expression(if_expr, Some(return_type))?;
+            }
+            HirExpression::Block(block) => {
+                let saved_locals = self.locals.clone();
+                let saved_types = self.local_hir_types.clone();
+                let result = self.lower_body_with_implicit_return(block, return_type);
+                self.locals = saved_locals;
+                self.local_hir_types = saved_types;
+                result?;
+            }
+            _ => {
+                let value = self.lower_expression_with_expected_type(expr, return_type)?;
+                if let Some(current) = self.builder.get_current_block() {
+                    if self.block_falls_through(current) {
+                        self.builder.build_ret(Some(value))?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Preserve existing statement-position `if` semantics, but when an `if`
+    /// itself is the final expression of a non-Unit function, make each live
+    /// branch return its own tail. A missing else remains a live fallthrough
+    /// and is rejected by the enclosing MissingReturn check.
+    fn lower_if_expression(
+        &mut self,
+        i: &HirIf,
+        return_type: Option<&TirType>,
+    ) -> Result<TirValueId, TirLowerError> {
+        if let HirExpression::IsPattern(is_pat) = &*i.condition {
+            return self.lower_narrowing_if(i, is_pat, return_type);
+        }
+        let cond = self.lower_expression(&i.condition)?;
+        let then_entry = self.builder.new_block();
+        let else_entry = self.builder.new_block();
+        self.builder.build_condbr(cond, then_entry, else_entry)?;
+
+        let saved_locals = self.locals.clone();
+        let saved_types = self.local_hir_types.clone();
+
+        self.builder.set_current_block(then_entry);
+        let then_result = if let Some(ty) = return_type {
+            self.lower_body_with_implicit_return(&i.then_block, ty)
+        } else {
+            self.lower_block_statements(&i.then_block)
+        };
+        self.locals = saved_locals.clone();
+        self.local_hir_types = saved_types.clone();
+        then_result?;
+        let then_exit = self.builder.get_current_block().unwrap();
+        let then_falls_through = self.block_falls_through(then_exit);
+
+        self.builder.set_current_block(else_entry);
+        let else_result = if let Some(else_expr) = &i.else_branch {
+            match &**else_expr {
+                HirExpression::Block(block) => {
+                    if let Some(ty) = return_type {
+                        self.lower_body_with_implicit_return(block, ty)
+                    } else {
+                        self.lower_block_statements(block)
+                    }
+                }
+                HirExpression::If(_) => {
+                    if let Some(ty) = return_type {
+                        self.lower_implicit_return_expression(else_expr, ty)
+                    } else {
+                        self.lower_expression(else_expr).map(|_| ())
+                    }
+                }
+                _ => Err(TirLowerError::UnsupportedExpr(
+                    "Else is not a block or if".into(),
+                    else_expr.span(),
+                )),
+            }
+        } else {
+            Ok(())
+        };
+        self.locals = saved_locals;
+        self.local_hir_types = saved_types;
+        else_result?;
+        let else_exit = self.builder.get_current_block().unwrap();
+        let else_falls_through = self.block_falls_through(else_exit);
+
+        let join = self.builder.new_block();
+        if then_falls_through {
+            self.builder.set_current_block(then_exit);
+            self.builder.build_br(join)?;
+        }
+        if else_falls_through {
+            self.builder.set_current_block(else_exit);
+            self.builder.build_br(join)?;
+        }
+        self.builder.set_current_block(join);
+
+        if !then_falls_through && !else_falls_through {
+            // Dead continuation: callers must not emit another return here.
+            Ok(TirValueId(0))
+        } else {
+            self.builder.build_const(TirConst::Unit).map_err(Into::into)
+        }
+    }
+
+    fn lower_block_statements(&mut self, block: &HirBlock) -> Result<(), TirLowerError> {
+        for stmt in &block.statements {
+            if self.builder.is_terminated() {
+                break;
+            }
+            self.lower_statement(stmt)?;
+        }
         Ok(())
     }
 
@@ -2149,8 +2383,227 @@ impl<'a> LowerContext<'a> {
         self.builder.build_load(slot).map_err(Into::into)
     }
 
+    /// Infer the *public* closure signature, excluding hidden captured slots.
+    /// VM Parity 2B.1c: immutable ref capture lowering (TIR only).
+    fn infer_closure_type(&self, closure: &HirClosure) -> Result<Type, TirLowerError> {
+        for capture in &closure.captures {
+            let HirCapture::Named(named) = capture else {
+                return Err(TirLowerError::UnsupportedExpr(
+                    "recursive self captures require a separate borrow/lifetime gate".into(),
+                    closure.span,
+                ));
+            };
+            let Some((_, _, is_mutable)) = self.locals.get(&named.name) else {
+                return Err(TirLowerError::UnknownLocal(named.name.clone(), named.span));
+            };
+            match named.mode {
+                HirCaptureMode::Ref if !*is_mutable => {}
+                HirCaptureMode::Ref => {
+                    return Err(TirLowerError::UnsupportedExpr(
+                        format!(
+                            "ref capture '{}' must originate from immutable let",
+                            named.name
+                        ),
+                        named.span,
+                    ));
+                }
+                HirCaptureMode::Inout if *is_mutable => {}
+                HirCaptureMode::Inout => {
+                    return Err(TirLowerError::UnsupportedExpr(
+                        format!(
+                            "inout capture '{}' must originate from mutable var",
+                            named.name
+                        ),
+                        named.span,
+                    ));
+                }
+                _ => {
+                    return Err(TirLowerError::UnsupportedExpr(
+                        "VM borrowed captures require ref of immutable or inout of mutable storage"
+                            .into(),
+                        named.span,
+                    ));
+                }
+            }
+        }
+        let mut params = Vec::with_capacity(closure.parameters.len());
+        for param in &closure.parameters {
+            if param.kind != tempra_ast::ParameterKind::Runtime || param.is_inout {
+                return Err(TirLowerError::UnsupportedExpr(
+                    "non-runtime/inout closure parameters are not supported in VM Parity 2A".into(),
+                    param.span,
+                ));
+            }
+            params.push(resolve_hir_type(
+                &param.ty,
+                self.type_ctx,
+                self.self_ty.as_ref(),
+                &self.generic_subs,
+            )?);
+        }
+        let ret = match &closure.return_type {
+            Some(ret) => resolve_hir_type(
+                ret,
+                self.type_ctx,
+                self.self_ty.as_ref(),
+                &self.generic_subs,
+            )?,
+            None => Type::Unit,
+        };
+        Ok(Type::Function(params, Box::new(ret)))
+    }
+
+    /// Lift capture-free HIR closures into deterministic, module-local functions.
+    /// Their body is isolated from the parent function's locals. The return
+    /// expression is materialized explicitly, preserving Tempra expression blocks.
+    fn lower_closure(&mut self, closure: &HirClosure) -> Result<TirValueId, TirLowerError> {
+        let Type::Function(params, ret) = self.infer_closure_type(closure)? else {
+            unreachable!("closure inference always returns a function type")
+        };
+        // Preserve source declaration order: hidden arguments and borrow slots
+        // must use the same order. These are slot identities, never SSA copies.
+        let mut ref_captures = Vec::with_capacity(closure.captures.len());
+        let mut exclusive_capture = None;
+        let mut seen = std::collections::HashSet::new();
+        for capture in &closure.captures {
+            let HirCapture::Named(named) = capture else {
+                unreachable!("infer_closure_type rejected recursive capture")
+            };
+            let (slot, ty, is_mutable) = self
+                .locals
+                .get(&named.name)
+                .ok_or_else(|| TirLowerError::UnknownLocal(named.name.clone(), named.span))?;
+            match named.mode {
+                HirCaptureMode::Ref if !*is_mutable => {}
+                HirCaptureMode::Inout if *is_mutable => {}
+                _ => {
+                    return Err(TirLowerError::UnsupportedExpr(
+                        "VM borrowed captures require ref of immutable or inout of mutable storage"
+                            .into(),
+                        named.span,
+                    ));
+                }
+            }
+            if let Some(previous) = exclusive_capture {
+                if previous != (named.mode == HirCaptureMode::Inout) {
+                    return Err(TirLowerError::UnsupportedExpr(
+                        "mixed ref/inout captures are not supported by VM Parity 2B.5".into(),
+                        named.span,
+                    ));
+                }
+            } else {
+                exclusive_capture = Some(named.mode == HirCaptureMode::Inout);
+            }
+            if !seen.insert(named.name.clone()) {
+                return Err(TirLowerError::UnsupportedExpr(
+                    format!("duplicate ref capture '{}'", named.name),
+                    named.span,
+                ));
+            }
+            let hir_ty = match self.local_hir_types.get(&named.name) {
+                Some(ty) => ty.clone(),
+                None => unmap_type(ty)?,
+            };
+            ref_captures.push((named.name.clone(), *slot, ty.clone(), hir_ty));
+        }
+        let synthetic_name = format!(
+            "{}$closure${}${}",
+            self.builder.func.name, closure.span.start, closure.span.end
+        );
+        let return_type = map_type(&ret)?;
+
+        {
+            let child_builder = self
+                .module_builder
+                .new_function(&synthetic_name, return_type.clone());
+            let mut child = LowerContext::new(
+                child_builder,
+                self.type_ctx,
+                self.module_builder,
+                self.self_ty.clone(),
+                self.generic_subs.clone(),
+            );
+            child.module_prefix = self.module_prefix.clone();
+            let entry = child.builder.new_block();
+            child.builder.set_current_block(entry);
+
+            // Hidden capture parameters precede user-visible call arguments.
+            for (name, _, tir_ty, hir_ty) in &ref_captures {
+                let exclusive = exclusive_capture == Some(true);
+                let value = if exclusive {
+                    child.builder.add_inout_param(tir_ty.clone())
+                } else {
+                    child.builder.add_param(tir_ty.clone())
+                };
+                let slot = child.builder.build_slot(tir_ty.clone(), Some(name))?;
+                if exclusive {
+                    let parameter = child.builder.func.params.len() - 1;
+                    child.builder.build_bind_inout(slot, parameter)?;
+                } else {
+                    child.builder.build_store(slot, value)?;
+                }
+                child.locals.insert(
+                    name.clone(),
+                    (slot, tir_ty.clone(), exclusive_capture == Some(true)),
+                );
+                child.local_hir_types.insert(name.clone(), hir_ty.clone());
+            }
+
+            for (parameter, parameter_type) in closure.parameters.iter().zip(params.iter()) {
+                let tir_type = map_type(parameter_type)?;
+                let parameter_id = child.builder.add_param(tir_type.clone());
+                let slot = child
+                    .builder
+                    .build_slot(tir_type.clone(), Some(&parameter.name))?;
+                child.builder.build_store(slot, parameter_id)?;
+                child
+                    .locals
+                    .insert(parameter.name.clone(), (slot, tir_type, false));
+                child
+                    .local_hir_types
+                    .insert(parameter.name.clone(), parameter_type.clone());
+            }
+
+            child.lower_body_with_implicit_return(&closure.body, &return_type)?;
+
+            if !child.builder.is_terminated() {
+                if return_type == TirType::Unit {
+                    child.builder.build_ret(None)?;
+                } else {
+                    let current = child.builder.get_current_block().unwrap();
+                    if child.builder.is_block_reachable_from_entry(current) {
+                        return Err(TirLowerError::MissingReturn(closure.body.span));
+                    }
+                }
+            }
+
+            child.builder.prune_unreachable_blocks();
+            let synthesized = child.builder.build();
+            child.module_builder.add_function(synthesized);
+        }
+
+        let function_id = self.module_builder.declare_function(&synthetic_name);
+        if ref_captures.is_empty() {
+            self.builder
+                .build_make_closure(function_id, vec![])
+                .map_err(Into::into)
+        } else {
+            let borrowed_slots = ref_captures.iter().map(|(_, slot, _, _)| *slot).collect();
+            if exclusive_capture == Some(true) {
+                self.builder
+                    .build_make_closure_inout(function_id, borrowed_slots)
+                    .map_err(Into::into)
+            } else {
+                self.builder
+                    .build_make_closure_ref(function_id, borrowed_slots)
+                    .map_err(Into::into)
+            }
+        }
+    }
+
     pub fn lower_expression(&mut self, expr: &HirExpression) -> Result<TirValueId, TirLowerError> {
         match expr {
+            HirExpression::Closure(closure) => self.lower_closure(closure),
             HirExpression::Integer(span, s) => {
                 let val = s.parse::<i64>().map_err(|_| {
                     TirLowerError::UnsupportedExpr("Invalid Int64 literal".into(), *span)
@@ -2191,6 +2644,12 @@ impl<'a> LowerContext<'a> {
                         .map_err(|e| e.into());
                 }
                 if let Some((slot, _ty, _)) = self.locals.get(name) {
+                    if self.exclusive_slice_slots.contains_key(slot) {
+                        return Err(TirLowerError::UnsupportedExpr(
+                            "exclusive slice descriptor cannot be materialized as a value".into(),
+                            *span,
+                        ));
+                    }
                     self.builder.build_load(*slot).map_err(|e| e.into())
                 } else {
                     let keys: Vec<_> = self.locals.keys().cloned().collect();
@@ -2202,6 +2661,15 @@ impl<'a> LowerContext<'a> {
             }
             HirExpression::Binary(b) => {
                 if b.op == HirBinaryOp::Assign {
+                    if let HirExpression::Index(index) = &*b.left {
+                        if let Some(parameter) = self.exclusive_slice_parameter(&index.object) {
+                            let value = self.lower_expression(&b.right)?;
+                            let index = self.lower_expression(&index.index)?;
+                            self.builder
+                                .build_inout_slice_set(parameter, index, value)?;
+                            return Ok(self.builder.build_const(TirConst::Unit)?);
+                        }
+                    }
                     if let HirExpression::Name(span, name) = &*b.left {
                         let (slot, _ty, mutable) = if let Some(info) = self.locals.get(name) {
                             info.clone()
@@ -2209,6 +2677,12 @@ impl<'a> LowerContext<'a> {
                             return Err(TirLowerError::UnknownLocal(name.clone(), *span));
                         };
 
+                        if self.exclusive_slice_slots.contains_key(&slot) {
+                            return Err(TirLowerError::UnsupportedStmt(
+                                "cannot rebind an exclusive slice parameter".into(),
+                                *span,
+                            ));
+                        }
                         if !mutable {
                             return Err(TirLowerError::UnsupportedStmt(
                                 "cannot assign to let binding".into(),
@@ -2351,75 +2825,26 @@ impl<'a> LowerContext<'a> {
                     }
                 }
             }
-            HirExpression::If(i) => {
-                if let HirExpression::IsPattern(is_pat) = &*i.condition {
-                    return self.lower_narrowing_if(i, is_pat);
-                }
-                let cond = self.lower_expression(&i.condition)?;
-                let mut t_block = self.builder.new_block();
-                let mut f_block = self.builder.new_block();
-
-                self.builder.build_condbr(cond, t_block, f_block)?;
-
-                // Then block
-                self.builder.set_current_block(t_block);
-                for stmt in &i.then_block.statements {
-                    self.lower_statement(stmt)?;
-                }
-                t_block = self.builder.get_current_block().unwrap();
-                let t_falls_through = self.block_falls_through(t_block);
-
-                // Else block
-                self.builder.set_current_block(f_block);
-                if let Some(else_expr) = &i.else_branch {
-                    if let HirExpression::Block(b) = &**else_expr {
-                        for stmt in &b.statements {
-                            self.lower_statement(stmt)?;
-                        }
-                    } else if let HirExpression::If(_nested_if) = &**else_expr {
-                        self.lower_expression(else_expr)?;
-                    } else {
-                        return Err(TirLowerError::UnsupportedExpr(
-                            "Else is not a block or if".into(),
-                            else_expr.span(),
-                        ));
-                    }
-                }
-                f_block = self.builder.get_current_block().unwrap();
-                let f_falls_through = self.block_falls_through(f_block);
-
-                if !t_falls_through && !f_falls_through {
-                    // Neither branch can reach the join. We still create a block so
-                    // that subsequent instructions (which are unreachable) can be
-                    // appended without causing a "block already terminated" error.
-                    // The block has no incoming edges and is therefore unreachable.
-                    let end_block = self.builder.new_block();
-                    self.builder.set_current_block(end_block);
-                    Ok(TirValueId(0))
-                } else {
-                    let end_block = self.builder.new_block();
-
-                    if t_falls_through {
-                        self.builder.set_current_block(t_block);
-                        self.builder.build_br(end_block)?;
-                    }
-                    if f_falls_through {
-                        self.builder.set_current_block(f_block);
-                        self.builder.build_br(end_block)?;
-                    }
-
-                    self.builder.set_current_block(end_block);
-                    self.builder
-                        .build_const(TirConst::Unit)
-                        .map_err(|e| e.into())
-                }
-            }
+            HirExpression::If(i) => self.lower_if_expression(i, None),
             HirExpression::Call(c) => {
+                if c.inout_arguments.iter().any(|value| *value)
+                    && !matches!(c.callee.as_ref(), HirExpression::Name(_, _))
+                {
+                    return Err(TirLowerError::UnsupportedExpr(
+                        "inout VM calls require a direct named function".into(),
+                        c.span,
+                    ));
+                }
+                // Scalar inout arguments are lowered below, at the direct-call site.
+                // Slice views remain unsupported until buffer-level borrow execution exists.
                 // Handle .len() method call
                 if let HirExpression::Member(m) = &*c.callee {
                     let obj_ty = self.infer_expr_type(&m.object)?;
                     if c.args.is_empty() {
                         if m.field == "len" {
+                            if let Some(parameter) = self.exclusive_slice_parameter(&m.object) {
+                                return Ok(self.builder.build_inout_slice_len(parameter)?);
+                            }
                             if matches!(obj_ty, Type::Array(_) | Type::Slice(_) | Type::String) {
                                 let obj = self.lower_expression(&m.object)?;
                                 return self.builder.build_len(obj).map_err(|e| e.into());
@@ -2779,6 +3204,43 @@ impl<'a> LowerContext<'a> {
                             .map_err(|e| e.into());
                     }
 
+                    if let Some((slot, TirType::Function(params, _), _)) = self.locals.get(name) {
+                        let slot = *slot;
+                        let params = params.clone();
+                        if params.len() != c.args.len() {
+                            return Err(TirLowerError::UnsupportedExpr(
+                                format!(
+                                    "closure call arity mismatch: expected {}, found {}",
+                                    params.len(),
+                                    c.args.len()
+                                ),
+                                c.span,
+                            ));
+                        }
+                        if c.inout_arguments.iter().any(|value| *value) {
+                            return Err(TirLowerError::UnsupportedExpr(
+                                "exclusive indirect callback call requires a verified contract"
+                                    .into(),
+                                c.span,
+                            ));
+                        }
+                        let callee = self.builder.build_load(slot)?;
+                        let mut args = Vec::with_capacity(c.args.len());
+                        for (argument, expected_type) in c.args.iter().zip(params.iter()) {
+                            let expr = match argument {
+                                HirCallArgument::Positional(expr) => expr,
+                                HirCallArgument::Named(named) => &named.value,
+                            };
+                            args.push(
+                                self.lower_expression_with_expected_type(expr, expected_type)?,
+                            );
+                        }
+                        return self
+                            .builder
+                            .build_call_closure(callee, args)
+                            .map_err(Into::into);
+                    }
+
                     if let Some((resolved_name, sig)) = self.lookup_function(name) {
                         if sig.params.len() != c.args.len() {
                             return Err(TirLowerError::UnsupportedExpr(
@@ -2792,14 +3254,99 @@ impl<'a> LowerContext<'a> {
                             ));
                         }
 
-                        let mut arg_values = Vec::new();
-                        for arg in &c.args {
-                            let arg_expr = match arg {
-                                HirCallArgument::Positional(e) => e,
-                                HirCallArgument::Named(n) => &n.value,
+                        // Evaluate arguments in *source* order, then arrange SSA
+                        // values by parameter position for the direct call.
+                        // Reordering evaluation of named arguments would change
+                        // observable effects and is not allowed.
+                        let mut ordered: Vec<Option<TirValueId>> = vec![None; sig.params.len()];
+                        let mut next_pos = 0usize;
+                        for (source_index, argument) in c.args.iter().enumerate() {
+                            let (parameter_index, expr) = match argument {
+                                HirCallArgument::Positional(expr) => {
+                                    let index = next_pos;
+                                    next_pos += 1;
+                                    (index, expr)
+                                }
+                                HirCallArgument::Named(named) => {
+                                    let Some(index) =
+                                        sig.params.iter().position(|p| p.name == named.name)
+                                    else {
+                                        return Err(TirLowerError::UnsupportedExpr(
+                                            "unknown named inout call parameter".into(),
+                                            c.span,
+                                        ));
+                                    };
+                                    (index, &named.value)
+                                }
                             };
-                            arg_values.push(self.lower_expression(arg_expr)?);
+                            if parameter_index >= ordered.len()
+                                || ordered[parameter_index].is_some()
+                            {
+                                return Err(TirLowerError::UnsupportedExpr(
+                                    "duplicate or invalid direct-call argument".into(),
+                                    c.span,
+                                ));
+                            }
+                            let required_inout = sig.params[parameter_index].is_inout;
+                            let explicit_inout = c
+                                .inout_arguments
+                                .get(source_index)
+                                .copied()
+                                .unwrap_or(false);
+                            if required_inout != explicit_inout {
+                                return Err(TirLowerError::UnsupportedExpr(
+                                    "inout call marker does not match the parameter contract"
+                                        .into(),
+                                    c.span,
+                                ));
+                            }
+                            let value = if required_inout
+                                && matches!(&sig.params[parameter_index].ty, Type::Slice(_))
+                            {
+                                self.lower_exclusive_slice_argument(expr)?
+                            } else if required_inout {
+                                let HirExpression::Name(_, owner) = expr else {
+                                    return Err(TirLowerError::UnsupportedExpr(
+                                        "VM inout Slice views require exclusive buffer lowering"
+                                            .into(),
+                                        c.span,
+                                    ));
+                                };
+                                let (slot, slot_type, mutable) =
+                                    self.locals.get(owner).cloned().ok_or_else(|| {
+                                        TirLowerError::UnknownLocal(owner.clone(), c.span)
+                                    })?;
+                                if !mutable
+                                    || !matches!(
+                                        slot_type,
+                                        TirType::Int64
+                                            | TirType::Bool
+                                            | TirType::UInt64
+                                            | TirType::UInt8
+                                            | TirType::Float64
+                                    )
+                                {
+                                    return Err(TirLowerError::UnsupportedExpr(
+                                        "VM inout calls currently support mutable scalar owners only".into(), c.span,
+                                    ));
+                                }
+                                self.builder.build_borrow_inout(slot)?
+                            } else {
+                                self.lower_expression(expr)?
+                            };
+                            ordered[parameter_index] = Some(value);
                         }
+                        let arg_values = ordered
+                            .into_iter()
+                            .map(|item| {
+                                item.ok_or_else(|| {
+                                    TirLowerError::UnsupportedExpr(
+                                        "missing direct-call argument".into(),
+                                        c.span,
+                                    )
+                                })
+                            })
+                            .collect::<Result<Vec<_>, _>>()?;
 
                         let func_id = self.module_builder.declare_function(&resolved_name);
                         return self
@@ -2909,6 +3456,10 @@ impl<'a> LowerContext<'a> {
                     .map_err(|e| e.into())
             }
             HirExpression::Index(i) => {
+                if let Some(parameter) = self.exclusive_slice_parameter(&i.object) {
+                    let index = self.lower_expression(&i.index)?;
+                    return Ok(self.builder.build_inout_slice_get(parameter, index)?);
+                }
                 let obj_ty = self.infer_expr_type(&i.object)?;
                 if matches!(obj_ty, Type::String) {
                     return Err(TirLowerError::UnsupportedExpr(
@@ -2936,6 +3487,11 @@ impl<'a> LowerContext<'a> {
                     .map_err(|e| e.into())
             }
             HirExpression::Member(m) => {
+                if m.field == "len" {
+                    if let Some(parameter) = self.exclusive_slice_parameter(&m.object) {
+                        return Ok(self.builder.build_inout_slice_len(parameter)?);
+                    }
+                }
                 let obj_ty = self.infer_expr_type(&m.object)?;
                 if m.field == "len"
                     && matches!(obj_ty, Type::Array(_) | Type::Slice(_) | Type::String)
@@ -2995,6 +3551,7 @@ impl<'a> LowerContext<'a> {
         &mut self,
         i: &HirIf,
         is_pat: &HirIsPatternExpr,
+        return_type: Option<&TirType>,
     ) -> Result<TirValueId, TirLowerError> {
         let (variant_name, binding_name) = self.extract_simple_pattern(&is_pat.pattern)?;
 
@@ -3019,6 +3576,7 @@ impl<'a> LowerContext<'a> {
 
         // Save locals for scoping
         let old_locals = self.locals.clone();
+        let old_hir_types = self.local_hir_types.clone();
 
         // Then block
         self.builder.set_current_block(t_block);
@@ -3049,21 +3607,26 @@ impl<'a> LowerContext<'a> {
             self.locals.insert(binding, (slot, tir_payload_ty, false));
         }
 
-        for stmt in &i.then_block.statements {
-            self.lower_statement(stmt)?;
+        if let Some(ty) = return_type {
+            self.lower_body_with_implicit_return(&i.then_block, ty)?;
+        } else {
+            self.lower_block_statements(&i.then_block)?;
         }
         t_block = self.builder.get_current_block().unwrap();
         let t_falls_through = self.block_falls_through(t_block);
 
         // Restore locals after then block (bindings should not leak)
         self.locals = old_locals;
+        self.local_hir_types = old_hir_types;
 
         // Else block
         self.builder.set_current_block(f_block);
         if let Some(else_expr) = &i.else_branch {
             if let HirExpression::Block(b) = &**else_expr {
-                for stmt in &b.statements {
-                    self.lower_statement(stmt)?;
+                if let Some(ty) = return_type {
+                    self.lower_body_with_implicit_return(b, ty)?;
+                } else {
+                    self.lower_block_statements(b)?;
                 }
             } else {
                 return Err(TirLowerError::UnsupportedExpr(
@@ -3698,7 +4261,11 @@ fn lower_function_inner(
             }
             let ty = resolve_hir_type(&p.ty, type_ctx, self_ty.as_ref(), &generic_subs)?;
             let tir_ty = map_type(&ty)?;
-            builder.add_param(tir_ty);
+            if p.is_inout {
+                builder.add_inout_param(tir_ty);
+            } else {
+                builder.add_param(tir_ty);
+            }
         }
         if builder.func.return_type == TirType::Unit {
             builder.build_ret(None)?;
@@ -3727,18 +4294,30 @@ fn lower_function_inner(
         }
         let ty = resolve_hir_type(&p.ty, type_ctx, self_ty.as_ref(), &generic_subs)?;
         let tir_ty = map_type(&ty)?;
-        let val_id = ctx.builder.add_param(tir_ty.clone());
+        let val_id = if p.is_inout {
+            ctx.builder.add_inout_param(tir_ty.clone())
+        } else {
+            ctx.builder.add_param(tir_ty.clone())
+        };
 
         let slot = ctx.builder.build_slot(tir_ty.clone(), Some(&p.name))?;
-        ctx.builder.build_store(slot, val_id)?;
+        if p.is_inout && matches!(&tir_ty, TirType::Slice(_)) {
+            ctx.exclusive_slice_slots
+                .insert(slot, ctx.builder.func.params.len() - 1);
+        } else if p.is_inout {
+            let parameter = ctx.builder.func.params.len() - 1;
+            ctx.builder.build_bind_inout(slot, parameter)?;
+        } else {
+            ctx.builder.build_store(slot, val_id)?;
+        }
         // Parameters are immutable by default in Phase 12.2 lowering
-        ctx.locals.insert(p.name.clone(), (slot, tir_ty, false));
+        ctx.locals
+            .insert(p.name.clone(), (slot, tir_ty, p.is_inout));
     }
 
     if let Some(body) = &func.body {
-        for stmt in &body.statements {
-            ctx.lower_statement(stmt)?;
-        }
+        let return_type = ctx.builder.func.return_type.clone();
+        ctx.lower_body_with_implicit_return(body, &return_type)?;
     }
 
     if !ctx.builder.is_terminated() {

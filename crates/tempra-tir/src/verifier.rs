@@ -117,6 +117,23 @@ fn resolve_get_type(
     }
 }
 
+fn is_slice_scalar(ty: &TirType) -> bool {
+    matches!(
+        ty,
+        TirType::Int64 | TirType::UInt64 | TirType::UInt8 | TirType::Float64 | TirType::Bool
+    )
+}
+
+fn exclusive_slice_element(func: &TirFunction, parameter: usize) -> Option<TirType> {
+    if !func.inout_params.get(parameter).copied().unwrap_or(false) {
+        return None;
+    }
+    match &func.params.get(parameter)?.1 {
+        TirType::Slice(inner) if is_slice_scalar(inner) => Some((**inner).clone()),
+        _ => None,
+    }
+}
+
 fn verify_function_inner(
     func: &TirFunction,
     functions: &HashMap<TirFunctionId, &TirFunction>,
@@ -125,6 +142,11 @@ fn verify_function_inner(
 ) -> Result<HashMap<TirValueId, Option<TirType>>, Vec<VerifierError>> {
     let mut errors = Vec::new();
 
+    if !func.inout_params.is_empty() && func.inout_params.len() != func.params.len() {
+        return Err(vec![VerifierError::GenericError(
+            "inout parameter metadata must match function arity".into(),
+        )]);
+    }
     if func.blocks.is_empty() {
         // Declaration only, nothing more to verify here
         return Ok(HashMap::new());
@@ -270,13 +292,65 @@ fn verify_function_inner(
                 TirInstr::Slot(slot, ty) => {
                     slot_types.insert(*slot, ty.clone());
                 }
-                TirInstr::Load(res, slot) => {
+                TirInstr::BindInout(_, _) => {
+                    // The complete entry/slot/parameter contract is checked below.
+                }
+                TirInstr::Load(res, slot) | TirInstr::BorrowInout(res, slot) => {
                     if let Some(ty) = slot_types.get(slot) {
                         value_types.insert(*res, Some(ty.clone()));
                     } else {
                         errors.push(VerifierError::UndeclaredSlot(*slot));
                         value_types.insert(*res, None);
                     }
+                }
+                TirInstr::BorrowSliceInout(res, source, start, end) => {
+                    let element = match source {
+                        TirSliceSource::Owner(slot) => match slot_types.get(slot) {
+                            Some(TirType::Array(inner)) if is_slice_scalar(inner) => {
+                                Some((**inner).clone())
+                            }
+                            _ => None,
+                        },
+                        TirSliceSource::Parameter(index) => exclusive_slice_element(func, *index),
+                    };
+                    if element.is_none()
+                        || [start, end]
+                            .iter()
+                            .any(|v| value_types.get(*v) != Some(&Some(TirType::Int64)))
+                    {
+                        errors.push(VerifierError::GenericError(
+                            "invalid exclusive slice source or bounds".into(),
+                        ));
+                    }
+                    value_types.insert(*res, element.map(|ty| TirType::Slice(Box::new(ty))));
+                }
+                TirInstr::InoutSliceGet(res, parameter, index) => {
+                    let element = exclusive_slice_element(func, *parameter);
+                    if element.is_none() || value_types.get(index) != Some(&Some(TirType::Int64)) {
+                        errors.push(VerifierError::GenericError(
+                            "invalid exclusive slice read".into(),
+                        ));
+                    }
+                    value_types.insert(*res, element);
+                }
+                TirInstr::InoutSliceSet(parameter, index, value) => {
+                    let element = exclusive_slice_element(func, *parameter);
+                    if element.is_none()
+                        || value_types.get(index) != Some(&Some(TirType::Int64))
+                        || value_types.get(value) != Some(&element)
+                    {
+                        errors.push(VerifierError::GenericError(
+                            "invalid exclusive slice write".into(),
+                        ));
+                    }
+                }
+                TirInstr::InoutSliceLen(res, parameter) => {
+                    if exclusive_slice_element(func, *parameter).is_none() {
+                        errors.push(VerifierError::GenericError(
+                            "invalid exclusive slice length".into(),
+                        ));
+                    }
+                    value_types.insert(*res, Some(TirType::Int64));
                 }
                 TirInstr::Store(slot, val) => {
                     let val_ty = value_types.get(val);
@@ -305,7 +379,22 @@ fn verify_function_inner(
                     }
                     if let Some(f) = functions.get(target_func) {
                         if args.len() == f.params.len() {
-                            for (arg, (_param_val, param_ty)) in args.iter().zip(&f.params) {
+                            for (index, (arg, (_param_val, param_ty))) in
+                                args.iter().zip(&f.params).enumerate()
+                            {
+                                let is_exclusive_value = func.blocks.iter().any(|block| {
+                                    block.instrs.iter().any(|instr| {
+                                    matches!(instr, TirInstr::BorrowInout(value, _) | TirInstr::BorrowSliceInout(value, _, _, _) if value == arg)
+                                })
+                                });
+                                if is_exclusive_value
+                                    != f.inout_params.get(index).copied().unwrap_or(false)
+                                {
+                                    errors.push(VerifierError::GenericError(
+                                        "exclusive call argument must match inout parameter access"
+                                            .into(),
+                                    ));
+                                }
                                 if let Some(Some(a_ty)) = value_types.get(arg) {
                                     if a_ty != param_ty {
                                         errors.push(VerifierError::TypeMismatch {
@@ -325,6 +414,165 @@ fn verify_function_inner(
                     } else {
                         errors.push(VerifierError::FunctionNotFound(*target_func));
                         value_types.insert(*res, None);
+                    }
+                }
+                TirInstr::MakeClosure(res, target_func, captures) => {
+                    if let Some(f) = functions.get(target_func) {
+                        if f.inout_params.iter().any(|access| *access) {
+                            errors.push(VerifierError::GenericError(
+                                "ordinary closure target cannot have inout parameters".into(),
+                            ));
+                        }
+                        if captures.len() > f.params.len() {
+                            errors.push(VerifierError::GenericError(format!(
+                                "closure capture count exceeds target parameter count for {:?}",
+                                target_func
+                            )));
+                            value_types.insert(*res, None);
+                        } else {
+                            for (capture, (_param_id, expected)) in
+                                captures.iter().zip(f.params.iter())
+                            {
+                                match value_types.get(capture) {
+                                    None => errors.push(VerifierError::UndeclaredValue(*capture)),
+                                    Some(Some(actual)) if actual != expected => {
+                                        errors.push(VerifierError::TypeMismatch {
+                                            expected: expected.clone(),
+                                            actual: actual.clone(),
+                                        });
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            // Hidden capture parameters are excluded from the callable signature.
+                            let params = f.params[captures.len()..]
+                                .iter()
+                                .map(|(_, ty)| ty.clone())
+                                .collect();
+                            value_types.insert(
+                                *res,
+                                Some(TirType::Function(params, Box::new(f.return_type.clone()))),
+                            );
+                        }
+                    } else {
+                        errors.push(VerifierError::FunctionNotFound(*target_func));
+                        value_types.insert(*res, None);
+                    }
+                }
+                TirInstr::MakeClosureRef(res, target_func, captures)
+                | TirInstr::MakeClosureInout(res, target_func, captures) => {
+                    // Storage is borrowed, not copied: validate slot identities
+                    // and their exact types against hidden leading parameters.
+                    if captures.is_empty() {
+                        errors.push(VerifierError::GenericError(
+                            "make_closure_ref requires at least one borrowed slot".into(),
+                        ));
+                        value_types.insert(*res, None);
+                    } else if let Some(f) = functions.get(target_func) {
+                        if f.is_extern || f.blocks.is_empty() {
+                            errors.push(VerifierError::GenericError(format!(
+                                "make_closure_ref requires a defined target: {:?}",
+                                target_func
+                            )));
+                            value_types.insert(*res, None);
+                        } else if captures.len() > f.params.len() {
+                            errors.push(VerifierError::GenericError(format!(
+                                "borrowed closure capture count exceeds target parameters for {:?}",
+                                target_func
+                            )));
+                            value_types.insert(*res, None);
+                        } else {
+                            let exclusive = matches!(instr, TirInstr::MakeClosureInout(_, _, _));
+                            if f.params.iter().enumerate().any(|(index, (_, ty))| {
+                                let expected = exclusive && index < captures.len();
+                                let actual = f.inout_params.get(index).copied().unwrap_or(false);
+                                expected != actual || (actual && matches!(ty, TirType::Slice(_)))
+                            }) {
+                                errors.push(VerifierError::GenericError(
+                                    "closure capture access must match hidden parameter modes; public inout is unsupported".into(),
+                                ));
+                            }
+                            let mut seen = std::collections::HashSet::new();
+                            for (slot, (_, expected)) in captures.iter().zip(f.params.iter()) {
+                                if !seen.insert(*slot) {
+                                    errors.push(VerifierError::GenericError(format!(
+                                        "duplicate borrowed capture slot ${}",
+                                        slot.0
+                                    )));
+                                }
+                                match slot_types.get(slot) {
+                                    None => errors.push(VerifierError::UndeclaredSlot(*slot)),
+                                    Some(actual) if actual != expected => {
+                                        errors.push(VerifierError::TypeMismatch {
+                                            expected: expected.clone(),
+                                            actual: actual.clone(),
+                                        });
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            let params = f.params[captures.len()..]
+                                .iter()
+                                .map(|(_, ty)| ty.clone())
+                                .collect();
+                            value_types.insert(
+                                *res,
+                                Some(TirType::Function(params, Box::new(f.return_type.clone()))),
+                            );
+                        }
+                    } else {
+                        errors.push(VerifierError::FunctionNotFound(*target_func));
+                        value_types.insert(*res, None);
+                    }
+                }
+                TirInstr::CallClosure(res, callee, args) => {
+                    let callee_type = value_types.get(callee).cloned();
+                    match callee_type {
+                        None => {
+                            errors.push(VerifierError::UndeclaredValue(*callee));
+                            value_types.insert(*res, None);
+                        }
+                        Some(Some(TirType::Function(params, ret))) => {
+                            if args.len() != params.len() {
+                                errors.push(VerifierError::GenericError(format!(
+                                    "closure call arity mismatch: expected {}, found {}",
+                                    params.len(),
+                                    args.len()
+                                )));
+                            }
+                            for (arg, expected) in args.iter().zip(params.iter()) {
+                                match value_types.get(arg) {
+                                    None => errors.push(VerifierError::UndeclaredValue(*arg)),
+                                    Some(Some(actual)) if actual != expected => {
+                                        errors.push(VerifierError::TypeMismatch {
+                                            expected: expected.clone(),
+                                            actual: actual.clone(),
+                                        });
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            // Still diagnose undeclared extra arguments on wrong-arity calls.
+                            for arg in args.iter().skip(params.len()) {
+                                if !value_types.contains_key(arg) {
+                                    errors.push(VerifierError::UndeclaredValue(*arg));
+                                }
+                            }
+                            value_types.insert(*res, Some(*ret));
+                        }
+                        Some(Some(other)) => {
+                            errors.push(VerifierError::GenericError(format!(
+                                "cannot call non-function TIR value of type {:?}",
+                                other
+                            )));
+                            value_types.insert(*res, None);
+                        }
+                        Some(None) => {
+                            errors.push(VerifierError::GenericError(
+                                "closure callee type is unresolved".to_string(),
+                            ));
+                            value_types.insert(*res, None);
+                        }
                     }
                 }
                 TirInstr::Add(res, a, b)
@@ -562,9 +810,586 @@ fn verify_function_inner(
         }
     }
 
+    errors.extend(verify_borrowed_closure_frame_lifetimes(func, functions));
+    errors.extend(verify_exclusive_call_borrows(func, functions));
+    errors.extend(verify_inout_bindings(func));
+
     if errors.is_empty() {
         Ok(value_types)
     } else {
         Err(errors)
+    }
+}
+
+// VM Parity 2B.1d: frame-bound borrowed closures.
+// This is a conservative structural proof, not a general lexical borrow checker.
+// A borrowed closure may move through local slots and cross a direct call
+// only when the callee is verified not to let that callback escape.
+// A Store in the entry block may execute repeatedly if the CFG returns to
+// entry. Counted-once syntax is not counted-once execution (v0.4 §14.5).
+fn borrowed_entry_can_repeat(func: &TirFunction, entry: TirBlockId) -> bool {
+    let successors = |id: TirBlockId| -> Vec<TirBlockId> {
+        let terminator = func
+            .blocks
+            .iter()
+            .find(|block| block.id == id)
+            .and_then(|block| block.terminator.as_ref());
+        match terminator {
+            Some(TirTerminator::Br(target)) => vec![*target],
+            Some(TirTerminator::CondBr(_, yes, no)) => vec![*yes, *no],
+            _ => vec![],
+        }
+    };
+
+    let mut pending = successors(entry);
+    let mut seen = HashSet::new();
+    while let Some(block) = pending.pop() {
+        if block == entry {
+            return true;
+        }
+        if seen.insert(block) {
+            pending.extend(successors(block));
+        }
+    }
+    false
+}
+
+/// An incoming exclusive place is bound once, immediately after its slot
+/// declaration in the entry block. No ordinary Store can create that alias.
+fn verify_inout_bindings(func: &TirFunction) -> Vec<VerifierError> {
+    let Some(entry) = func.blocks.first() else {
+        return Vec::new();
+    };
+    let mut bound_slots = HashSet::new();
+    let mut bound_parameters = HashSet::new();
+    let mut errors = Vec::new();
+    for block in &func.blocks {
+        for (index, instr) in block.instrs.iter().enumerate() {
+            let TirInstr::BindInout(slot, parameter) = instr else {
+                continue;
+            };
+            let parameter_type = func.params.get(*parameter).map(|(_, ty)| ty);
+            let adjacent = index.checked_sub(1).and_then(|i| block.instrs.get(i));
+            let matches_slot = matches!(adjacent, Some(TirInstr::Slot(id, ty))
+                if id == slot && Some(ty) == parameter_type);
+            let declarations = func
+                .blocks
+                .iter()
+                .flat_map(|b| &b.instrs)
+                .filter(|i| matches!(i, TirInstr::Slot(id, _) if id == slot))
+                .count();
+            if block.id != entry.id
+                || borrowed_entry_can_repeat(func, entry.id)
+                || !matches_slot
+                || declarations != 1
+                || !func.inout_params.get(*parameter).copied().unwrap_or(false)
+                || matches!(
+                    parameter_type,
+                    None | Some(TirType::Slice(_) | TirType::Function(_, _))
+                )
+                || !bound_slots.insert(*slot)
+                || !bound_parameters.insert(*parameter)
+            {
+                errors.push(VerifierError::GenericError(
+                    "invalid inout place binding: requires one matching entry slot per exclusive parameter".into(),
+                ));
+            }
+        }
+    }
+    errors
+}
+
+/// Exclusive SSA operands have only one legal consumer: a direct call's
+/// corresponding `inout` parameter. No assignment, return or alias is legal.
+fn verify_exclusive_call_borrows(
+    func: &TirFunction,
+    functions: &HashMap<TirFunctionId, &TirFunction>,
+) -> Vec<VerifierError> {
+    let borrow_sources: HashMap<TirValueId, TirSliceSource> = func
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instrs)
+        .filter_map(|instr| match instr {
+            TirInstr::BorrowInout(value, slot) => Some((*value, TirSliceSource::Owner(*slot))),
+            TirInstr::BorrowSliceInout(value, source, _, _) => Some((*value, *source)),
+            _ => None,
+        })
+        .collect();
+    let exclusive: HashSet<TirValueId> = borrow_sources.keys().copied().collect();
+    let mut uses: HashMap<TirValueId, usize> = exclusive.iter().map(|v| (*v, 0)).collect();
+    let exclusive_parameters: HashSet<TirValueId> = func
+        .params
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| func.inout_params.get(*i).copied().unwrap_or(false))
+        .map(|(_, (value, _))| *value)
+        .collect();
+    let slice_parameters: HashSet<TirValueId> = func
+        .params
+        .iter()
+        .enumerate()
+        .filter(|(i, (_, ty))| {
+            func.inout_params.get(*i).copied().unwrap_or(false) && matches!(ty, TirType::Slice(_))
+        })
+        .map(|(_, (value, _))| *value)
+        .collect();
+    let slice_borrows: HashSet<TirValueId> = func
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instrs)
+        .filter_map(|instruction| match instruction {
+            TirInstr::BorrowSliceInout(value, _, _, _) => Some(*value),
+            _ => None,
+        })
+        .collect();
+    let mut invalid = false;
+    if !slice_parameters.is_empty()
+        && func.params.iter().enumerate().any(|(i, (_, ty))| {
+            if matches!(ty, TirType::Slice(_)) {
+                exclusive_slice_element(func, i).is_none()
+            } else {
+                !is_slice_scalar(ty)
+            }
+        })
+    {
+        invalid = true;
+    }
+    if !slice_parameters.is_empty()
+        && !is_slice_scalar(&func.return_type)
+        && func.return_type != TirType::Unit
+    {
+        invalid = true;
+    }
+    for block in &func.blocks {
+        for instr in &block.instrs {
+            let mut operands: Vec<TirValueId> = Vec::new();
+            match instr {
+                TirInstr::Const(_, _)
+                | TirInstr::Slot(_, _)
+                | TirInstr::BindInout(_, _)
+                | TirInstr::Load(_, _)
+                | TirInstr::BorrowInout(_, _)
+                | TirInstr::MakeClosureRef(_, _, _)
+                | TirInstr::MakeClosureInout(_, _, _)
+                | TirInstr::InoutSliceLen(_, _) => {}
+                TirInstr::BorrowSliceInout(_, _, start, end) => operands.extend([*start, *end]),
+                TirInstr::InoutSliceGet(_, _, index) => operands.push(*index),
+                TirInstr::InoutSliceSet(_, index, value) => operands.extend([*index, *value]),
+                TirInstr::Make(_, _, _, args) | TirInstr::MakeClosure(_, _, args) => {
+                    operands.extend(args.iter().copied())
+                }
+                TirInstr::MakeStruct(_, _, fields) => {
+                    operands.extend(fields.iter().map(|(_, value)| *value))
+                }
+                TirInstr::Get(_, obj, _)
+                | TirInstr::Tag(_, obj)
+                | TirInstr::Unwrap(_, obj, _, _)
+                | TirInstr::Not(_, obj)
+                | TirInstr::Len(_, obj)
+                | TirInstr::Size(_, obj)
+                | TirInstr::Bytes(_, obj) => operands.push(*obj),
+                TirInstr::Store(_, value) => operands.push(*value),
+                TirInstr::Call(_, target, args) => {
+                    let callee = functions.get(target);
+                    let mut borrowed_slots = HashSet::new();
+                    for (index, value) in args.iter().enumerate() {
+                        if exclusive.contains(value) {
+                            // Two independent SSA handles to one owner may not
+                            // coexist in the same direct call.
+                            if !borrowed_slots.insert(borrow_sources[value]) {
+                                invalid = true;
+                            }
+                            *uses.get_mut(value).unwrap() += 1;
+                            if !callee.is_some_and(|f| {
+                                !f.is_extern
+                                    && f.inout_params.get(index).copied().unwrap_or(false)
+                                    && (slice_borrows.contains(value)
+                                        == matches!(
+                                            f.params.get(index),
+                                            Some((_, TirType::Slice(_)))
+                                        ))
+                            }) {
+                                invalid = true;
+                            }
+                        }
+                    }
+                    operands.extend(args.iter().copied().filter(|v| !exclusive.contains(v)));
+                }
+                TirInstr::CallClosure(_, callable, args) => {
+                    operands.push(*callable);
+                    operands.extend(args.iter().copied());
+                }
+                TirInstr::Set(_, obj, _, value)
+                | TirInstr::ArrayPush(_, obj, value)
+                | TirInstr::GetIndex(_, obj, value)
+                | TirInstr::Add(_, obj, value)
+                | TirInstr::Sub(_, obj, value)
+                | TirInstr::Mul(_, obj, value)
+                | TirInstr::Div(_, obj, value)
+                | TirInstr::Eq(_, obj, value)
+                | TirInstr::Lt(_, obj, value)
+                | TirInstr::Gt(_, obj, value)
+                | TirInstr::And(_, obj, value)
+                | TirInstr::Or(_, obj, value) => operands.extend([*obj, *value]),
+                TirInstr::Slice(_, obj, start, end) => operands.extend([*obj, *start, *end]),
+            }
+            if operands
+                .iter()
+                .any(|value| exclusive.contains(value) || exclusive_parameters.contains(value))
+            {
+                invalid = true;
+            }
+        }
+        match &block.terminator {
+            Some(TirTerminator::Ret(Some(v))) | Some(TirTerminator::CondBr(v, _, _))
+                if exclusive.contains(v) || exclusive_parameters.contains(v) =>
+            {
+                invalid = true
+            }
+            _ => {}
+        }
+    }
+    if uses.values().any(|count| *count != 1) {
+        invalid = true;
+    }
+    if invalid {
+        vec![VerifierError::GenericError(
+            "inout borrow must be consumed exactly once by a verified direct call".into(),
+        )]
+    } else {
+        Vec::new()
+    }
+}
+
+fn verify_borrowed_closure_frame_lifetimes(
+    func: &TirFunction,
+    functions: &HashMap<TirFunctionId, &TirFunction>,
+) -> Vec<VerifierError> {
+    let mut source_slots = HashSet::new();
+    let mut borrowed_values = HashSet::new();
+    let mut borrow_sites = Vec::new();
+
+    for block in &func.blocks {
+        for (index, instr) in block.instrs.iter().enumerate() {
+            if let TirInstr::MakeClosureRef(result, _, captures)
+            | TirInstr::MakeClosureInout(result, _, captures) = instr
+            {
+                borrowed_values.insert(*result);
+                for slot in captures {
+                    source_slots.insert(*slot);
+                    borrow_sites.push((block.id, index, *slot));
+                }
+            }
+        }
+    }
+
+    if borrowed_values.is_empty() {
+        return Vec::new();
+    }
+
+    let mut errors = Vec::new();
+    let entry_block = func.blocks.first().map(|block| block.id);
+
+    // For this milestone, owner storage must have one static initialization
+    // in the entry block, and it must execute before any borrow in that block.
+    // A single instruction in a loop/non-entry block is NOT a safe initializer.
+    // This conservative restriction also excludes later mutation of a borrowed
+    // slot, even when a more sophisticated analysis could prove it harmless.
+    let mut ordered_sources: Vec<_> = source_slots.iter().copied().collect();
+    ordered_sources.sort_by_key(|slot| slot.0);
+    for source in ordered_sources {
+        let mut writes = Vec::new();
+        for block in &func.blocks {
+            for (index, instr) in block.instrs.iter().enumerate() {
+                if let TirInstr::Store(slot, _) = instr {
+                    if *slot == source {
+                        writes.push((block.id, index));
+                    }
+                }
+            }
+        }
+        let entry_write = writes.len() == 1
+            && Some(writes[0].0) == entry_block
+            && entry_block.is_some_and(|id| !borrowed_entry_can_repeat(func, id));
+        let initialized_before_borrow = entry_write
+            && borrow_sites.iter().all(|(block, index, slot)| {
+                *slot != source || *block != writes[0].0 || writes[0].1 < *index
+            });
+        if !initialized_before_borrow {
+            errors.push(VerifierError::GenericError(format!(
+                "borrowed source slot ${} requires exactly one entry-block initialization before the borrow",
+                source.0
+            )));
+        }
+    }
+
+    // May-flow fixpoint: any local slot receiving a borrowed closure becomes
+    // tainted; any subsequent load is tainted as well. Union over every Store
+    // is necessary across branches and loops (never use the last Store only).
+    let mut borrowed_slots = HashSet::new();
+    loop {
+        let mut changed = false;
+        for block in &func.blocks {
+            for instr in &block.instrs {
+                match instr {
+                    TirInstr::Store(slot, value) if borrowed_values.contains(value) => {
+                        changed |= borrowed_slots.insert(*slot);
+                    }
+                    TirInstr::Load(value, slot) if borrowed_slots.contains(slot) => {
+                        changed |= borrowed_values.insert(*value);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    // A slot bound to incoming inout storage is not a local callback sink.
+    // Storing a borrowed closure into it would escape into the caller.
+    if func
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instrs)
+        .any(|instr| matches!(instr, TirInstr::BindInout(slot, _) if borrowed_slots.contains(slot)))
+    {
+        errors.push(VerifierError::GenericError(
+            "borrowed closure cannot escape through an inout place".into(),
+        ));
+    }
+
+    // Scan in stable function/block/instruction order. A direct callback
+    // argument is permitted only after a separate interprocedural proof.
+    for block in &func.blocks {
+        for instr in &block.instrs {
+            if let TirInstr::MakeClosureRef(_, _, captures)
+            | TirInstr::MakeClosureInout(_, _, captures) = instr
+            {
+                if captures.iter().any(|slot| borrowed_slots.contains(slot)) {
+                    errors.push(VerifierError::GenericError(
+                        "nested ref capture of a borrowed closure is unsupported".into(),
+                    ));
+                }
+            }
+            if instruction_escapes_borrowed_closure(instr, &borrowed_values, functions) {
+                errors.push(VerifierError::GenericError(
+                    "borrowed closure escapes its owner frame or is used as a non-callee value"
+                        .into(),
+                ));
+            }
+        }
+        if let Some(TirTerminator::Ret(Some(value))) = &block.terminator {
+            if borrowed_values.contains(value) {
+                errors.push(VerifierError::GenericError(
+                    "borrowed closure escapes its owner frame through return".into(),
+                ));
+            }
+        }
+    }
+
+    errors
+}
+
+/// Proves that the indicated function parameter is used only during the call.
+/// The analysis conservatively joins taint from all branches/iterations and
+/// follows direct forwarding calls. Cycles in the call graph require an
+/// explicit future contract; they are rejected rather than assumed safe.
+fn proves_nonescaping_tir_callback_parameter(
+    functions: &HashMap<TirFunctionId, &TirFunction>,
+    function_id: TirFunctionId,
+    parameter_index: usize,
+    visiting: &mut HashSet<(TirFunctionId, usize)>,
+) -> bool {
+    let Some(function) = functions.get(&function_id).copied() else {
+        return false;
+    };
+    if function.is_extern || function.blocks.is_empty() {
+        return false;
+    }
+    let Some((parameter_value, TirType::Function(_, return_type))) =
+        function.params.get(parameter_index)
+    else {
+        return false;
+    };
+    if !visiting.insert((function_id, parameter_index)) {
+        return false;
+    }
+
+    let proven = (|| {
+        // May-taint is intentionally path-insensitive: every possible use
+        // must be safe. Storing into a local slot is allowed; capturing that
+        // slot into a new environment or returning its value is not.
+        let mut values = HashSet::from([*parameter_value]);
+        let mut slots = HashSet::new();
+        loop {
+            let mut changed = false;
+            for block in &function.blocks {
+                for instruction in &block.instrs {
+                    match instruction {
+                        TirInstr::Store(slot, value) if values.contains(value) => {
+                            changed |= slots.insert(*slot);
+                        }
+                        TirInstr::Load(value, slot) if slots.contains(slot) => {
+                            changed |= values.insert(*value);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+
+        if function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instrs)
+            .any(|instr| matches!(instr, TirInstr::BindInout(slot, _) if slots.contains(slot)))
+        {
+            return false;
+        }
+
+        for block in &function.blocks {
+            for instruction in &block.instrs {
+                match instruction {
+                    TirInstr::Call(_, target, args) => {
+                        let tainted: Vec<_> = args
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(index, value)| values.contains(value).then_some(index))
+                            .collect();
+                        if tainted.is_empty() {
+                            continue;
+                        }
+                        let Some(callee) = functions.get(target) else {
+                            return false;
+                        };
+                        // A forwarded callback cannot be returned by the
+                        // callee, including through a different local alias.
+                        if matches!(&callee.return_type, TirType::Function(_, _)) {
+                            return false;
+                        }
+                        for index in tainted {
+                            if !proves_nonescaping_tir_callback_parameter(
+                                functions, *target, index, visiting,
+                            ) {
+                                return false;
+                            }
+                        }
+                    }
+                    TirInstr::CallClosure(_, callee, args) => {
+                        if args.iter().any(|value| values.contains(value)) {
+                            return false;
+                        }
+                        // Invoking the callback itself is safe only when it
+                        // cannot return another callback that may escape.
+                        if values.contains(callee)
+                            && matches!(return_type.as_ref(), TirType::Function(_, _))
+                        {
+                            return false;
+                        }
+                    }
+                    TirInstr::MakeClosureRef(_, _, captures)
+                    | TirInstr::MakeClosureInout(_, _, captures) => {
+                        if captures.iter().any(|slot| slots.contains(slot)) {
+                            return false;
+                        }
+                    }
+                    _ => {
+                        if instruction_escapes_borrowed_closure(instruction, &values, functions) {
+                            return false;
+                        }
+                    }
+                }
+            }
+            match &block.terminator {
+                Some(TirTerminator::Ret(Some(value)))
+                | Some(TirTerminator::CondBr(value, _, _))
+                    if values.contains(value) =>
+                {
+                    return false;
+                }
+                _ => {}
+            }
+        }
+        true
+    })();
+
+    visiting.remove(&(function_id, parameter_index));
+    proven
+}
+
+fn instruction_escapes_borrowed_closure(
+    instr: &TirInstr,
+    borrowed: &HashSet<TirValueId>,
+    functions: &HashMap<TirFunctionId, &TirFunction>,
+) -> bool {
+    let contains = |value: &TirValueId| borrowed.contains(value);
+    match instr {
+        TirInstr::Const(_, _)
+        | TirInstr::Slot(_, _)
+        | TirInstr::BindInout(_, _)
+        | TirInstr::Load(_, _)
+        | TirInstr::BorrowInout(_, _)
+        | TirInstr::Store(_, _)
+        | TirInstr::MakeClosureRef(_, _, _)
+        | TirInstr::MakeClosureInout(_, _, _)
+        | TirInstr::InoutSliceLen(_, _) => false,
+        TirInstr::BorrowSliceInout(_, _, start, end) => contains(start) || contains(end),
+        TirInstr::InoutSliceGet(_, _, index) => contains(index),
+        TirInstr::InoutSliceSet(_, index, value) => contains(index) || contains(value),
+        TirInstr::Call(_, target, args) => {
+            let borrowed_args: Vec<_> = args
+                .iter()
+                .enumerate()
+                .filter_map(|(index, value)| contains(value).then_some(index))
+                .collect();
+            if borrowed_args.is_empty() {
+                return false;
+            }
+            let Some(callee) = functions.get(target) else {
+                return true;
+            };
+            if matches!(&callee.return_type, TirType::Function(_, _)) {
+                return true;
+            }
+            borrowed_args.into_iter().any(|index| {
+                !proves_nonescaping_tir_callback_parameter(
+                    functions,
+                    *target,
+                    index,
+                    &mut HashSet::new(),
+                )
+            })
+        }
+        TirInstr::CallClosure(_, _, args)
+        | TirInstr::MakeClosure(_, _, args)
+        | TirInstr::Make(_, _, _, args) => args.iter().any(contains),
+        TirInstr::MakeStruct(_, _, fields) => fields.iter().any(|(_, value)| contains(value)),
+        TirInstr::Get(_, object, _)
+        | TirInstr::Tag(_, object)
+        | TirInstr::Len(_, object)
+        | TirInstr::Size(_, object)
+        | TirInstr::Bytes(_, object)
+        | TirInstr::Not(_, object) => contains(object),
+        TirInstr::Unwrap(_, object, _, _) => contains(object),
+        TirInstr::Set(_, object, _, value)
+        | TirInstr::GetIndex(_, object, value)
+        | TirInstr::ArrayPush(_, object, value)
+        | TirInstr::Add(_, object, value)
+        | TirInstr::Sub(_, object, value)
+        | TirInstr::Mul(_, object, value)
+        | TirInstr::Div(_, object, value)
+        | TirInstr::Eq(_, object, value)
+        | TirInstr::Lt(_, object, value)
+        | TirInstr::Gt(_, object, value)
+        | TirInstr::And(_, object, value)
+        | TirInstr::Or(_, object, value) => contains(object) || contains(value),
+        TirInstr::Slice(_, object, start, end) => {
+            contains(object) || contains(start) || contains(end)
+        }
     }
 }

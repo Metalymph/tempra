@@ -2,7 +2,7 @@
 
 **Target competitors:** CPython, Node.js JavaScript, Bun JavaScript,
 Bun TypeScript, and Node.js TypeScript (with build/transpile measured
-separately). Compare with Tempra Ergal **VM**, not experimental JIT.
+separately). Compare with Tempra Script **VM**, not experimental JIT.
 
 Initial workloads: empty/minimal CLI; integer/text processing; input
 file transform; JSON parsing/writing when Tempra supports it; process

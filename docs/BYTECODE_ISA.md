@@ -1,294 +1,294 @@
-# Tempra Bytecode ISA Specification (v0.1)
+# Tempra — Bytecode ISA
 
-This document defines the Instruction Set Architecture (ISA) for the Tempra stack-based virtual machine.
+**Version:** v0.2 (documentation consolidation)
+**Status:** Current v0 stack-VM instruction families plus normative requirements for future ownership-aware execution. **Not** an implementation or ABI-completeness certificate.
+**Scope:** Tempra Script's portable bytecode instruction semantics, structural verification, arithmetic, calls, and the migration requirements from [Memory & Ownership v0.4](Tempra_Memory_Ownership_v0.4.md).
 
-## 1. Introduction
+## 1. Authority and boundaries
 
-Tempra uses a stack-based bytecode for its interpreted execution mode. This mode is optimized for rapid cold-starts, low memory overhead, and development workflows (scripting and compile-time execution).
+This document replaces the former *Bytecode ISA Specification v0.1*. It is read together with:
 
-### Objectives
-- **Simplicity**: Easy to implement and verify.
-- **Portability**: Agnostic of the underlying hardware.
-- **Verifiability**: Designed for strict structural and type validation before execution.
-- **Cacheability**: Support for serializing compiled bytecode to disk to skip re-compilation.
+- [BYTECODE_VM.md](BYTECODE_VM.md) — VM execution, frames, runtime values and current integration.
+- [TIR_SPEC.md](TIR_SPEC.md) — typed intermediate semantics.
+- [TIR_TO_BYTECODE.md](TIR_TO_BYTECODE.md) — translation and relocation.
+- [BYTECODE_CACHE.md](BYTECODE_CACHE.md) — cache container, trust, verification and invalidation.
+- [Tempra Memory & Ownership v0.4](Tempra_Memory_Ownership_v0.4.md) — **sole normative authority** for value, ownership, borrow, resource and memory safety semantics.
+- [Specialized Effects v0.2](specs/specialized-effects-v0.2.md) and [Capability Contracts v0.1](specs/effects-v0.1.md) — effect-contract meaning.
 
-### Non-Goals
-- **Highest possible performance**: AOT (native) compilation remains the target for high-performance production workloads.
-- **Register VM**: While register-based VMs can be faster, a stack-based model is simpler for the initial bootstrap and `comptime` migration.
+**Status convention:** *Existing v0 instruction* describes the documented bytecode family, **not** guaranteed full source-level reachability. *Required by v0.4* indicates a future lowering/verifier obligation, **not** an implemented opcode. Historical claims should be checked against the active feature branch before any release.
 
-### Pipeline
-The compilation pipeline follows these steps:
-`Source Code` -> `HIR (Typed)` -> `TIR (Tempra IR)` -> `Bytecode` -> `Stack VM`
+The stack VM is the planned Tempra Script scripting runtime; Tempra Native's planned native backend is LLVM AOT. **No JIT or Cranelift path belongs to the target architecture.** Removing experimental Rust code is a separate engineering change.
 
----
+## 2. Pipeline and representation
 
-## 2. Architecture & ABI Stability
+```text
+Source
+  → Lexer / Parser
+  → Typed HIR + specialization/comptime pruning
+  → TIR + verification/semantic contracts
+  → TIR → Bytecode lowering
+  → Bytecode verification
+  → Tempra Script stack VM
+```
 
-### Stack-Based Model
-The VM operates on a data stack. Instructions push operands onto the stack and pop them to produce results. Local variables are stored in a separate indexed table (frame) for efficiency.
+The default execution path on the remote `main` snapshot may still be the HIR interpreter. The VM must not silently fall back after a failed bytecode lowering, verifier check, capability restriction or memory safety check. Switching the default requires an explicit parity gate.
 
-### ABI Stability Rules
-> [!IMPORTANT]
-> **v0 bytecode is NOT a stable ABI.**
-> 
-> The instruction set, binary format, and runtime semantics are subject to change without notice. Cache artifacts are strictly tied to the compiler version and source hash; they may be invalidated or deleted by the compiler at any time.
+The VM is stack-based. A function has a code body, local slots, an operand stack, a signature, a maximum stack bound, and optional debug information. A bytecode module contains constants, functions and code.
 
-### Instruction Encoding (v0)
-- **Format**: Opcode followed by operands.
-- **Fixed-width**: Operands use fixed-width encoding (e.g., 4 or 8 bytes) where practical in v0 to simplify decoding.
-- **Optimizations**: Compact encodings (variable-length, bit-packing) are deferred to later phases.
+- Arguments are evaluated and pushed **left to right**.
+- A `Call` consumes the declared arguments and initializes the callee's parameter locals.
+- A non-`Unit` `Return` transfers one result to the caller. A `Unit` `Return` transfers no value.
+- Control-flow targets must identify instruction boundaries; byte offsets, indices and encoding particulars are private to the current bytecode format.
+- Source `let`/`var`, `ref`/`inout`, and `consume` meaning must not be inferred from physical slot or stack operations alone.
 
-### Call Convention (v0)
-1. **Arguments**: Pushed onto the data stack in **left-to-right** order.
-2. **Execution**: The `Call` instruction transfers control to the callee.
-3. **Consumption**: The callee pops its arguments from the stack upon entry (or accesses them via local slots mapped to the stack).
-4. **Return**: The return value (if any) is pushed back onto the data stack by the `Return` instruction before exiting the callee.
+### 2.1 Binary stability and cache headers
 
----
+The v0 instruction encoding and serialized cache are **not stable public ABI**. Source and compiler semantic revisions can invalidate existing artifacts.
 
-## 3. Data Model
+The historical ISA document described a module magic value `TMPR`, while [BYTECODE_CACHE.md](BYTECODE_CACHE.md) documents the persisted **cache-container** magic `TMBC` and bytecode format version 2. These are not interchangeable claims: the cache spec governs its actual serialized header. Do not hard-code `TMPR` as the current cache magic.
 
-### Module Structure
-A compiled Tempra module (`.tmprc` or internal representation) consists of:
-- **Magic Number**: `0x544D5052` ("TMPR")
-- **Version**: Compiler version identifier.
-- **Fingerprint**: Fingerprint of the compiler and feature set.
-- **Constant Pool**: A table of shared constants (Strings, large numbers).
-- **Function Table**: Metadata and entry points for all functions in the module.
-- **Bytecode Vec**: The actual instruction stream.
+A cache hit must pass compatibility/trust validation **and** bytecode verification. A raw decoder is not itself an execution authorization. Introducing ownership metadata, new verification semantics or changed effect enforcement requires the appropriate semantic-revision/cache migration.
 
-### Function Structure
-Each function definition includes:
-- **Name**: For debugging and lookup.
-- **Signature**: Argument types and return type.
-- **Locals Count**: Number of slots reserved for parameters and local variables.
-- **Max Stack**: The peak height of the data stack during execution. 
-    - *Note*: This can be derived by the lowerer or verifier, but it should be explicitly stored in the serialized cache for fast loading.
-- **Code**: Range or offset in the module's bytecode vector.
-- **Debug Info**: (Optional) Mapping of bytecode offsets to source spans.
+## 3. Operand notation
 
-### Value Model
-The VM handles the following primitive types directly:
-- **Unit**: Represents `()`.
-- **Bool**: `true` or `false`.
-- **Int64**: 64-bit signed integer.
-- **UInt64**: 64-bit unsigned integer.
-- **UInt8**: 8-bit unsigned integer (often used for bytes).
-- **Float64**: 64-bit IEEE-754 floating point.
-- **String**: Reference to a string (interned or heap-allocated).
-- **Composite/Placeholder**: (Future) Metadata for structs, enums, and arrays.
+In tables, `[a, b] → [c]` shows the top-of-stack input suffix (left to right) and its replacement. `T` denotes a verified operand type. The display names are documented v0 opcode names; byte values, exact operands, encodings, availability of optimised variants and current arity must be taken from the implementation when emitting test vectors.
 
----
+### 3.1 Constants — existing v0 families
 
-## 4. Instruction Set (ISA)
-
-### Constants
-| Opcode | Operands | Stack Effect | Description |
+| Opcode | Operand | Stack effect | Meaning |
 |---|---|---|---|
-| `ConstUnit` | - | `[] -> [unit]` | Pushes the unit value. |
-| `ConstBool` | bool | `[] -> [bool]` | Pushes a boolean literal. |
-| `ConstI64` | i64 | `[] -> [i64]` | Pushes a 64-bit signed integer literal. |
-| `ConstU64` | u64 | `[] -> [u64]` | Pushes a 64-bit unsigned integer literal. |
-| `ConstF64` | f64 | `[] -> [f64]` | Pushes a 64-bit float literal. |
-| `ConstString` | idx | `[] -> [string]` | Pushes a string from the constant pool. |
+| `ConstUnit` | — | `[] → [Unit]` | Unit value |
+| `ConstBool` | Boolean | `[] → [Bool]` | Boolean value |
+| `ConstI64` | `i64` | `[] → [Int64]` | Signed integer |
+| `ConstU64` | `u64` | `[] → [UInt64]` | Unsigned integer |
+| `ConstF64` | `f64` | `[] → [Float64]` | Floating-point value |
+| `ConstString` | Constant index | `[] → [String]` | UTF-8 value from constant pool |
 
-### Locals
-| Opcode | Operands | Stack Effect | Description |
+`UInt8` exists in the language/runtime but the original v0 ISA does **not** list a dedicated `ConstU8`; do not infer one from this document. Numeric source reachability and conversion support may be narrower than bytecode-level tests.
+
+### 3.2 Locals and stack — existing v0 families
+
+| Opcode | Operand | Stack effect | Meaning |
 |---|---|---|---|
-| `LoadLocal` | index | `[] -> [T]` | Pushes value from local slot `index`. |
-| `StoreLocal` | index | `[T] -> []` | Pops value and stores it in local slot `index`. |
+| `LoadLocal` | Local index | `[] → [T]` | Read local value |
+| `StoreLocal` | Local index | `[T] → []` | Assign local from stack |
+| `Pop` | — | `[T] → []` | Discard stack value |
+| `Dup` | — | `[T] → [T, T]` | Duplicate stack operand |
 
-### Stack Manipulation
-| Opcode | Operands | Stack Effect | Description |
+**Ownership qualification:** these are *physical instruction descriptions*, not permissions to duplicate resources or implicitly turn a borrow into an owned value. Under v0.4:
+
+- Loading a duplicable value may be lowered with a physical copy, reuse, or move if observationally equivalent.
+- Loading or duplicating a nonduplicable resource cannot create two independent owners.
+- A `consume` transfer invalidates the source **semantically**; the checker/verifier must reject later uses.
+- `Pop`/slot overwrite/return/unwind must not leak or double-release owned resources.
+- Existing opcodes alone do not establish these guarantees. An ownership-aware TIR/bytecode representation, metadata, or an equivalent verified protocol must supply them. **No new concrete opcode is mandated here.**
+
+**A1 ownership-aware implementation contract:** `LoadLocal` reads a value at
+the time of the instruction, including when the slot is an incoming scalar
+borrow. It must not put a raw borrow handle on the operand stack. `StoreLocal`
+assigns a value (through an exclusive incoming place when applicable); it cannot
+bind or copy a raw handle. `BorrowLocal`, `BorrowLocalMut` and `BorrowSliceMut`
+are the explicit handle producers. The verifier checks the matching capture or
+direct-call consumer. The serialized format version is incremented when this
+contract changes because old code may rely on implicit handle copying.
+
+### 3.3 Arithmetic — existing v0 families
+
+| Type | Add | Sub | Mul | Div |
+|---|---|---|---|---|
+| `Int64` | `AddI64` | `SubI64` | `MulI64` | `DivI64` |
+| `UInt64` | `AddU64` | `SubU64` | `MulU64` | `DivU64` |
+| `Float64` | `AddF64` | `SubF64` | `MulF64` | `DivF64` |
+
+Each binary arithmetic instruction consumes two same-typed operands and produces one same-typed result.
+
+**`Int64`:** checked add, subtract, multiply and divide. Overflow is a controlled error; division by zero is a separate controlled error; `Int64::MIN / -1` overflows. Unary signed negation must obey the checked contract, regardless of its lowering sequence. These operations conservatively require `Panic` until proven otherwise by an independently approved mechanism.
+
+**`UInt64`:** checked addition/multiplication overflow, subtraction underflow, division by zero. Do not silently reinterpret them as signed integer operations or wrap.
+
+**`Float64`:** IEEE 754 behaviour, including NaN, infinities, signed zero and division by zero. Arithmetic must not be rewritten into checked integer operations. `LtF64` and `GtF64` are ordered comparisons, both false if either operand is NaN.
+
+The runtime must report controlled Tempra failures rather than expose Rust panics, undefined behaviour, incidental host traps or unchecked arithmetic.
+
+### 3.4 Comparison and Boolean operations — existing v0 families
+
+| Opcode | Stack effect | Meaning |
+|---|---|---|
+| `Eq` | `[T, T] → [Bool]` | Equality subject to type/operator rules |
+| `LtI64`, `GtI64` | `[Int64, Int64] → [Bool]` | Signed comparisons |
+| `LtU64`, `GtU64` | `[UInt64, UInt64] → [Bool]` | Unsigned comparisons |
+| `LtF64`, `GtF64` | `[Float64, Float64] → [Bool]` | IEEE-ordered comparisons |
+| `Not` | `[Bool] → [Bool]` | Negation |
+| `And`, `Or` | `[Bool, Bool] → [Bool]` | Boolean combination |
+
+`Eq` is not a licence to compare closure values, arbitrary raw addresses or noncomparable resources. The type checker determines comparability. Source-level `&&` and `||` must retain short-circuit evaluation; an eager `And` or `Or` opcode cannot replace it unless the operands have already been evaluated with equivalent control flow.
+
+### 3.5 Branches, calls and returns — existing v0 families
+
+| Opcode | Operand | Stack effect | Meaning |
 |---|---|---|---|
-| `Pop` | - | `[T] -> []` | Discards the top value. |
-| `Dup` | - | `[T] -> [T, T]` | Duplicates the top value. |
+| `Jump` | Target | No data result | Unconditional branch |
+| `JumpIfFalse` | Target | `[Bool] → []` | Conditional branch |
+| `Call` | Function index, arity | `[args…] → [ret?]` | Direct call |
+| `Return` | — | `[ret?] → []` | Function return |
+| `Unreachable` | — | No valid successor | Controlled execution failure if reached |
 
-### Arithmetic (Int64)
-| Opcode | Operands | Stack Effect | Description |
+At joins, the stack shape and types must agree. Jumps cannot enter the middle of an operand encoding. Call arity and argument types must match the target function's verified signature; source-specialization IDs must map consistently to concrete bytecode function indices.
+
+Error propagation through `?` is ordinary checked control flow over `Result` values; it is **not** exception unwinding.
+
+### 3.6 Enums — existing documented v0 families
+
+| Opcode | Operand | Stack effect | Meaning |
 |---|---|---|---|
-| `AddI64` | - | `[i64, i64] -> [i64]` | Integer addition. |
-| `SubI64` | - | `[i64, i64] -> [i64]` | Integer subtraction. |
-| `MulI64` | - | `[i64, i64] -> [i64]` | Integer multiplication. |
-| `DivI64` | - | `[i64, i64] -> [i64]` | Integer division. |
+| `MakeEnum` | Enum, variant, count | `[payloads…] → [enum]` | Create variant |
+| `Tag` | — | `[enum] → [tag]` | Inspect variant tag |
+| `Unwrap` | Variant, index | `[enum] → [T]` | Checked payload extraction |
 
-These opcodes use checked Tempra `Int64` semantics. Addition, subtraction and
-multiplication overflow fail with `Int64ArithmeticError::Overflow`; division by
-zero fails with `Int64ArithmeticError::DivisionByZero`, and `Int64::MIN / -1` is
-overflow. The VM and
-native JIT must return the same controlled failure. The bytecode encoding is
-unchanged by this contract.
+The tag's exact runtime representation is an implementation detail. Pattern matching must preserve arm order, guards, exhaustiveness and source-level ownership rules, even if a particular lowering stage does not yet support every pattern.
 
-### Arithmetic (UInt64)
-| Opcode | Operands | Stack Effect | Description |
+### 3.7 Arrays, tuples, slices and strings — existing documented v0 families
+
+| Opcode | Operand | Stack effect | Meaning |
 |---|---|---|---|
-| `AddU64` | - | `[u64, u64] -> [u64]` | Unsigned addition. |
-| `SubU64` | - | `[u64, u64] -> [u64]` | Unsigned subtraction. |
-| `MulU64` | - | `[u64, u64] -> [u64]` | Unsigned multiplication. |
-| `DivU64` | - | `[u64, u64] -> [u64]` | Unsigned division. |
+| `MakeArray` | Element count | `[elements…] → [Array]` | Own array value |
+| `MakeTuple` | Element count | `[fields…] → [Tuple]` | Positional product |
+| `GetIndex` | — | `[collection, index] → [T]` | Bounds-checked lookup |
+| `Slice` | — | `[collection, start, end] → [Slice(T)]` | Borrowed view |
+| `Len` | — | `[collection] → [Int]` | Element count / string scalar count |
+| `Size` | — | `[String] → [Int]` | UTF-8 byte size |
+| `Bytes` | — | `[String] → [Slice(UInt8)]` | Read-only bytes view |
 
-These opcodes use checked Tempra `UInt64` semantics through the shared
-`tempra-runtime` kernel. Addition and multiplication overflow fail with
-`UInt64ArithmeticError::Overflow`, subtraction underflow fails with
-`UInt64ArithmeticError::Underflow`, and division by zero fails with
-`UInt64ArithmeticError::DivisionByZero`. They must never wrap or panic in any
-supported backend.
+The notation does **not** prescribe whether a collection operand is physically retained, borrowed, consumed or loaded via a helper: that distinction is semantic and depends on the verified contract.
 
-### Arithmetic (Float64)
-| Opcode | Operands | Stack Effect | Description |
-|---|---|---|---|
-| `AddF64` | - | `[f64, f64] -> [f64]` | Floating point addition. |
-| `SubF64` | - | `[f64, f64] -> [f64]` | Floating point subtraction. |
-| `MulF64` | - | `[f64, f64] -> [f64]` | Floating point multiplication. |
-| `DivF64` | - | `[f64, f64] -> [f64]` | Floating point division. |
+Normative requirements from v0.4:
 
-These opcodes preserve IEEE 754 behavior: division by `+0.0`/`-0.0` yields
-signed infinity (or NaN for `0.0 / 0.0`), NaN propagates, and signed zero is
-observable. They must not be lowered from or to integer opcodes.
+1. `Slice(T)` is a non-owning read-only view; `inout Slice(T)` is a checked exclusive mutable access, **not** a separate public `MutableSlice(T)`.
+2. A borrowed slice does not keep its owner alive; every live use requires valid provenance.
+3. `Range` is a value independent of a buffer. Slicing applies a half-open interval `[start, end)` and checks bounds at application.
+4. `Bytes` must not expose writable string bytes through a read-only view.
+5. No silent copy may repair an illegal escaping borrow.
+6. Mutable access, views of temporary owners and data crossing suspension points require v0.4 checks. The `Slice` instruction alone does not encode a complete borrow proof.
 
-### Comparison & Logic
-| Opcode | Operands | Stack Effect | Description |
-|---|---|---|---|
-| `Eq` | - | `[T, T] -> [bool]` | Structural equality check. |
-| `LtI64` | - | `[i64, i64] -> [bool]` | Signed less-than. |
-| `GtI64` | - | `[i64, i64] -> [bool]` | Signed greater-than. |
-| `LtU64` | - | `[u64, u64] -> [bool]` | Unsigned less-than. |
-| `GtU64` | - | `[u64, u64] -> [bool]` | Unsigned greater-than. |
-| `LtF64` | - | `[f64, f64] -> [bool]` | IEEE-ordered less-than; false for NaN. |
-| `GtF64` | - | `[f64, f64] -> [bool]` | IEEE-ordered greater-than; false for NaN. |
-| `Not` | - | `[bool] -> [bool]` | Boolean negation. |
-| `And` | - | `[bool, bool] -> [bool]` | Boolean AND. |
-| `Or` | - | `[bool, bool] -> [bool]` | Boolean OR. |
+`GetIndex` and `Slice` require checked indices. A malformed operand or wrong type must not trigger an uncontrolled host panic.
 
-### Control Flow
-| Opcode | Operands | Stack Effect | Description |
-|---|---|---|---|
-| `Jump` | offset | `-` | Unconditional jump to bytecode offset. |
-| `JumpIfFalse` | offset | `[bool] -> []` | Jump if top of stack is `false`. |
-| `Return` | - | `[ret?] -> []` | Return from function. |
-| `Unreachable` | - | `-` | Trap the VM. |
+## 4. Structural bytecode verification
 
-### Calls
-| Opcode | Operands | Stack Effect | Description |
-|---|---|---|---|
-| `Call` | fn_idx, argc| `[args...] -> [ret?]` | Calls function by index in function table. |
+Before execution of a bytecode module the verifier must establish, within its currently supported feature surface:
 
-### Enums
-| Opcode | Operands | Stack Effect | Description |
-|---|---|---|---|
-| `MakeEnum` | enum, var, cnt| `[payloads...] -> [enum]` | Creates an enum instance with `cnt` payloads. |
-| `Tag` | - | `[enum] -> [string]` | Extracts the variant name (tag) from an enum. |
-| `Unwrap` | variant, index | `[enum] -> [T]` | Extracts the `index`-th payload of a specific variant. |
+1. **Instruction decoding:** valid opcodes, operands and constant/function/local indices.
+2. **CFG integrity:** jump targets align with instruction boundaries; all reachable blocks have legal terminators.
+3. **Stack discipline:** no underflow; consistent stack height/type on join; correct return shape; declared `max_stack` respected.
+4. **Locals:** definite initialization before load; assignments meet slot/type constraints.
+5. **Calls:** arity, argument type, return type and function identity are correct.
+6. **Typed operations:** numeric opcode selection follows verified types; no accidental unsigned/float-to-signed rewriting.
+7. **Failure containment:** invalid input or impossible reachable `Unreachable` is reported safely, not converted into undefined host behaviour.
 
-### Collections & Strings
-| Opcode | Operands | Stack Effect | Description |
-|---|---|---|---|
-| `MakeArray` | count | `[args...] -> [array]` | Pops `count` elements and creates an array. |
-| `MakeTuple` | count | `[args...] -> [tuple]` | Pops `count` elements and creates a tuple. |
-| `GetIndex` | - | `[object, index] -> [T]` | Accesses an element by dynamic index. |
-| `Slice` | - | `[object, start, end] -> [slice]` | Creates a view into an array or slice. |
-| `Len` | - | `[object] -> [i64]` | Retrieves count of elements (Array/Slice) or chars (String). |
-| `Size` | - | `[str] -> [i64]` | Retrieves UTF-8 byte size of String. |
-| `Bytes` | - | `[str] -> [slice]` | Retrieves a Slice(UInt8) view of String bytes. |
+Structural verification **is not equivalent** to having implemented the entire v0.4 ownership checker. A future verified bytecode boundary must also preserve ownership-acquisition and consumption, loan scopes, provenance, exclusive access, cleanup on every exit, nonduplicable types, capture modes and suspension restrictions. These requirements may be encoded by additional facts/instructions or by a checked lowering certificate; the representation remains **open**, not silently assumed present.
 
----
+Untrusted or stale cache artifacts must never bypass these checks.
 
-## 5. Bytecode Verifier Specification
+## 5. Capability and effects boundary
 
-Before execution, the VM must verify the bytecode to ensure safety:
-1. **Instruction Validity**: All opcodes must be valid and operands must be within bounds (e.g., local index, constant pool index).
-2. **Jump Safety**: All jump targets must point to the beginning of a valid instruction.
-3. **Stack Consistency**: 
-    - The stack height at any instruction must be the same regardless of the path taken to get there.
-    - The stack must be empty (or contain only the return value) at `Return`.
-    - Stack depth must never exceed `Max Stack`.
-4. **Type Safety**: Operands on the stack must match the types expected by the opcode (e.g., `AddI64` requires two `i64` values).
-5. **Initialization**: Local variables must be initialized before they are loaded via `LoadLocal`.
-6. **Arity**: `Call` must push exactly the number of arguments required by the function's signature.
+`@deny(...)`, `@pure`, and specialized effect restrictions are checked by the compiler on the supported path. Current frontend-only `check` or generic IR emission is **not automatically** a certificate that all runtime/capability contracts were enforced.
 
----
+- `@pure` denies I/O, process, spawn and nondeterminism; it does **not** by itself deny allocation or panic.
+- `@deny(alloc)` must apply a conservative, backend-independent allocation contract. A possible dynamic copy/compaction cannot be accepted merely because one optimizer may eliminate it.
+- A bytecode cache hit cannot bypass a newly required semantic analysis. A compatible artifact must carry sufficient trust information, or compilation must rerun the relevant check.
+- A JIT is **not** part of the target architecture.
 
-## 6. Cache Policy
+## 6. Lowering and optimization invariants
 
-To improve startup performance, Tempra caches compiled bytecode in `.tempra/cache/`.
+The original stack lowering materializes TIR values in local slots, emits loads before consumers, stores results after producers and patches branch targets after block emission. See [TIR_TO_BYTECODE.md](TIR_TO_BYTECODE.md).
 
-### Cache Metadata
-- **Compiler Fingerprint**: Ensures cache is not used by a different version of the compiler.
-- **Source Hash**: Ensures cache matches the current source code.
-- **Feature Flags**: ABI version and enabled language features.
+Existing optimisation ideas include stack preallocation, superinstructions, instruction dispatch improvements and peephole removal of redundant temporary `StoreLocal`/`LoadLocal` pairs.
 
-### Invalidation
-- Caches are automatically invalidated if the source hash or compiler version changes.
-- Users can clear the cache manually if needed.
-- In v0, invalidation is aggressive to prevent stale ABI issues.
+Each optimisation must preserve:
 
----
+- evaluation order and Result/controlled-error behaviour;
+- observable value independence and copy effects;
+- `consume` invalidation and correct ownership transfer;
+- borrow provenance, exclusive access and last-use termination;
+- cleanup on ordinary return, error and cancellation where applicable;
+- effect contracts and deterministic compiler outputs.
 
-## 7. Roadmap
+An optimisation may avoid a *physical* copy only when the semantic operation remains valid. It cannot make invalid source ownership or `@deny(alloc)` contracts acceptable through a target-specific lucky outcome.
 
-- **Phase 13.0**: ISA Draft (Current).
-- **Phase 13.1**: `tempra-bytecode` crate data model.
-- **Phase 13.2**: TIR → Bytecode lowering.
-- **Phase 13.3**: Bytecode Verifier implementation.
-- **Phase 13.4**: Minimal Stack VM.
-- **Phase 13.5**: Bytecode serialization and cache integration.
-- **Phase 13.6**: Micro-optimizations (super-instructions, dispatch speed).
+## 7. Profiling and performance — VM only
 
----
+Call counts, instruction counts, backedge counts, opcode histograms and superinstruction statistics may remain useful for VM profiling, benchmarking and optimisation. **Hotness is telemetry**, not a trigger for JIT compilation.
 
-## 8. Examples
+Do not document JIT options, native promotion, JIT fallback or Cranelift-specific ABI as future ISA capabilities. Historical prototypes belong under `docs/archive/jit/`.
 
-### Simple Addition
-**Source:**
+## 8. Comptime migration gate
+
+Current remote documentation describes a K1 HIR-based `comptime` evaluator. Planned Tempra Script consolidation moves compile-time execution to the VM **only after** semantic parity is demonstrated.
+
+The bytecode execution boundary must preserve selected-branch pruning, specializations, deterministic fuel/call-depth policies (or an explicitly approved revised policy), restricted host effects, error diagnostics and memory semantics. Counting raw bytecode instructions is not automatically equivalent to the existing HIR semantic-tick policy.
+
+Comptime is an execution phase, **not** a public effect or permission to bypass borrowing.
+
+## 9. Worked examples (illustrative, not serialized byte offsets)
+
+### Arithmetic
+
 ```tempra
 fn add(a: Int64, b: Int64) -> Int64 {
-    return a + b
+    a + b
 }
 ```
 
-**TIR (Simplified):**
-```
-fn add (%0: i64, %1: i64) -> i64 {
-  slot $0: i64
-  store $0, %0
-  slot $1: i64
-  store $1, %1
-  %2 = load $0
-  %3 = load $1
-  %4 = add %2, %3
-  ret %4
-}
+```text
+LoadLocal 0
+LoadLocal 1
+AddI64
+Return
 ```
 
-**Bytecode:**
-```
-0: LoadLocal 0  // push parameter 'a'
-1: LoadLocal 1  // push parameter 'b'
-2: AddI64       // pop a, b -> push result
-3: Return       // pop result and return
-```
+### Conditional
 
-### Conditional Logic
-**Source:**
 ```tempra
 fn max(a: Int64, b: Int64) -> Int64 {
-    if a > b {
-        return a
-    } else {
-        return b
-    }
+    if a > b { a } else { b }
 }
 ```
 
-**Bytecode:**
+```text
+LoadLocal 0
+LoadLocal 1
+GtI64
+JumpIfFalse else
+LoadLocal 0
+Return
+else:
+LoadLocal 1
+Return
 ```
-0: LoadLocal 0  // a
-1: LoadLocal 1  // b
-2: GtI64        // a > b
-3: JumpIfFalse 7 // Jump to else if false
-4: LoadLocal 0  // return a
-5: Return
-6: Jump 9       // Not reachable in this case, but standard
-7: LoadLocal 1  // return b
-8: Return
-```
+
+Labels here illustrate CFG structure and are **not** literal bytecode operands.
+
+## 10. Conformance and implementation ledger
+
+| Case | Required result | Current guarantee? |
+|---|---|---|
+| Well-typed verified arithmetic | Correct typed value or controlled failure | Existing v0 contract on supported paths |
+| Wrong numeric opcode/type | Rejected before execution | Existing structural/typed verification |
+| Bad jump or uninitialized local | Rejected | Existing verification requirement |
+| Cache artifact with stale semantics | Invalidated/recompiled | Existing cache contract |
+| `Dup` of nonduplicable resource | Rejected | **v0.4 requirement; implementation not certified** |
+| Borrow escaping an owner | Rejected | **v0.4 requirement; implementation not certified** |
+| Mutating a live read-only slice | Rejected | **v0.4 requirement; implementation not certified** |
+| Dynamic borrow through `.await()` | Rejected | **v0.4 requirement; async not certified** |
+| Actor state isolated and handles cycle-safe | Per v0.4, handles deferred | **Not implemented/certified** |
+| Comptime via bytecode VM | K1 parity gate passes before promotion | **Planned** |
+| JIT/Cranelift runtime | No target path | **Legacy code removal separate** |
+
+## 11. Implementation validation required before the documentation PR
+
+Read the active VM branch and confirm actual instruction variants/operands, the precise structural verifier surface, source reachability, bytecode cache format, optimisation and profiling options. This document deliberately does **not** invent numeric opcode values, a final instruction count or completed ownership opcode definitions.
+
+Future native Tempra Native/LLVM AOT must preserve the **same language semantics**, but is not required to share the bytecode encoding.
+
+---
+
+**Invariant:** *Bytecode may change; Tempra's checked semantics must not.*

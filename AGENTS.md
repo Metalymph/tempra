@@ -7,7 +7,7 @@ flags or runtime guarantees; verify against the current compiler and
 - Use `just check`, `just test` and `just tooling-check` as appropriate.
 - Use `just roadmap-check` when editing roadmap or proof status.
 - Do not replace the planned stack-VM default with a generic HIR fallback
-  or embed a Wasm engine. Experimental JIT is frozen pending product scope.
+  or embed a Wasm engine. Do not reintroduce the retired JIT or Cranelift backend.
 - Treat `Result` obligations and capability contracts as semantic rules,
   not style warnings. Diagnostic locations and deterministic order matter.
 - Before publishing examples, execute them with the exact documented

@@ -40,3 +40,14 @@ Rust refactoring, CI setup, toolchain size, maintainability and reuse
 under self-hosting. Do **not** start with a custom verifier.
 
 `formal/manifest.toml` is a status registry, not a machine-checked proof.
+
+## PRE-AOT proof boundaries (2026-11-10)
+
+R.PROOF covers Result obligations and source flow; M.PROOF addresses acyclic
+ownership, borrowing/exclusivity and reclamation; E.PROOF addresses effect
+safety; VM.PROOF includes bytecode verifier soundness, VM execution preservation
+and the explicitly scoped staged-`comptime` correspondence. The existing
+`formal/manifest.toml` already tracks these as **DRAFT**. No new decorative
+proof milestones are added for benchmarking, Shell UI, packaging or websites.
+Proof checking is separate from Cargo success and the model-to-Rust relation
+must be stated for the verified subset.

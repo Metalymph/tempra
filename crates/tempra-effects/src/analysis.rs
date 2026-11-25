@@ -45,6 +45,10 @@ pub enum DirectCapabilitySource {
     Make,
     /// A TIR `MakeStruct` instruction.
     MakeStruct,
+    /// Allocation of a frame-bound borrowed closure environment.
+    BorrowedClosure,
+    /// Materialization of a closure capture environment.
+    ClosureEnvironment,
     /// A potentially failing division.
     Division,
     /// A potentially overflowing `Int64` addition.
@@ -59,6 +63,8 @@ pub enum DirectCapabilitySource {
     ConstantIndexGet,
     /// A dynamic-index `GetIndex` operation.
     DynamicIndexGet,
+    /// Exclusive slice element write: bounds check and possible COW allocation.
+    ExclusiveSliceWrite,
     /// A potentially failing slice operation.
     Slice,
     /// Materialization of a string's byte view in the current runtime.
@@ -180,6 +186,13 @@ pub enum CapabilityAnalysisError {
         /// Location of the call.
         callsite: TirLocation,
     },
+    /// An indirect call whose target cannot yet be resolved safely.
+    UnsupportedIndirectCall {
+        /// Function containing the indirect call.
+        caller: TirFunctionId,
+        /// Location of the indirect call.
+        callsite: TirLocation,
+    },
     /// A called extern has no compiler-known capability classification.
     UnclassifiedExtern {
         /// Calling function.
@@ -218,6 +231,11 @@ impl fmt::Display for CapabilityAnalysisError {
                 formatter,
                 "function {} calls unresolved declaration '{}' ({})",
                 caller.0, name, target.0
+            ),
+            Self::UnsupportedIndirectCall { caller, .. } => write!(
+                formatter,
+                "unresolved indirect closure call in function {}: target effects cannot be proven",
+                caller.0
             ),
             Self::UnclassifiedExtern {
                 caller,
@@ -427,6 +445,241 @@ struct SummaryState {
 /// The analyzer still validates IDs and call topology that can be malformed in
 /// hand-built modules. It returns the first such error in deterministic scan
 /// order instead of panicking.
+/// Precomputed, conservative closure target resolution within one TIR function.
+///
+/// The set of possible targets is a *may* set. Every Store to a slot
+/// contributes, regardless of CFG order. Unknown definitions invalidate
+/// resolution rather than silently dropping an effect-bearing target.
+struct ClosureTargetIndex {
+    definitions: HashMap<TirValueId, ClosureDefinition>,
+    stores: HashMap<TirSlotId, Vec<TirValueId>>,
+    // A callable parameter has no local definition. Its possible targets are
+    // inferred conservatively from direct module-local call sites.
+    parameter_targets: HashMap<TirValueId, Vec<TirFunctionId>>,
+}
+
+#[derive(Clone, Copy)]
+enum ClosureDefinition {
+    Make(TirFunctionId),
+    Load(TirSlotId),
+}
+
+// VM Parity 2B.1f: borrowed closure target propagation.
+impl ClosureTargetIndex {
+    fn new(
+        function: &TirFunction,
+        parameter_targets: Option<&HashMap<TirValueId, Vec<TirFunctionId>>>,
+    ) -> Self {
+        let mut index = Self {
+            definitions: HashMap::new(),
+            stores: HashMap::new(),
+            parameter_targets: parameter_targets.cloned().unwrap_or_default(),
+        };
+        for block in &function.blocks {
+            for instr in &block.instrs {
+                match instr {
+                    TirInstr::MakeClosure(result, target, _)
+                    | TirInstr::MakeClosureRef(result, target, _)
+                    | TirInstr::MakeClosureInout(result, target, _) => {
+                        index
+                            .definitions
+                            .insert(*result, ClosureDefinition::Make(*target));
+                    }
+                    TirInstr::Load(result, slot) => {
+                        index
+                            .definitions
+                            .insert(*result, ClosureDefinition::Load(*slot));
+                    }
+                    TirInstr::Store(slot, value) => {
+                        index.stores.entry(*slot).or_default().push(*value);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        index
+    }
+
+    fn targets_for(&self, value: TirValueId) -> Option<Vec<TirFunctionId>> {
+        let mut values_on_path = HashSet::new();
+        let mut slots_on_path = HashSet::new();
+        let targets = self.resolve_value(value, &mut values_on_path, &mut slots_on_path)?;
+        if targets.is_empty() {
+            None
+        } else {
+            {
+                let mut targets = targets;
+                targets.sort_by_key(|target| target.0);
+                targets.dedup();
+                Some(targets)
+            }
+        }
+    }
+
+    fn resolve_value(
+        &self,
+        value: TirValueId,
+        values_on_path: &mut HashSet<TirValueId>,
+        slots_on_path: &mut HashSet<TirSlotId>,
+    ) -> Option<Vec<TirFunctionId>> {
+        if !values_on_path.insert(value) {
+            return None;
+        }
+        let result = match self.definitions.get(&value) {
+            Some(ClosureDefinition::Make(target)) => {
+                let mut targets = Vec::new();
+                targets.push(*target);
+                Some(targets)
+            }
+            Some(ClosureDefinition::Load(slot)) => {
+                self.resolve_slot(*slot, values_on_path, slots_on_path)
+            }
+            None => self.parameter_targets.get(&value).cloned(),
+        };
+        values_on_path.remove(&value);
+        result
+    }
+
+    fn resolve_slot(
+        &self,
+        slot: TirSlotId,
+        values_on_path: &mut HashSet<TirValueId>,
+        slots_on_path: &mut HashSet<TirSlotId>,
+    ) -> Option<Vec<TirFunctionId>> {
+        if !slots_on_path.insert(slot) {
+            return None;
+        }
+        let result = (|| {
+            let writes = self.stores.get(&slot)?;
+            if writes.is_empty() {
+                return None;
+            }
+            let mut all_targets = Vec::new();
+            for value in writes {
+                all_targets.extend(self.resolve_value(*value, values_on_path, slots_on_path)?);
+            }
+            Some(all_targets)
+        })();
+        slots_on_path.remove(&slot);
+        result
+    }
+}
+
+/// Whole-module, conservative may-target inference for callable parameters.
+///
+/// The effect graph must include *every* possible callback target. A direct
+/// call passes closure targets into its callee's function-typed parameters;
+/// those parameters can then be invoked or forwarded by further direct calls.
+/// The monotonically growing target sets reach a finite fixed point, including
+/// for cycles in the direct-call graph.
+///
+/// A missing target at any callsite is **not** treated as an empty/no-effect
+/// callback. Once the known-target fixed point is reached, incomplete bindings
+/// are invalidated transitively, leaving their indirect calls fail-closed.
+/// This analysis is module-local; it does not infer targets from exports,
+/// externs, indirect forwarding or callable values returned by functions.
+fn infer_parameter_closure_targets(
+    functions: &[&TirFunction],
+    function_by_id: &HashMap<TirFunctionId, &TirFunction>,
+) -> HashMap<TirFunctionId, HashMap<TirValueId, Vec<TirFunctionId>>> {
+    let mut targets: HashMap<TirFunctionId, HashMap<TirValueId, Vec<TirFunctionId>>> =
+        HashMap::new();
+
+    // First propagate every provable target. The presence of a known target
+    // never makes an unknown path safe; those paths are handled below.
+    loop {
+        let mut changed = false;
+        for caller in functions {
+            let index = ClosureTargetIndex::new(caller, targets.get(&caller.id));
+            for block in &caller.blocks {
+                for instr in &block.instrs {
+                    let TirInstr::Call(_, callee_id, args) = instr else {
+                        continue;
+                    };
+                    let Some(callee) = function_by_id.get(callee_id) else {
+                        continue; // UnknownCallTarget is reported by analyze().
+                    };
+                    for ((parameter, ty), arg) in callee.params.iter().zip(args.iter()) {
+                        if !matches!(ty, TirType::Function(_, _)) {
+                            continue;
+                        }
+                        let Some(found) = index.targets_for(*arg) else {
+                            continue;
+                        };
+                        let known = targets
+                            .entry(*callee_id)
+                            .or_default()
+                            .entry(*parameter)
+                            .or_default();
+                        for target in found {
+                            if !known.contains(&target) {
+                                known.push(target);
+                                changed = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    // Reject a parameter if *any* contributing callsite is unresolved. This
+    // second fixed point carries unknown provenance through transitive
+    // forwarding (including from a root function with no known callers).
+    let mut incomplete: HashSet<(TirFunctionId, TirValueId)> = HashSet::new();
+    loop {
+        let mut changed = false;
+        for caller in functions {
+            let safe_parameters: HashMap<_, _> = targets
+                .get(&caller.id)
+                .into_iter()
+                .flat_map(|params| params.iter())
+                .filter(|(value, _)| !incomplete.contains(&(caller.id, **value)))
+                .map(|(value, targets)| (*value, targets.clone()))
+                .collect();
+            let index = ClosureTargetIndex::new(caller, Some(&safe_parameters));
+            for block in &caller.blocks {
+                for instr in &block.instrs {
+                    let TirInstr::Call(_, callee_id, args) = instr else {
+                        continue;
+                    };
+                    let Some(callee) = function_by_id.get(callee_id) else {
+                        continue;
+                    };
+                    for ((parameter, ty), arg) in callee.params.iter().zip(args.iter()) {
+                        if matches!(ty, TirType::Function(_, _))
+                            && index.targets_for(*arg).is_none()
+                        {
+                            changed |= incomplete.insert((*callee_id, *parameter));
+                        }
+                    }
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    for (function, parameter) in incomplete {
+        if let Some(params) = targets.get_mut(&function) {
+            params.remove(&parameter);
+        }
+    }
+    for params in targets.values_mut() {
+        for known in params.values_mut() {
+            known.sort_by_key(|target| target.0);
+            known.dedup();
+        }
+    }
+    targets
+}
+
+/// Analyzes direct and transitive capability requirements of a TIR module.
+///
+/// Resolves provable closure targets conservatively and rejects unresolved indirect calls.
 pub fn analyze(module: &TirModule) -> Result<CapabilityAnalysis, CapabilityAnalysisError> {
     let mut functions: Vec<&TirFunction> = module.functions.iter().collect();
     functions.sort_by_key(|function| function.id.0);
@@ -456,6 +709,8 @@ pub fn analyze(module: &TirModule) -> Result<CapabilityAnalysis, CapabilityAnaly
         .iter()
         .map(|function| (function.id, *function))
         .collect();
+
+    let parameter_closure_targets = infer_parameter_closure_targets(&functions, &function_by_id);
 
     let mut states: Vec<SummaryState> = functions
         .iter()
@@ -491,6 +746,8 @@ pub fn analyze(module: &TirModule) -> Result<CapabilityAnalysis, CapabilityAnaly
             function.params.iter().cloned().collect();
         let mut slot_types: HashMap<TirSlotId, TirType> = HashMap::new();
         let value_index = FunctionValueIndex::new(function);
+        let closure_targets =
+            ClosureTargetIndex::new(function, parameter_closure_targets.get(&function.id));
         let mut blocks: Vec<_> = function.blocks.iter().collect();
         blocks.sort_by_key(|block| block.id.0);
 
@@ -516,65 +773,97 @@ pub fn analyze(module: &TirModule) -> Result<CapabilityAnalysis, CapabilityAnaly
 
                 record_instruction_type(
                     instruction,
+                    function,
                     &function_by_id,
                     &mut value_types,
                     &mut slot_types,
                 );
 
-                let TirInstr::Call(_, target_id, arguments) = instruction else {
-                    continue;
+                let (resolved_targets, arguments) = match instruction {
+                    TirInstr::Call(_, target, arguments) => (vec![*target], arguments),
+                    TirInstr::CallClosure(_, callable, arguments) => {
+                        let targets = closure_targets.targets_for(*callable).ok_or(
+                            CapabilityAnalysisError::UnsupportedIndirectCall {
+                                caller: function.id,
+                                callsite: location,
+                            },
+                        )?;
+                        (targets, arguments)
+                    }
+                    _ => continue,
                 };
+                for target_id in resolved_targets {
+                    let target_id = &target_id;
 
-                let Some(target) = function_by_id.get(target_id).copied() else {
-                    return Err(CapabilityAnalysisError::UnknownCallTarget {
-                        caller: function.id,
-                        target: *target_id,
-                        callsite: location,
-                    });
-                };
-                let edge = CallEdge {
-                    caller: function.id,
-                    callee: target.id,
-                    callsite: location,
-                };
-                call_edges.push(edge);
-
-                if target.is_extern {
-                    let Some(capabilities) = capabilities_for_extern(&target.name) else {
-                        return Err(CapabilityAnalysisError::UnclassifiedExtern {
+                    let Some(target) = function_by_id.get(target_id).copied() else {
+                        return Err(CapabilityAnalysisError::UnknownCallTarget {
                             caller: function.id,
-                            extern_id: target.id,
-                            name: target.name.clone(),
+                            target: *target_id,
                             callsite: location,
                         });
                     };
-                    record_origin(
-                        &mut states[state_index],
-                        &mut direct_origins,
-                        capabilities,
-                        location,
-                        DirectCapabilitySource::ExternCall {
-                            extern_id: target.id,
-                            name: target.name.clone(),
-                        },
-                    );
-                    record_local_effect_facts(
-                        &mut local_effect_facts,
-                        &value_index,
-                        target,
-                        arguments,
-                        location,
-                        capabilities,
-                    );
-                } else if target.blocks.is_empty() {
-                    return Err(CapabilityAnalysisError::UnresolvedDeclaration {
+                    // Indirect externs need capture-aware argument/fact binding.
+                    // Until supported, reject rather than lose resource-specific effects.
+                    if target.is_extern
+                        && (matches!(instruction, TirInstr::CallClosure(_, _, _))
+                            || target
+                                .params
+                                .iter()
+                                .zip(arguments.iter())
+                                .any(|((_, ty), _)| matches!(ty, TirType::Function(_, _))))
+                    {
+                        // A native extern receiving a callback can invoke it
+                        // outside the module-local target graph. Without a
+                        // trusted extern contract, its effects are unknown.
+                        return Err(CapabilityAnalysisError::UnsupportedIndirectCall {
+                            caller: function.id,
+                            callsite: location,
+                        });
+                    }
+                    let edge = CallEdge {
                         caller: function.id,
-                        target: target.id,
-                        name: target.name.clone(),
+                        callee: target.id,
                         callsite: location,
-                    });
-                } else {
-                    internal_edges.push(edge);
+                    };
+                    call_edges.push(edge);
+
+                    if target.is_extern {
+                        let Some(capabilities) = capabilities_for_extern(&target.name) else {
+                            return Err(CapabilityAnalysisError::UnclassifiedExtern {
+                                caller: function.id,
+                                extern_id: target.id,
+                                name: target.name.clone(),
+                                callsite: location,
+                            });
+                        };
+                        record_origin(
+                            &mut states[state_index],
+                            &mut direct_origins,
+                            capabilities,
+                            location,
+                            DirectCapabilitySource::ExternCall {
+                                extern_id: target.id,
+                                name: target.name.clone(),
+                            },
+                        );
+                        record_local_effect_facts(
+                            &mut local_effect_facts,
+                            &value_index,
+                            target,
+                            arguments,
+                            location,
+                            capabilities,
+                        );
+                    } else if target.blocks.is_empty() {
+                        return Err(CapabilityAnalysisError::UnresolvedDeclaration {
+                            caller: function.id,
+                            target: target.id,
+                            name: target.name.clone(),
+                            callsite: location,
+                        });
+                    } else {
+                        internal_edges.push(edge);
+                    }
                 }
             }
         }
@@ -810,6 +1099,20 @@ fn classify_instruction(
     instruction: &TirInstr,
     value_types: &HashMap<TirValueId, TirType>,
 ) -> Option<(CapabilitySet, DirectCapabilitySource)> {
+    if matches!(instruction, TirInstr::BorrowSliceInout(_, _, _, _)) {
+        return Some((
+            CapabilitySet::singleton(Capability::Panic)
+                .union(CapabilitySet::singleton(Capability::Alloc)),
+            DirectCapabilitySource::Slice,
+        ));
+    }
+    if matches!(instruction, TirInstr::InoutSliceSet(_, _, _)) {
+        return Some((
+            CapabilitySet::singleton(Capability::Panic)
+                .union(CapabilitySet::singleton(Capability::Alloc)),
+            DirectCapabilitySource::ExclusiveSliceWrite,
+        ));
+    }
     let (capability, source) = match instruction {
         TirInstr::Const(_, TirConst::String(_)) => {
             (Capability::Alloc, DirectCapabilitySource::StringConstant)
@@ -817,6 +1120,14 @@ fn classify_instruction(
         TirInstr::Const(_, _) => return None,
         TirInstr::Make(_, _, _, _) => (Capability::Alloc, DirectCapabilitySource::Make),
         TirInstr::MakeStruct(_, _, _) => (Capability::Alloc, DirectCapabilitySource::MakeStruct),
+        TirInstr::MakeClosureRef(_, _, _) | TirInstr::MakeClosureInout(_, _, _) => {
+            (Capability::Alloc, DirectCapabilitySource::BorrowedClosure)
+        }
+        TirInstr::MakeClosure(_, _, captures) if !captures.is_empty() => (
+            Capability::Alloc,
+            DirectCapabilitySource::ClosureEnvironment,
+        ),
+        TirInstr::MakeClosure(_, _, _) | TirInstr::CallClosure(_, _, _) => return None,
         TirInstr::Get(_, _, TirKey::Index(_)) => {
             (Capability::Panic, DirectCapabilitySource::ConstantIndexGet)
         }
@@ -853,13 +1164,21 @@ fn classify_instruction(
             )
         }
         TirInstr::Div(_, _, _) => (Capability::Panic, DirectCapabilitySource::Division),
-        TirInstr::GetIndex(_, _, _) => (Capability::Panic, DirectCapabilitySource::DynamicIndexGet),
+        TirInstr::GetIndex(_, _, _) | TirInstr::InoutSliceGet(_, _, _) => {
+            (Capability::Panic, DirectCapabilitySource::DynamicIndexGet)
+        }
+        TirInstr::BorrowSliceInout(_, _, _, _) => {
+            (Capability::Panic, DirectCapabilitySource::Slice)
+        }
+        TirInstr::InoutSliceSet(_, _, _) | TirInstr::InoutSliceLen(_, _) => return None,
         TirInstr::Slice(_, _, _, _) => (Capability::Panic, DirectCapabilitySource::Slice),
         TirInstr::Bytes(_, _) => (Capability::Alloc, DirectCapabilitySource::Bytes),
         TirInstr::ArrayPush(_, _, _) => (Capability::Alloc, DirectCapabilitySource::ArrayPush),
         TirInstr::Tag(_, _)
         | TirInstr::Slot(_, _)
+        | TirInstr::BindInout(_, _)
         | TirInstr::Load(_, _)
+        | TirInstr::BorrowInout(_, _)
         | TirInstr::Store(_, _)
         | TirInstr::Call(_, _, _)
         | TirInstr::Add(_, _, _)
@@ -880,6 +1199,7 @@ fn classify_instruction(
 
 fn record_instruction_type(
     instruction: &TirInstr,
+    function: &TirFunction,
     functions: &HashMap<TirFunctionId, &TirFunction>,
     value_types: &mut HashMap<TirValueId, TirType>,
     slot_types: &mut HashMap<TirSlotId, TirType>,
@@ -902,7 +1222,25 @@ fn record_instruction_type(
             slot_types.insert(*slot, ty.clone());
             None
         }
-        TirInstr::Load(result, slot) => slot_types.get(slot).cloned().map(|ty| (*result, ty)),
+        TirInstr::Load(result, slot) | TirInstr::BorrowInout(result, slot) => {
+            slot_types.get(slot).cloned().map(|ty| (*result, ty))
+        }
+        TirInstr::MakeClosure(result, target, captures) => functions.get(target).map(|function| {
+            let params = function
+                .params
+                .iter()
+                .skip(captures.len())
+                .map(|(_, ty)| ty.clone())
+                .collect();
+            (
+                *result,
+                TirType::Function(params, Box::new(function.return_type.clone())),
+            )
+        }),
+        TirInstr::CallClosure(result, callable, _) => match value_types.get(callable) {
+            Some(TirType::Function(_, ret)) => Some((*result, (**ret).clone())),
+            _ => None,
+        },
         TirInstr::Call(result, target, _) => functions
             .get(target)
             .map(|function| (*result, function.return_type.clone())),
@@ -918,18 +1256,29 @@ fn record_instruction_type(
         | TirInstr::And(result, _, _)
         | TirInstr::Or(result, _, _)
         | TirInstr::Not(result, _) => Some((*result, TirType::Bool)),
-        TirInstr::Len(result, _) | TirInstr::Size(result, _) => Some((*result, TirType::Int64)),
+        TirInstr::Len(result, _)
+        | TirInstr::Size(result, _)
+        | TirInstr::InoutSliceLen(result, _) => Some((*result, TirType::Int64)),
         TirInstr::Bytes(result, _) => Some((*result, TirType::Slice(Box::new(TirType::UInt8)))),
         TirInstr::ArrayPush(result, array, _) => {
             value_types.get(array).cloned().map(|ty| (*result, ty))
         }
-        TirInstr::MakeStruct(_, _, _)
+        TirInstr::InoutSliceGet(result, parameter, _) => match function.params.get(*parameter) {
+            Some((_, TirType::Slice(inner))) => Some((*result, (**inner).clone())),
+            _ => None,
+        },
+        TirInstr::MakeClosureRef(_, _, _)
+        | TirInstr::MakeClosureInout(_, _, _)
+        | TirInstr::MakeStruct(_, _, _)
         | TirInstr::Get(_, _, _)
         | TirInstr::Set(_, _, _, _)
         | TirInstr::Unwrap(_, _, _, _)
+        | TirInstr::BindInout(_, _)
         | TirInstr::Store(_, _)
         | TirInstr::GetIndex(_, _, _)
-        | TirInstr::Slice(_, _, _, _) => None,
+        | TirInstr::Slice(_, _, _, _)
+        | TirInstr::BorrowSliceInout(_, _, _, _)
+        | TirInstr::InoutSliceSet(_, _, _) => None,
     };
 
     if let Some((value, ty)) = result {

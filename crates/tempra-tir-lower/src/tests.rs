@@ -1,4 +1,4 @@
-use crate::lower::lower_function;
+use crate::lower::{lower_function, map_type, unmap_type};
 use tempra_hir::*;
 use tempra_span::Span;
 use tempra_tir::builder::ModuleBuilder;
@@ -207,6 +207,7 @@ fn call_known_function_ok() {
         span: empty_span(),
         callee: Box::new(HirExpression::Name(empty_span(), "other".to_string())),
         type_args: None,
+        inout_arguments: vec![],
         args: vec![HirCallArgument::Positional(HirExpression::Integer(
             empty_span(),
             "5".to_string(),
@@ -385,7 +386,7 @@ fn unreachable_join_after_terminating_if_ok() {
 }
 
 #[test]
-fn if_missing_return_error() {
+fn if_mixed_implicit_and_explicit_returns_ok() {
     let cond = HirExpression::Bool(empty_span(), true);
     let if_expr = HirExpression::If(HirIf {
         span: empty_span(),
@@ -413,9 +414,391 @@ fn if_missing_return_error() {
         vec![HirStatement::Expr(if_expr)],
     );
 
+    let module = lower_and_verify(&func);
+    assert!(module.functions[0]
+        .blocks
+        .iter()
+        .all(|block| { !matches!(&block.terminator, Some(TirTerminator::Unreachable)) }));
+}
+
+// VM Parity 2A.1: callable signatures must survive HIR <-> TIR conversion.
+#[test]
+fn closure_function_type_roundtrip_including_nested_callable() {
+    let signature = Type::Function(
+        vec![
+            Type::Int64,
+            Type::Function(vec![Type::Bool], Box::new(Type::String)),
+        ],
+        Box::new(Type::Option(Box::new(Type::UInt8))),
+    );
+
+    let mapped = map_type(&signature).expect("function signature must lower to TIR");
+    assert_eq!(
+        mapped,
+        TirType::Function(
+            vec![
+                TirType::Int64,
+                TirType::Function(vec![TirType::Bool], Box::new(TirType::String)),
+            ],
+            Box::new(TirType::Option(Box::new(TirType::UInt8))),
+        )
+    );
+    assert_eq!(
+        unmap_type(&mapped).expect("TIR function signature must map to HIR"),
+        signature
+    );
+}
+
+#[test]
+fn closure_function_type_rejects_unresolved_nested_types() {
+    let bad_parameter = Type::Function(vec![Type::Unknown], Box::new(Type::Unit));
+    assert!(map_type(&bad_parameter).is_err());
+
+    let bad_return = Type::Function(vec![Type::Int64], Box::new(Type::Error));
+    assert!(map_type(&bad_return).is_err());
+}
+
+// VM Parity 2A.5a — HIR closure lowering into verified, deterministic TIR.
+#[test]
+fn lower_capture_free_closure_as_first_class_value() {
+    let span = Span::new(100, 135);
+    let int = || HirType::Named(span, "Int64".to_string());
+    let closure = HirExpression::Closure(HirClosure {
+        span,
+        captures: vec![],
+        parameters: vec![HirParameter {
+            span,
+            name: "x".into(),
+            ty: int(),
+            is_inout: false,
+            kind: tempra_ast::ParameterKind::Runtime,
+        }],
+        return_type: Some(int()),
+        body: HirBlock {
+            span,
+            statements: vec![HirStatement::Expr(HirExpression::Binary(HirBinary {
+                span,
+                left: Box::new(HirExpression::Name(span, "x".into())),
+                op: HirBinaryOp::Add,
+                right: Box::new(HirExpression::Integer(span, "1".into())),
+            }))],
+        },
+    });
+
+    let call = HirExpression::Call(HirCall {
+        span,
+        callee: Box::new(HirExpression::Name(span, "f".into())),
+        type_args: None,
+        inout_arguments: vec![],
+        args: vec![HirCallArgument::Positional(HirExpression::Integer(
+            span,
+            "10".into(),
+        ))],
+    });
+    let func = create_function(
+        "main",
+        int(),
+        vec![
+            HirStatement::Let(HirLet {
+                span,
+                name: "f".into(),
+                ty: None,
+                value: closure,
+            }),
+            HirStatement::Return(Some(call)),
+        ],
+    );
     let ctx = create_test_ctx();
     let mut builder = ModuleBuilder::new();
-    let res = lower_function(&func, &ctx, &mut builder, None, None);
-    assert!(res.is_err());
-    assert!(res.unwrap_err().to_string().contains("missing return"));
+    let main = lower_function(&func, &ctx, &mut builder, None, None).unwrap();
+    builder.add_function(main);
+
+    assert!(verify_module(&builder.module).is_ok());
+    assert_eq!(builder.module.functions.len(), 2);
+    let formatted = format_tir_module(&builder.module);
+    assert!(formatted.contains("make_closure @"));
+    assert!(formatted.contains("call_closure %"));
+    assert!(formatted.contains("add %"));
+    assert!(formatted.contains("ret %"));
+    assert!(builder
+        .module
+        .functions
+        .iter()
+        .any(|f| f.name == "main$closure$100$135"));
+}
+
+#[test]
+fn closure_lifting_rejects_unknown_ref_capture_local() {
+    let span = Span::new(3, 45);
+    let closure = HirExpression::Closure(HirClosure {
+        span,
+        captures: vec![HirCapture::Named(HirCaptureNamed {
+            span,
+            mode: HirCaptureMode::Ref,
+            name: "base".into(),
+        })],
+        parameters: vec![],
+        return_type: Some(HirType::Named(span, "Int64".into())),
+        body: HirBlock {
+            span,
+            statements: vec![HirStatement::Expr(HirExpression::Integer(span, "1".into()))],
+        },
+    });
+    let func = create_function(
+        "main",
+        HirType::Named(span, "Unit".into()),
+        vec![HirStatement::Let(HirLet {
+            span,
+            name: "f".into(),
+            ty: None,
+            value: closure,
+        })],
+    );
+    let ctx = create_test_ctx();
+    let mut builder = ModuleBuilder::new();
+    let err = lower_function(&func, &ctx, &mut builder, None, None).unwrap_err();
+    assert!(err.to_string().contains("unknown local variable"));
+}
+
+#[test]
+fn closure_lifting_is_reproducible() {
+    let span = Span::new(10, 20);
+    let func = create_function(
+        "main",
+        HirType::Named(span, "Unit".into()),
+        vec![HirStatement::Let(HirLet {
+            span,
+            name: "f".into(),
+            ty: None,
+            value: HirExpression::Closure(HirClosure {
+                span,
+                captures: vec![],
+                parameters: vec![],
+                return_type: Some(HirType::Named(span, "Int64".into())),
+                body: HirBlock {
+                    span,
+                    statements: vec![HirStatement::Expr(HirExpression::Integer(
+                        span,
+                        "11".into(),
+                    ))],
+                },
+            }),
+        })],
+    );
+
+    let generate = || {
+        let ctx = create_test_ctx();
+        let mut builder = ModuleBuilder::new();
+        let main = lower_function(&func, &ctx, &mut builder, None, None).unwrap();
+        builder.add_function(main);
+        assert!(verify_module(&builder.module).is_ok());
+        format_tir_module(&builder.module)
+    };
+    assert_eq!(generate(), generate());
+}
+
+// VM Parity 2B.1c: source-level immutable borrow becomes slot-based TIR.
+#[test]
+fn lower_immutable_ref_capture_preserves_hidden_parameter_order() {
+    let span = Span::new(200, 260);
+    let int = || HirType::Named(span, "Int64".into());
+    let ref_capture = |name: &str| {
+        HirCapture::Named(HirCaptureNamed {
+            span,
+            mode: HirCaptureMode::Ref,
+            name: name.to_string(),
+        })
+    };
+    let addition = HirExpression::Binary(HirBinary {
+        span,
+        op: HirBinaryOp::Add,
+        left: Box::new(HirExpression::Name(span, "a".into())),
+        right: Box::new(HirExpression::Name(span, "b".into())),
+    });
+    let closure = HirExpression::Closure(HirClosure {
+        span,
+        captures: vec![ref_capture("a"), ref_capture("b")],
+        parameters: vec![],
+        return_type: Some(int()),
+        body: HirBlock {
+            span,
+            statements: vec![HirStatement::Expr(addition)],
+        },
+    });
+    let func = create_function(
+        "main",
+        int(),
+        vec![
+            HirStatement::Let(HirLet {
+                span,
+                name: "a".into(),
+                ty: None,
+                value: HirExpression::Integer(span, "7".into()),
+            }),
+            HirStatement::Let(HirLet {
+                span,
+                name: "b".into(),
+                ty: None,
+                value: HirExpression::Integer(span, "4".into()),
+            }),
+            HirStatement::Let(HirLet {
+                span,
+                name: "f".into(),
+                ty: None,
+                value: closure,
+            }),
+            HirStatement::Return(Some(HirExpression::Call(HirCall {
+                span,
+                callee: Box::new(HirExpression::Name(span, "f".into())),
+                type_args: None,
+                inout_arguments: vec![],
+                args: vec![],
+            }))),
+        ],
+    );
+    let ctx = create_test_ctx();
+    let mut builder = ModuleBuilder::new();
+    let main = lower_function(&func, &ctx, &mut builder, None, None).unwrap();
+    builder.add_function(main);
+    assert!(verify_module(&builder.module).is_ok());
+    let formatted = format_tir_module(&builder.module);
+    assert!(formatted.contains("make_closure_ref @"));
+    assert!(formatted.contains("captures ($0, $1)"));
+    assert!(formatted.contains("call_closure %"));
+}
+
+#[test]
+fn lower_ref_capture_rejects_mutable_var() {
+    let span = Span::new(10, 50);
+    let int = || HirType::Named(span, "Int64".into());
+    let closure = HirExpression::Closure(HirClosure {
+        span,
+        captures: vec![HirCapture::Named(HirCaptureNamed {
+            span,
+            mode: HirCaptureMode::Ref,
+            name: "x".into(),
+        })],
+        parameters: vec![],
+        return_type: Some(int()),
+        body: HirBlock {
+            span,
+            statements: vec![HirStatement::Expr(HirExpression::Name(span, "x".into()))],
+        },
+    });
+    let func = create_function(
+        "main",
+        int(),
+        vec![
+            HirStatement::Var(HirVar {
+                span,
+                name: "x".into(),
+                ty: None,
+                value: HirExpression::Integer(span, "7".into()),
+            }),
+            HirStatement::Let(HirLet {
+                span,
+                name: "f".into(),
+                ty: None,
+                value: closure,
+            }),
+        ],
+    );
+    let ctx = create_test_ctx();
+    let mut builder = ModuleBuilder::new();
+    let err = lower_function(&func, &ctx, &mut builder, None, None).unwrap_err();
+    assert!(err.to_string().contains("immutable let"));
+}
+
+// VM Parity 2B.4: the final expression must produce the function value.
+#[test]
+fn implicit_return_integer_tail_ok() {
+    let func = create_function(
+        "implicit_tail",
+        HirType::Named(empty_span(), "Int64".into()),
+        vec![HirStatement::Expr(HirExpression::Integer(
+            empty_span(),
+            "42".into(),
+        ))],
+    );
+    let module = lower_and_verify(&func);
+    assert!(matches!(
+        &module.functions[0].blocks[0].terminator,
+        Some(TirTerminator::Ret(Some(_)))
+    ));
+    assert!(format_tir_module(&module).contains("ret %"));
+}
+
+#[test]
+fn implicit_return_if_with_two_value_branches_ok() {
+    let func = create_function(
+        "implicit_if",
+        HirType::Named(empty_span(), "Int64".into()),
+        vec![HirStatement::Expr(if_expr(
+            true,
+            vec![HirStatement::Expr(HirExpression::Integer(
+                empty_span(),
+                "10".into(),
+            ))],
+            Some(vec![HirStatement::Expr(HirExpression::Integer(
+                empty_span(),
+                "20".into(),
+            ))]),
+        ))],
+    );
+    let module = lower_and_verify(&func);
+    assert_eq!(module.functions[0].blocks.len(), 3);
+    assert!(module.functions[0].blocks.iter().all(|block| {
+        matches!(
+            &block.terminator,
+            Some(TirTerminator::CondBr(..)) | Some(TirTerminator::Ret(Some(_)))
+        )
+    }));
+}
+
+#[test]
+fn implicit_return_if_missing_else_is_rejected() {
+    let func = create_function(
+        "implicit_missing_else",
+        HirType::Named(empty_span(), "Int64".into()),
+        vec![HirStatement::Expr(if_expr(
+            true,
+            vec![HirStatement::Expr(HirExpression::Integer(
+                empty_span(),
+                "1".into(),
+            ))],
+            None,
+        ))],
+    );
+    let mut builder = ModuleBuilder::new();
+    let err = lower_function(&func, &create_test_ctx(), &mut builder, None, None).unwrap_err();
+    assert!(err.to_string().contains("missing return"));
+}
+
+#[test]
+fn implicit_return_final_let_is_rejected() {
+    let func = create_function(
+        "implicit_final_let",
+        HirType::Named(empty_span(), "Int64".into()),
+        vec![HirStatement::Let(HirLet {
+            span: empty_span(),
+            name: "x".into(),
+            ty: None,
+            value: HirExpression::Integer(empty_span(), "1".into()),
+        })],
+    );
+    let mut builder = ModuleBuilder::new();
+    let err = lower_function(&func, &create_test_ctx(), &mut builder, None, None).unwrap_err();
+    assert!(err.to_string().contains("missing return"));
+}
+
+#[test]
+fn implicit_return_in_nested_block_ok() {
+    let func = create_function(
+        "implicit_block",
+        HirType::Named(empty_span(), "Int64".into()),
+        vec![HirStatement::Expr(HirExpression::Block(block(vec![
+            HirStatement::Expr(HirExpression::Integer(empty_span(), "9".into())),
+        ])))],
+    );
+    lower_and_verify(&func);
 }

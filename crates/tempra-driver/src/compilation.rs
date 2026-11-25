@@ -1,3 +1,4 @@
+use crate::timings::{measure, CompilationPhase as Phase, CompilationTimings};
 use crate::{contracts::ContractBindings, DriverError, FunctionCapabilityContract};
 use tempra_bytecode::BytecodeModule;
 use tempra_effects::CapabilityAnalysis;
@@ -69,22 +70,38 @@ impl VmCompilation {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn compile_tir_module(
     module: TirModule,
     bindings: ContractBindings,
 ) -> Result<VmCompilation, DriverError> {
-    let analyzed = analyze_tir_module(module, bindings)?;
-    enforce_analyzed_tir(&analyzed)?;
-    lower_analyzed_tir(analyzed)
+    let mut disabled = None;
+    compile_tir_module_instrumented(module, bindings, &mut disabled)
 }
 
-pub(crate) fn analyze_tir_module(
+pub(crate) fn compile_tir_module_instrumented(
     module: TirModule,
     bindings: ContractBindings,
+    timings: &mut Option<&mut CompilationTimings>,
+) -> Result<VmCompilation, DriverError> {
+    let analyzed = analyze_tir_module_instrumented(module, bindings, timings)?;
+    measure(timings, Phase::DenyEnforcement, || {
+        enforce_analyzed_tir(&analyzed)
+    })?;
+    lower_analyzed_tir_instrumented(analyzed, timings)
+}
+
+pub(crate) fn analyze_tir_module_instrumented(
+    module: TirModule,
+    bindings: ContractBindings,
+    timings: &mut Option<&mut CompilationTimings>,
 ) -> Result<AnalyzedTir, DriverError> {
-    tempra_tir::verifier::verify_module(&module).map_err(DriverError::TirVerificationError)?;
-    let capabilities =
-        tempra_effects::analyze(&module).map_err(DriverError::CapabilityAnalysisError)?;
+    measure(timings, Phase::TirVerify, || {
+        tempra_tir::verifier::verify_module(&module).map_err(DriverError::TirVerificationError)
+    })?;
+    let capabilities = measure(timings, Phase::EffectsAnalysis, || {
+        tempra_effects::analyze(&module).map_err(DriverError::CapabilityAnalysisError)
+    })?;
     Ok(AnalyzedTir {
         module,
         capabilities,
@@ -101,11 +118,23 @@ pub(crate) fn enforce_analyzed_tir(analyzed: &AnalyzedTir) -> Result<(), DriverE
 }
 
 pub(crate) fn lower_analyzed_tir(analyzed: AnalyzedTir) -> Result<VmCompilation, DriverError> {
-    let bytecode = tempra_bytecode_lower::lower_tir_module(&analyzed.module).map_err(|e| {
-        DriverError::UnsupportedExperimentalVm(format!("bytecode lowering error: {:?}", e))
+    let mut disabled = None;
+    lower_analyzed_tir_instrumented(analyzed, &mut disabled)
+}
+
+pub(crate) fn lower_analyzed_tir_instrumented(
+    analyzed: AnalyzedTir,
+    timings: &mut Option<&mut CompilationTimings>,
+) -> Result<VmCompilation, DriverError> {
+    let bytecode = measure(timings, Phase::BytecodeLower, || {
+        tempra_bytecode_lower::lower_tir_module(&analyzed.module).map_err(|e| {
+            DriverError::UnsupportedExperimentalVm(format!("bytecode lowering error: {:?}", e))
+        })
     })?;
-    tempra_bytecode::verify::verify_module(&bytecode).map_err(|e| {
-        DriverError::UnsupportedExperimentalVm(format!("verification error: {:?}", e))
+    measure(timings, Phase::BytecodeVerify, || {
+        tempra_bytecode::verify::verify_module(&bytecode).map_err(|e| {
+            DriverError::UnsupportedExperimentalVm(format!("verification error: {:?}", e))
+        })
     })?;
     Ok(VmCompilation { analyzed, bytecode })
 }

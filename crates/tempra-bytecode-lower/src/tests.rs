@@ -17,6 +17,7 @@ fn test_lower_const_return_i64() {
         next_slot_id: 0,
         debug_slots: Default::default(),
         is_extern: false,
+        inout_params: Vec::new(),
     };
 
     let b0 = TirBlockId(0);
@@ -56,6 +57,7 @@ fn test_lower_add_i64() {
         next_slot_id: 0,
         debug_slots: Default::default(),
         is_extern: false,
+        inout_params: Vec::new(),
     };
 
     let b0 = TirBlockId(0);
@@ -91,6 +93,7 @@ fn test_lower_if_condbr() {
         next_slot_id: 0,
         debug_slots: Default::default(),
         is_extern: false,
+        inout_params: Vec::new(),
     };
 
     // Block 0: CondBr %0, B1, B2
@@ -146,6 +149,7 @@ fn test_unsupported_make_error() {
         next_slot_id: 0,
         debug_slots: Default::default(),
         is_extern: false,
+        inout_params: Vec::new(),
     };
 
     // Non-field Set remains unsupported; tuple/index reads lower through GetIndex.
@@ -187,6 +191,7 @@ fn test_lower_make_tuple() {
         next_slot_id: 0,
         debug_slots: Default::default(),
         is_extern: false,
+        inout_params: Vec::new(),
     };
 
     func.blocks.push(TirBlock {
@@ -225,6 +230,7 @@ fn test_peephole_preserves_user_slots() {
         next_slot_id: 1,
         debug_slots: Default::default(),
         is_extern: false,
+        inout_params: Vec::new(),
     };
 
     let s0 = TirSlotId(0);
@@ -272,6 +278,7 @@ fn test_peephole_fuses_superinstructions() {
         next_slot_id: 0,
         debug_slots: Default::default(),
         is_extern: false,
+        inout_params: Vec::new(),
     };
 
     // v2 = v0 + v1
@@ -322,6 +329,7 @@ fn returning_i64_function(id: usize, name: &str, value: i64) -> TirFunction {
         next_slot_id: 0,
         debug_slots: Default::default(),
         is_extern: false,
+        inout_params: Vec::new(),
     }
 }
 
@@ -341,6 +349,7 @@ fn calling_function(id: usize, name: &str, target: usize) -> TirFunction {
         next_slot_id: 0,
         debug_slots: Default::default(),
         is_extern: false,
+        inout_params: Vec::new(),
     }
 }
 
@@ -431,6 +440,7 @@ fn lower_numeric_binary(
             next_slot_id: 0,
             debug_slots: Default::default(),
             is_extern: false,
+            inout_params: Vec::new(),
         }],
     };
     let bytecode = lower_tir_module(&module).unwrap();
@@ -590,6 +600,7 @@ fn invalid_numeric_tir_is_rejected_before_bytecode_emission() {
             next_slot_id: 0,
             debug_slots: Default::default(),
             is_extern: false,
+            inout_params: Vec::new(),
         }],
     };
 
@@ -633,6 +644,7 @@ fn conflicting_struct_field_types_are_rejected_before_bytecode_emission() {
                 next_slot_id: 0,
                 debug_slots: Default::default(),
                 is_extern: false,
+                inout_params: Vec::new(),
             },
             TirFunction {
                 id: TirFunctionId(1),
@@ -656,6 +668,7 @@ fn conflicting_struct_field_types_are_rejected_before_bytecode_emission() {
                 next_slot_id: 0,
                 debug_slots: Default::default(),
                 is_extern: false,
+                inout_params: Vec::new(),
             },
             TirFunction {
                 id: TirFunctionId(2),
@@ -676,6 +689,7 @@ fn conflicting_struct_field_types_are_rejected_before_bytecode_emission() {
                 next_slot_id: 0,
                 debug_slots: Default::default(),
                 is_extern: false,
+                inout_params: Vec::new(),
             },
         ],
     };
@@ -689,4 +703,198 @@ fn conflicting_struct_field_types_are_rejected_before_bytecode_emission() {
         }
         other => panic!("expected TIR verification failure, got {other:?}"),
     }
+}
+
+// VM Parity 2A.5b: TIR -> bytecode callable lowering.
+#[test]
+fn lower_tir_capture_free_closure_and_indirect_call() {
+    use tempra_bytecode::opcode::BytecodeInstr;
+    use tempra_bytecode::serialize::encode_module;
+    use tempra_bytecode::verify::verify_module;
+    use tempra_tir::builder::ModuleBuilder;
+
+    let mut module = ModuleBuilder::new();
+    let mut lambda = module.new_function("lambda", TirType::Int64);
+    let entry = lambda.new_block();
+    lambda.set_current_block(entry);
+    let x = lambda.add_param(TirType::Int64);
+    let one = lambda.build_const(TirConst::Int64(1)).unwrap();
+    let added = lambda.build_add(x, one).unwrap();
+    lambda.build_ret(Some(added)).unwrap();
+    let lambda_id = lambda.func.id;
+    module.add_function(lambda.build());
+
+    let mut main = module.new_function("main", TirType::Int64);
+    let entry = main.new_block();
+    main.set_current_block(entry);
+    let closure = main.build_make_closure(lambda_id, vec![]).unwrap();
+    let ten = main.build_const(TirConst::Int64(10)).unwrap();
+    let result = main.build_call_closure(closure, vec![ten]).unwrap();
+    main.build_ret(Some(result)).unwrap();
+    module.add_function(main.build());
+
+    let bc = lower_tir_module(&module.module).unwrap();
+    verify_module(&bc).unwrap();
+    assert!(bc
+        .functions
+        .iter()
+        .flat_map(|f| &f.code)
+        .any(|instr| matches!(instr, BytecodeInstr::MakeClosure(_, 0))));
+    assert!(bc
+        .functions
+        .iter()
+        .flat_map(|f| &f.code)
+        .any(|instr| matches!(instr, BytecodeInstr::CallClosure(_, 1))));
+    assert_eq!(encode_module(&bc).unwrap(), encode_module(&bc).unwrap());
+}
+
+#[test]
+fn lower_tir_captured_closure_signature_and_higher_order_call() {
+    use tempra_bytecode::verify::verify_module;
+    use tempra_tir::builder::ModuleBuilder;
+
+    let fn_type = TirType::Function(vec![TirType::Int64], Box::new(TirType::Int64));
+    let mut module = ModuleBuilder::new();
+
+    let mut lambda = module.new_function("lambda", TirType::Int64);
+    let entry = lambda.new_block();
+    lambda.set_current_block(entry);
+    let base = lambda.add_param(TirType::Int64);
+    let x = lambda.add_param(TirType::Int64);
+    let sum = lambda.build_add(base, x).unwrap();
+    lambda.build_ret(Some(sum)).unwrap();
+    let lambda_id = lambda.func.id;
+    module.add_function(lambda.build());
+
+    let mut apply = module.new_function("apply", TirType::Int64);
+    let entry = apply.new_block();
+    apply.set_current_block(entry);
+    let callable = apply.add_param(fn_type);
+    let arg = apply.add_param(TirType::Int64);
+    let result = apply.build_call_closure(callable, vec![arg]).unwrap();
+    apply.build_ret(Some(result)).unwrap();
+    let apply_id = apply.func.id;
+    module.add_function(apply.build());
+
+    let mut main = module.new_function("main", TirType::Int64);
+    let entry = main.new_block();
+    main.set_current_block(entry);
+    let seven = main.build_const(TirConst::Int64(7)).unwrap();
+    let captured = main.build_make_closure(lambda_id, vec![seven]).unwrap();
+    let ten = main.build_const(TirConst::Int64(10)).unwrap();
+    let result = main.build_call(apply_id, vec![captured, ten]).unwrap();
+    main.build_ret(Some(result)).unwrap();
+    module.add_function(main.build());
+
+    let bc = lower_tir_module(&module.module).unwrap();
+    verify_module(&bc).unwrap();
+    assert_eq!(bc.signatures.len(), 1);
+    assert_eq!(
+        bc.signatures[0].params,
+        vec![tempra_bytecode::function::BytecodeType::Int64]
+    );
+}
+
+#[test]
+fn lower_tir_callable_signatures_are_reproducible() {
+    use tempra_bytecode::serialize::encode_module;
+    use tempra_tir::builder::ModuleBuilder;
+
+    fn make() -> Vec<u8> {
+        let mut module = ModuleBuilder::new();
+        let mut lambda = module.new_function("lambda", TirType::Int64);
+        let entry = lambda.new_block();
+        lambda.set_current_block(entry);
+        let x = lambda.add_param(TirType::Int64);
+        lambda.build_ret(Some(x)).unwrap();
+        let lambda_id = lambda.func.id;
+        module.add_function(lambda.build());
+
+        let mut main = module.new_function("main", TirType::Int64);
+        let entry = main.new_block();
+        main.set_current_block(entry);
+        let callable = main.build_make_closure(lambda_id, vec![]).unwrap();
+        let arg = main.build_const(TirConst::Int64(5)).unwrap();
+        let result = main.build_call_closure(callable, vec![arg]).unwrap();
+        main.build_ret(Some(result)).unwrap();
+        module.add_function(main.build());
+        encode_module(&lower_tir_module(&module.module).unwrap()).unwrap()
+    }
+
+    assert_eq!(make(), make());
+}
+
+// VM Parity 2B.1e.1: distinct borrowed-local bytecode, not value captures.
+#[test]
+fn borrowed_closure_bytecode_lowering_keeps_slot_identity() {
+    use tempra_bytecode::opcode::BytecodeInstr;
+    use tempra_bytecode::verify::verify_module;
+    use tempra_tir::builder::ModuleBuilder;
+
+    let mut builder = ModuleBuilder::new();
+    let mut lambda = builder.new_function("lambda", TirType::Int64);
+    let entry = lambda.new_block();
+    lambda.set_current_block(entry);
+    let hidden = lambda.add_param(TirType::Int64);
+    let arg = lambda.add_param(TirType::Int64);
+    let sum = lambda.build_add(hidden, arg).unwrap();
+    lambda.build_ret(Some(sum)).unwrap();
+    let target = lambda.func.id;
+    builder.add_function(lambda.build());
+
+    let mut main = builder.new_function("main", TirType::Int64);
+    let entry = main.new_block();
+    main.set_current_block(entry);
+    let slot = main.build_slot(TirType::Int64, Some("base")).unwrap();
+    let ten = main.build_const(TirConst::Int64(10)).unwrap();
+    main.build_store(slot, ten).unwrap();
+    let closure = main.build_make_closure_ref(target, vec![slot]).unwrap();
+    let five = main.build_const(TirConst::Int64(5)).unwrap();
+    let called = main.build_call_closure(closure, vec![five]).unwrap();
+    main.build_ret(Some(called)).unwrap();
+    builder.add_function(main.build());
+
+    let bc = lower_tir_module(&builder.module).unwrap();
+    let main = bc.functions.iter().find(|f| f.name == "main").unwrap();
+    assert!(main
+        .code
+        .iter()
+        .any(|instr| matches!(instr, BytecodeInstr::BorrowLocal(_))));
+    assert!(main
+        .code
+        .iter()
+        .any(|instr| matches!(instr, BytecodeInstr::MakeClosureRef(_, 1))));
+    verify_module(&bc).unwrap();
+}
+
+#[test]
+fn a1_inout_binding_uses_parameter_storage_not_a_value_copy() {
+    use tempra_bytecode::function::LocalId;
+    use tempra_bytecode::opcode::BytecodeInstr;
+    use tempra_tir::builder::ModuleBuilder;
+
+    let mut module = ModuleBuilder::new();
+    let mut update = module.new_function("update", TirType::Unit);
+    let block = update.new_block();
+    update.set_current_block(block);
+    update.add_inout_param(TirType::Int64);
+    let slot = update.build_slot(TirType::Int64, Some("owner")).unwrap();
+    update.build_bind_inout(slot, 0).unwrap();
+    let value = update.build_const(TirConst::Int64(42)).unwrap();
+    update.build_store(slot, value).unwrap();
+    update.build_ret(None).unwrap();
+    module.add_function(update.build());
+
+    let bytecode = lower_tir_module(&module.module).unwrap();
+    verify_module(&bytecode).unwrap();
+    let update = &bytecode.functions[0];
+    assert_eq!(update.inout_params, vec![true]);
+    assert_eq!(
+        update.code,
+        vec![
+            BytecodeInstr::ConstI64(tempra_bytecode::constant::ConstId(0)),
+            BytecodeInstr::StoreLocal(LocalId(0)),
+            BytecodeInstr::Return,
+        ]
+    );
 }

@@ -1,0 +1,5 @@
+// expected: 3
+fn main() -> Int64 {
+    let xs: [Int64] = [10, 20, 30]
+    return xs.len()
+}

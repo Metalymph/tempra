@@ -68,6 +68,10 @@ pub enum EffectDirectOriginKind {
     Make,
     /// A TIR struct construction.
     MakeStruct,
+    /// Allocation of a frame-bound borrowed closure environment.
+    BorrowedClosure,
+    /// Allocation of a closure capture environment.
+    ClosureEnvironment,
     /// A conservative may-panic division.
     Division,
     /// A potentially overflowing checked `Int64` addition.
@@ -82,6 +86,8 @@ pub enum EffectDirectOriginKind {
     ConstantIndexGet,
     /// A dynamic-index access.
     DynamicIndexGet,
+    /// Exclusive slice element write, including possible COW allocation.
+    ExclusiveSliceWrite,
     /// A slice operation.
     Slice,
     /// String byte-view materialization.
@@ -299,6 +305,10 @@ fn project_witness(
         DirectCapabilitySource::StringConstant => (EffectDirectOriginKind::StringConstant, None),
         DirectCapabilitySource::Make => (EffectDirectOriginKind::Make, None),
         DirectCapabilitySource::MakeStruct => (EffectDirectOriginKind::MakeStruct, None),
+        DirectCapabilitySource::BorrowedClosure => (EffectDirectOriginKind::BorrowedClosure, None),
+        DirectCapabilitySource::ClosureEnvironment => {
+            (EffectDirectOriginKind::ClosureEnvironment, None)
+        }
         DirectCapabilitySource::Division => (EffectDirectOriginKind::Division, None),
         DirectCapabilitySource::IntegerAddition => (EffectDirectOriginKind::IntegerAddition, None),
         DirectCapabilitySource::IntegerSubtraction => {
@@ -312,6 +322,9 @@ fn project_witness(
             (EffectDirectOriginKind::ConstantIndexGet, None)
         }
         DirectCapabilitySource::DynamicIndexGet => (EffectDirectOriginKind::DynamicIndexGet, None),
+        DirectCapabilitySource::ExclusiveSliceWrite => {
+            (EffectDirectOriginKind::ExclusiveSliceWrite, None)
+        }
         DirectCapabilitySource::Slice => (EffectDirectOriginKind::Slice, None),
         DirectCapabilitySource::Bytes => (EffectDirectOriginKind::Bytes, None),
         DirectCapabilitySource::ArrayPush => (EffectDirectOriginKind::ArrayPush, None),

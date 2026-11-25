@@ -1,7 +1,7 @@
 use crate::bytecode::BytecodeModule;
 use crate::constant::ConstId;
 use crate::error::BytecodeError;
-use crate::function::{BytecodeFunction, BytecodeType, FunctionId, LocalId};
+use crate::function::{BytecodeFunction, BytecodeType, FunctionId, LocalId, SignatureId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InstrOffset(pub usize);
@@ -60,6 +60,26 @@ pub enum BytecodeInstr {
 
     // Calls
     Call(FunctionId, u16), // ID, argc
+    /// Target function ID, followed by the number of captured values on stack.
+    MakeClosure(FunctionId, u16),
+    /// The stack contains the callable followed by arguments (left to right).
+    CallClosure(SignatureId, u16), // expected signature, argc
+    // VM Parity 2B.1e.1: borrowed closure bytecode ISA.
+    // BorrowLocal is a *borrow handle*, not LoadLocal (which copies a value).
+    // It may only be consumed by a verified MakeClosureRef in 2B.1e.2.
+    BorrowLocal(LocalId),
+    MakeClosureRef(FunctionId, u16), // target, borrowed capture count
+    /// Exclusive borrow handle for an inout capture.
+    BorrowLocalMut(LocalId),
+    /// Closure with exclusively borrowed mutable capture storage.
+    MakeClosureInout(FunctionId, u16),
+    /// Bounds on stack (start, end); borrow an array owner or reborrow an incoming view.
+    BorrowSliceMut(LocalId),
+    /// Index on stack; read an incoming exclusive slice element.
+    InoutSliceGet(LocalId),
+    /// Index and value on stack; mutate the original owner via an incoming view.
+    InoutSliceSet(LocalId),
+    InoutSliceLen(LocalId),
 
     // Enum-like
     MakeEnum(ConstId, ConstId, u16), // enum_name, variant_name, payload_count
@@ -86,7 +106,7 @@ pub enum BytecodeInstr {
     AddI64LC(LocalId, ConstId), // LoadLocal a; ConstI64 b; AddI64
 }
 
-pub const BYTECODE_OPCODE_COUNT: usize = 53;
+pub const BYTECODE_OPCODE_COUNT: usize = 63;
 
 impl BytecodeInstr {
     pub fn opcode_id(&self) -> usize {
@@ -144,6 +164,16 @@ impl BytecodeInstr {
             BytecodeInstr::ArrayPush => 50,
             BytecodeInstr::AddI64LL(_, _) => 51,
             BytecodeInstr::AddI64LC(_, _) => 52,
+            BytecodeInstr::MakeClosure(_, _) => 53,
+            BytecodeInstr::CallClosure(_, _) => 54,
+            BytecodeInstr::BorrowLocal(_) => 55,
+            BytecodeInstr::MakeClosureRef(_, _) => 56,
+            BytecodeInstr::BorrowLocalMut(_) => 57,
+            BytecodeInstr::MakeClosureInout(_, _) => 58,
+            BytecodeInstr::BorrowSliceMut(_) => 59,
+            BytecodeInstr::InoutSliceGet(_) => 60,
+            BytecodeInstr::InoutSliceSet(_) => 61,
+            BytecodeInstr::InoutSliceLen(_) => 62,
         }
     }
 
@@ -202,6 +232,16 @@ impl BytecodeInstr {
             BytecodeInstr::ArrayPush => "ArrayPush",
             BytecodeInstr::AddI64LL(_, _) => "AddI64LL",
             BytecodeInstr::AddI64LC(_, _) => "AddI64LC",
+            BytecodeInstr::MakeClosure(_, _) => "MakeClosure",
+            BytecodeInstr::CallClosure(_, _) => "CallClosure",
+            BytecodeInstr::BorrowLocal(_) => "BorrowLocal",
+            BytecodeInstr::MakeClosureRef(_, _) => "MakeClosureRef",
+            BytecodeInstr::BorrowLocalMut(_) => "BorrowLocalMut",
+            BytecodeInstr::MakeClosureInout(_, _) => "MakeClosureInout",
+            BytecodeInstr::BorrowSliceMut(_) => "BorrowSliceMut",
+            BytecodeInstr::InoutSliceGet(_) => "InoutSliceGet",
+            BytecodeInstr::InoutSliceSet(_) => "InoutSliceSet",
+            BytecodeInstr::InoutSliceLen(_) => "InoutSliceLen",
         }
     }
 }
@@ -256,6 +296,79 @@ pub fn stack_effect(
         BytecodeInstr::Return => {
             let pops = if func.ret == BytecodeType::Unit { 0 } else { 1 };
             StackEffect { pops, pushes: 0 }
+        }
+        BytecodeInstr::MakeClosure(id, capture_count) => {
+            let target = module
+                .functions
+                .get(id.0 as usize)
+                .ok_or(BytecodeError::InvalidFunctionId(*id))?;
+            if *capture_count as usize > target.params.len() {
+                return Err(BytecodeError::Message(format!(
+                    "closure capture count {} exceeds function parameter count {}",
+                    capture_count,
+                    target.params.len()
+                )));
+            }
+            StackEffect {
+                pops: *capture_count,
+                pushes: 1,
+            }
+        }
+        BytecodeInstr::BorrowSliceMut(_) => StackEffect { pops: 2, pushes: 1 },
+        BytecodeInstr::InoutSliceGet(_) => StackEffect { pops: 1, pushes: 1 },
+        BytecodeInstr::InoutSliceSet(_) => StackEffect { pops: 2, pushes: 0 },
+        BytecodeInstr::InoutSliceLen(_) => StackEffect { pops: 0, pushes: 1 },
+        BytecodeInstr::BorrowLocal(id) | BytecodeInstr::BorrowLocalMut(id) => {
+            if id.0 as usize >= func.locals.len() {
+                return Err(BytecodeError::Message(format!(
+                    "borrowed local ${} is out of bounds",
+                    id.0
+                )));
+            }
+            StackEffect { pops: 0, pushes: 1 }
+        }
+        BytecodeInstr::MakeClosureRef(target_id, capture_count)
+        | BytecodeInstr::MakeClosureInout(target_id, capture_count) => {
+            let target = module
+                .functions
+                .get(target_id.0 as usize)
+                .ok_or(BytecodeError::InvalidFunctionId(*target_id))?;
+            if usize::from(*capture_count) > target.params.len() {
+                return Err(BytecodeError::Message(format!(
+                    "borrowed closure has {} captures but target accepts {} parameters",
+                    capture_count,
+                    target.params.len()
+                )));
+            }
+            StackEffect {
+                pops: *capture_count,
+                pushes: 1,
+            }
+        }
+        BytecodeInstr::CallClosure(signature_id, argc) => {
+            let signature = module
+                .signatures
+                .get(signature_id.0 as usize)
+                .ok_or_else(|| {
+                    BytecodeError::Message(format!(
+                        "invalid callable signature ID #{}",
+                        signature_id.0
+                    ))
+                })?;
+            if usize::from(*argc) != signature.params.len() {
+                return Err(BytecodeError::Message(format!(
+                    "closure arity mismatch: expected {}, found {}",
+                    signature.params.len(),
+                    argc
+                )));
+            }
+            let pops = argc
+                .checked_add(1)
+                .ok_or_else(|| BytecodeError::Message("too many indirect-call operands".into()))?;
+            StackEffect {
+                pops,
+                pushes: u16::from(signature.ret != BytecodeType::Unit),
+            }
         }
         BytecodeInstr::Call(id, argc) => {
             let target = module

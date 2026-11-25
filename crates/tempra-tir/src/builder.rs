@@ -58,6 +58,7 @@ impl ModuleBuilder {
                 params: params.into_iter().map(|t| (TirValueId(0), t)).collect(), // Dummy value IDs for params in decl
                 return_type,
                 is_extern: false,
+                inout_params: Vec::new(),
                 blocks: Vec::new(),
                 next_value_id: 0,
                 next_block_id: 0,
@@ -82,6 +83,7 @@ impl FunctionBuilder {
                 params: Vec::new(),
                 return_type,
                 is_extern: false,
+                inout_params: Vec::new(),
                 blocks: Vec::new(),
                 next_value_id: 0,
                 next_block_id: 0,
@@ -95,7 +97,58 @@ impl FunctionBuilder {
     pub fn add_param(&mut self, ty: TirType) -> TirValueId {
         let id = self.next_value();
         self.func.params.push((id, ty));
+        self.func.inout_params.push(false);
         id
+    }
+
+    /// Adds a parameter whose storage must be borrowed exclusively by callers.
+    pub fn add_inout_param(&mut self, ty: TirType) -> TirValueId {
+        let id = self.add_param(ty);
+        *self.func.inout_params.last_mut().unwrap() = true;
+        id
+    }
+
+    /// A typed borrow handle that can only flow into an exclusive call argument.
+    pub fn build_borrow_inout(&mut self, slot: TirSlotId) -> Result<TirValueId, TirBuildError> {
+        let id = self.next_value();
+        self.push_instr(TirInstr::BorrowInout(id, slot))?;
+        Ok(id)
+    }
+
+    pub fn build_borrow_slice_inout(
+        &mut self,
+        source: TirSliceSource,
+        start: TirValueId,
+        end: TirValueId,
+    ) -> Result<TirValueId, TirBuildError> {
+        let id = self.next_value();
+        self.push_instr(TirInstr::BorrowSliceInout(id, source, start, end))?;
+        Ok(id)
+    }
+
+    pub fn build_inout_slice_get(
+        &mut self,
+        parameter: usize,
+        index: TirValueId,
+    ) -> Result<TirValueId, TirBuildError> {
+        let id = self.next_value();
+        self.push_instr(TirInstr::InoutSliceGet(id, parameter, index))?;
+        Ok(id)
+    }
+
+    pub fn build_inout_slice_set(
+        &mut self,
+        parameter: usize,
+        index: TirValueId,
+        value: TirValueId,
+    ) -> Result<(), TirBuildError> {
+        self.push_instr(TirInstr::InoutSliceSet(parameter, index, value))
+    }
+
+    pub fn build_inout_slice_len(&mut self, parameter: usize) -> Result<TirValueId, TirBuildError> {
+        let id = self.next_value();
+        self.push_instr(TirInstr::InoutSliceLen(id, parameter))?;
+        Ok(id)
     }
 
     pub fn new_block(&mut self) -> TirBlockId {
@@ -392,6 +445,53 @@ impl FunctionBuilder {
         Ok(id)
     }
 
+    /// Construct a callable referencing a function and its captured values.
+    /// Captured values become the leading parameters of the target function.
+    pub fn build_make_closure(
+        &mut self,
+        target: TirFunctionId,
+        captures: Vec<TirValueId>,
+    ) -> Result<TirValueId, TirBuildError> {
+        let id = self.next_value();
+        self.push_instr(TirInstr::MakeClosure(id, target, captures))?;
+        Ok(id)
+    }
+
+    /// Construct a borrowed closure referencing existing local storage slots.
+    /// This is TIR-only until non-escaping borrow lifetime validation and
+    /// native VM support have been implemented.
+    pub fn build_make_closure_ref(
+        &mut self,
+        target: TirFunctionId,
+        captures: Vec<TirSlotId>,
+    ) -> Result<TirValueId, TirBuildError> {
+        let id = self.next_value();
+        self.push_instr(TirInstr::MakeClosureRef(id, target, captures))?;
+        Ok(id)
+    }
+
+    /// Construct an exclusive borrowed closure referencing mutable local slots.
+    pub fn build_make_closure_inout(
+        &mut self,
+        target: TirFunctionId,
+        captures: Vec<TirSlotId>,
+    ) -> Result<TirValueId, TirBuildError> {
+        let id = self.next_value();
+        self.push_instr(TirInstr::MakeClosureInout(id, target, captures))?;
+        Ok(id)
+    }
+
+    /// Call a function value, checked against its TIR function signature.
+    pub fn build_call_closure(
+        &mut self,
+        callee: TirValueId,
+        args: Vec<TirValueId>,
+    ) -> Result<TirValueId, TirBuildError> {
+        let id = self.next_value();
+        self.push_instr(TirInstr::CallClosure(id, callee, args))?;
+        Ok(id)
+    }
+
     pub fn build_slot(
         &mut self,
         ty: TirType,
@@ -400,6 +500,16 @@ impl FunctionBuilder {
         let slot = self.next_slot(name);
         self.push_instr(TirInstr::Slot(slot, ty))?;
         Ok(slot)
+    }
+
+    /// Associate a slot with its exclusive incoming parameter, without a value copy.
+    pub fn build_bind_inout(
+        &mut self,
+        slot: TirSlotId,
+        parameter: usize,
+    ) -> Result<(), TirBuildError> {
+        self.push_instr(TirInstr::BindInout(slot, parameter))?;
+        Ok(())
     }
 
     pub fn build_store(&mut self, slot: TirSlotId, val: TirValueId) -> Result<(), TirBuildError> {

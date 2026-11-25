@@ -357,6 +357,7 @@ impl<'src> Lowerer<'src> {
                     .type_args
                     .as_ref()
                     .map(|args| args.iter().map(|a| self.lower_type(a)).collect()),
+                inout_arguments: e.inout_arguments.clone(),
                 args: e
                     .arguments
                     .iter()

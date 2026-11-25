@@ -1,356 +1,219 @@
-# Tempra Architecture
+# Tempra — Compiler & Runtime Architecture
 
-This document describes the compiler as it exists today and the intended insertion point for the next semantic analyses. Planned components are labeled explicitly.
+**Documentation revision:** v0.2 — 2026-11-16
+**Scope:** compiler layers, runtime paths, semantic authorities, ownership/effects, and planned backends
+**Status:** consolidated target architecture with a separately identified implementation baseline. This document is not an implementation or release certificate.
 
-## Design principles
+## 1. Purpose and authority
 
-- **Script first:** the default execution path favors a small, direct HIR interpreter.
-- **Forward semantic flow:** source representations lower from AST to HIR and, for the experimental VM, to verified TIR.
-- **Typed shared facts:** cross-cutting analyses should publish stable per-function facts instead of independently rebuilding semantic information.
-- **Small public language:** compiler sophistication must not require a large source-level effect, ownership, or proof language.
-- **Backend isolation:** native and Wasm code generation remain separate targets; Wasm output must not be routed through Cranelift.
-- **Structured diagnostics:** analysis results should retain identities and provenance suitable for terminal, JSON, LSP, and inspection tools.
+Tempra is a statically checked, scripting-first systems language with value semantics. **Tempra Script** is its intended stack-VM scripting runtime; **Tempra Native** is the planned LLVM-based native AOT compiler. Both must implement the same source-language semantics.
 
-## Current compiler paths
+Architectural descriptions cannot override normative language rules:
 
-### Default run path
+| Concern | Authority |
+| --- | --- |
+| Value semantics, ownership, borrowing, `consume`, slices, closure captures, cleanup, actor safety | [Memory & Ownership v0.4](../Tempra_Memory_Ownership_v0.4.md) — **sole memory-model authority** |
+| Source language | [Surface Syntax v0.2](../TEMPRA_SURFACE_SPEC_v0.2.md) and [Grammar](../GRAMMAR.md), with explicitly open constructs excluded from current claims |
+| Comptime | [Comptime Specification](../COMPTIME_SPEC.md), including the HIR-to-VM migration gate |
+| Broad and specialized effects | [Capability Contracts](../specs/effects-v0.1.md), [Specialized Effects v0.2](../specs/specialized-effects-v0.2.md) |
+| TIR and execution | [TIR Specification](../TIR_SPEC.md), [Bytecode VM](../BYTECODE_VM.md), [Bytecode ISA](../BYTECODE_ISA.md) |
+| Cache and reproducibility | [Bytecode Cache](../BYTECODE_CACHE.md) |
+| Delivery milestones, proof gates and releases | [Roadmap](../roadmap.md) and [roadmap subdocuments](../roadmap/) |
+
+**Status distinction:** *approved* means designed; *implemented* means present on the stated bounded source path; *verified* requires reproducible test evidence at a specific commit; *formally proved* requires a separate proof artifact. None implies another.
+
+### Baseline being described
+
+The current runtime still defaults to HIR execution, with an experimental bytecode VM. The legacy JIT/Cranelift code has been removed by the retirement change; VM-first execution remains separately gated.
+
+## 2. Design principles
+
+1. **One source semantics:** neither the interpreter representation nor a native code-generation choice defines what a legal Tempra program means.
+2. **Script-first:** fast startup, small runtime and predictable errors matter before sophisticated optimizations or native compilation.
+3. **Typed intermediate facts:** validated TIR, function identities, call graphs, effects and future ownership facts are shared by consumers, not independently re-inferred in each backend.
+4. **Verifier boundaries:** malformed IR, stale artifacts and unsupported source constructs fail with controlled diagnostics; they do not trigger silent semantic fallback.
+5. **Deterministic compilation:** inputs, module order, specialization ordering and trusted cache revisions must not introduce incidental nondeterminism on the supported surface.
+6. **Explicit effects and ownership:** minimal source syntax, strong semantic enforcement; `@pure` and `@deny(...)` do not silently relax memory safety.
+7. **Distinct compiler and runtime goals:** Tempra Script may use acyclic reference counting; Tempra Native's RC-free LLVM goal is not already proven by that choice.
+8. **Historical separation:** the JIT/Cranelift prototypes are retained as archival records only, not future runtime/compiler dependencies.
+
+## 3. Current execution paths on the inspected baseline
+
+### 3.1 Default HIR execution — current historical state
 
 ```text
-Source
-  → Lexer / Parser
-  → AST
-  → HIR lowering
-  → Reject capability contracts (execution only)
-  → Type checking
-      → canonical comptime facade when evaluation is required
+source / modules
+  → lexer → parser → AST → HIR
+  → module resolution and type checking
+       ↳ K1 comptime facade when required
   → HIR interpreter
 ```
 
-`tempra run` uses this path unless the experimental VM is selected. Annotated execution is explicitly unsupported here, not silently unchecked. `tempra check` currently stops after parsing, HIR lowering, module resolution, and type checking; it does not certify capability contracts.
+The existing HIR execution path has broader language coverage than the experimental VM. It **rejects programs with capability contracts** (`@deny` and `@pure`) rather than running them without enforcement. Historically, `tempra check` performs frontend and type-checking work only; it does **not** certify broad/specialized capability enforcement or the future ownership proof. REPL and source TIR interpretation have separate unsupported-path guards. These are implementation limitations, not desired Tempra Script behavior.
 
-### Experimental VM path
-
-```text
-Source
-  → Lexer / Parser
-  → AST
-  → HIR lowering
-  → Type checking
-      → canonical comptime facade and HIR pruning/materialization
-  → TIR lowering
-  → TIR verification
-  → Capability analysis (broad and specialized facts, fresh compilation)
-  → Broad and specialized contract enforcement
-  → Bytecode lowering
-  → Bytecode verification
-  → VmCompilation (retained TIR, capability facts, bytecode)
-  → Bytecode VM
-  → optional experimental Cranelift JIT for eligible functions
-```
-
-TIR support covers a smaller language subset than the HIR interpreter. Generic templates are not emitted directly; requested concrete specializations are lowered where supported.
-
-This is the fresh source/multi-module VM path. K2.2 processes unique
-specialization requests in deterministic first-request order. Bytecode lowering
-emits functions by ascending `TirFunctionId` and resolves calls through an
-explicit `TirFunctionId`-to-`FunctionId` map; TIR identity is never inferred from
-physical vector position. Bytecode cache hits verify and
-execute cached bytecode without analysis or reconstructed TIR, but require an
-enforcement-aware semantic fingerprint and matching source identity. TIR emission
-verifies then formats. Source TIR interpretation rejects contracts before lowering;
-raw TIR interpretation verifies then interprets. Neither needs analyzer coverage.
-HIR execution, REPL and test execution reject annotated input through one shared
-HIR presence scan before execution/state commit. See [pipeline boundaries](PIPELINE.md).
-
-File/module compilation receives a resolved standard-library root through
-`CompilationConfig`. The root denotes the `std/` directory itself; the module
-resolver only maps `import std.path` to `<root>/path.tmpr` and does not perform
-environment discovery. The default configuration discovers the nearest `std/`
-ancestor of the current compiler executable, never the process cwd. Embedders and
-tests may provide an explicit root; a relative explicit path is made absolute once
-at that API boundary. Analysis/LSP retain their existing adapter boundary and do
-not make `CompilationConfig` a new frontend authority.
-
-### Incomplete planned paths
-
-The `tempra-mir`, `tempra-ir`, `tempra-opt`, native AOT, Wasm backend, linker, and build crates contain varying levels of scaffold or prototype code. They are not a single production pipeline today. Historical design documents that describe them as complete do not override this status.
-
-Native AOT is first-class milestone A in the [roadmap](../roadmap.md); the existing Cranelift backend scaffold is its initial direction. Dedicated Wasm/WASI output remains a separate track. NR is standalone experimental RC-free research and never blocks baseline AOT.
-
-## Canonical comptime authority
-
-The K1 audit selected the existing HIR interpreter as the semantic kernel for
-comptime. K1.1 adds a single public compiler-facing facade in
-`tempra-interpreter`; it owns comptime mode and fuel installation, boundary
-normalization, and restoration of prior interpreter state. `tempra-typeck`
-invokes that facade and separately materializes supported primitive results into
-HIR. Nested comptime syntax shares the active evaluation session.
-
-This establishes one entrypoint, not complete K1 semantics. K1.2 wires the same
-facade into ordinary multi-module and file-based typechecking through a
-module-aware lookup adapter while retaining separate HIR files. Analysis/LSP
-and REPL typechecking remain deferred. K1.3 makes supported shared-kernel integer
-arithmetic panic-free. K1.4 rejects functions without executable HIR bodies,
-including extern declarations reached during comptime, instead of synthesizing
-`Unit`; it does not route comptime through the VM native resolver. Recursion and
-specialization behavior remain later hardening. K1.5 applies one
-interpreter-boundary policy to currently executable host-observable operations:
-deterministic local work, allocation and `cmd` construction remain allowed,
-while process execution, output/input, filesystem, environment, host-OS access,
-`dbg` and `exit` are rejected. TIR, VM, JIT,
-Wasm and future AOT remain consumers of already resolved semantics rather than
-comptime authorities. K1.6 centralizes deterministic evaluator-progress fuel:
-expression/statement entries, Tempra call frames and executed `for` bodies are
-explicit ticks, while builtins remain constant-cost in v0.1. A call-depth guard
-allows 8 active frames by default and rejects the 9th; nested comptime shares
-the active session. This is a conservative compiler-defined v0.1 safety limit,
-revisionable as the evaluator evolves, not
-a timeout, wall-clock limit, or resource quota. K1.7 completes the K1 trust
-boundary by requiring `semantics-2`; revision-1 artifacts miss and must pass
-through fresh K1 evaluation. K2.2 raises current trust to `semantics-3` so older
-artifacts cannot retain the specialization ID/index miscompilation. K2.4 raises
-current trust to `semantics-4` after making interface selection and requirement/
-field diagnostics follow canonical source/module declaration order. These semantic
-revisions are independent of bytecode format version.
-
-K3.2 raises current trust to `semantics-5` because checked `Int64` add/sub/mul
-now contribute `Panic` and revision-4 hits could bypass that enforcement.
-K4.5B raised trust to `semantics-6` because revision-5 hits could bypass
-static specialized `@deny` enforcement. K4.9D raised trust to `semantics-7` for
-v0.2 family/category enforcement; K4.9E confirms compatibility without a
-further revision. K3.3 raises current trust to `semantics-8` for numeric backend
-parity: verified TIR types drive `Int64`/`UInt64`/`Float64` bytecode opcode
-selection, `UInt64` uses the shared checked kernel, and `Float64` keeps IEEE 754
-semantics. Revision-7 artifacts may contain the former untyped numeric lowering
-or predate Float64 literal support, so they miss. The shared `tempra-runtime` arithmetic
-contract is consumed by the HIR interpreter, TIR interpreter and VM. Eligible JIT functions implement equivalent checked
-Cranelift operations and propagate a C-compatible `{ value, status }` result
-through pure and heap-aware native calls. A non-zero status from native code is
-returned to the VM as a typed runtime failure and is never reclassified as
-fallback or re-executed in the interpreter. `UInt64` and `Float64` functions are
-not native-JIT eligible today: they are rejected as unsupported types and run
-interpreted.
-
-## Capability analysis insertion point
-
-Phase E uses verified TIR as its only semantic substrate:
+### 3.2 Experimental bytecode VM — currently documented path
 
 ```text
-TIR lowering
-  → TIR verification
-  → capability analysis
-  → later semantic analyses
-  → bytecode, native, or Wasm backends
+source / module inputs
+  → parse, HIR, typecheck, comptime pruning
+  → specialized concrete functions → TIR lowering
+  → TIR structural/type verification
+  → E1/E2 capability and specialized-effect facts
+  → E3/K4 contract enforcement
+  → TIR → bytecode lowering
+  → bytecode verification
+  → Tempra Script stack VM (experimental)
 ```
 
-E1 provides a pure `tempra-effects` crate that depends only on `tempra-tir`. It consumes a `TirModule` and returns stable summaries, a call graph, and deterministic provenance. It does not mutate TIR, change bytecode formats, parse attributes, or add an HIR analyzer.
+A fresh VM compilation can retain verified TIR, capability facts and bytecode in the internal `VmCompilation` product. Capability analysis is compiler-owned: untrusted annotations cannot be silently ignored by a runtime dispatch decision. The current source path may fail for syntax/features not lowered to executable TIR/bytecode. A failure is reported rather than silently rerouting to HIR execution.
 
-E2 implements minimal driver integration: private `AnalyzedTir` ties immutable
-TIR to its facts, and public `VmCompilation` also retains verified bytecode.
-Source and multi-module fresh compilation analyze once immediately after TIR
-verification. E3.2 enforces contracts before bytecode lowering; typed failures
-are retained in `DriverError`. Capability presence without a denying contract is accepted.
+**Cache hit:** matching source identity and compiler/semantic fingerprint, followed by bytecode verification, may execute cached bytecode *without reconstructing TIR or capability facts*. That is acceptable only within the historical compiler-trust contract for the cache revision; introducing the new v0.4 ownership enforcement needs a new, explicitly validated trust boundary. See [Bytecode Cache](../BYTECODE_CACHE.md).
 
-E3.1 preserves dedicated `@deny` syntax through AST/HIR. It adds no semantic
-capability logic to frontend crates. Driver-owned conversion and registration
-bind the concrete HIR declaration directly to the ID returned by lowering,
-including specializations, without a post-hoc name lookup. Immutable contract
-accessors on `VmCompilation` retain source/module identity and declaration and
-attribute spans alongside facts. E3.2 compares denied and transitively required
-sets, retaining deterministic violations and E1 witnesses; final rendering is E6.
-Instruction source mapping remains absent. E3.2 uses the existing cache header's
-fingerprint `tempra-{CARGO_PKG_VERSION}-semantics-1`; legacy artifacts miss and only
-successfully enforced compilations can write replacements. No facts are serialized.
+### 3.3 Diagnostic and inspection paths
 
-E4 adds only pure source intent and normalization: AST/HIR retain `pure_span`,
-and the driver unions Io/Process/Spawn/Nondeterminism with explicit deny. Effective
-contracts retain pure provenance separately from explicit deny spans. Neither
-E1 analysis nor E3.2 enforcement changes; pure allows allocation and may-panic
-operations unless explicitly denied. The shared HIR presence guard covers pure
-without changing the execution adapters. `semantics-1` remained valid at that
-point because the old parser rejected pure and changed annotations change source
-identity.
+| Path | Role | What it does **not** certify |
+| --- | --- | --- |
+| `tempra check` (historical baseline) | Frontend/module/type checks | Complete effects/ownership enforcement |
+| `tempra emit-tir` | TIR lowering, verification, readable IR | Executability of the full source language or effect-contract satisfaction |
+| `tempra effects` | Fresh capability-aware compilation and inspection on its supported subset | Unavailable HIR-only operations, future ownership proof or sandboxing |
+| Raw/source TIR interpreter | Narrow TIR validation/regression | Full VM, stdlib, native ABI, actor or ownership behavior |
+| REPL/LSP | Interaction and diagnostics over their documented frontend scope | Automatic certification through the VM pipeline |
 
-### K4.6 specialized refinements (implemented)
+The precise CLI features supported in the user's branch must be checked before presenting new release guidance.
 
-K4.6 adds compiler-owned specialized operations as a refinement over broad
-capabilities. `Capability`, `CapabilitySet`, `@pure`, broad `@deny` and bytecode
-are unchanged. Specialized clauses live in the compilation-local contract side
-table and reuse the same E1 summaries, call graph and witnesses. Operation
-identity and resource knowledge stay separate: exact literals and `*` are
-supported; unknown resources, missing classification and unclassified operations
-under a denied parent fail closed. Different known operations are disjoint.
-Broad violation results remain authoritative and are returned before specialized
-results.
-
-Classification is explicit compiler metadata, not inference from native names or
-types. The production `tempra-native` registry and the `tempra-effects`
-classifier remain separate tables; K4.6B.1 cross-crate tests require exact name,
-parent-capability, signature and resource-position agreement. Resolver identity
-is trusted, native code is not sandboxed and native handlers still validate their
-arguments manually.
-
-Enforcement runs before bytecode lowering. VM, profiled VM and JIT consume only
-already-enforced bytecode; there is no runtime specialized-effect guard. HIR,
-test, REPL and source-TIR execution reject any annotated input; `check` and
-`emit-tir` remain non-enforcing tooling. Effect inspection compiles fresh and
-enforces, but specialized violations currently surface as a generic compiler
-error rather than an E6 structured diagnostic; the E6 schema is unchanged.
-
-K4.5B raised cache trust to `semantics-6`, so revision-5 artifacts retaining
-unenforced specialized clauses cannot be reused; K4.9D later raised current trust
-to `semantics-7` for v0.2 family/category enforcement. Hits remain trusted
-bytecode-only artifacts with no reconstructed facts. Filesystem parameters are
-opaque source spellings: no canonicalization, symlink/hard-link confinement,
-mount-alias protection or TOCTOU guarantee is claimed. K4.6A found no bypass;
-K4.6B.2 covers fresh source/file, VM/profiling/JIT, cache, unsupported paths,
-unknown externs and inspection boundaries. K4.6C records the guarantees in
-[Specialized Effects v0.1](../specs/specialized-effects-v0.1.md). K4.7A audited
-differential coverage, K4.7B added focused source/file, enforcement, determinism,
-inspection and VM/JIT regressions, and K4.7C established independent-process
-canonical violation parity. The gate verdict is **PASS** for supported
-same-build, same-host/target paths. Native `std.*` calls remain outside JIT v1:
-the calling entry is rejected and the interpreter executes the native call. This
-is documented as an unsupported execution path, not an enforcement bypass; no
-runtime guard or JIT architecture change was introduced.
-
-K4.8 is documentation-only. It specifies the proposed v0.2 `fs`/`net` families,
-parameterless operation denials, cross-family `io.read`/`io.write` categories,
-`net.send`/`net.receive` and conservative future-operation matching in
-[Specialized Effects v0.2](../specs/specialized-effects-v0.2.md). K4.9A–E now
-implement and review that vocabulary and enforcement under `semantics-7`.
-Family/category predicates use canonical classification without expanding to
-operation lists; unknown membership under the relevant parent is potential.
-Resource-qualified generic I/O remains operation-scoped. The typed specialized
-error retains targets, resources, spans, classifications and witnesses, but E6
-still reports a generic count and omits specialized intent from successful CLI
-inspection. Module/file compilation explicitly rejects annotated extend methods
-because it does not lower those methods; source compilation binds supported
-methods normally. No runtime guard, sandbox or connection identity is added.
-K4.10's [final gate and ledger](../K4_SPECIALIZED_EFFECTS_GATE.md) is PASS for
-this bounded static surface: three production-classified operation identities,
-ten taxonomy-only identities, with rejected and limited execution paths stated
-separately. The gate adds one missing verifier precondition for malformed
-parameter/local layouts, returning the existing error before indexing. This
-completes the specialized-effects track while retaining all documented native,
-source-provenance, tooling, runtime-guard and sandbox limitations.
+## 4. Approved target: Tempra Script VM-first runtime
 
 ```text
-tempra-tir
-    ↑ dependency
-tempra-effects
-    ↑ dependency
-tempra-driver
-    ↑ consumed by
-tempra-analysis / tempra-lsp / tempra-cli
+source
+  → lexer / parser
+  → typed HIR + module resolution + generic specialization
+  → comptime resolution / branch pruning
+  → ownership/value-use analysis [planned, v0.4]
+  → verified TIR + retained semantic facts
+  → effects and capability contract enforcement
+  → ownership-valid bytecode lowering and verification [planned gate]
+  → Tempra Script stack VM
+       → controlled runtime errors / stdlib native boundary
 ```
 
-Source-span mapping remains deferred: TIR has no reliable source mapping.
-E2 retains structural locations, edges, origins and witnesses. The future
-bridge belongs in a lowering side table from `TirLocation` to module identity
-plus existing `Span`; debug names are not a source map. HIR-only operations,
-cache-hit facts and unresolved E1 native/cloning mappings remain coverage gaps.
+The ownership stages above are **requirements, not claims of deployed passes**. The exact TIR representation of ownership/loans is deliberately unspecified by the memory specification: it may involve explicit IR instructions, metadata, proven type states or combinations. The key requirement is that no backend can reinterpret an illegal source program as legal.
 
-## Semantic analysis order
+**Promotion rule:** replace HIR as the default runtime only after supported-language parity, error/Result parity, capability enforcement, memory and ownership gates, stdlib behavior, cache migration, diagnostics and release tests have passed. There must be no silent HIR fallback that bypasses safety enforcement. Maintaining a narrow TIR micro-interpreter for tests does not count as shipping a second general scripting runtime.
 
-The [roadmap](../roadmap.md) is authoritative for sequencing, statuses,
-dependencies and acceptance gates. The layered model is:
+### Tempra Script memory contract
+
+- Values have **value semantics**. An implementation may optimize a duplicable copy into a physical move only without altering observable independence.
+- Nonduplicable resources (e.g., owned OS handles when introduced) cannot be implicitly copied; a semantic transfer requires an explicit `consume` contract.
+- `ref` is read-only shared access; `inout` is exclusive mutation. Borrow provenance and early release/last use must be checked, including branches, loops and calls.
+- `Slice(T)` is a **non-owning, read-only** view; writable access requires `inout Slice(T)`. A slice cannot keep its owner alive.
+- Acyclic owning graphs are the safe-language requirement. Tempra Script's intended owning representation is **ARC NO-CYCLE**, not tracing GC, general object references or unconstrained strong ownership cycles.
+- Cleanup must account for normal return, `Result` error paths, early exit, task cancellation and resource shutdown without double-destruction.
+- `fn[ref x]`, `fn[inout x]`, `fn[consume x]` and recursive `fn[self]` preserve explicit capture semantics; recursive closure implementation may not introduce a strong cycle.
+- Borrowed references/slices may not escape owners or cross `.await()` where a dynamic loan would remain live. Safe actor handles and lifetime semantics remain **deferred after the NO-CYCLE gate**.
+
+The existing Rust `Rc`/interior-mutability representations are **implementation details**, not evidence that v0.4 is already enforced. This distinction is fundamental to the migration.
+
+## 5. Compiler layers and ownership of responsibilities
+
+| Layer | Main crates (inspected `main`) | Responsibilities |
+| --- | --- | --- |
+| Frontend | `tempra-lexer`, `tempra-parser`, `tempra-ast` | Tokens, syntax, source spans and AST |
+| Semantic lowering | `tempra-hir`, `tempra-typeck` | Typed HIR, generic/interface resolution, value-use/type checking and future borrow contracts |
+| Current comptime | `tempra-interpreter` via `comptime.rs` | K1 canonical evaluated expression/session policy, currently HIR based |
+| TIR | `tempra-tir`, `tempra-tir-lower` | Typed, verifiable control flow and lowering from supported HIR |
+| Effects | `tempra-effects` | Pure verified-TIR analysis; per-function summaries, call graph, witnesses |
+| Orchestration | `tempra-driver` | Compilation inputs, verification/analyze/enforce ordering, cache boundary, module graph |
+| Bytecode | `tempra-bytecode-lower`, `tempra-bytecode` | Instruction selection, encoding, verifier, cache and optimization |
+| Execution | `tempra-vm`, `tempra-runtime`, `tempra-native` | Stack VM, checked common arithmetic and native stdlib boundary |
+| Validation only | `tempra-tir-interp` | Small TIR executable subset for differential/IR tests |
+| Tools | `tempra-cli`, `tempra-analysis`, `tempra-diagnostics`, `tempra-lsp` | User and editor interfaces to compiler facts |
+
+A crate's presence is not proof of completeness, runtime eligibility or a stable API. See [Repository File Map](FILE_MAP.md) for verified source paths and planned scaffolds.
+
+## 6. Effect and capability analysis architecture
+
+E1–E6 and the K4 specialized-effects track are documented as implemented on a **bounded TIR-supported surface**, not as universal coverage for every HIR construct.
 
 ```text
-Semantic: E → R → M → M5 → C → V
-Backend:  A (native AOT, first-class; Cranelift initial)
-Optimization: O after M ownership facts; P after K5/K6 measurements
-Research: NR (standalone experimental RC-free; never blocks A)
-Conditional: U
+verified TIR
+  → direct instruction / classified native extern requirements
+  → call graph
+  → transitive fixed-point capability summaries + witnesses
+  → bind source contracts to concrete specialized function IDs
+  → broad denial checks, then specialized refinements
+  → either diagnostics or permission to lower verified code
 ```
 
-C (pluggable actor concurrency) implementation requires the M5 memory
-stabilization gate. A may progress incrementally and does not wait for O, NR or
-P. Capability summaries become reusable inputs for ownership checks,
-concurrency-boundary checks, verified functions, diagnostics, and tooling.
+The seven internal capabilities are `Alloc`, `Panic`, `Io`, `Process`, `Spawn`, `Nondeterminism` and reserved `Unsafe`. The six public broad `@deny` spellings exclude unsafe. `@pure` means deny `io`, `process`, `spawn`, `nondeterminism` **only**; it does not prohibit allocation or panics. K4 specialized families/categories and operation-resource denials refine but never relax broad restrictions.
 
-## Capability summary architecture
+Facts are based on *semantic runtime operations*, not on the spelling of a `const` or `make` instruction alone. Checked integer arithmetic can conservatively require `Panic`. Memory v0.4 makes `@deny(alloc)` a conservative backend-independent promise; possible runtime copy/compaction cannot be declared allocation-free solely because an optimizer might remove it.
 
-E1 derives direct capability requirements by scanning verified TIR instructions and called extern functions. A call graph built from `TirInstr::Call` propagates requirements to callers through reverse internal edges until a fixed point.
+- Source span provenance belongs to frontend/lowering side tables; structural TIR locations alone do not identify reliable source spans.
+- Production native registry and effect classification must remain consistent. The current native boundary is **not** a filesystem sandbox or a runtime capability guard.
+- Unknown called extern classifications fail closed on paths requiring sound analysis; unused extern declarations do not necessarily invalidate a module.
+- A cache hit uses a trusted compiler fingerprint rather than reconstructing all semantic facts; new semantic obligations require explicit invalidation.
+- `@unsafe` and `@verified` are deferred; neither can be invented as an implemented escape hatch for source-level memory rules.
 
-Provenance must retain:
+## 7. Comptime authority and migration
 
-- the function containing a direct requirement;
-- its `TirBlockId` and instruction index;
-- each callsite along a transitive path;
-- deterministic ordering and tie-breaking.
+K1's current canonical `comptime` kernel is the HIR interpreter behind a compiler-facing facade. K1 provides module-aware lookup on supported typechecking paths, deterministic evaluator-progress fuel, an eight-active-frame default call-depth guard and rejection of host-observable I/O/process/external operations. The compiler materializes supported values and prunes unselected `if comptime`/`comptime match` branches **before runtime TIR emission**.
 
-Unknown extern declarations are harmless until called. A call to an extern without a known classification is an analysis error, including calls in non-entry TIR functions.
+**Target:** run compile-time evaluation on Tempra Script's VM without weakening these semantics. The VM cannot assume a complete runtime TIR module already exists: compile-time expressions are needed during type checking, generic specialization and branch selection. The migration therefore needs a separate eligible evaluation representation/session, explicit effect restrictions, controlled diagnostics, a fuel-accounting equivalence or approved revision, and memory/ownership parity. Executing the same apparent source program at runtime is not by itself sufficient proof.
 
-`Alloc` classification follows semantic runtime allocation in the current representation. TIR string constants and construction instructions are not normative allocation sites without runtime confirmation. `Panic` is a conservative may-fail capability in E1, including checked `Int64` arithmetic; it is not a runtime error hierarchy. Later verified analysis may prove individual operations safe.
+This is a **planned migration**. The current HIR comptime kernel must not be removed until the replacement passes its explicit gate. The revised [Comptime Specification](../COMPTIME_SPEC.md) governs the detailed contract.
 
-## Memory architecture boundary
+## 8. Reproducibility, cache and standard-library discovery
 
-The current HIR runtime uses reference-counted and interior-mutable Rust representations for arrays, slices, closures, and captured cells. In particular, recursive closure `self` currently uses a strong cell-to-closure link. The runtime implementation therefore must not be cited as proof that safe Tempra already prevents ownership cycles.
+- K2's accepted bounded reproducibility contract establishes **Level 3** on the supported same-build, same-host/target bytecode surface; not cross-platform byte identity.
+- `TirFunctionId` identifies a compilation-local semantic function, **not** the index of a vector element. Bytecode lowering emits deterministic function order and resolves calls through an explicit identity-to-index map.
+- Standard-library location is supplied through `CompilationConfig`: explicit root or default discovered relative to the **compiler executable**, not by searching process cwd. The resolver receives the resolved root and maintains module identities.
+- The documented remote baseline uses bytecode cache format `2`, magic `TMBC` and semantic trust revision `semantics-8`. Those numbers are **historical checked baseline**, not a reserved version for the future v0.4 ownership implementation.
+- A cache artifact stores verified bytecode without TIR/effect facts. A new safety analysis must change its trust boundary rather than reinterpret old artifacts as ownership-certified.
 
-The roadmap's layered dependency model applies. E is implemented for the
-current surface; K3 runtime parity remains IN PROGRESS for currently executable
-surfaces, K4 is DONE, and K5/K6 are PLANNED. K keeps comptime semantics canonical
-and backend-independent. Its audit selected the existing HIR interpreter kernel,
-and K1.1 provides the canonical session facade without making a runtime backend
-authoritative. R is future Result/value-use hardening, not an effect. Phase M
-follows R and will define which ownership graphs are legal across value
-semantics, `let`, `var`, `ref`, `inout`, `consume`, closure captures, recursive
-`self`, structs, enums, and escaping values. M ends at the M5 stabilization gate,
-which actor concurrency (C) implementation must pass. Native AOT is first-class
-milestone A, with Cranelift as the initial backend, and may progress
-incrementally; O, NR and P are need-based work, not prerequisites for C or A. U
-remains conditional.
+## 9. Runtime failure, FFI and module boundaries
 
-ARC optimization is a separate later concern. Escape analysis, stack promotion, uniqueness, reuse, and retain/release elimination belong to O and are not prerequisites for C or A. Preparatory ownership and escape analyses may begin during M.
+Arithmetic overflow/division, bounds, unsupported instructions, source Result propagation and verifier errors must follow controlled Tempra contracts. Typechecking and capability failures occur **before** execution on enforcing paths. No host panic, native trap or fallback execution may substitute for an expected typed diagnostic.
 
-E1–E6 complete the currently meaningful capability-contract and tooling core
-while retaining known coverage gaps. E6 projects existing facts through
-`tempra effects` and immutable driver types; it does not add analysis. K1's
-audit/spec and K1.1–K1.7 implementation are complete, including the semantic
-cache revision that prevents older artifacts from bypassing current comptime
-guarantees. K2.1's audit, K2.2's specialization ordering/function-ID integrity,
-K2.3's explicit standard-library discovery input, K2.4's deterministic
-interface/field iteration and K2.5's cross-process byte-for-byte gate are complete.
-Level 3 applies to the supported same-build, same-host/target bytecode surface;
-cross-machine Level 4 reproducibility is not claimed. Runtime parity remains in
-K3 for the currently executable HIR, TIR, VM and JIT surfaces; Wasm and AOT join
-runtime parity when those backends exist.
-Responsiveness measurements are planned in K5–K6; K4 is DONE. Compile
-latency is monitored during development; deep latency and incremental-build
-optimization belongs to P. The richer future TIR Graph still requires later
-ownership and actor facts.
+Extern calls cross a trusted Rust/native boundary. FFI safety policy from Memory v0.4 applies to future external pointer/resource APIs; raw unsafe authorization and detailed cross-language ABI are deferred. Temporary buffers used for external/async I/O must respect owner lifetime, stable address needs, cancellation and exclusive mutation.
 
-U — Unsafe Boundary is DEFERRED / CONDITIONAL standalone work at the end of the roadmap.
-The trigger is the first real source operation requiring authorization to preserve
-memory/type invariants; none is intentionally exposed today. Future local audited
-islands must not automatically contaminate callers or waive deny/pure contracts.
-The [historical E5 audit](../E1_CAPABILITY_ANALYSIS.md) records native signature,
-the now-resolved comptime bodyless-dispatch gap, and internal JIT API debts
-separately from unsafe authorization.
+The module system retains qualified module identity; compiled specializations and diagnostics must not depend on hash iteration. Imports, source paths and explicit stdlib roots affect reproducibility as described in the module and cache specifications.
 
-## Major crate responsibilities
+## 10. Tempra Native LLVM AOT and other targets
 
-- `tempra-lexer`, `tempra-parser`, `tempra-ast`: surface syntax and AST construction.
-- `tempra-hir`: normalized semantic representation and AST lowering.
-- `tempra-typeck`: type checking, specialization facts, narrowing, interfaces, and pattern analysis.
-- `tempra-driver`: module loading and orchestration of current execution and checking paths.
-- `tempra-runtime`: shared host-safe runtime contracts, including checked `Int64` arithmetic.
-- `tempra-interpreter`: default checked-HIR runtime.
-- `tempra-tir`, `tempra-tir-lower`, `tempra-tir-interp`: typed backend-facing IR, lowering, verification, and focused interpretation tests.
-- `tempra-bytecode`, `tempra-bytecode-lower`, `tempra-vm`: experimental bytecode path.
-- `tempra-native` and `std/`: native implementations and Tempra extern declarations for the current standard library.
-- `tempra-diagnostics`: structured diagnostic data and rendering support.
-- `tempra-analysis`, `tempra-lsp`: editor-facing semantic analysis and LSP behavior.
-- `tempra-jit-cranelift`: opt-in JIT experiment over eligible bytecode functions.
-- `tempra-effects`: pure TIR capability analysis, summaries, call edges, structured errors and deterministic provenance; E2 integration is owned by `tempra-driver`.
+**Tempra Native target:** native AOT code generation through LLVM after Tempra Script's scripting maturity and required semantic gates. The AOT backend must consume the same type, ownership, borrowing, effect and cleanup contracts. **Zero GC/ARC is an architectural optimization/research objective, not a proven property of the backend**. A safe and correct implementation may need fallback management or a narrower proven subset until its absence of runtime reference counting is demonstrated.
 
-## Public semantic terminology
+A dedicated Wasm/WASI code-generation path is separate and remains incomplete in the inspected baseline; Wasm hosting and Wasm backend emission are not interchangeable. Neither target is an Tempra Script scripting release prerequisite. There is **no planned Cranelift-based AOT backend** and **no planned JIT**.
 
-- **checked:** normal safe Tempra behavior, implicit and without a mode flag;
-- **verified:** future stronger local proof through `@verified`;
-- **unsafe:** future explicit low-level boundary through `@unsafe`.
+The legacy JIT and native backend scaffold have been removed from the workspace, VM, driver, CLI and CI. Historical design notes remain archived; the retirement change requires its own build and test validation.
 
-There is no current Spark mode, global `--checked`, or global `--verified` design.
+## 11. Semantic milestones and release gates
 
-See the [roadmap](../roadmap.md), [pipeline](PIPELINE.md), [TIR specification](../TIR_SPEC.md), and [capability contract specification](../specs/effects-v0.1.md) for the corresponding details.
+The roadmap's phase identities must not be silently renumbered:
+
+| Track | Meaning | Boundary |
+| --- | --- | --- |
+| E / K4 | Capability/specialized-effect enforcement | Implemented for documented bounded verified-TIR surface; known tooling and native gaps |
+| K1 / K2 | Comptime HIR authority and reproducible specialization/compilation | Historical implementation gates completed on their stated surfaces |
+| K3 | Runtime parity | In progress in inspected documentation; no whole-language certificate |
+| K5 / K6 | Phase timings, latency baselines and regression budgets | Measurement and budgets; exact active-branch status to be refreshed |
+| R | Result/value-use hardening | Partial implementation reported; separate from a formal R proof |
+| M / M5 | Acyclic ownership and memory stability | **Mandatory gate** before safe actor concurrency C |
+| C | Structured concurrency and actors | Deferred until M5; actor handles later after NO-CYCLE |
+| A | Tempra Native native AOT | Future LLVM backend; no Cranelift commitment |
+| O / P | Ownership-informed optimizations / deeper performance work | Separate from memory correctness |
+| U / V | Conditional unsafe boundary / future verification constructs | Not implemented as general user escapes |
+
+The Tempra Script release plan additionally requires representative default-VM scripts, stdlib usability, CLI/distribution smoke tests, controlled diagnostics, performance evidence and developer tooling. See [Tempra Script release gates](../roadmap/release-gates.md).
+
+## 12. Required evidence before declaring this architecture implemented
+
+1. Compare paths and crate APIs against the **actual feature branch** and record the commit SHA.
+2. Run a supported-surface HIR/VM differential matrix including errors, `Result`, patterns, closures, module imports, CLI entrypoints and stdlib boundaries.
+3. Establish ownership compiler errors and runtime cleanup for the complete v0.4 conformance matrix; do not infer them from `Rc` internals or stack verification.
+4. Validate broad/specialized effects with fresh build, cache hit/miss, profile mode and unsupported-path denial.
+5. Prove that older cache revisions cannot skip changed semantics; retain K2's determinism tests.
+6. Gate `comptime` migration independently, including fuel, effect policy, specialization and values with ownership obligations.
+7. Keep the retired JIT and Cranelift paths absent; verify the dependency/CI/CLI gate.
+8. Update [Pipeline](PIPELINE.md), [File Map](FILE_MAP.md), [VM Coverage](../VM_COVERAGE.md) and roadmap statuses only with collected test evidence.
+
+**Architectural invariant:** one language memory model, one supported scripting runtime, verified semantic boundaries and independently validated backends.

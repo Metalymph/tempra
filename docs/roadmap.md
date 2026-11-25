@@ -17,25 +17,25 @@ This section governs **forward-looking product sequencing** while retaining
 the historical E/K/R/M/C/A milestone records below. Historical milestones
 remain referenced by their original canonical IDs. See
 [milestone migration](roadmap/migration.md), [status](roadmap/status.md)
-and [Ergal plan](roadmap/ergal.md).
+and [Tempra Script plan](roadmap/script.md).
 
-**Product gates:** S1 **Ergal scripting achievement** (stack VM runtime,
+**Product gates:** S1 **Tempra Script scripting achievement** (stack VM runtime,
 language, stdlib, CLI, cache, distribution foundation) → S2 **Astro Tone
 website/documentation** → S3 **formatter/linter/LSP/MCP and agent support**
-→ S4 **Ergal v1.0-alpha/beta**. S2 and S3 may overlap S1, but S3 and the
+→ S4 **Tempra Script v1.0-alpha/beta**. S2 and S3 may overlap S1, but S3 and the
 [release gates](roadmap/release-gates.md) **must** pass before alpha.
 Comparisons include **Python, JavaScript and TypeScript**, using pinned
 CPython/Node.js/Bun versions and transparent TypeScript build accounting.
 
-**After scripting maturity:** LLVM-backed Nimonic AOT, then self-hosting.
-The experimental Cranelift JIT is frozen after Result implementation work.
-No embedded Wasm engine is part of the Ergal deliverable. The historical
+**After scripting maturity:** LLVM-backed Tempra Native AOT, then self-hosting.
+The historical Cranelift JIT is designated for complete code removal; it is not part of either target distribution.
+No embedded Wasm engine is part of the Tempra Script deliverable. The historical
 default HIR interpreter remains the actual current path until stack VM
 parity justifies promotion; future comptime authority changes also require
 an explicit parity gate.
 
-**Implementation closure:** local R1–R3 Result/provenance tests are reported
-green for the supported scope, including path-sensitive and loop regressions.
+**Implementation closure:** R1–R3 Result/provenance changes were merged with a
+user-reported green workspace gate for the supported scope.
 This is **not** the closure of canonical R4/R5 or a formal verification
 claim. The first draft obligation is R.PROOF. The phrase "K4 Result"
 used in discussions maps to canonical R;
@@ -50,12 +50,57 @@ substitute for tooling, scripting or distribution gates.
 **Immediate technical milestone:** canonical **K5 Phase Timings and Latency
 Baseline**, followed by K6 regression budgets. K5 is empirical measurement,
 not a mathematical proof; see [K5 protocol](roadmap/k5.md).
+## PRE-AOT integration decision (2026-11-10)
+
+The forward **single non-AOT stack VM** decision, Script 2.0, shared
+REPL/Shell profile, TIR Graph and measured external-dependency audit are
+specified in [the integrated PRE-AOT roadmap](roadmap/pre-aot.md).
+Detailed gates: [VM/comptime migration](roadmap/unified-vm.md),
+[Script 2.0](roadmap/script-2.md), [REPL/Shell](roadmap/repl-shell.md),
+[TIR Graph](roadmap/tir-graph.md), and
+[dependency reduction](roadmap/dependency-reduction.md).
+
+**Identity clarification:** canonical K5.1 is the benchmark protocol and K5.2
+is compiler phase timing; neither is Result Hardening (canonical **R**).
+R4/R5 and `R.PROOF` remain independent open work. Preserve K5/K6 and M/M5
+historical IDs. M5 gates actor-concurrency implementation; O is optional
+optimization rather than a safety substitute.
+
+**Forward target supersedes historical backend planning:** no JIT, LLVM as the
+first Tempra Native native codegen, and LLVM/Wasm evaluation later. Historical
+Cranelift AOT or dedicated Wasm proposals below remain recorded history,
+not the active product decision. The old default HIR interpreter and TIR interpreter remain present and may only
+be retired after documented VM parity, comptime-staging and regression gates.
+The JIT is removed independently of those gates. `@deny`/`@pure`, Result,
+ownership and deterministic diagnostics must never be bypassed during migration.
+
+S1–S4 product gates still apply: formatter/linter/LSP/MCP must be usable
+before alpha. Full PRE-AOT Tempra Script distribution additionally requires the
+specified unified VM, `comptime` parity, Shell profile/job-control scope,
+TIR Graph, stdlib, portability and measured startup/footprint. S2 Astro Tone
+site and AI packs include reproducible Python/JavaScript/TypeScript examples.
+
+## Definitive distribution decision (2026-11-16)
+
+- **Tempra Script:** verified stack-bytecode VM, scripting-first toolchain,
+  planned default after parity and release gates.
+- **Tempra Native:** LLVM AOT, future native distribution after Script maturity.
+- **One language:** identical source syntax, effects, Memory & Ownership v0.4,
+  controlled errors and accepted behavior; no dialect split.
+- **Legacy engines:** historical HIR remains a bounded parity/comptime reference;
+  JIT and Cranelift are designated for full code removal, not backend promotion.
+
+The phase logs below may retain explicit historical JIT names. They describe
+experiments, **not** a supported future runtime or current safety certification.
+Naming alone does not change the bytecode trust revision or source semantics.
+
 ## Current implementation baseline
 
 Tempra has a working lexer, parser, AST-to-HIR lowering, typechecker, HIR
 interpreter, module graph, native standard-library bridge, and language tooling.
-TIR, TIR verification, bytecode lowering, the bytecode VM, and the Cranelift JIT
-exist as experimental paths with a smaller supported language subset. MIR,
+TIR, TIR verification, bytecode lowering and the bytecode VM exist with a
+smaller supported language subset. The historical Cranelift JIT is retired;
+it is not a target runtime. MIR,
 general-purpose optimization, native AOT, and dedicated Wasm emission remain
 incomplete scaffolds.
 
@@ -105,7 +150,7 @@ K/TIR stability
 M ownership facts
   → A2 ownership-aware code generation
 A1 + A2
-  → A3 Cranelift-based AOT
+  → A3 LLVM-based AOT (Tempra Native, after Script maturity)
   → A4 linking
   → A5 standalone executables
   → A6 backend parity
@@ -151,8 +196,8 @@ The following constraints are explicit:
 | K4 | Specialized-effect track | Implemented | Compiler history |
 | K5 | Phase timings and latency baseline | Planned | Compiler responsiveness |
 | K6 | Regression budgets and responsiveness gate | Planned | Compiler responsiveness |
-| R | Result / value-use hardening | Planned | Semantic prerequisite |
-| M | Memory model, acyclic ownership and stabilization | Planned; M5 is the gate | Semantic prerequisite |
+| R | Result / value-use hardening | R1–R3 bounded gate reported; R4/R5 open | Semantic prerequisite |
+| M | Memory model, acyclic ownership and stabilization | v0.4 specified; implementation/M5 gate open | Semantic prerequisite |
 | C | Pluggable actor concurrency | Planned; blocked by M5 | Semantic prerequisite |
 | V | Verified functions (`@verified`) | Planned | Semantic proof |
 | A | Native AOT | Planned; existing scaffold only | First-class backend milestone |
@@ -443,11 +488,11 @@ K4 specialized-effect track.
 
 ## Future language milestones
 
-### R — Result / Value-Use Hardening (PLANNED)
+### R — Result / Value-Use Hardening (R1–R3 BOUNDED GATE; R4/R5 OPEN)
 
-R is the next semantic language milestone after E. It may be specified alongside
-active K compiler work; K5/K6 responsiveness does not block R. R is not an
-implemented rule, a capability, or an effect. Result-returning values must not be silently discarded:
+R follows E semantically. R1–R3 have a reported implementation gate on a
+bounded tested surface; R4 error compatibility, R5 parity and R.PROOF remain
+open. K5/K6 responsiveness does not block R. R is not a capability or an effect. Result-returning values must not be silently discarded:
 handling uses `?`, `match`, return/propagation, or another meaningful use. The
 future treatment of `let _ = result_returning_call()` must not create an
 accidental escape hatch; this does not add wildcard-binding syntax today. An
@@ -484,7 +529,7 @@ constructs; stored obligations transfer rather than discharge; no new syntax; no
 generalized affine semantics; diagnostics and execution-path parity; existing
 programs that already handle Results remain valid.
 
-### M — Memory Model (PLANNED)
+### M — Memory Model (v0.4 SPECIFIED; IMPLEMENTATION AND M5 OPEN)
 
 Memory correctness is distinct from memory optimization. The intended invariant
 is:
@@ -492,10 +537,11 @@ is:
 > Safe Tempra must not permit construction of strong ownership cycles that
 > prevent ARC from reclaiming otherwise unreachable values.
 
-The dedicated Phase M specification must define this rule across value semantics,
-`let`/`var`, `ref`, `inout`, `consume`, explicit closure captures, recursive
-closure `self`, structs, enums, and escaping values. The current interpreter
-representation does not yet establish this guarantee.
+[Memory & Ownership v0.4](Tempra_Memory_Ownership_v0.4.md) now defines
+this invariant across values, `let`/`var`, `ref`/`inout`, explicit `consume`,
+closure captures and `self`, aggregates, borrowed views, nonduplicable resources
+and escaping values. The historical interpreter representation does **not**
+certify that the approved semantics are already implemented.
 
 Phase M must keep the source language substantially simpler than Rust lifetimes
 or Pony reference capabilities. Formal acyclic ownership rules follow R in the
@@ -590,53 +636,49 @@ baseline native AOT output.
 
 ## Backend and optimization milestones
 
-### A — Native AOT (PLANNED, FIRST-CLASS MILESTONE)
+### A — Tempra Native LLVM AOT (PLANNED, AFTER SCRIPT MATURITY)
 
-Native AOT output is a core product goal, not merely a parallel engineering
-track. It is milestone A. Current `tempra-backend-cranelift`, MIR, linker and
-related crates are scaffolds or prototypes; they do not constitute a working AOT
-pipeline.
+Tempra Native is a planned LLVM ahead-of-time distribution of the **same**
+language as Tempra Script. It is a core product goal after the scripting
+runtime and its required semantic gates have matured. Historical Cranelift
+backend crates are scaffolds designated for removal, **not** a future AOT
+implementation route. No JIT or Cranelift fallback is a release strategy.
 
-A may progress incrementally as its actual prerequisites become available. A1
-can begin once K/TIR semantics are stable enough for the ABI. A2 waits only for
-the M ownership facts it consumes. A does not wait for O, NR, P or V to finish.
+A1–A7 retain their canonical identities. Their implementation status does not
+change merely because the chosen backend has changed.
 
-1. **A1 — Native ABI and runtime contract.** Define value representation, calling
-   convention, scalar/aggregate layout, `Result`, `Option`, strings, arrays,
-   slices, structs, enums, tuples, closures, panic/error status, the extern/native
-   bridge and standard-library ABI assumptions.
-   Gate: ABI specification and conformance tests; no implicit host ABI
-   assumptions.
-2. **A2 — Ownership-aware code generation.** Consume M ownership, alias and
-   escape facts. Insert ARC and deterministic cleanup where required. Preserve
-   closure, capture, `ref`/`inout`/`consume` and escape rules.
-   Gate: generated code preserves M guarantees; no strong cycles introduced;
-   behavior matches HIR/VM on the supported surface.
-3. **A3 — Cranelift-based AOT.** Build whole-program AOT lowering on the existing
-   Cranelift direction. No JIT hotness, VM execution or interpreter dependency.
-   Gate: supported programs compile ahead of time and execute without the VM.
-   LLVM may remain a later optional backend; it is not a substitute for the
-   current Cranelift direction and is not required to complete A.
-4. **A4 — Linking.** Emit objects, connect the runtime and startup path, integrate
-   platform linkers and report link failures as controlled diagnostics.
-   Gate: linked artifacts for the supported target set; reproducible link inputs.
-5. **A5 — Standalone executables.** Produce native executables that run without
-   the Tempra VM, JIT or source tree, with defined entry, arguments, exit status,
-   standard I/O and runtime support.
-   Gate: representative scripts and applications run as standalone binaries.
-6. **A6 — Backend parity.** Match results, errors, diagnostics, capability
-   enforcement and memory behavior across HIR, TIR, VM, JIT and A. Annotated
-   programs must be enforced or explicitly rejected; AOT must not bypass
-   contracts. Record the unsupported surface explicitly.
-   Gate: differential parity suite and same-build, same-host/target
-   reproducibility expectations.
-7. **A7 — Performance and binary size.** Establish measurable baselines and
-   realistic budgets for runtime performance, AOT compilation latency, startup
-   time, binary size and regressions. Evaluate these dimensions independently.
-   AOT is not required to outperform VM/JIT in every benchmark. Profiling-driven
-   changes must not alter semantics.
-   Gate: recorded baselines on named reference environments; independent budget
-   decisions; no unexplained regression without an explicit trade-off.
+1. **A1 — Native ABI and runtime contract.** Define scalar/aggregate layout,
+   calling conventions, `Result`/`Option`, string/array/slice/struct/enum/tuple
+   representation, closure conventions, error status, FFI/native integration and
+   startup. Gate: documented ABI plus executable conformance tests.
+2. **A2 — Ownership-aware code generation.** Consume the normative
+   [Memory & Ownership v0.4](Tempra_Memory_Ownership_v0.4.md) semantics and
+   verified TIR ownership/effect summaries. Preserve semantic copies,
+   `consume`, `ref`, `inout`, no-cycle/cleanup and nonduplicable resources.
+   An RC-free native implementation is an **unproven performance goal**, not a
+   prerequisite that may weaken correctness. Gate: no invalid ownership or
+   cleanup behavior on the declared surface.
+3. **A3 — LLVM AOT backend.** Lower verified typed IR to LLVM ahead of time.
+   Emit native object code or a linkable artifact without VM, JIT, or interpreter
+   execution. Gate: representative native code executes correctly on named targets.
+4. **A4 — Linking.** Produce complete native artifacts with startup/runtime,
+   platform linkers and controlled failures. Gate: repeatable links on the
+   supported target matrix.
+5. **A5 — Standalone executables.** Programs run without a Tempra VM, source
+   checkout or JIT. Define arguments, exit codes, standard I/O and distribution
+   support. Gate: standalone smoke and functional tests.
+6. **A6 — Backend parity.** Tempra Script and Tempra Native must agree on
+   observable values, checked errors, effects, ownership and cleanup for a
+   **declared identical supported subset**. Unsupported annotations/features
+   must be rejected, not bypassed. Gate: reproducible differential tests.
+7. **A7 — Performance and binary size.** Record native runtime performance,
+   compile/link time, startup, peak RSS and artifact size under K5/K6-style
+   named environments. No blanket faster-than-VM claim is implied.
+
+**Schedule:** Native can have preliminary design/prototype work, but product
+release and parity commitments follow Script maturity and memory safety gates.
+Advanced O/NR optimizations are optional; they never replace the baseline
+correctness or runtime fallback policy.
 
 ### O — Advanced Memory Optimization (PLANNED)
 
@@ -738,15 +780,15 @@ ahead of the trigger.
 
 ## Parallel engineering tracks
 
-Native AOT is milestone A above, not merely a parallel-track entry. The remaining
+Tempra Native LLVM AOT is milestone A above, not merely a parallel-track entry. The remaining
 engineering tracks are explicit and do not weaken the semantic dependency chain.
 
 | Track | Status | Current position and gate |
 | --- | --- | --- |
-| Native AOT | Milestone A (first-class) | Incomplete scaffolds only; see A1–A7. Core product goal. |
-| Wasm / WASI | Planned | `tempra-backend-wasm` and host crates are scaffolds; no complete emission. Dedicated Wasm must not route through Cranelift. Future gate: Wasm/WASI output, hosting, contract enforcement, memory parity. |
-| VM | Experimental | Bytecode VM with a narrower subset; requires `main`; cache exists. K3 parity remains in progress. Gate: full supported-subset parity. |
-| JIT | Experimental | Opt-in Cranelift for eligible `Int64` functions and a read-only heap subset; native `std.*` calls fall back. Not a production backend. Gate: documented subset parity. |
+| Tempra Native | Milestone A (LLVM AOT) | Future distribution after Script maturity; source tree contains legacy scaffolds, not a working LLVM backend. |
+| Wasm / WASI | Planned | Dedicated Wasm emission and host crates remain scaffolds; Wasm does not depend on the discarded Cranelift backend. Gate: verified output, hosting, contracts and memory parity. |
+| Tempra Script | Experimental VM path; future default | Bytecode VM with a narrower documented subset and cache; K3 parity and default-promotion gate remain open. |
+| Legacy JIT removal | Retirement change | Crates, features, dependencies, CLI paths and CI jobs removed; validate workspace and cross-platform CI. Historical notes remain archived. |
 | Type-system hardening | Planned / ongoing | Multiple valid interfaces for one associated type still use deterministic first-match (K2.4 debt); module/file `extend` lowering is limited. Gate: specified selection rules, diagnostics and tests. |
 | Comptime specialization | Planned | Full HIR specialization and runtime erasure are not implemented; `SpecializationKey` names remain temporary. Gate: deterministic specialization, runtime erasure, code-size control. |
 | Standard library | Implemented MVP, expanding | `std.fs`, `std.path`, `std.strings`, `std.io`; coverage differs between HIR and VM. Gate: stable APIs, backend parity, tests. |
@@ -763,7 +805,7 @@ engineering tracks are explicit and do not weaken the semantic dependency chain.
 | M5 | Acyclic strong ownership, reclamation, deterministic cleanup, sound `ref`/`inout`/`consume` and capture behavior, ownership-aware TIR, cross-backend parity. Blocks C implementation. |
 | C | Structured task/group/actor/channel/select semantics, isolation, cancellation, no `ref`/`inout` crossing, no data races, pluggable domains and backend parity. |
 | V | Proof obligations discharged or explicitly represented; no proof language; separate from effects; backend parity. |
-| A | Native ABI, ownership-aware codegen, Cranelift AOT, linking, standalone executables, backend parity, independent performance/size baselines. |
+| A | Native ABI, ownership-aware LLVM AOT, linking, standalone executables, Script/Native semantic parity, independent performance/size baselines. |
 | O | Semantics and M guarantees preserved; measured optimization; no miscompilation; RC-free not implied. |
 | NR | Evidence-based feasibility with fallback ARC; no language guarantee; no gate on A. |
 | P | Cold/incremental/edit-to-compile budgets, cache correctness, specialization control, memory/artifact budgets, no semantic change. |
@@ -814,7 +856,7 @@ The following decisions remain open and are not committed by this roadmap:
 - C transfer rules for owned values, share-safe values and concurrency handles.
 - A target matrix, ABI details, linking model, runtime startup strategy, and
   whether A supports C concurrency in its first release.
-- Whether LLVM is ever adopted as an optional AOT backend after Cranelift.
+- LLVM target matrix, lowering/ABI choices and backend compilation strategy; the LLVM backend decision itself is finalized.
 - NR region model, fallback ARC boundaries, adoption granularity and feasibility
   thresholds.
 - O4/NR analysis ownership and the boundary between preparatory work and research.

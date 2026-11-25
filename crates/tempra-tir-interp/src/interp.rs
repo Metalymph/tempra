@@ -26,6 +26,12 @@ pub fn interpret_function(
         .find(|f| f.name == function_name)
         .ok_or_else(|| TirInterpError::UnknownFunction(function_name.to_string()))?;
 
+    if func.inout_params.iter().any(|access| *access) {
+        return Err(TirInterpError::UnsupportedInstr(
+            "inout entry requires the ownership-aware VM".into(),
+        ));
+    }
+
     if func.params.len() != args.len() {
         return Err(TirInterpError::WrongArity {
             name: function_name.to_string(),
@@ -239,6 +245,12 @@ impl<'a> Frame<'a> {
                     .iter()
                     .find(|f| f.id == *func_id)
                     .ok_or_else(|| TirInterpError::UnknownFunction(format!("@{}", func_id.0)))?;
+
+                if callee.inout_params.iter().any(|access| *access) {
+                    return Err(TirInterpError::UnsupportedInstr(
+                        "inout calls require the ownership-aware VM".into(),
+                    ));
+                }
 
                 let mut call_args = Vec::new();
                 for arg_id in arg_ids {

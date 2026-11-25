@@ -1,21 +1,36 @@
-# Ergal release gates
+# Tempra Script — Release Gates
 
-No Ergal v1.0-alpha/beta release should be dispatched without a coherent
-editing-to-execution workflow and installable distribution.
+**Revision:** 2026-11-16. These gates define the promised supported surface; they do not certify that any release has shipped.
 
-| Gate | Alpha | Beta |
+No Tempra Script v1.0 alpha/beta should be dispatched without a coherent install-to-edit-to-execution workflow, deterministic diagnostics and reproducible evidence. Tempra Native is a later LLVM AOT distribution, not a dependency of this release.
+
+| Gate | Alpha requirement | Beta expansion |
 | --- | --- | --- |
-| Runtime | VM default for declared scripting subset; no hidden interpreter fallback | Broader VM parity and regression budgets |
-| Stdlib | File/path/process/strings/collections + documented failure model | Broader scripting APIs, cross-platform behavior verified |
-| CLI / REPL | run/check/repl/diagnostics and exit codes | Cache/package reliability and compatibility |
-| Formatter | Deterministic, idempotent, comments and --check | Stress and editor edit consistency |
-| Linter | Stable baseline rules, actionable diagnostics | Configuration and broader rule coverage |
-| LSP | Completion/hover/definition/references/rename/formatting/diagnostics | Performance and larger workspace robustness |
-| MCP / agents | Compiler-backed resources/tools, controlled execution, supported schemas | Agent evals and docs retrieval quality baselines |
-| Distribution | macOS/Linux/Windows install smoke + relocatable stdlib | Repeatable packaging and upgrade path |
-| Documentation | Language + stdlib reference, recipes, examples tested | Compatibility policy and migration docs |
-| Benchmarks | K5 environment and raw data published | K6 budgets; Python/Node/Bun/TS comparisons reproducible |
-| Proof | Scope/status disclosed, no false formal claims | Further `.PROOF` milestones where feasible; not a substitute for release tests |
+| **Runtime** | Verified stack VM is default for declared scripting subset; no hidden HIR fallback after errors | Broader end-to-end parity and stronger regression evidence |
+| **Memory** | Explicitly disclose current Memory v0.4 conformance limits; reject unsupported ownership forms | Expand M/M5 evidence; no unearned cycle/borrow safety claims |
+| **Effects / Result** | Enforced on shipped supported execution paths; no silent Result discard | Broader native/stdlib, module and diagnostic coverage |
+| **Stdlib** | File/path/process/strings/collections and documented failures on the declared subset | More APIs; tested cross-platform behavior |
+| **CLI / REPL** | `run`, `check`, `repl`, exit codes, diagnostics | Cache, package and interactive-state reliability |
+| **Formatter** | Deterministic, idempotent, comments and `--check` | Stress tests, LSP edit agreement |
+| **Linter** | Stable baseline diagnostics and actionable fixes | Configurable and expanded rules |
+| **LSP** | Completion, hover, definitions, references, rename, formatting, diagnostics | Large-workspace and latency hardening |
+| **MCP / agent workflow** | Compiler-backed inspection and controlled actions | Agent evaluation and retrieval-quality baselines |
+| **Distribution** | macOS/Linux/Windows install/uninstall smoke; relocatable stdlib | Repeatable packaging and upgrade path |
+| **Documentation** | Language/stdlib references and executable examples | Migration and compatibility policy |
+| **Benchmarks** | K5 environment and raw measurements published | K6 budgets; reproducible CPython/Node/Bun/TypeScript comparisons |
+| **Formal evidence** | Claimed scope and open obligations disclosed | Additional model/implementation-linked work where feasible |
 
-Do not label *experimental* crates as production-grade because they
-exist in Cargo workspace. Release notes must list unsupported surfaces.
+## Mandatory nonclaims
+
+- Existing crate scaffolds do **not** prove an AOT compiler, a general VM-supported source surface, actor safety or an RC-free memory implementation.
+- The VM may not silently hide missing support behind a second runtime.
+- `comptime` VM migration must pass semantic and deterministic-budget parity before replacing the historical kernel.
+- Bytecode caches are untrusted until version/fingerprint/source checks and verification; the format is not a stable ABI.
+- No historical JIT/Cranelift feature may be used as a Tempra Script product promise.
+- Any release states its exact supported syntax, libraries, targets and test/build commit.
+
+## Evidence to retain
+
+Record exact commit, working-tree state, toolchain, target OS/architecture, native and bytecode versions, commands, fixtures, stdout/stderr/exit behavior, relevant environment, failures, and benchmarks with raw samples. A release is blocked by an unverified hard gate even if the marketing site or editor tooling is ready.
+
+See the [Script plan](script.md), [roadmap status](status.md), [K5 protocol](k5.md), and [VM coverage](../VM_COVERAGE.md).

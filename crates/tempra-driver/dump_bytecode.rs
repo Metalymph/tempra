@@ -1,6 +1,5 @@
 use std::fs;
 use tempfile::tempdir;
-use tempra_vm::profile::VmOptions;
 
 fn main() {
     let dir = tempdir().unwrap();
@@ -13,8 +12,6 @@ pub fn main() -> Int64 {
 }
 ";
     fs::write(&main_path, main_src).unwrap();
-    let mut options = VmOptions::default();
-    options.jit_enabled = false;
     // Get the module
     let hash = [0u8; 32];
     let fingerprint = "fingerprint".to_string();

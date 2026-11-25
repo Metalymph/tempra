@@ -501,29 +501,6 @@ fn profile_summary_contains_hot_function() {
             backedge_count: 9999,
             is_hot: true,
             top_opcodes: vec![("Jump", 9999)],
-            jit_compile_attempts: 0,
-            jit_compile_successes: 0,
-            jit_compile_failures: 0,
-            jit_runtime_calls: 0,
-            jit_fallback_calls: 0,
-            jit_rejection_reason: None,
-            jit_compile_time_ns: 0,
-            jit_total_native_time_ns: 0,
-            jit_rejected_count: 0,
-            jit_heap_runtime_calls: 0,
-            jit_heap_helper_calls: 0,
-            jit_heap_handle_allocations: 0,
-            jit_heap_context_objects: 0,
-            jit_heap_fallbacks: 0,
-            jit_heap_errors: 0,
-            jit_heap_handle_cache_hits: 0,
-            jit_heap_handle_cache_misses: 0,
-            jit_skipped_below_threshold: 0,
-            jit_skipped_too_small: 0,
-            jit_skipped_retry_limit: 0,
-            jit_permanent_rejections: 0,
-            jit_retryable_failures: 0,
-            jit_is_permanently_rejected: false,
         }],
         global_opcode_counts: vec![0; BYTECODE_OPCODE_COUNT],
     };
@@ -600,6 +577,14 @@ fn opcode_ids_are_unique_and_within_bounds() {
         BytecodeInstr::GetField(tempra_bytecode::constant::ConstId(0)),
         BytecodeInstr::SetField(tempra_bytecode::constant::ConstId(0)),
         BytecodeInstr::ArrayPush,
+        BytecodeInstr::BorrowLocal(LocalId(0)),
+        BytecodeInstr::MakeClosureRef(FunctionId(0), 0),
+        BytecodeInstr::BorrowLocalMut(LocalId(0)),
+        BytecodeInstr::MakeClosureInout(FunctionId(0), 0),
+        BytecodeInstr::BorrowSliceMut(LocalId(0)),
+        BytecodeInstr::InoutSliceGet(LocalId(0)),
+        BytecodeInstr::InoutSliceSet(LocalId(0)),
+        BytecodeInstr::InoutSliceLen(LocalId(0)),
         BytecodeInstr::AddI64LL(
             tempra_bytecode::function::LocalId(0),
             tempra_bytecode::function::LocalId(0),
@@ -608,6 +593,8 @@ fn opcode_ids_are_unique_and_within_bounds() {
             tempra_bytecode::function::LocalId(0),
             tempra_bytecode::constant::ConstId(0),
         ),
+        BytecodeInstr::MakeClosure(FunctionId(0), 0),
+        BytecodeInstr::CallClosure(tempra_bytecode::function::SignatureId(0), 0),
     ];
 
     for instr in samples {
@@ -832,5 +819,634 @@ fn vm_float64_comparisons_and_negation_preserve_ieee_754() {
             );
         }
         other => panic!("expected Float64, got {other:?}"),
+    }
+}
+
+#[test]
+fn vm_closure_no_captures_dispatches_and_returns() {
+    use tempra_bytecode::function::BytecodeSignature;
+
+    let mut module = BytecodeModule::new();
+    let signature = module.intern_signature(BytecodeSignature {
+        params: vec![BytecodeType::Int64],
+        ret: BytecodeType::Int64,
+    });
+    let one = module.add_constant(BytecodeConstant::Int64(1));
+    let ten = module.add_constant(BytecodeConstant::Int64(10));
+
+    let mut lambda = BytecodeFunction::new(
+        "lambda".into(),
+        vec![BytecodeType::Int64],
+        BytecodeType::Int64,
+    );
+    lambda.locals = lambda.params.clone();
+    lambda.max_stack = 2;
+    lambda.code = vec![
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::ConstI64(one),
+        BytecodeInstr::AddI64,
+        BytecodeInstr::Return,
+    ];
+    let target = module.add_function(lambda);
+
+    let mut main = BytecodeFunction::new("main".into(), vec![], BytecodeType::Int64);
+    main.max_stack = 2;
+    main.code = vec![
+        BytecodeInstr::MakeClosure(target, 0),
+        BytecodeInstr::ConstI64(ten),
+        BytecodeInstr::CallClosure(signature, 1),
+        BytecodeInstr::Return,
+    ];
+    module.add_function(main);
+
+    assert_eq!(
+        run_function(&module, "main", vec![]).unwrap(),
+        VmValue::Int64(11)
+    );
+}
+
+#[test]
+fn vm_closure_capture_order_and_repeat_calls() {
+    use tempra_bytecode::function::BytecodeSignature;
+
+    let mut module = BytecodeModule::new();
+    let signature = module.intern_signature(BytecodeSignature {
+        params: vec![BytecodeType::Int64],
+        ret: BytecodeType::Int64,
+    });
+    let seven = module.add_constant(BytecodeConstant::Int64(7));
+    let ten = module.add_constant(BytecodeConstant::Int64(10));
+
+    let mut lambda = BytecodeFunction::new(
+        "lambda".into(),
+        vec![BytecodeType::Int64, BytecodeType::Int64],
+        BytecodeType::Int64,
+    );
+    lambda.locals = lambda.params.clone();
+    lambda.max_stack = 2;
+    lambda.code = vec![
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::LoadLocal(LocalId(1)),
+        BytecodeInstr::AddI64,
+        BytecodeInstr::Return,
+    ];
+    let target = module.add_function(lambda);
+
+    let mut main = BytecodeFunction::new("main".into(), vec![], BytecodeType::Int64);
+    main.locals = vec![BytecodeType::Callable(signature)];
+    main.max_stack = 3;
+    main.code = vec![
+        BytecodeInstr::ConstI64(seven),
+        BytecodeInstr::MakeClosure(target, 1),
+        BytecodeInstr::StoreLocal(LocalId(0)),
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::ConstI64(ten),
+        BytecodeInstr::CallClosure(signature, 1),
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::ConstI64(ten),
+        BytecodeInstr::CallClosure(signature, 1),
+        BytecodeInstr::AddI64,
+        BytecodeInstr::Return,
+    ];
+    module.add_function(main);
+
+    assert_eq!(
+        run_function(&module, "main", vec![]).unwrap(),
+        VmValue::Int64(34)
+    );
+}
+
+#[test]
+fn vm_closure_as_function_parameter() {
+    use tempra_bytecode::function::BytecodeSignature;
+
+    let mut module = BytecodeModule::new();
+    let signature = module.intern_signature(BytecodeSignature {
+        params: vec![BytecodeType::Int64],
+        ret: BytecodeType::Int64,
+    });
+    let one = module.add_constant(BytecodeConstant::Int64(1));
+    let ten = module.add_constant(BytecodeConstant::Int64(10));
+
+    let mut lambda = BytecodeFunction::new(
+        "lambda".into(),
+        vec![BytecodeType::Int64],
+        BytecodeType::Int64,
+    );
+    lambda.locals = lambda.params.clone();
+    lambda.max_stack = 2;
+    lambda.code = vec![
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::ConstI64(one),
+        BytecodeInstr::AddI64,
+        BytecodeInstr::Return,
+    ];
+    let lambda_id = module.add_function(lambda);
+
+    let mut apply = BytecodeFunction::new(
+        "apply".into(),
+        vec![BytecodeType::Callable(signature), BytecodeType::Int64],
+        BytecodeType::Int64,
+    );
+    apply.locals = apply.params.clone();
+    apply.max_stack = 2;
+    apply.code = vec![
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::LoadLocal(LocalId(1)),
+        BytecodeInstr::CallClosure(signature, 1),
+        BytecodeInstr::Return,
+    ];
+    let apply_id = module.add_function(apply);
+
+    let mut main = BytecodeFunction::new("main".into(), vec![], BytecodeType::Int64);
+    main.max_stack = 2;
+    main.code = vec![
+        BytecodeInstr::MakeClosure(lambda_id, 0),
+        BytecodeInstr::ConstI64(ten),
+        BytecodeInstr::Call(apply_id, 2),
+        BytecodeInstr::Return,
+    ];
+    module.add_function(main);
+
+    assert_eq!(
+        run_function(&module, "main", vec![]).unwrap(),
+        VmValue::Int64(11)
+    );
+}
+
+// VM Parity 2B.1e.2: MakeClosureRef retains a frame-local handle, not a
+// captured copy. Loading the hidden capture materializes its current value.
+#[test]
+fn vm_ref_borrow_slot_identity_and_late_dereference() {
+    use tempra_bytecode::function::BytecodeSignature;
+    let mut module = BytecodeModule::new();
+    let signature = module.intern_signature(BytecodeSignature {
+        params: vec![BytecodeType::Int64],
+        ret: BytecodeType::Int64,
+    });
+    let ten = module.add_constant(BytecodeConstant::Int64(10));
+    let five = module.add_constant(BytecodeConstant::Int64(5));
+
+    let mut lambda = BytecodeFunction::new(
+        "lambda".into(),
+        vec![BytecodeType::Int64, BytecodeType::Int64],
+        BytecodeType::Int64,
+    );
+    lambda.locals = vec![BytecodeType::Int64; 3];
+    lambda.max_stack = 2;
+    lambda.code = vec![
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::StoreLocal(LocalId(2)),
+        BytecodeInstr::LoadLocal(LocalId(2)),
+        BytecodeInstr::LoadLocal(LocalId(1)),
+        BytecodeInstr::AddI64,
+        BytecodeInstr::Return,
+    ];
+    let target = module.add_function(lambda);
+
+    let mut main = BytecodeFunction::new("main".into(), vec![], BytecodeType::Int64);
+    main.locals = vec![BytecodeType::Int64, BytecodeType::Callable(signature)];
+    main.max_stack = 2;
+    main.code = vec![
+        BytecodeInstr::ConstI64(ten),
+        BytecodeInstr::StoreLocal(LocalId(0)),
+        BytecodeInstr::BorrowLocal(LocalId(0)),
+        BytecodeInstr::MakeClosureRef(target, 1),
+        BytecodeInstr::StoreLocal(LocalId(1)),
+        BytecodeInstr::LoadLocal(LocalId(1)),
+        BytecodeInstr::ConstI64(five),
+        BytecodeInstr::CallClosure(signature, 1),
+        BytecodeInstr::Return,
+    ];
+    module.add_function(main);
+
+    tempra_bytecode::verify::verify_module(&module).unwrap();
+    assert_eq!(
+        run_function(&module, "main", vec![]).unwrap(),
+        VmValue::Int64(15)
+    );
+    // Borrowed closures now survive encode -> verified decode -> VM execution.
+    let encoded = tempra_bytecode::serialize::encode_module(&module).unwrap();
+    let decoded = tempra_bytecode::serialize::decode_and_verify_artifact(&encoded).unwrap();
+    assert_eq!(
+        run_function(&decoded.module, "main", vec![]).unwrap(),
+        VmValue::Int64(15)
+    );
+}
+
+#[test]
+fn vm_borrowed_callback_cross_frame_transitive_and_cached() {
+    use tempra_bytecode::function::BytecodeSignature;
+    use tempra_bytecode::serialize::{decode_and_verify_artifact, encode_module};
+    let mut module = BytecodeModule::new();
+    let signature = module.intern_signature(BytecodeSignature {
+        params: vec![],
+        ret: BytecodeType::Int64,
+    });
+    let base = module.add_constant(BytecodeConstant::Int64(7));
+    let mut lambda = BytecodeFunction::new(
+        "capture".into(),
+        vec![BytecodeType::Int64],
+        BytecodeType::Int64,
+    );
+    lambda.locals = lambda.params.clone();
+    lambda.max_stack = 1;
+    lambda.code = vec![BytecodeInstr::LoadLocal(LocalId(0)), BytecodeInstr::Return];
+    let capture_id = module.add_function(lambda);
+    let mut invoke = BytecodeFunction::new(
+        "invoke".into(),
+        vec![BytecodeType::Callable(signature)],
+        BytecodeType::Int64,
+    );
+    invoke.locals = invoke.params.clone();
+    invoke.max_stack = 1;
+    invoke.code = vec![
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::CallClosure(signature, 0),
+        BytecodeInstr::Return,
+    ];
+    let invoke_id = module.add_function(invoke);
+    let mut twice = BytecodeFunction::new(
+        "twice".into(),
+        vec![BytecodeType::Callable(signature)],
+        BytecodeType::Int64,
+    );
+    twice.locals = twice.params.clone();
+    twice.max_stack = 2;
+    twice.code = vec![
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::Call(invoke_id, 1),
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::Call(invoke_id, 1),
+        BytecodeInstr::AddI64,
+        BytecodeInstr::Return,
+    ];
+    let twice_id = module.add_function(twice);
+    let mut main = BytecodeFunction::new("main".into(), vec![], BytecodeType::Int64);
+    main.locals = vec![BytecodeType::Int64, BytecodeType::Callable(signature)];
+    main.max_stack = 1;
+    main.code = vec![
+        BytecodeInstr::ConstI64(base),
+        BytecodeInstr::StoreLocal(LocalId(0)),
+        BytecodeInstr::BorrowLocal(LocalId(0)),
+        BytecodeInstr::MakeClosureRef(capture_id, 1),
+        BytecodeInstr::StoreLocal(LocalId(1)),
+        BytecodeInstr::LoadLocal(LocalId(1)),
+        BytecodeInstr::Call(twice_id, 1),
+        BytecodeInstr::Return,
+    ];
+    module.add_function(main);
+    tempra_bytecode::verify::verify_module(&module).unwrap();
+    let bytes = encode_module(&module).unwrap();
+    let decoded = decode_and_verify_artifact(&bytes).unwrap();
+    assert_eq!(
+        run_function(&module, "main", vec![]).unwrap(),
+        VmValue::Int64(14)
+    );
+    assert_eq!(
+        run_function(&decoded.module, "main", vec![]).unwrap(),
+        VmValue::Int64(14)
+    );
+}
+
+// 2B.5.A: the hidden mutable capture stores through its owner's frame slot.
+#[test]
+fn vm_inout_capture_updates_owner_across_calls_and_cache_roundtrip() {
+    use tempra_bytecode::function::BytecodeSignature;
+    use tempra_bytecode::serialize::{decode_and_verify_artifact, encode_module};
+    let mut module = BytecodeModule::new();
+    let signature = module.intern_signature(BytecodeSignature {
+        params: vec![BytecodeType::Int64],
+        ret: BytecodeType::Unit,
+    });
+    let ten = module.add_constant(BytecodeConstant::Int64(10));
+    let five = module.add_constant(BytecodeConstant::Int64(5));
+    let two = module.add_constant(BytecodeConstant::Int64(2));
+    let mut child = BytecodeFunction::new(
+        "mutate_capture".into(),
+        vec![BytecodeType::Int64, BytecodeType::Int64],
+        BytecodeType::Unit,
+    );
+    child.inout_params = vec![true, false];
+    child.locals = child.params.clone();
+    child.max_stack = 2;
+    child.code = vec![
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::LoadLocal(LocalId(1)),
+        BytecodeInstr::AddI64,
+        BytecodeInstr::StoreLocal(LocalId(0)),
+        BytecodeInstr::Return,
+    ];
+    let child_id = module.add_function(child);
+    let mut main = BytecodeFunction::new("main".into(), vec![], BytecodeType::Int64);
+    main.locals = vec![BytecodeType::Int64, BytecodeType::Callable(signature)];
+    main.max_stack = 2;
+    main.code = vec![
+        BytecodeInstr::ConstI64(ten),
+        BytecodeInstr::StoreLocal(LocalId(0)),
+        BytecodeInstr::BorrowLocalMut(LocalId(0)),
+        BytecodeInstr::MakeClosureInout(child_id, 1),
+        BytecodeInstr::StoreLocal(LocalId(1)),
+        BytecodeInstr::LoadLocal(LocalId(1)),
+        BytecodeInstr::ConstI64(five),
+        BytecodeInstr::CallClosure(signature, 1),
+        BytecodeInstr::LoadLocal(LocalId(1)),
+        BytecodeInstr::ConstI64(two),
+        BytecodeInstr::CallClosure(signature, 1),
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::Return,
+    ];
+    module.add_function(main);
+    tempra_bytecode::verify::verify_module(&module).unwrap();
+    assert_eq!(
+        run_function(&module, "main", vec![]).unwrap(),
+        VmValue::Int64(17)
+    );
+    let bytes = encode_module(&module).unwrap();
+    let restored = decode_and_verify_artifact(&bytes).unwrap();
+    assert_eq!(
+        run_function(&restored.module, "main", vec![]).unwrap(),
+        VmValue::Int64(17)
+    );
+}
+
+/// The inout signature is part of the bytecode contract and is checked again
+/// after deserializing an untrusted module.
+fn vm_inout_scalar_module() -> BytecodeModule {
+    let mut module = BytecodeModule::new();
+    let ten = module.add_constant(BytecodeConstant::Int64(10));
+    let one = module.add_constant(BytecodeConstant::Int64(1));
+    let mut inc = BytecodeFunction::new(
+        "increment".into(),
+        vec![BytecodeType::Int64],
+        BytecodeType::Unit,
+    );
+    inc.inout_params = vec![true];
+    inc.locals = inc.params.clone();
+    inc.max_stack = 2;
+    inc.code = vec![
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::ConstI64(one),
+        BytecodeInstr::AddI64,
+        BytecodeInstr::StoreLocal(LocalId(0)),
+        BytecodeInstr::Return,
+    ];
+    let inc_id = module.add_function(inc);
+    let mut main = BytecodeFunction::new("main".into(), vec![], BytecodeType::Int64);
+    main.locals = vec![BytecodeType::Int64];
+    main.max_stack = 2;
+    main.code = vec![
+        BytecodeInstr::ConstI64(ten),
+        BytecodeInstr::StoreLocal(LocalId(0)),
+        BytecodeInstr::BorrowLocalMut(LocalId(0)),
+        BytecodeInstr::Call(inc_id, 1),
+        BytecodeInstr::BorrowLocalMut(LocalId(0)),
+        BytecodeInstr::Call(inc_id, 1),
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::Return,
+    ];
+    module.add_function(main);
+    module
+}
+
+#[test]
+fn vm_inout_scalar_parameters_preserve_owner_and_release_between_calls() {
+    use tempra_bytecode::serialize::{decode_and_verify_artifact, encode_module};
+    let module = vm_inout_scalar_module();
+    tempra_bytecode::verify::verify_module(&module).unwrap();
+    assert_eq!(
+        run_function(&module, "main", vec![]).unwrap(),
+        VmValue::Int64(12)
+    );
+    let bytes = encode_module(&module).unwrap();
+    let restored = decode_and_verify_artifact(&bytes).unwrap();
+    assert_eq!(restored.module.functions[0].inout_params, vec![true]);
+    assert_eq!(
+        run_function(&restored.module, "main", vec![]).unwrap(),
+        VmValue::Int64(12)
+    );
+}
+
+#[test]
+fn vm_inout_verifier_rejects_by_value_for_exclusive_parameter() {
+    let mut module = vm_inout_scalar_module();
+    let main = module.functions.last_mut().unwrap();
+    main.code[2] = BytecodeInstr::LoadLocal(LocalId(0));
+    assert!(tempra_bytecode::verify::verify_module(&module).is_err());
+}
+
+#[test]
+fn vm_inout_verifier_rejects_exclusive_handle_for_by_value_parameter() {
+    let mut module = vm_inout_scalar_module();
+    module.functions[0].inout_params = vec![false];
+    assert!(tempra_bytecode::verify::verify_module(&module).is_err());
+}
+
+#[test]
+fn vm_inout_verifier_rejects_invalid_signature_metadata() {
+    let mut module = vm_inout_scalar_module();
+    module.functions[0].inout_params.clear();
+    assert!(tempra_bytecode::verify::verify_module(&module).is_err());
+}
+
+#[test]
+fn vm_inout_verifier_rejects_invalid_empty_function_metadata() {
+    let mut module = BytecodeModule::new();
+    let mut empty = BytecodeFunction::new(
+        "empty".into(),
+        vec![BytecodeType::Int64],
+        BytecodeType::Unit,
+    );
+    empty.inout_params.clear();
+    module.add_function(empty);
+    assert!(tempra_bytecode::verify::verify_module(&module).is_err());
+}
+
+#[test]
+fn vm_inout_verifier_rejects_owner_read_while_exclusive_argument_pending() {
+    let mut module = vm_inout_scalar_module();
+    let main = module.functions.last_mut().unwrap();
+    // Before calling increment, an ordinary read of counter would alias the
+    // still-pending exclusive borrow.
+    main.code.insert(3, BytecodeInstr::LoadLocal(LocalId(0)));
+    main.code.insert(4, BytecodeInstr::Pop);
+    assert!(tempra_bytecode::verify::verify_module(&module).is_err());
+}
+
+/// Bytecode-level fixture: exclusive subview mutations detach owning copies,
+/// and sequential calls release the loan without releasing the owner.
+fn vm_exclusive_slice_module() -> BytecodeModule {
+    let mut module = BytecodeModule::new();
+    let ten = module.add_constant(BytecodeConstant::Int64(10));
+    let twenty = module.add_constant(BytecodeConstant::Int64(20));
+    let thirty = module.add_constant(BytecodeConstant::Int64(30));
+    let zero = module.add_constant(BytecodeConstant::Int64(0));
+    let one = module.add_constant(BytecodeConstant::Int64(1));
+    let three = module.add_constant(BytecodeConstant::Int64(3));
+    let ninety_nine = module.add_constant(BytecodeConstant::Int64(99));
+    let mut mutate = BytecodeFunction::new(
+        "mutate".into(),
+        vec![BytecodeType::ExclusiveSlice],
+        BytecodeType::Unit,
+    );
+    mutate.inout_params = vec![true];
+    mutate.locals = mutate.params.clone();
+    mutate.max_stack = 2;
+    mutate.code = vec![
+        BytecodeInstr::ConstI64(zero),
+        BytecodeInstr::ConstI64(ninety_nine),
+        BytecodeInstr::InoutSliceSet(LocalId(0)),
+        BytecodeInstr::Return,
+    ];
+    let target = module.add_function(mutate);
+    let mut main = BytecodeFunction::new("main".into(), vec![], BytecodeType::Int64);
+    main.locals = vec![BytecodeType::Any, BytecodeType::Any];
+    main.max_stack = 3;
+    main.code = vec![
+        BytecodeInstr::ConstI64(ten),
+        BytecodeInstr::ConstI64(twenty),
+        BytecodeInstr::ConstI64(thirty),
+        BytecodeInstr::MakeArray(3),
+        BytecodeInstr::StoreLocal(LocalId(0)),
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::StoreLocal(LocalId(1)),
+        BytecodeInstr::ConstI64(one),
+        BytecodeInstr::ConstI64(three),
+        BytecodeInstr::BorrowSliceMut(LocalId(0)),
+        BytecodeInstr::Call(target, 1),
+        BytecodeInstr::ConstI64(one),
+        BytecodeInstr::ConstI64(three),
+        BytecodeInstr::BorrowSliceMut(LocalId(0)),
+        BytecodeInstr::Call(target, 1),
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::ConstI64(one),
+        BytecodeInstr::GetIndex,
+        BytecodeInstr::LoadLocal(LocalId(1)),
+        BytecodeInstr::ConstI64(one),
+        BytecodeInstr::GetIndex,
+        BytecodeInstr::AddI64,
+        BytecodeInstr::Return,
+    ];
+    module.add_function(main);
+    module
+}
+
+#[test]
+fn vm_exclusive_slice_roundtrip_and_copy_isolation() {
+    use tempra_bytecode::serialize::{decode_and_verify_artifact, encode_module};
+    let module = vm_exclusive_slice_module();
+    tempra_bytecode::verify::verify_module(&module).unwrap();
+    assert_eq!(
+        run_function(&module, "main", vec![]).unwrap(),
+        VmValue::Int64(119)
+    );
+    let restored = decode_and_verify_artifact(&encode_module(&module).unwrap()).unwrap();
+    assert_eq!(
+        restored.module.functions[0].params,
+        vec![BytecodeType::ExclusiveSlice]
+    );
+    assert_eq!(
+        run_function(&restored.module, "main", vec![]).unwrap(),
+        VmValue::Int64(119)
+    );
+}
+
+#[test]
+fn vm_exclusive_slice_rejects_raw_handle_duplication() {
+    let mut module = vm_exclusive_slice_module();
+    module.functions[1].code.insert(10, BytecodeInstr::Dup);
+    module.functions[1].code.insert(11, BytecodeInstr::Pop);
+    assert!(tempra_bytecode::verify::verify_module(&module).is_err());
+}
+
+#[test]
+fn vm_exclusive_slice_rejects_descriptor_materialization() {
+    let mut module = vm_exclusive_slice_module();
+    module.functions[0]
+        .code
+        .insert(0, BytecodeInstr::LoadLocal(LocalId(0)));
+    module.functions[0].code.insert(1, BytecodeInstr::Pop);
+    assert!(tempra_bytecode::verify::verify_module(&module).is_err());
+}
+
+#[test]
+fn vm_exclusive_slice_rejects_ordinary_slice_argument() {
+    let mut module = vm_exclusive_slice_module();
+    module.functions[1]
+        .code
+        .insert(7, BytecodeInstr::LoadLocal(LocalId(0)));
+    module.functions[1].code[10] = BytecodeInstr::Slice;
+    assert!(tempra_bytecode::verify::verify_module(&module).is_err());
+}
+
+#[test]
+fn vm_exclusive_slice_rejects_missing_inout_flag() {
+    let mut module = vm_exclusive_slice_module();
+    module.functions[0].inout_params[0] = false;
+    assert!(tempra_bytecode::verify::verify_module(&module).is_err());
+}
+
+#[test]
+fn vm_exclusive_slice_rejects_simultaneous_owner_borrows() {
+    let mut module = vm_exclusive_slice_module();
+    let main = &mut module.functions[1];
+    let second_borrow = main.code[7..10].to_vec();
+    main.code.splice(10..10, second_borrow);
+    main.code.insert(13, BytecodeInstr::Call(FunctionId(0), 1));
+    assert!(tempra_bytecode::verify::verify_module(&module).is_err());
+}
+
+#[test]
+fn a1_vm_inout_read_is_a_value_snapshot() {
+    let mut module = vm_inout_scalar_module();
+    let twenty = module.add_constant(BytecodeConstant::Int64(20));
+    let child = &mut module.functions[0];
+    child.ret = BytecodeType::Int64;
+    child.locals.push(BytecodeType::Int64);
+    child.code = vec![
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::StoreLocal(LocalId(1)),
+        BytecodeInstr::ConstI64(twenty),
+        BytecodeInstr::StoreLocal(LocalId(0)),
+        BytecodeInstr::LoadLocal(LocalId(1)),
+        BytecodeInstr::Return,
+    ];
+    let main = &mut module.functions[1];
+    main.code.drain(4..6);
+    main.code.insert(5, BytecodeInstr::AddI64);
+    tempra_bytecode::verify::verify_module(&module).unwrap();
+    assert_eq!(
+        run_function(&module, "main", vec![]).unwrap(),
+        VmValue::Int64(30)
+    );
+}
+
+#[test]
+fn a1_verifier_rejects_plain_calls_even_without_any_borrow_opcode() {
+    let mut module = vm_inout_scalar_module();
+    let main = module.functions.last_mut().unwrap();
+    main.code[2] = BytecodeInstr::LoadLocal(LocalId(0));
+    main.code[4] = BytecodeInstr::LoadLocal(LocalId(0));
+    let error = tempra_bytecode::verify::verify_module(&module).unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("violates the verified inout/non-escape contract"));
+    let bytes = tempra_bytecode::serialize::encode_module(&module).unwrap();
+    assert!(tempra_bytecode::serialize::decode_and_verify_artifact(&bytes).is_err());
+}
+
+#[test]
+fn a1_verifier_rejects_pending_exclusive_fused_local_reads() {
+    let module = vm_inout_scalar_module();
+    for read in [
+        BytecodeInstr::AddI64LL(LocalId(0), LocalId(0)),
+        BytecodeInstr::AddI64LC(LocalId(0), tempra_bytecode::constant::ConstId(0)),
+    ] {
+        let mut invalid = module.clone();
+        let main = invalid.functions.last_mut().unwrap();
+        main.code.insert(3, read);
+        main.code.insert(4, BytecodeInstr::Pop);
+        let error = tempra_bytecode::verify::verify_module(&invalid).unwrap_err();
+        assert!(error.to_string().contains("exclusive argument is pending"));
     }
 }

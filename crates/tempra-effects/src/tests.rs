@@ -37,6 +37,7 @@ fn function_with_blocks(id: usize, name: &str, blocks: Vec<TirBlock>) -> TirFunc
         params: Vec::new(),
         return_type: TirType::Unit,
         is_extern: false,
+        inout_params: Vec::new(),
         blocks,
         next_value_id: 0,
         next_block_id: 0,
@@ -52,6 +53,7 @@ fn extern_function(id: usize, name: &str) -> TirFunction {
         params: Vec::new(),
         return_type: TirType::Unit,
         is_extern: true,
+        inout_params: Vec::new(),
         blocks: vec![block(0, Vec::new())],
         next_value_id: 0,
         next_block_id: 0,
@@ -2652,4 +2654,399 @@ fn specialized_witness_prefers_a_shorter_path_to_the_same_origin() {
     assert_eq!(witness.calls.len(), 1);
     assert_eq!(witness.calls[0].callee, TirFunctionId(2));
     assert_eq!(witness.origin.location().function, TirFunctionId(2));
+}
+
+#[test]
+fn closure_local_call_propagates_callee_effects() {
+    let mut main = function(
+        0,
+        "main",
+        vec![
+            TirInstr::MakeClosure(TirValueId(0), TirFunctionId(1), vec![]),
+            TirInstr::Slot(
+                TirSlotId(0),
+                TirType::Function(vec![], Box::new(TirType::Unit)),
+            ),
+            TirInstr::Store(TirSlotId(0), TirValueId(0)),
+            TirInstr::Load(TirValueId(1), TirSlotId(0)),
+            TirInstr::CallClosure(TirValueId(2), TirValueId(1), vec![]),
+        ],
+    );
+    main.return_type = TirType::Unit;
+    let target = function(
+        1,
+        "closure_body",
+        vec![
+            TirInstr::Const(TirValueId(0), TirConst::Int64(10)),
+            TirInstr::Const(TirValueId(1), TirConst::Int64(2)),
+            TirInstr::Div(TirValueId(2), TirValueId(0), TirValueId(1)),
+        ],
+    );
+    let analysis = analyze(&module(vec![main, target])).unwrap();
+    assert!(analysis
+        .summary(TirFunctionId(0))
+        .unwrap()
+        .required
+        .contains(Capability::Panic));
+    assert_eq!(analysis.call_edges().len(), 1);
+    assert_eq!(analysis.call_edges()[0].callee, TirFunctionId(1));
+}
+
+#[test]
+fn closure_unknown_parameter_fails_closed() {
+    let mut main = function(
+        0,
+        "main",
+        vec![TirInstr::CallClosure(TirValueId(1), TirValueId(0), vec![])],
+    );
+    main.params.push((
+        TirValueId(0),
+        TirType::Function(vec![], Box::new(TirType::Unit)),
+    ));
+    let error = analyze(&module(vec![main])).unwrap_err();
+    assert!(matches!(
+        error,
+        CapabilityAnalysisError::UnsupportedIndirectCall {
+            caller: TirFunctionId(0),
+            ..
+        }
+    ));
+}
+
+#[test]
+fn closure_slot_with_multiple_targets_propagates_all_effects() {
+    let call_ty = TirType::Function(vec![], Box::new(TirType::Unit));
+    let main = function(
+        0,
+        "main",
+        vec![
+            TirInstr::Slot(TirSlotId(0), call_ty),
+            TirInstr::MakeClosure(TirValueId(0), TirFunctionId(1), vec![]),
+            TirInstr::MakeClosure(TirValueId(1), TirFunctionId(2), vec![]),
+            TirInstr::Store(TirSlotId(0), TirValueId(0)),
+            TirInstr::Store(TirSlotId(0), TirValueId(1)),
+            TirInstr::Load(TirValueId(2), TirSlotId(0)),
+            TirInstr::CallClosure(TirValueId(3), TirValueId(2), vec![]),
+        ],
+    );
+    let alloc_body = function(1, "alloc_body", vec![string_const(0, "alloc")]);
+    let panic_body = function(
+        2,
+        "panic_body",
+        vec![
+            TirInstr::Const(TirValueId(0), TirConst::Int64(1)),
+            TirInstr::Const(TirValueId(1), TirConst::Int64(2)),
+            TirInstr::Div(TirValueId(2), TirValueId(0), TirValueId(1)),
+        ],
+    );
+    let analysis = analyze(&module(vec![main, panic_body, alloc_body])).unwrap();
+    let required = analysis.summary(TirFunctionId(0)).unwrap().required;
+    assert!(required.contains(Capability::Alloc));
+    assert!(required.contains(Capability::Panic));
+    assert_eq!(analysis.call_edges().len(), 2);
+}
+
+// VM Parity 2B.1f: borrowed closure target propagation.
+
+#[test]
+fn borrowed_closure_effects_propagate_and_account_alloc() {
+    let owner = function(
+        0,
+        "main",
+        vec![
+            TirInstr::Slot(TirSlotId(0), TirType::Int64),
+            TirInstr::Const(TirValueId(0), TirConst::Int64(10)),
+            TirInstr::Store(TirSlotId(0), TirValueId(0)),
+            TirInstr::MakeClosureRef(TirValueId(1), TirFunctionId(1), vec![TirSlotId(0)]),
+            TirInstr::Slot(
+                TirSlotId(1),
+                TirType::Function(vec![], Box::new(TirType::Unit)),
+            ),
+            TirInstr::Store(TirSlotId(1), TirValueId(1)),
+            TirInstr::Load(TirValueId(2), TirSlotId(1)),
+            TirInstr::CallClosure(TirValueId(3), TirValueId(2), vec![]),
+        ],
+    );
+
+    let mut target = function(
+        1,
+        "closure_body",
+        vec![
+            TirInstr::Const(TirValueId(1), TirConst::Int64(2)),
+            TirInstr::Div(TirValueId(2), TirValueId(0), TirValueId(1)),
+        ],
+    );
+    target.params.push((TirValueId(0), TirType::Int64));
+
+    let report = analyze(&module(vec![owner, target])).unwrap();
+    let summary = report.summary(TirFunctionId(0)).unwrap();
+
+    assert!(summary.direct.contains(Capability::Alloc));
+    assert!(summary.required.contains(Capability::Alloc));
+    assert!(summary.required.contains(Capability::Panic));
+
+    assert_eq!(report.call_edges().len(), 1);
+    assert_eq!(report.call_edges()[0].callee, TirFunctionId(1));
+
+    assert!(report
+        .origins_for(TirFunctionId(0))
+        .any(|origin| origin.source == DirectCapabilitySource::BorrowedClosure));
+}
+
+#[test]
+fn borrowed_closure_effects_reject_unknown_target() {
+    let owner = function(
+        0,
+        "main",
+        vec![
+            TirInstr::MakeClosureRef(TirValueId(0), TirFunctionId(777), vec![TirSlotId(0)]),
+            TirInstr::CallClosure(TirValueId(1), TirValueId(0), vec![]),
+        ],
+    );
+
+    let error = analyze(&module(vec![owner])).unwrap_err();
+
+    assert!(matches!(
+        error,
+        CapabilityAnalysisError::UnknownCallTarget {
+            target: TirFunctionId(777),
+            ..
+        }
+    ));
+}
+
+// VM Parity 2B.3: callback targets must retain their capability requirements
+// when passed through typed function parameters. No unknown callback is pure.
+fn callback_type() -> TirType {
+    TirType::Function(vec![], Box::new(TirType::Unit))
+}
+
+fn callback_invoker(id: usize, target: Option<usize>) -> TirFunction {
+    let mut body = vec![TirInstr::CallClosure(TirValueId(1), TirValueId(0), vec![])];
+    if let Some(forward_to) = target {
+        body = vec![TirInstr::Call(
+            TirValueId(1),
+            TirFunctionId(forward_to),
+            vec![TirValueId(0)],
+        )];
+    }
+    let mut function = function(id, "invoke", body);
+    function.params.push((TirValueId(0), callback_type()));
+    function
+}
+
+#[test]
+fn borrowed_callback_parameter_propagates_effects_to_callers() {
+    let main = function(
+        0,
+        "main",
+        vec![
+            TirInstr::Slot(TirSlotId(0), TirType::Int64),
+            int_const(0, 42),
+            TirInstr::Store(TirSlotId(0), TirValueId(0)),
+            TirInstr::MakeClosureRef(TirValueId(1), TirFunctionId(2), vec![TirSlotId(0)]),
+            TirInstr::Call(TirValueId(2), TirFunctionId(1), vec![TirValueId(1)]),
+        ],
+    );
+    let callback = function(
+        2,
+        "callback",
+        vec![
+            int_const(1, 0),
+            TirInstr::Div(TirValueId(2), TirValueId(0), TirValueId(1)),
+        ],
+    );
+    let report = analyze(&module(vec![main, callback_invoker(1, None), callback])).unwrap();
+    let caller = report.summary(TirFunctionId(0)).unwrap();
+    let callee = report.summary(TirFunctionId(1)).unwrap();
+    assert!(caller.required.contains(Capability::Alloc));
+    assert!(caller.required.contains(Capability::Panic));
+    assert!(callee.required.contains(Capability::Panic));
+    assert!(!callee.direct.contains(Capability::Panic));
+    assert!(report
+        .call_edges()
+        .iter()
+        .any(|edge| { edge.caller == TirFunctionId(1) && edge.callee == TirFunctionId(2) }));
+}
+
+#[test]
+fn borrowed_callback_targets_propagate_through_two_direct_calls() {
+    let main = function(
+        0,
+        "main",
+        vec![
+            TirInstr::MakeClosure(TirValueId(0), TirFunctionId(3), vec![]),
+            TirInstr::Call(TirValueId(1), TirFunctionId(1), vec![TirValueId(0)]),
+        ],
+    );
+    let callback = function(3, "callback", vec![string_const(0, "allocated")]);
+    let report = analyze(&module(vec![
+        main,
+        callback_invoker(1, Some(2)),
+        callback_invoker(2, None),
+        callback,
+    ]))
+    .unwrap();
+    for id in [0, 1, 2] {
+        assert!(report
+            .summary(TirFunctionId(id))
+            .unwrap()
+            .required
+            .contains(Capability::Alloc));
+    }
+    assert!(report
+        .call_edges()
+        .iter()
+        .any(|edge| { edge.caller == TirFunctionId(2) && edge.callee == TirFunctionId(3) }));
+}
+
+#[test]
+fn callback_multiple_known_callers_union_all_capabilities() {
+    let main = function(
+        0,
+        "main",
+        vec![
+            TirInstr::MakeClosure(TirValueId(0), TirFunctionId(2), vec![]),
+            TirInstr::Call(TirValueId(1), TirFunctionId(1), vec![TirValueId(0)]),
+            TirInstr::MakeClosure(TirValueId(2), TirFunctionId(3), vec![]),
+            TirInstr::Call(TirValueId(3), TirFunctionId(1), vec![TirValueId(2)]),
+        ],
+    );
+    let alloc_body = function(2, "alloc", vec![string_const(0, "allocated")]);
+    let panic_body = function(
+        3,
+        "panic",
+        vec![
+            int_const(0, 1),
+            int_const(1, 0),
+            TirInstr::Div(TirValueId(2), TirValueId(0), TirValueId(1)),
+        ],
+    );
+    let report = analyze(&module(vec![
+        main,
+        callback_invoker(1, None),
+        alloc_body,
+        panic_body,
+    ]))
+    .unwrap();
+    let required = report.summary(TirFunctionId(1)).unwrap().required;
+    assert!(required.contains(Capability::Alloc));
+    assert!(required.contains(Capability::Panic));
+}
+
+#[test]
+fn callback_known_and_unknown_sources_still_fail_closed() {
+    let known = function(
+        0,
+        "known",
+        vec![
+            TirInstr::MakeClosure(TirValueId(0), TirFunctionId(3), vec![]),
+            TirInstr::Call(TirValueId(1), TirFunctionId(2), vec![TirValueId(0)]),
+        ],
+    );
+    let mut unknown = function(
+        1,
+        "unbound",
+        vec![TirInstr::Call(
+            TirValueId(1),
+            TirFunctionId(2),
+            vec![TirValueId(0)],
+        )],
+    );
+    unknown.params.push((TirValueId(0), callback_type()));
+    let callback = function(3, "callback", vec![]);
+    let error = analyze(&module(vec![
+        known,
+        unknown,
+        callback_invoker(2, None),
+        callback,
+    ]))
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        CapabilityAnalysisError::UnsupportedIndirectCall {
+            caller: TirFunctionId(2),
+            ..
+        }
+    ));
+}
+
+#[test]
+fn callback_unknown_source_propagates_through_forwarding() {
+    let mut main = function(
+        0,
+        "main",
+        vec![TirInstr::Call(
+            TirValueId(1),
+            TirFunctionId(1),
+            vec![TirValueId(0)],
+        )],
+    );
+    main.params.push((TirValueId(0), callback_type()));
+    let error = analyze(&module(vec![
+        main,
+        callback_invoker(1, Some(2)),
+        callback_invoker(2, None),
+    ]))
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        CapabilityAnalysisError::UnsupportedIndirectCall {
+            caller: TirFunctionId(2),
+            ..
+        }
+    ));
+}
+
+#[test]
+fn callback_parameter_can_be_loaded_from_local_slot() {
+    let mut invoker = function(
+        1,
+        "invoke",
+        vec![
+            TirInstr::Slot(TirSlotId(0), callback_type()),
+            TirInstr::Store(TirSlotId(0), TirValueId(0)),
+            TirInstr::Load(TirValueId(1), TirSlotId(0)),
+            TirInstr::CallClosure(TirValueId(2), TirValueId(1), vec![]),
+        ],
+    );
+    invoker.params.push((TirValueId(0), callback_type()));
+    let main = function(
+        0,
+        "main",
+        vec![
+            TirInstr::MakeClosure(TirValueId(0), TirFunctionId(2), vec![]),
+            TirInstr::Call(TirValueId(1), TirFunctionId(1), vec![TirValueId(0)]),
+        ],
+    );
+    let callback = function(2, "callback", vec![string_const(0, "alloc")]);
+    let report = analyze(&module(vec![main, invoker, callback])).unwrap();
+    assert!(report
+        .summary(TirFunctionId(0))
+        .unwrap()
+        .required
+        .contains(Capability::Alloc));
+}
+
+#[test]
+fn extern_callable_parameter_cannot_hide_callback_effects() {
+    let main = function(
+        0,
+        "main",
+        vec![
+            TirInstr::MakeClosure(TirValueId(0), TirFunctionId(2), vec![]),
+            TirInstr::Call(TirValueId(1), TirFunctionId(1), vec![TirValueId(0)]),
+        ],
+    );
+    let mut external = extern_function(1, "std.callback.invoke");
+    external.params.push((TirValueId(0), callback_type()));
+    let callback = function(2, "callback", vec![string_const(0, "allocated")]);
+    let error = analyze(&module(vec![main, external, callback])).unwrap_err();
+    assert!(matches!(
+        error,
+        CapabilityAnalysisError::UnsupportedIndirectCall {
+            caller: TirFunctionId(0),
+            ..
+        }
+    ));
 }

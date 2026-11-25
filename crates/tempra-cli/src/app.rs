@@ -21,17 +21,14 @@ pub enum Commands {
     Repl,
     /// Emit TIR (Tempra Intermediate Representation) for a source file [experimental]
     EmitTir(EmitTirArgs),
+    /// K5.2 phase timings of a fresh single-source VM compilation
+    Timings(TimingsArgs),
 }
 
 #[derive(Parser)]
 pub struct RunArgs {
     #[arg(long, help = "Use the experimental bytecode VM and cache")]
     pub experimental_vm: bool,
-    #[arg(
-        long,
-        help = "Enable experimental Cranelift JIT (requires --experimental-vm)"
-    )]
-    pub experimental_jit: bool,
     pub path: PathBuf,
     pub args: Vec<String>,
 }
@@ -71,5 +68,20 @@ pub struct TestArgs {
 
 #[derive(Parser)]
 pub struct EmitTirArgs {
+    pub path: PathBuf,
+}
+
+#[derive(Parser)]
+pub struct TimingsArgs {
+    /// Emit a versioned JSON report, including partial data on compile errors
+    #[arg(long)]
+    pub json: bool,
+    /// Measure the real single-source cache lookup and compile only on miss.
+    #[arg(long, conflicts_with = "modules")]
+    pub cache: bool,
+    /// Measure fresh file/module-graph compilation (does not use cache).
+    #[arg(long, conflicts_with = "cache")]
+    pub modules: bool,
+    /// File compiled as a single source (imports/module graph not yet supported)
     pub path: PathBuf,
 }

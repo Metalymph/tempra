@@ -28,7 +28,7 @@ fn test_custom_iterator_success() {
 
         fn main() {
             var it = MyIter { count: 10 };
-            let dummy = consume_one[MyIter](it);
+            let dummy = consume_one[MyIter](inout it);
         }
     "#;
     let res = test_source(source);
@@ -121,7 +121,7 @@ fn test_projection_in_return_type() {
         }
         fn main() {
             var it = MyIter {};
-            let dummy = get_item[MyIter](it);
+            let dummy = get_item[MyIter](inout it);
         }
     "#;
     let res = test_source(source);

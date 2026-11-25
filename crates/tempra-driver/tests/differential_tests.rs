@@ -1,4 +1,4 @@
-use tempra_driver::{run_source_hir, run_source_vm};
+use tempra_driver::{check_source, run_source_hir, run_source_vm};
 use tempra_interpreter::value::{OptionValue, Value, ValueResult};
 use tempra_vm::value::VmValue;
 
@@ -82,6 +82,8 @@ fn normalize_vm(val: VmValue) -> NormalizedValue {
         VmValue::UInt8(u) => NormalizedValue::UInt8(u),
         VmValue::Float64(f) => NormalizedValue::Float(f),
         VmValue::String(s) => NormalizedValue::String(s),
+        VmValue::Closure(_) => NormalizedValue::Unsupported("vm_closure".into()),
+        VmValue::BorrowedLocal(_) => NormalizedValue::Unsupported("vm_borrow".into()),
         VmValue::Array(arr) => {
             let inner = arr.iter().map(|v| normalize_vm(v.clone())).collect();
             NormalizedValue::Array(inner)
@@ -440,8 +442,18 @@ fn test_diff_nested_terminating_branches() {
 fn test_diff_array_ops() {
     assert_differential("fn main() -> Int64 { let xs = [1, 2, 3]; return xs[1] }");
     assert_differential("fn main() -> Int64 { let xs = [1, 2, 3]; return xs.len() }");
-    assert_differential(
-        "fn main() -> Slice(Int64) { let xs: [Int64] = [1, 2, 3, 4]; return xs[1..3] }",
+}
+
+#[test]
+fn test_diff_reject_escaping_slice_from_local_owner() {
+    let source = "fn main() -> Slice(Int64) { let xs: [Int64] = [1, 2, 3, 4]; return xs[1..3] }";
+    let err = format!(
+        "{:?}",
+        check_source(source).expect_err("borrowed local slice must not escape")
+    );
+    assert!(
+        err.contains("borrow escape"),
+        "unexpected diagnostic: {err}"
     );
 }
 
@@ -617,22 +629,18 @@ fn test_match_non_exhaustive_error() {
 }
 
 #[test]
-fn test_unsupported_closure() {
+fn test_closure_no_capture_is_first_class() {
     let source = r#"
         fn main() -> Int64 {
             let f = fn(x: Int64) -> Int64 { x + 1 }
             return f(10)
         }
     "#;
-    let hir_res = run_source_hir(source, &[]);
-    assert!(
-        hir_res.is_ok(),
-        "HIR should support closures: {:?}",
-        hir_res.err()
-    );
 
-    let vm_res = run_source_vm(source, &[]);
-    assert!(vm_res.is_err(), "VM should have failed for closures");
+    assert_differential(source);
+
+    let result = run_source_vm(source, &[]).expect("capture-free closure must execute on the VM");
+    assert_eq!(result, VmValue::Int64(11));
 }
 
 #[test]
@@ -795,4 +803,435 @@ fn test_diff_float64_nan_ordering_and_signed_zero() {
     for (source, expected) in cases {
         assert_differential_bool(source, expected);
     }
+}
+
+#[test]
+fn vm_parity_ref_capture_immutable_single() {
+    let source = r#"
+        fn main() -> Int64 {
+            let base = 10
+            let add = fn[ref base](x: Int64) -> Int64 {
+                base + x
+            }
+            return add(5)
+        }
+    "#;
+
+    assert_differential(source);
+}
+
+#[test]
+fn vm_parity_ref_capture_immutable_ordered() {
+    let source = r#"
+        fn main() -> Int64 {
+            let a = 7
+            let b = 4
+            let compute = fn[ref a, ref b](x: Int64) -> Int64 {
+                a * x + b
+            }
+            return compute(3)
+        }
+    "#;
+
+    assert_differential(source);
+}
+
+// VM Parity 2B.2: source-to-bytecode CFG coverage for nonescaping ref captures.
+#[test]
+fn vm_parity_ref_capture_called_across_if_branches() {
+    let source = r#"
+        fn main() -> Int64 {
+            let base = 10
+            let add = fn[ref base](x: Int64) -> Int64 {
+                base + x
+            }
+            if 2 > 1 {
+                return add(5)
+            } else {
+                return add(7)
+            }
+        }
+    "#;
+    assert_differential(source);
+}
+
+#[test]
+fn vm_parity_ref_capture_created_in_conditional_branch() {
+    let source = r#"
+        fn main() -> Int64 {
+            let base = 10
+            if 1 < 2 {
+                let add = fn[ref base](x: Int64) -> Int64 {
+                    base + x
+                }
+                return add(5)
+            } else {
+                return 17
+            }
+        }
+    "#;
+    assert_differential(source);
+}
+
+#[test]
+fn vm_parity_ref_capture_non_escaping_direct_callback() {
+    let source = r#"
+        fn invoke(callback: fn() -> Int) -> Int { return callback() }
+        fn main() -> Int {
+            let base = 10
+            let get = fn[ref base]() -> Int { base }
+            return invoke(get)
+        }
+    "#;
+    assert_differential(source);
+}
+
+#[test]
+fn vm_parity_ref_capture_non_escaping_transitive_callback() {
+    let source = r#"
+        fn invoke(callback: fn() -> Int) -> Int { return callback() }
+        fn twice(callback: fn() -> Int) -> Int {
+            return invoke(callback) + invoke(callback)
+        }
+        fn main() -> Int {
+            let base = 10
+            let get = fn[ref base]() -> Int { base }
+            return twice(get)
+        }
+    "#;
+    assert_differential(source);
+}
+
+// VM Parity 2B.4 — implicit returns must agree with the HIR interpreter.
+#[test]
+fn vm_parity_implicit_return_scalar() {
+    assert_differential("fn double(x: Int) -> Int { x * 2 } fn main() -> Int { double(17) }");
+}
+
+#[test]
+fn vm_parity_implicit_return_if_value() {
+    assert_differential(
+        r#"
+        fn compute(x: Int) -> Int {
+            if x > 0 { x * 2 } else { 5 }
+        }
+        fn main() -> Int { compute(2) + compute(0) }
+    "#,
+    );
+}
+
+#[test]
+fn vm_parity_implicit_return_nested_if() {
+    assert_differential(
+        r#"
+        fn classify(x: Int) -> Int {
+            if x > 5 {
+                if x > 10 { 100 } else { 50 }
+            } else if x > 0 { 10 } else { 0 }
+        }
+        fn main() -> Int { classify(1) + classify(8) + classify(11) }
+    "#,
+    );
+}
+
+#[test]
+fn vm_parity_implicit_return_mixed_explicit_early_return() {
+    assert_differential(
+        r#"
+        fn check(x: Int) -> Int {
+            if x < 0 { return 7 }
+            x + 1
+        }
+        fn main() -> Int { check(-1) + check(9) }
+    "#,
+    );
+}
+
+#[test]
+fn vm_parity_implicit_return_match() {
+    assert_differential(
+        r#"
+        fn classify(x: Int) -> Int {
+            match x {
+                0 => 10
+                1 => 20
+                _ => 30
+            }
+        }
+        fn main() -> Int { classify(0) + classify(1) + classify(3) }
+    "#,
+    );
+}
+
+#[test]
+fn vm_parity_implicit_return_closure_if() {
+    assert_differential(
+        r#"
+        fn main() -> Int {
+            let convert = fn(x: Int) -> Int {
+                if x > 0 { x + 2 } else { 10 }
+            }
+            convert(3) + convert(0)
+        }
+    "#,
+    );
+}
+
+#[test]
+fn vm_parity_implicit_return_borrowed_callback() {
+    assert_differential(
+        r#"
+        fn invoke(callback: fn() -> Int) -> Int { callback() }
+        fn main() -> Int {
+            let base = 10
+            let get = fn[ref base]() -> Int { base }
+            invoke(get)
+        }
+    "#,
+    );
+}
+
+#[test]
+fn vm_parity_implicit_return_contextual_option() {
+    assert_differential(
+        r#"
+        fn choose(flag: Bool) -> Option(Int) {
+            if flag { Some(7) } else { None }
+        }
+        fn main() -> Int {
+            let result = choose(true)
+            match result {
+                Some(v) => v
+                None => 0
+            }
+        }
+    "#,
+    );
+}
+
+// VM Parity 2B.5.A: exclusive capture mutates original owner, not a copy.
+#[test]
+fn vm_parity_inout_capture_persistent_mutation() {
+    assert_differential(
+        r#"
+        fn main() -> Int {
+            var total = 10
+            let accumulate = fn[inout total](x: Int) {
+                total = total + x
+            }
+            accumulate(5)
+            accumulate(2)
+            return total
+        }
+    "#,
+    );
+}
+
+#[test]
+fn vm_parity_inout_capture_nested_nonescaping_call() {
+    assert_differential(
+        r#"
+        fn invoke(callback: fn(Int) -> Unit) {
+            callback(3)
+        }
+        fn main() -> Int {
+            var total = 4
+            let inc = fn[inout total](x: Int) { total = total + x }
+            invoke(inc)
+            return total
+        }
+    "#,
+    );
+}
+
+#[test]
+fn vm_parity_inout_parameter_repeated_mutation() {
+    let source = r#"
+        fn increment(inout value: Int) {
+            value = value + 1
+        }
+        fn main() -> Int {
+            var counter = 10
+            increment(inout counter)
+            increment(inout counter)
+            counter
+        }
+    "#;
+    assert_differential(source);
+    assert_eq!(run_source_vm(source, &[]).unwrap(), VmValue::Int64(12));
+}
+
+#[test]
+fn vm_parity_inout_parameter_nested_reborrow() {
+    let source = r#"
+        fn increment(inout value: Int) {
+            value = value + 1
+        }
+        fn twice(inout value: Int) {
+            increment(inout value)
+            increment(inout value)
+        }
+        fn main() -> Int {
+            var counter = 10
+            twice(inout counter)
+            counter
+        }
+    "#;
+    assert_differential(source);
+    assert_eq!(run_source_vm(source, &[]).unwrap(), VmValue::Int64(12));
+}
+
+#[test]
+fn vm_parity_inout_parameter_named_call() {
+    let source = r#"
+        fn increment(inout value: Int) {
+            value = value + 1
+        }
+        fn main() -> Int {
+            var counter = 10
+            increment(value=inout counter)
+            counter
+        }
+    "#;
+    assert_differential(source);
+    assert_eq!(run_source_vm(source, &[]).unwrap(), VmValue::Int64(11));
+}
+
+#[test]
+fn vm_parity_inout_slice_preserves_owner_and_independent_copy() {
+    let source = r#"
+        fn mutate(inout data: Slice(Int)) { data[0] = 99 }
+        fn main() -> Int {
+            var data = [10, 20, 30]
+            let before = data
+            mutate(inout data[1..3])
+            data[1] + before[1]
+        }
+    "#;
+    assert_differential(source);
+    assert_eq!(run_source_vm(source, &[]).unwrap(), VmValue::Int64(119));
+}
+
+#[test]
+fn vm_parity_inout_slice_nested_subview_and_sequential_calls() {
+    let source = r#"
+        fn increment(inout view: Slice(Int)) { view[0] = view[0] + 1 }
+        fn update(inout view: Slice(Int)) {
+            increment(inout view[1..2])
+            increment(inout view[1..2])
+        }
+        fn main() -> Int {
+            var data = [10, 20, 30, 40]
+            update(inout data[1..4])
+            data[2]
+        }
+    "#;
+    assert_differential(source);
+    assert_eq!(run_source_vm(source, &[]).unwrap(), VmValue::Int64(32));
+}
+
+#[test]
+fn vm_parity_inout_slice_length_and_read_after_write() {
+    let source = r#"
+        fn update(inout view: Slice(Int)) -> Int {
+            view[0] = view[0] + 5
+            view[0] + view.len()
+        }
+        fn main() -> Int {
+            var data = [10, 20, 30]
+            update(inout data[1..3])
+        }
+    "#;
+    assert_differential(source);
+    assert_eq!(run_source_vm(source, &[]).unwrap(), VmValue::Int64(27));
+}
+
+#[test]
+fn vm_parity_inout_slice_out_of_range_write() {
+    let source = r#"
+        fn mutate(inout data: Slice(Int)) { data[1] = 99 }
+        fn main() {
+            var data = [10, 20, 30]
+            mutate(inout data[1..2])
+        }
+    "#;
+    let hir = format!("{:?}", run_source_hir(source, &[]).unwrap_err());
+    let vm = format!("{:?}", run_source_vm(source, &[]).unwrap_err());
+    assert!(hir.to_lowercase().contains("out of bounds"), "{hir}");
+    assert!(
+        vm.contains("IndexOutOfBounds") || vm.to_lowercase().contains("out of bounds"),
+        "{vm}"
+    );
+}
+
+#[test]
+fn vm_parity_a1_inout_parameter_snapshot() {
+    let source = r#"
+        fn update(inout value: Int) -> Int {
+            let before = value
+            value = 20
+            before
+        }
+        fn main() -> Int {
+            var number = 10
+            let before = update(inout number)
+            number + before
+        }
+    "#;
+    assert_differential(source);
+    assert_eq!(run_source_vm(source, &[]).unwrap(), VmValue::Int64(30));
+}
+
+#[test]
+fn vm_parity_a1_inout_parameter_copy_mutation() {
+    let source = r#"
+        fn update(inout value: Int) -> Int {
+            var independent = value
+            independent = independent + 7
+            value = value + 1
+            independent
+        }
+        fn main() -> Int {
+            var number = 10
+            let independent = update(inout number)
+            number + independent
+        }
+    "#;
+    assert_differential(source);
+    assert_eq!(run_source_vm(source, &[]).unwrap(), VmValue::Int64(28));
+}
+
+#[test]
+fn vm_parity_a1_inout_capture_snapshot() {
+    let source = r#"
+        fn main() -> Int {
+            var total = 10
+            let update = fn[inout total]() -> Int {
+                let before = total
+                total = 20
+                before
+            }
+            let before = update()
+            before + total
+        }
+    "#;
+    assert_differential(source);
+    assert_eq!(run_source_vm(source, &[]).unwrap(), VmValue::Int64(30));
+}
+
+#[test]
+fn vm_parity_a1_ref_capture_copy_mutation() {
+    let source = r#"
+        fn main() -> Int {
+            let base = 10
+            let compute = fn[ref base]() -> Int {
+                var independent = base
+                independent = independent + 3
+                independent + base
+            }
+            compute()
+        }
+    "#;
+    assert_differential(source);
+    assert_eq!(run_source_vm(source, &[]).unwrap(), VmValue::Int64(23));
 }

@@ -1,5 +1,27 @@
 use std::fmt;
 use std::rc::Rc;
+use tempra_bytecode::function::{FunctionId, SignatureId};
+
+/// A non-owning read-only or exclusive handle to an owner in an active VM frame.
+/// No pointer to a frame or `Rc` ownership is kept by the handle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VmBorrow {
+    pub owner_frame: u64,
+    pub local_id: tempra_bytecode::function::LocalId,
+    /// An exclusive handle permits writes through its captured alias only.
+    pub mutable: bool,
+    /// Absolute half-open interval in the owning array; None for scalar/capture loans.
+    pub range: Option<(usize, usize)>,
+}
+
+/// Callable plus ordered captured values. Capture values precede explicit
+/// arguments in the synthesized target's parameter list.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VmClosure {
+    pub function_id: FunctionId,
+    pub signature_id: SignatureId,
+    pub captures: Vec<VmValue>,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum VmValue {
@@ -10,6 +32,10 @@ pub enum VmValue {
     UInt8(u8),
     Float64(f64),
     String(String),
+    /// A first-class typed callable; empty captures require no heap allocation.
+    Closure(VmClosure),
+    /// Non-owning borrow of a local in another active frame.
+    BorrowedLocal(VmBorrow),
     Enum(String, String, Vec<VmValue>), // enum_name, variant_name, payloads
     Tuple(Vec<VmValue>),
     Array(Rc<Vec<VmValue>>),
@@ -34,6 +60,8 @@ impl VmValue {
             VmValue::UInt8(_) => "UInt8",
             VmValue::Float64(_) => "Float64",
             VmValue::String(_) => "String",
+            VmValue::Closure(_) => "Closure",
+            VmValue::BorrowedLocal(_) => "BorrowedLocal",
             VmValue::Enum(_, _, _) => "Enum",
             VmValue::Tuple(_) => "Tuple",
             VmValue::Array(_) => "Array",
@@ -53,6 +81,12 @@ impl fmt::Display for VmValue {
             VmValue::UInt8(b) => write!(f, "{}", b),
             VmValue::Float64(v) => write!(f, "{}", v),
             VmValue::String(s) => write!(f, "{:?}", s),
+            VmValue::Closure(closure) => write!(f, "<closure @{}>", closure.function_id.0),
+            VmValue::BorrowedLocal(handle) => write!(
+                f,
+                "<borrow frame={} local=${}>",
+                handle.owner_frame, handle.local_id.0
+            ),
             VmValue::Enum(_e, v, payloads) => {
                 if payloads.is_empty() {
                     write!(f, "{}", v)

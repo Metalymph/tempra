@@ -67,7 +67,14 @@ fn test_slice_as_view_parent_mutation() {
         xs[0] = 9
         expect(ys[0] == 9)
     "#;
-    assert!(test_source(source).is_ok());
+    let err = format!(
+        "{:?}",
+        test_source(source).expect_err("live borrowed slice must prevent owner mutation")
+    );
+    assert!(
+        err.contains("borrow conflict"),
+        "unexpected diagnostic: {err}"
+    );
 }
 
 #[test]
@@ -78,7 +85,14 @@ fn test_slice_as_view_slice_mutation() {
         ys[1] = 8
         expect(xs[1] == 8)
     "#;
-    assert!(test_source(source).is_ok());
+    let error = format!(
+        "{:?}",
+        test_source(source).expect_err("ordinary Slice is read-only")
+    );
+    assert!(
+        error.contains("read-only Slice"),
+        "unexpected diagnostic: {error}"
+    );
 }
 
 #[test]

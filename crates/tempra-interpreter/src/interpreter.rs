@@ -636,6 +636,13 @@ impl Interpreter {
                     tempra_hir::types::Type::Enum(name, _) => {
                         tempra_hir::types::Type::Enum(name, arg_types)
                     }
+                    tempra_hir::types::Type::Slice(_) => {
+                        if arg_types.len() == 1 {
+                            tempra_hir::types::Type::Slice(Box::new(arg_types[0].clone()))
+                        } else {
+                            tempra_hir::types::Type::Error
+                        }
+                    }
                     tempra_hir::types::Type::Option(_) => {
                         if arg_types.len() == 1 {
                             tempra_hir::types::Type::Option(Box::new(arg_types[0].clone()))

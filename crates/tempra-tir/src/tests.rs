@@ -869,3 +869,696 @@ fn struct_field_inference_guard_bounds_deep_dependency_chains() {
         "expected bounded-inference error, got {errors:?}"
     );
 }
+
+// VM Parity 2A.2: typed callable IR gate, independent of bytecode emission.
+#[test]
+fn closure_tir_valid_call_and_capture_signature() {
+    let mut module = ModuleBuilder::new();
+    let mut lambda = module.new_function("$closure$0", TirType::Int64);
+    let block = lambda.new_block();
+    lambda.set_current_block(block);
+    let captured = lambda.add_param(TirType::Int64);
+    let argument = lambda.add_param(TirType::Int64);
+    let sum = lambda.build_add(captured, argument).unwrap();
+    lambda.build_ret(Some(sum)).unwrap();
+    let lambda_id = lambda.func.id;
+    module.add_function(lambda.build());
+
+    let mut main = module.new_function("main", TirType::Int64);
+    let block = main.new_block();
+    main.set_current_block(block);
+    let captured = main.build_const(TirConst::Int64(2)).unwrap();
+    let callable = main.build_make_closure(lambda_id, vec![captured]).unwrap();
+    let input = main.build_const(TirConst::Int64(10)).unwrap();
+    let result = main.build_call_closure(callable, vec![input]).unwrap();
+    main.build_ret(Some(result)).unwrap();
+    module.add_function(main.build());
+
+    let verified = verify_module_with_types(&module.module).unwrap();
+    let main_id = module.function_table["main"];
+    assert_eq!(
+        verified.functions[&main_id][&callable],
+        TirType::Function(vec![TirType::Int64], Box::new(TirType::Int64))
+    );
+    assert_eq!(verified.functions[&main_id][&result], TirType::Int64);
+    let ir = format_tir_module(&module.module);
+    assert!(ir.contains("make_closure"));
+    assert!(ir.contains("call_closure"));
+}
+
+#[test]
+fn closure_tir_rejects_missing_target() {
+    let mut module = ModuleBuilder::new();
+    let mut main = module.new_function("main", TirType::Unit);
+    let block = main.new_block();
+    main.set_current_block(block);
+    main.build_make_closure(TirFunctionId(999), vec![]).unwrap();
+    main.build_ret(None).unwrap();
+    module.add_function(main.build());
+    let errors = verify_module(&module.module).unwrap_err();
+    assert!(errors.contains(&VerifierError::FunctionNotFound(TirFunctionId(999))));
+}
+
+#[test]
+fn closure_tir_rejects_wrong_call_arity_and_argument_type() {
+    let mut module = ModuleBuilder::new();
+    let mut lambda = module.new_function("$closure$1", TirType::Int64);
+    let block = lambda.new_block();
+    lambda.set_current_block(block);
+    let p = lambda.add_param(TirType::Int64);
+    lambda.build_ret(Some(p)).unwrap();
+    let lambda_id = lambda.func.id;
+    module.add_function(lambda.build());
+
+    let mut main = module.new_function("main", TirType::Unit);
+    let block = main.new_block();
+    main.set_current_block(block);
+    let callable = main.build_make_closure(lambda_id, vec![]).unwrap();
+    main.build_call_closure(callable, vec![]).unwrap();
+    let wrong = main.build_const(TirConst::Bool(true)).unwrap();
+    main.build_call_closure(callable, vec![wrong]).unwrap();
+    main.build_ret(None).unwrap();
+    module.add_function(main.build());
+
+    let errors = verify_module(&module.module).unwrap_err();
+    assert!(errors.iter().any(|err| matches!(err,
+        VerifierError::GenericError(message) if message.contains("closure call arity mismatch")
+    )));
+    assert!(errors.contains(&VerifierError::TypeMismatch {
+        expected: TirType::Int64,
+        actual: TirType::Bool,
+    }));
+}
+
+#[test]
+fn closure_tir_rejects_invalid_capture_and_noncallable() {
+    let mut module = ModuleBuilder::new();
+    let mut lambda = module.new_function("$closure$2", TirType::Unit);
+    let block = lambda.new_block();
+    lambda.set_current_block(block);
+    lambda.add_param(TirType::Int64);
+    lambda.build_ret(None).unwrap();
+    let lambda_id = lambda.func.id;
+    module.add_function(lambda.build());
+
+    let mut main = module.new_function("main", TirType::Unit);
+    let block = main.new_block();
+    main.set_current_block(block);
+    let wrong = main.build_const(TirConst::Bool(true)).unwrap();
+    main.build_make_closure(lambda_id, vec![wrong]).unwrap();
+    main.build_call_closure(wrong, vec![]).unwrap();
+    main.build_ret(None).unwrap();
+    module.add_function(main.build());
+
+    let errors = verify_module(&module.module).unwrap_err();
+    assert!(errors.contains(&VerifierError::TypeMismatch {
+        expected: TirType::Int64,
+        actual: TirType::Bool,
+    }));
+    assert!(errors.iter().any(|err| matches!(err,
+        VerifierError::GenericError(message) if message.contains("non-function")
+    )));
+}
+
+// VM Parity 2B.1b: borrowed slots are distinct from captured SSA values.
+#[test]
+fn borrowed_closure_tir_tracks_original_slot_and_types() {
+    let mut module = ModuleBuilder::new();
+    let mut lambda = module.new_function("lambda", TirType::Int64);
+    let entry = lambda.new_block();
+    lambda.set_current_block(entry);
+    let base = lambda.add_param(TirType::Int64);
+    let x = lambda.add_param(TirType::Int64);
+    let sum = lambda.build_add(base, x).unwrap();
+    lambda.build_ret(Some(sum)).unwrap();
+    let lambda_id = lambda.func.id;
+    module.add_function(lambda.build());
+
+    let mut main = module.new_function("main", TirType::Int64);
+    let entry = main.new_block();
+    main.set_current_block(entry);
+    let slot = main.build_slot(TirType::Int64, Some("base")).unwrap();
+    let value = main.build_const(TirConst::Int64(10)).unwrap();
+    main.build_store(slot, value).unwrap();
+    let closure = main.build_make_closure_ref(lambda_id, vec![slot]).unwrap();
+    let argument = main.build_const(TirConst::Int64(5)).unwrap();
+    let result = main.build_call_closure(closure, vec![argument]).unwrap();
+    main.build_ret(Some(result)).unwrap();
+    module.add_function(main.build());
+
+    assert!(verify_module(&module.module).is_ok());
+    let tir = format_tir_module(&module.module);
+    assert!(tir.contains("make_closure_ref @"));
+    assert!(tir.contains("captures ($0)"));
+    assert!(!tir.contains("make_closure @"));
+}
+
+#[test]
+fn borrowed_closure_tir_rejects_missing_and_wrong_typed_slots() {
+    let mut module = ModuleBuilder::new();
+    let mut lambda = module.new_function("lambda", TirType::Unit);
+    let entry = lambda.new_block();
+    lambda.set_current_block(entry);
+    lambda.add_param(TirType::Int64);
+    lambda.build_ret(None).unwrap();
+    let lambda_id = lambda.func.id;
+    module.add_function(lambda.build());
+
+    let mut main = module.new_function("main", TirType::Unit);
+    let entry = main.new_block();
+    main.set_current_block(entry);
+    main.build_make_closure_ref(lambda_id, vec![TirSlotId(999)])
+        .unwrap();
+    let wrong_slot = main.build_slot(TirType::Bool, Some("wrong")).unwrap();
+    main.build_make_closure_ref(lambda_id, vec![wrong_slot])
+        .unwrap();
+    main.build_make_closure_ref(lambda_id, vec![]).unwrap();
+    main.build_ret(None).unwrap();
+    module.add_function(main.build());
+
+    let errors = verify_module(&module.module).unwrap_err();
+    assert!(errors.contains(&VerifierError::UndeclaredSlot(TirSlotId(999))));
+    assert!(errors.contains(&VerifierError::TypeMismatch {
+        expected: TirType::Int64,
+        actual: TirType::Bool,
+    }));
+    assert!(errors.iter().any(|error| matches!(error,
+        VerifierError::GenericError(message) if message.contains("requires at least one borrowed slot")
+    )));
+}
+
+// VM Parity 2B.1d: borrowed closure storage never outlives the frame.
+#[test]
+fn borrowed_closure_lifetime_rejects_return_through_local_slot() {
+    let mut module = ModuleBuilder::new();
+    let call_ty = TirType::Function(vec![], Box::new(TirType::Unit));
+    let mut lambda = module.new_function("borrowed_body", TirType::Unit);
+    let entry = lambda.new_block();
+    lambda.set_current_block(entry);
+    lambda.add_param(TirType::Int64);
+    lambda.build_ret(None).unwrap();
+    let target = lambda.func.id;
+    module.add_function(lambda.build());
+
+    let mut main = module.new_function("main", call_ty.clone());
+    let entry = main.new_block();
+    main.set_current_block(entry);
+    let source = main.build_slot(TirType::Int64, Some("source")).unwrap();
+    let ten = main.build_const(TirConst::Int64(10)).unwrap();
+    main.build_store(source, ten).unwrap();
+    let borrowed = main.build_make_closure_ref(target, vec![source]).unwrap();
+    let holder = main.build_slot(call_ty, Some("holder")).unwrap();
+    main.build_store(holder, borrowed).unwrap();
+    let returned = main.build_load(holder).unwrap();
+    main.build_ret(Some(returned)).unwrap();
+    module.add_function(main.build());
+
+    let errors = verify_module(&module.module).unwrap_err();
+    assert!(
+        errors.iter().any(|e| matches!(e,
+            VerifierError::GenericError(msg) if msg.contains("through return")
+        )),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn borrowed_closure_lifetime_accepts_verified_nonescaping_call_argument() {
+    let mut module = ModuleBuilder::new();
+    let call_ty = TirType::Function(vec![], Box::new(TirType::Unit));
+    let mut lambda = module.new_function("borrowed_body", TirType::Unit);
+    let entry = lambda.new_block();
+    lambda.set_current_block(entry);
+    lambda.add_param(TirType::Int64);
+    lambda.build_ret(None).unwrap();
+    let target = lambda.func.id;
+    module.add_function(lambda.build());
+
+    let mut sink = module.new_function("sink", TirType::Unit);
+    let entry = sink.new_block();
+    sink.set_current_block(entry);
+    sink.add_param(call_ty);
+    sink.build_ret(None).unwrap();
+    let sink_id = sink.func.id;
+    module.add_function(sink.build());
+
+    let mut main = module.new_function("main", TirType::Unit);
+    let entry = main.new_block();
+    main.set_current_block(entry);
+    let source = main.build_slot(TirType::Int64, Some("source")).unwrap();
+    let ten = main.build_const(TirConst::Int64(10)).unwrap();
+    main.build_store(source, ten).unwrap();
+    let borrowed = main.build_make_closure_ref(target, vec![source]).unwrap();
+    main.build_call(sink_id, vec![borrowed]).unwrap();
+    main.build_ret(None).unwrap();
+    module.add_function(main.build());
+
+    assert!(verify_module(&module.module).is_ok());
+}
+
+// Add a frame-owning caller with one immutable borrowed callback passed to
+// `target`. The target must prove the callback cannot escape its call frame.
+fn add_borrowed_callback_owner(module: &mut ModuleBuilder, target: TirFunctionId) {
+    let mut body = module.new_function("callback_target_body", TirType::Unit);
+    let entry = body.new_block();
+    body.set_current_block(entry);
+    body.add_param(TirType::Int64);
+    body.build_ret(None).unwrap();
+    let body_id = body.func.id;
+    module.add_function(body.build());
+
+    let mut owner = module.new_function("callback_owner", TirType::Unit);
+    let entry = owner.new_block();
+    owner.set_current_block(entry);
+    let slot = owner.build_slot(TirType::Int64, Some("captured")).unwrap();
+    let value = owner.build_const(TirConst::Int64(42)).unwrap();
+    owner.build_store(slot, value).unwrap();
+    let borrowed = owner.build_make_closure_ref(body_id, vec![slot]).unwrap();
+    owner.build_call(target, vec![borrowed]).unwrap();
+    owner.build_ret(None).unwrap();
+    module.add_function(owner.build());
+}
+
+#[test]
+fn borrowed_closure_lifetime_accepts_direct_and_transitive_verified_callbacks() {
+    let mut module = ModuleBuilder::new();
+    let callback_ty = TirType::Function(vec![], Box::new(TirType::Unit));
+    let mut invoke = module.new_function("invoke_callback", TirType::Unit);
+    let entry = invoke.new_block();
+    invoke.set_current_block(entry);
+    let callback = invoke.add_param(callback_ty.clone());
+    let alias = invoke
+        .build_slot(callback_ty.clone(), Some("callback_alias"))
+        .unwrap();
+    invoke.build_store(alias, callback).unwrap();
+    let loaded = invoke.build_load(alias).unwrap();
+    invoke.build_call_closure(loaded, vec![]).unwrap();
+    invoke.build_ret(None).unwrap();
+    let invoke_id = invoke.func.id;
+    module.add_function(invoke.build());
+
+    let mut forward = module.new_function("forward_callback", TirType::Unit);
+    let entry = forward.new_block();
+    forward.set_current_block(entry);
+    let callback = forward.add_param(callback_ty);
+    forward.build_call(invoke_id, vec![callback]).unwrap();
+    forward.build_call(invoke_id, vec![callback]).unwrap();
+    forward.build_ret(None).unwrap();
+    let forward_id = forward.func.id;
+    module.add_function(forward.build());
+
+    add_borrowed_callback_owner(&mut module, forward_id);
+    assert!(verify_module(&module.module).is_ok());
+}
+
+#[test]
+fn borrowed_closure_lifetime_rejects_escaping_callback_return() {
+    let mut module = ModuleBuilder::new();
+    let callback_ty = TirType::Function(vec![], Box::new(TirType::Unit));
+    let mut escape = module.new_function("return_callback", callback_ty.clone());
+    let entry = escape.new_block();
+    escape.set_current_block(entry);
+    let callback = escape.add_param(callback_ty.clone());
+    let alias = escape
+        .build_slot(callback_ty, Some("escaping_alias"))
+        .unwrap();
+    escape.build_store(alias, callback).unwrap();
+    let loaded = escape.build_load(alias).unwrap();
+    escape.build_ret(Some(loaded)).unwrap();
+    let escape_id = escape.func.id;
+    module.add_function(escape.build());
+
+    add_borrowed_callback_owner(&mut module, escape_id);
+    let errors = verify_module(&module.module).unwrap_err();
+    assert!(
+        errors.iter().any(|error| matches!(error,
+            VerifierError::GenericError(message) if message.contains("escapes its owner frame")
+        )),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn borrowed_closure_lifetime_rejects_callback_embedded_in_aggregate() {
+    let mut module = ModuleBuilder::new();
+    let callback_ty = TirType::Function(vec![], Box::new(TirType::Unit));
+    let mut embed = module.new_function("embed_callback", TirType::Unit);
+    let entry = embed.new_block();
+    embed.set_current_block(entry);
+    let callback = embed.add_param(callback_ty.clone());
+    embed
+        .build_make(TirType::Tuple(vec![callback_ty]), None, vec![callback])
+        .unwrap();
+    embed.build_ret(None).unwrap();
+    let embed_id = embed.func.id;
+    module.add_function(embed.build());
+
+    add_borrowed_callback_owner(&mut module, embed_id);
+    let errors = verify_module(&module.module).unwrap_err();
+    assert!(
+        errors.iter().any(|error| matches!(error,
+            VerifierError::GenericError(message) if message.contains("escapes its owner frame")
+        )),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn borrowed_closure_lifetime_rejects_unproved_recursive_forwarding() {
+    let mut module = ModuleBuilder::new();
+    let callback_ty = TirType::Function(vec![], Box::new(TirType::Unit));
+    let mut recursive = module.new_function("recursive_callback", TirType::Unit);
+    let entry = recursive.new_block();
+    recursive.set_current_block(entry);
+    let callback = recursive.add_param(callback_ty);
+    let recursive_id = recursive.func.id;
+    recursive.build_call(recursive_id, vec![callback]).unwrap();
+    recursive.build_ret(None).unwrap();
+    module.add_function(recursive.build());
+
+    add_borrowed_callback_owner(&mut module, recursive_id);
+    let errors = verify_module(&module.module).unwrap_err();
+    assert!(
+        errors.iter().any(|error| matches!(error,
+            VerifierError::GenericError(message) if message.contains("escapes its owner frame")
+        )),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn borrowed_closure_lifetime_rejects_callback_forwarded_to_indirect_target() {
+    let mut module = ModuleBuilder::new();
+    let callback_ty = TirType::Function(vec![], Box::new(TirType::Unit));
+    let mut invoke = module.new_function("indirect_invoke", TirType::Unit);
+    let entry = invoke.new_block();
+    invoke.set_current_block(entry);
+    invoke.add_param(callback_ty.clone());
+    invoke.build_ret(None).unwrap();
+    let invoke_id = invoke.func.id;
+    module.add_function(invoke.build());
+
+    let mut forward = module.new_function("indirect_forward", TirType::Unit);
+    let entry = forward.new_block();
+    forward.set_current_block(entry);
+    let callback = forward.add_param(callback_ty.clone());
+    let dynamic_target = forward.add_param(TirType::Function(
+        vec![callback_ty.clone()],
+        Box::new(TirType::Unit),
+    ));
+    forward
+        .build_call_closure(dynamic_target, vec![callback])
+        .unwrap();
+    forward.build_ret(None).unwrap();
+    let forward_id = forward.func.id;
+    module.add_function(forward.build());
+
+    // Provide a valid dynamic target; the verifier must still refuse because
+    // the forwarding contract is not statically established.
+    let mut owner = module.new_function("callback_owner", TirType::Unit);
+    let entry = owner.new_block();
+    owner.set_current_block(entry);
+    let slot = owner.build_slot(TirType::Int64, Some("captured")).unwrap();
+    let value = owner.build_const(TirConst::Int64(42)).unwrap();
+    owner.build_store(slot, value).unwrap();
+    let mut body = module.new_function("callback_target_body", TirType::Unit);
+    let body_entry = body.new_block();
+    body.set_current_block(body_entry);
+    body.add_param(TirType::Int64);
+    body.build_ret(None).unwrap();
+    let body_id = body.func.id;
+    module.add_function(body.build());
+    let borrowed = owner.build_make_closure_ref(body_id, vec![slot]).unwrap();
+    let callable = owner.build_make_closure(invoke_id, vec![]).unwrap();
+    owner
+        .build_call(forward_id, vec![borrowed, callable])
+        .unwrap();
+    owner.build_ret(None).unwrap();
+    module.add_function(owner.build());
+
+    let errors = verify_module(&module.module).unwrap_err();
+    assert!(
+        errors.iter().any(|error| matches!(error,
+            VerifierError::GenericError(message) if message.contains("escapes its owner frame")
+        )),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn borrowed_closure_lifetime_rejects_source_reassignment() {
+    let mut module = ModuleBuilder::new();
+    let mut lambda = module.new_function("borrowed_body", TirType::Unit);
+    let entry = lambda.new_block();
+    lambda.set_current_block(entry);
+    lambda.add_param(TirType::Int64);
+    lambda.build_ret(None).unwrap();
+    let target = lambda.func.id;
+    module.add_function(lambda.build());
+
+    let mut main = module.new_function("main", TirType::Unit);
+    let entry = main.new_block();
+    main.set_current_block(entry);
+    let source = main.build_slot(TirType::Int64, Some("source")).unwrap();
+    let ten = main.build_const(TirConst::Int64(10)).unwrap();
+    main.build_store(source, ten).unwrap();
+    let borrowed = main.build_make_closure_ref(target, vec![source]).unwrap();
+    let eleven = main.build_const(TirConst::Int64(11)).unwrap();
+    main.build_store(source, eleven).unwrap();
+    main.build_call_closure(borrowed, vec![]).unwrap();
+    main.build_ret(None).unwrap();
+    module.add_function(main.build());
+
+    let errors = verify_module(&module.module).unwrap_err();
+    assert!(errors.iter().any(|e| matches!(e,
+        VerifierError::GenericError(msg) if msg.contains("exactly one entry-block initialization")
+    )), "{errors:?}");
+}
+
+#[test]
+fn borrowed_closure_lifetime_rejects_aggregate_escape() {
+    let mut module = ModuleBuilder::new();
+    let mut lambda = module.new_function("borrowed_body", TirType::Unit);
+    let entry = lambda.new_block();
+    lambda.set_current_block(entry);
+    lambda.add_param(TirType::Int64);
+    lambda.build_ret(None).unwrap();
+    let target = lambda.func.id;
+    module.add_function(lambda.build());
+
+    let mut main = module.new_function("main", TirType::Unit);
+    let entry = main.new_block();
+    main.set_current_block(entry);
+    let source = main.build_slot(TirType::Int64, Some("source")).unwrap();
+    let ten = main.build_const(TirConst::Int64(10)).unwrap();
+    main.build_store(source, ten).unwrap();
+    let borrowed = main.build_make_closure_ref(target, vec![source]).unwrap();
+    main.build_make_struct("Envelope".into(), vec![("callback".into(), borrowed)])
+        .unwrap();
+    main.build_ret(None).unwrap();
+    module.add_function(main.build());
+
+    let errors = verify_module(&module.module).unwrap_err();
+    assert!(
+        errors.iter().any(|e| matches!(e,
+            VerifierError::GenericError(msg) if msg.contains("escapes its owner frame")
+        )),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn borrowed_closure_lifetime_rejects_uninitialized_source() {
+    let mut module = ModuleBuilder::new();
+    let mut lambda = module.new_function("borrowed_body", TirType::Unit);
+    let entry = lambda.new_block();
+    lambda.set_current_block(entry);
+    lambda.add_param(TirType::Int64);
+    lambda.build_ret(None).unwrap();
+    let target = lambda.func.id;
+    module.add_function(lambda.build());
+
+    let mut main = module.new_function("main", TirType::Unit);
+    let entry = main.new_block();
+    main.set_current_block(entry);
+    let source = main.build_slot(TirType::Int64, Some("source")).unwrap();
+    main.build_make_closure_ref(target, vec![source]).unwrap();
+    let ten = main.build_const(TirConst::Int64(10)).unwrap();
+    main.build_store(source, ten).unwrap();
+    main.build_ret(None).unwrap();
+    module.add_function(main.build());
+
+    let errors = verify_module(&module.module).unwrap_err();
+    assert!(
+        errors.iter().any(|e| matches!(e,
+            VerifierError::GenericError(msg) if msg.contains("initialization before the borrow")
+        )),
+        "{errors:?}"
+    );
+}
+
+// CFG Borrow Safety: one syntactic Store in a cyclic entry block can execute
+// again after a borrow was created; the structural 2B.1 proof must reject it.
+#[test]
+fn borrowed_closure_lifetime_rejects_reentering_owner_initializer() {
+    let mut module = ModuleBuilder::new();
+    let mut lambda = module.new_function("borrowed_body", TirType::Unit);
+    let lambda_entry = lambda.new_block();
+    lambda.set_current_block(lambda_entry);
+    lambda.add_param(TirType::Int64);
+    lambda.build_ret(None).unwrap();
+    let target = lambda.func.id;
+    module.add_function(lambda.build());
+
+    let mut main = module.new_function("main", TirType::Unit);
+    let entry = main.new_block();
+    let body = main.new_block();
+    let exit = main.new_block();
+    main.set_current_block(entry);
+    let owner = main.build_slot(TirType::Int64, Some("owner")).unwrap();
+    let ten = main.build_const(TirConst::Int64(10)).unwrap();
+    main.build_store(owner, ten).unwrap();
+    let cond = main.build_const(TirConst::Bool(true)).unwrap();
+    main.build_condbr(cond, body, exit).unwrap();
+
+    main.set_current_block(body);
+    let callback = main.build_make_closure_ref(target, vec![owner]).unwrap();
+    main.build_call_closure(callback, vec![]).unwrap();
+    main.build_br(entry).unwrap();
+
+    main.set_current_block(exit);
+    main.build_ret(None).unwrap();
+    module.add_function(main.build());
+
+    let errors = verify_module(&module.module).unwrap_err();
+    assert!(
+        errors.iter().any(|error| matches!(error,
+            VerifierError::GenericError(msg) if msg.contains("entry-block initialization")
+        )),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn borrowed_closure_lifetime_accepts_separate_branch_calls() {
+    let mut module = ModuleBuilder::new();
+    let mut lambda = module.new_function("borrowed_body", TirType::Unit);
+    let lambda_entry = lambda.new_block();
+    lambda.set_current_block(lambda_entry);
+    lambda.add_param(TirType::Int64);
+    lambda.build_ret(None).unwrap();
+    let target = lambda.func.id;
+    module.add_function(lambda.build());
+
+    let mut main = module.new_function("main", TirType::Unit);
+    let entry = main.new_block();
+    let yes = main.new_block();
+    let no = main.new_block();
+    let exit = main.new_block();
+    main.set_current_block(entry);
+    let owner = main.build_slot(TirType::Int64, Some("owner")).unwrap();
+    let ten = main.build_const(TirConst::Int64(10)).unwrap();
+    main.build_store(owner, ten).unwrap();
+    let borrowed = main.build_make_closure_ref(target, vec![owner]).unwrap();
+    let cond = main.build_const(TirConst::Bool(true)).unwrap();
+    main.build_condbr(cond, yes, no).unwrap();
+
+    main.set_current_block(yes);
+    main.build_call_closure(borrowed, vec![]).unwrap();
+    main.build_br(exit).unwrap();
+
+    main.set_current_block(no);
+    main.build_call_closure(borrowed, vec![]).unwrap();
+    main.build_br(exit).unwrap();
+
+    main.set_current_block(exit);
+    main.build_ret(None).unwrap();
+    module.add_function(main.build());
+    assert!(verify_module(&module.module).is_ok());
+}
+
+#[test]
+fn exclusive_inout_tir_verifier_accepts_only_matching_direct_call() {
+    let mut module = ModuleBuilder::new();
+    let mut inc = module.new_function("increment", TirType::Unit);
+    let b = inc.new_block();
+    inc.set_current_block(b);
+    inc.add_inout_param(TirType::Int64);
+    inc.build_ret(None).unwrap();
+    let inc_id = inc.func.id;
+    module.add_function(inc.build());
+
+    let mut main = module.new_function("main", TirType::Unit);
+    let b = main.new_block();
+    main.set_current_block(b);
+    let slot = main.build_slot(TirType::Int64, Some("x")).unwrap();
+    let x = main.build_const(TirConst::Int64(1)).unwrap();
+    main.build_store(slot, x).unwrap();
+    let handle = main.build_borrow_inout(slot).unwrap();
+    main.build_call(inc_id, vec![handle]).unwrap();
+    main.build_ret(None).unwrap();
+    module.add_function(main.build());
+    assert!(verify_module(&module.module).is_ok());
+
+    module.module.functions[0].inout_params = vec![false];
+    assert!(verify_module(&module.module).is_err());
+}
+
+#[test]
+fn a1_inout_binding_is_explicit_and_unique() {
+    let mut module = ModuleBuilder::new();
+    let mut func = module.new_function("update", TirType::Unit);
+    let block = func.new_block();
+    func.set_current_block(block);
+    let incoming = func.add_inout_param(TirType::Int64);
+    let slot = func.build_slot(TirType::Int64, Some("owner")).unwrap();
+    func.build_bind_inout(slot, 0).unwrap();
+    let value = func.build_const(TirConst::Int64(42)).unwrap();
+    func.build_store(slot, value).unwrap();
+    func.build_ret(None).unwrap();
+    module.add_function(func.build());
+    assert!(verify_module(&module.module).is_ok());
+
+    let mut invalid = module.module.clone();
+    invalid.functions[0].inout_params[0] = false;
+    assert!(verify_module(&invalid).is_err());
+
+    let mut invalid = module.module.clone();
+    invalid.functions[0].blocks[0].instrs[1] = TirInstr::Store(slot, incoming);
+    assert!(verify_module(&invalid).is_err());
+
+    let mut invalid = module.module.clone();
+    let other = TirSlotId(slot.0 + 1);
+    invalid.functions[0].blocks[0].instrs.extend([
+        TirInstr::Slot(other, TirType::Int64),
+        TirInstr::BindInout(other, 0),
+    ]);
+    assert!(verify_module(&invalid).is_err());
+
+    let mut invalid = module.module.clone();
+    invalid.functions[0].blocks[0].instrs[1] = TirInstr::BindInout(slot, 99);
+    assert!(verify_module(&invalid).is_err());
+
+    let mut invalid = module.module.clone();
+    invalid.functions[0].blocks[0].terminator = Some(TirTerminator::Br(block));
+    assert!(verify_module(&invalid).is_err());
+}
+
+#[test]
+fn a1_tir_rejects_inout_public_callable_parameter() {
+    let mut module = ModuleBuilder::new();
+    let mut target = module.new_function("target", TirType::Unit);
+    let block = target.new_block();
+    target.set_current_block(block);
+    target.add_inout_param(TirType::Int64);
+    target.build_ret(None).unwrap();
+    let target_id = target.func.id;
+    module.add_function(target.build());
+    let mut main = module.new_function("main", TirType::Unit);
+    let block = main.new_block();
+    main.set_current_block(block);
+    main.build_make_closure(target_id, vec![]).unwrap();
+    main.build_ret(None).unwrap();
+    module.add_function(main.build());
+    assert!(verify_module(&module.module).is_err());
+}

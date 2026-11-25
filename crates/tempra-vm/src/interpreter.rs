@@ -1,28 +1,24 @@
 use crate::error::VmError;
 use crate::profile::{FunctionProfile, ProfilingState, VmOptions, VmProfile};
-use crate::value::VmValue;
+use crate::value::{VmBorrow, VmClosure, VmValue};
+use std::collections::HashSet;
 use std::rc::Rc;
 use tempra_bytecode::bytecode::BytecodeModule;
 use tempra_bytecode::constant::BytecodeConstant;
-use tempra_bytecode::function::{BytecodeType, FunctionId};
+use tempra_bytecode::function::{BytecodeSignature, BytecodeType, FunctionId, SignatureId};
 use tempra_bytecode::opcode::BytecodeInstr;
 use tempra_bytecode::verify::verify_module;
 
-#[cfg(feature = "jit-cranelift")]
-use std::collections::HashMap;
-#[cfg(feature = "jit-cranelift")]
-use tempra_jit_cranelift::helpers::JitRuntimeContext;
-#[cfg(feature = "jit-cranelift")]
-use tempra_jit_cranelift::{
-    compile_function_heap_aware, is_heap_requiring, JitEngine, JitFunctionI64,
-    JitFunctionI64HeapAware, JitRuntimeError,
-};
-
 pub struct Frame {
+    /// Unique lifetime identity; never reused within this interpreter.
+    pub token: u64,
     pub function_id: FunctionId,
     pub ip: usize,
     pub locals: Vec<Option<VmValue>>,
     pub stack: Vec<VmValue>,
+    /// Transient exclusive owner loans acquired by the caller for this frame.
+    /// Release them on every normal return, including nested calls.
+    pub inout_loans: Vec<(u64, u32)>,
 }
 
 pub type NativeResolver = fn(&str, &str) -> Option<fn(&[VmValue]) -> Result<VmValue, String>>;
@@ -30,17 +26,11 @@ pub type NativeResolver = fn(&str, &str) -> Option<fn(&[VmValue]) -> Result<VmVa
 pub struct Interpreter<'a> {
     pub module: &'a BytecodeModule,
     pub call_stack: Vec<Frame>,
+    next_frame_token: u64,
+    borrowed_sources: HashSet<(u64, u32)>,
+    exclusive_sources: HashSet<(u64, u32)>,
     pub(crate) profiling: Option<ProfilingState>,
     pub native_resolver: Option<NativeResolver>,
-
-    #[cfg(feature = "jit-cranelift")]
-    pub(crate) jit_engine: Option<JitEngine>,
-    /// Cache for pure-Int64 JIT functions (no heap params/locals).
-    #[cfg(feature = "jit-cranelift")]
-    pub(crate) jit_cache: HashMap<FunctionId, JitFunctionI64>,
-    /// Cache for heap-aware JIT functions (String/Array params or Len/Size/GetIndex opcodes).
-    #[cfg(feature = "jit-cranelift")]
-    pub(crate) jit_cache_heap: HashMap<FunctionId, JitFunctionI64HeapAware>,
 }
 
 impl<'a> Interpreter<'a> {
@@ -48,42 +38,29 @@ impl<'a> Interpreter<'a> {
         Self {
             module,
             call_stack: Vec::with_capacity(32),
+            next_frame_token: 0,
+            borrowed_sources: HashSet::new(),
+            exclusive_sources: HashSet::new(),
             profiling: None,
             native_resolver: None,
-            #[cfg(feature = "jit-cranelift")]
-            jit_engine: None,
-            #[cfg(feature = "jit-cranelift")]
-            jit_cache: HashMap::new(),
-            #[cfg(feature = "jit-cranelift")]
-            jit_cache_heap: HashMap::new(),
         }
     }
 
     pub fn with_options(module: &'a BytecodeModule, options: VmOptions) -> Self {
-        let profiling = if options.profiling || options.jit_enabled {
+        let profiling = if options.profiling {
             Some(ProfilingState::new(module.functions.len(), options))
         } else {
             None
         };
 
-        #[cfg(feature = "jit-cranelift")]
-        let (jit_engine, jit_cache) = if options.jit_enabled {
-            (Some(JitEngine::new()), HashMap::new())
-        } else {
-            (None, HashMap::new())
-        };
-
         Self {
             module,
             call_stack: Vec::with_capacity(32),
+            next_frame_token: 0,
+            borrowed_sources: HashSet::new(),
+            exclusive_sources: HashSet::new(),
             profiling,
             native_resolver: None,
-            #[cfg(feature = "jit-cranelift")]
-            jit_engine,
-            #[cfg(feature = "jit-cranelift")]
-            jit_cache,
-            #[cfg(feature = "jit-cranelift")]
-            jit_cache_heap: HashMap::new(),
         }
     }
 
@@ -101,108 +78,16 @@ impl<'a> Interpreter<'a> {
             .get(function_id.0 as usize)
             .ok_or_else(|| VmError::UnknownFunction(function_id.to_string()))?;
 
+        if func.inout_params.iter().any(|is_inout| *is_inout) {
+            return Err(VmError::Message(
+                "inout entry arguments require a live caller frame".into(),
+            ));
+        }
         if func.params.len() != args.len() {
             return Err(VmError::WrongArity {
                 expected: func.params.len() as u16,
                 found: args.len() as u16,
             });
-        }
-
-        #[cfg(feature = "jit-cranelift")]
-        if self
-            .profiling
-            .as_ref()
-            .map(|p| p.options.jit_enabled)
-            .unwrap_or(false)
-        {
-            // ── Heap-aware JIT dispatch ──────────────────────────────────────────
-            if let Some(jit_fn) = self.jit_cache_heap.get(&function_id).copied() {
-                let mut ctx = JitRuntimeContext::new();
-                let mut i64_args: Vec<i64> = Vec::with_capacity(args.len());
-                let mut marshal_ok = true;
-                for arg in &args {
-                    match vm_value_to_jit_handle(arg, &mut ctx) {
-                        Some(h) => i64_args.push(h),
-                        None => {
-                            marshal_ok = false;
-                            break;
-                        }
-                    }
-                }
-
-                if !marshal_ok {
-                    // Unsupported value at the native boundary: fall back to the
-                    // interpreter. This is not a native runtime failure.
-                    if let Some(ref mut prof) = self.profiling {
-                        let stats = &mut prof.stats[function_id.0 as usize];
-                        stats.jit_fallback_calls += 1;
-                        stats.jit_heap_fallbacks += 1;
-                    }
-                } else {
-                    let before_helpers = ctx.helper_calls;
-                    let before_allocs = ctx.allocation_count();
-
-                    let start_native = std::time::Instant::now();
-                    let result =
-                        jit_fn.call_with_ctx(&mut ctx as *mut JitRuntimeContext, &i64_args);
-                    let elapsed = start_native.elapsed().as_nanos() as u64;
-
-                    if let Some(ref mut prof) = self.profiling {
-                        let stats = &mut prof.stats[function_id.0 as usize];
-                        stats.jit_runtime_calls += 1;
-                        stats.jit_heap_runtime_calls += 1;
-                        stats.jit_heap_helper_calls += ctx.helper_calls - before_helpers;
-                        stats.jit_heap_handle_allocations += ctx.allocation_count() - before_allocs;
-                        stats.jit_heap_context_objects += ctx.object_count() as u64;
-                        stats.jit_heap_handle_cache_hits += ctx.cache_hits;
-                        stats.jit_heap_handle_cache_misses += ctx.cache_misses;
-                        stats.jit_total_native_time_ns += elapsed;
-                        if result.is_err() {
-                            stats.jit_heap_errors += 1;
-                        }
-                    }
-
-                    match result {
-                        Ok(res) => return Ok(VmValue::Int64(res)),
-                        Err(error) => return Err(jit_runtime_error_to_vm(error)),
-                    }
-                }
-            }
-            // ── Pure-i64 JIT dispatch ────────────────────────────────────────────
-            else if let Some(jit_fn) = self.jit_cache.get(&function_id).copied() {
-                let mut i64_args = Vec::with_capacity(args.len());
-                let mut compatible = true;
-                for arg in &args {
-                    if let VmValue::Int64(i) = arg {
-                        i64_args.push(*i);
-                    } else {
-                        compatible = false;
-                        break;
-                    }
-                }
-
-                if !compatible {
-                    // Unsupported value at the native boundary: fall back to the
-                    // interpreter. This is not a native runtime failure.
-                    if let Some(ref mut prof) = self.profiling {
-                        prof.stats[function_id.0 as usize].jit_fallback_calls += 1;
-                    }
-                } else {
-                    let start_native = std::time::Instant::now();
-                    let result = jit_fn.call_i64(&i64_args);
-                    let elapsed = start_native.elapsed().as_nanos() as u64;
-
-                    if let Some(ref mut prof) = self.profiling {
-                        prof.stats[function_id.0 as usize].jit_runtime_calls += 1;
-                        prof.stats[function_id.0 as usize].jit_total_native_time_ns += elapsed;
-                    }
-
-                    match result {
-                        Ok(res) => return Ok(VmValue::Int64(res)),
-                        Err(error) => return Err(jit_runtime_error_to_vm(error)),
-                    }
-                }
-            }
         }
 
         // Initialize locals
@@ -211,20 +96,21 @@ impl<'a> Interpreter<'a> {
             locals[i] = Some(arg);
         }
 
+        let initial_max_stack = func.max_stack as usize;
+        let initial_token = self.allocate_frame_token()?;
         let initial_frame = Frame {
+            token: initial_token,
             function_id,
             ip: 0,
             locals,
-            stack: Vec::with_capacity(func.max_stack as usize),
+            stack: Vec::with_capacity(initial_max_stack),
+            inout_loans: Vec::new(),
         };
 
         self.call_stack.push(initial_frame);
 
         if let Some(ref mut prof) = self.profiling {
             prof.stats[function_id.0 as usize].call_count += 1;
-
-            #[cfg(feature = "jit-cranelift")]
-            self.maybe_compile_jit(function_id);
         }
 
         self.execute()
@@ -299,29 +185,6 @@ impl<'a> Interpreter<'a> {
                 backedge_count: s.backedge_count,
                 is_hot,
                 top_opcodes: top_opcodes_named,
-                jit_compile_attempts: s.jit_compile_attempts,
-                jit_compile_successes: s.jit_compile_successes,
-                jit_compile_failures: s.jit_compile_failures,
-                jit_runtime_calls: s.jit_runtime_calls,
-                jit_fallback_calls: s.jit_fallback_calls,
-                jit_rejection_reason: s.jit_rejection_reason.clone(),
-                jit_compile_time_ns: s.jit_compile_time_ns,
-                jit_total_native_time_ns: s.jit_total_native_time_ns,
-                jit_rejected_count: s.jit_rejected_count,
-                jit_heap_runtime_calls: s.jit_heap_runtime_calls,
-                jit_heap_helper_calls: s.jit_heap_helper_calls,
-                jit_heap_handle_allocations: s.jit_heap_handle_allocations,
-                jit_heap_context_objects: s.jit_heap_context_objects,
-                jit_heap_fallbacks: s.jit_heap_fallbacks,
-                jit_heap_errors: s.jit_heap_errors,
-                jit_heap_handle_cache_hits: s.jit_heap_handle_cache_hits,
-                jit_heap_handle_cache_misses: s.jit_heap_handle_cache_misses,
-                jit_skipped_below_threshold: s.jit_skipped_below_threshold,
-                jit_skipped_too_small: s.jit_skipped_too_small,
-                jit_skipped_retry_limit: s.jit_skipped_retry_limit,
-                jit_permanent_rejections: s.jit_permanent_rejections,
-                jit_retryable_failures: s.jit_retryable_failures,
-                jit_is_permanently_rejected: s.jit_is_permanently_rejected,
             });
         }
 
@@ -386,164 +249,17 @@ impl<'a> Interpreter<'a> {
             50 => "ArrayPush",
             51 => "AddI64LL",
             52 => "AddI64LC",
+            53 => "MakeClosure",
+            54 => "CallClosure",
+            55 => "BorrowLocal",
+            56 => "MakeClosureRef",
+            57 => "BorrowLocalMut",
+            58 => "MakeClosureInout",
+            59 => "BorrowSliceMut",
+            60 => "InoutSliceGet",
+            61 => "InoutSliceSet",
+            62 => "InoutSliceLen",
             _ => "Unknown",
-        }
-    }
-
-    #[cfg(feature = "jit-cranelift")]
-    fn maybe_compile_jit(&mut self, function_id: FunctionId) {
-        // Skip if already compiled (either cache)
-        if self.jit_cache.contains_key(&function_id)
-            || self.jit_cache_heap.contains_key(&function_id)
-        {
-            return;
-        }
-
-        let mut attempt_needed = false;
-        if let Some(ref mut prof) = self.profiling {
-            let stats = &mut prof.stats[function_id.0 as usize];
-
-            if !prof.options.jit_enabled {
-                return;
-            }
-
-            if stats.jit_is_permanently_rejected {
-                return;
-            }
-
-            let is_hot = stats.call_count >= prof.options.hot_call_threshold
-                || stats.backedge_count >= prof.options.hot_backedge_threshold;
-            if !is_hot {
-                stats.jit_skipped_below_threshold += 1;
-                return;
-            }
-
-            let func_len = self.module.functions[function_id.0 as usize].code.len() as u64;
-            if func_len < prof.options.jit_min_instruction_count {
-                stats.jit_skipped_too_small += 1;
-                return;
-            }
-
-            if stats.jit_compile_failures >= prof.options.jit_retry_limit as u64 {
-                stats.jit_skipped_retry_limit += 1;
-                return;
-            }
-
-            attempt_needed = true;
-        }
-
-        if !attempt_needed {
-            return;
-        }
-
-        let start_time = std::time::Instant::now();
-
-        let eligibility = tempra_jit_cranelift::explain_jit_eligibility(self.module, function_id);
-        if let Some(ref mut prof) = self.profiling {
-            prof.stats[function_id.0 as usize].jit_compile_attempts += 1;
-            if !matches!(eligibility, tempra_jit_cranelift::JitEligibility::Eligible) {
-                prof.stats[function_id.0 as usize].jit_rejection_reason =
-                    Some(eligibility.to_string());
-                prof.stats[function_id.0 as usize].jit_rejected_count += 1;
-                prof.stats[function_id.0 as usize].jit_permanent_rejections += 1;
-                prof.stats[function_id.0 as usize].jit_is_permanently_rejected = true;
-                let elapsed = start_time.elapsed().as_nanos() as u64;
-                prof.stats[function_id.0 as usize].jit_compile_time_ns += elapsed;
-                return;
-            }
-        }
-
-        // Determine compile path: heap-aware or pure-i64
-        let heap_required = is_heap_requiring(&self.module.functions[function_id.0 as usize]);
-
-        if let Some(ref mut engine) = self.jit_engine {
-            let mut compiling = std::collections::HashSet::new();
-
-            if heap_required {
-                // ── Heap-aware compile path ───────────────────────────────────────
-                match compile_function_heap_aware(
-                    engine,
-                    self.module,
-                    function_id,
-                    &mut self.jit_cache_heap,
-                    &mut compiling,
-                ) {
-                    Ok(compiled) => {
-                        self.jit_cache_heap.insert(function_id, compiled);
-                        let elapsed = start_time.elapsed().as_nanos() as u64;
-                        if let Some(ref mut prof) = self.profiling {
-                            prof.stats[function_id.0 as usize].jit_compile_successes += 1;
-                            prof.stats[function_id.0 as usize].jit_compile_time_ns += elapsed;
-                        }
-                    }
-                    Err(e) => {
-                        let elapsed = start_time.elapsed().as_nanos() as u64;
-                        if let Some(ref mut prof) = self.profiling {
-                            prof.stats[function_id.0 as usize].jit_compile_failures += 1;
-                            prof.stats[function_id.0 as usize].jit_rejection_reason =
-                                Some(format!("Heap compile failed: {:?}", e));
-                            prof.stats[function_id.0 as usize].jit_compile_time_ns += elapsed;
-                            let failures = prof.stats[function_id.0 as usize].jit_compile_failures;
-                            if failures >= prof.options.jit_retry_limit as u64 {
-                                prof.stats[function_id.0 as usize].jit_is_permanently_rejected =
-                                    true;
-                                prof.stats[function_id.0 as usize].jit_permanent_rejections += 1;
-                            } else {
-                                prof.stats[function_id.0 as usize].jit_retryable_failures += 1;
-                            }
-                        }
-                    }
-                }
-            } else {
-                // ── Pure-i64 compile path ─────────────────────────────────────────
-                let old_keys: Vec<tempra_bytecode::function::FunctionId> =
-                    self.jit_cache.keys().copied().collect();
-                match tempra_jit_cranelift::compile_function_i64(
-                    engine,
-                    self.module,
-                    function_id,
-                    &mut self.jit_cache,
-                    &mut compiling,
-                ) {
-                    Ok(compiled) => {
-                        self.jit_cache.insert(function_id, compiled);
-                        let elapsed = start_time.elapsed().as_nanos() as u64;
-                        if let Some(ref mut prof) = self.profiling {
-                            for new_key in self.jit_cache.keys() {
-                                if !old_keys.contains(new_key) && *new_key != function_id {
-                                    prof.stats[new_key.0 as usize].jit_compile_attempts += 1;
-                                    prof.stats[new_key.0 as usize].jit_compile_successes += 1;
-                                }
-                            }
-                            prof.stats[function_id.0 as usize].jit_compile_successes += 1;
-                            prof.stats[function_id.0 as usize].jit_compile_time_ns += elapsed;
-                        }
-                    }
-                    Err(e) => {
-                        let elapsed = start_time.elapsed().as_nanos() as u64;
-                        if let Some(ref mut prof) = self.profiling {
-                            prof.stats[function_id.0 as usize].jit_compile_failures += 1;
-                            prof.stats[function_id.0 as usize].jit_rejection_reason =
-                                Some(format!("Compilation failed: {:?}", e));
-                            prof.stats[function_id.0 as usize].jit_compile_time_ns += elapsed;
-                            let failures = prof.stats[function_id.0 as usize].jit_compile_failures;
-                            if failures >= prof.options.jit_retry_limit as u64 {
-                                prof.stats[function_id.0 as usize].jit_is_permanently_rejected =
-                                    true;
-                                prof.stats[function_id.0 as usize].jit_permanent_rejections += 1;
-                            } else {
-                                prof.stats[function_id.0 as usize].jit_retryable_failures += 1;
-                            }
-                        }
-                    }
-                }
-            }
-        } else {
-            if let Some(ref mut prof) = self.profiling {
-                prof.stats[function_id.0 as usize].jit_compile_failures += 1;
-                prof.stats[function_id.0 as usize].jit_rejection_reason =
-                    Some("JIT engine not available".into());
-            }
         }
     }
 
@@ -622,15 +338,74 @@ impl<'a> Interpreter<'a> {
                             .ok_or(VmError::LocalNotInitialized(id.0))?
                             .clone()
                     };
-                    self.push(val)?;
+                    let value = self.resolve_borrowed_value(val)?;
+                    self.push(value)?;
                 }
                 BytecodeInstr::StoreLocal(id) => {
-                    let val = self.pop()?;
-                    let frame = self.call_stack.last_mut().ok_or(VmError::MissingReturn)?;
-                    if id.0 as usize >= frame.locals.len() {
-                        return Err(VmError::LocalOutOfBounds(id.0));
+                    let val = self.pop_raw()?;
+                    let (token, existing) = {
+                        let frame = self.call_stack.last().ok_or(VmError::MissingReturn)?;
+                        let existing = frame
+                            .locals
+                            .get(id.0 as usize)
+                            .ok_or(VmError::LocalOutOfBounds(id.0))?
+                            .clone();
+                        (frame.token, existing)
+                    };
+                    if matches!(&val, VmValue::BorrowedLocal(_)) {
+                        return Err(VmError::Message(
+                            "raw borrow handle cannot be stored as a value".into(),
+                        ));
                     }
-                    frame.locals[id.0 as usize] = Some(val);
+                    if let Some(VmValue::BorrowedLocal(handle)) = existing {
+                        if handle.range.is_some() {
+                            return Err(VmError::Message(
+                                "exclusive slice parameter cannot be rebound".into(),
+                            ));
+                        }
+                        if !handle.mutable {
+                            return Err(VmError::Message(
+                                "cannot mutate through immutable ref capture".into(),
+                            ));
+                        }
+                        if !self
+                            .exclusive_sources
+                            .contains(&(handle.owner_frame, handle.local_id.0))
+                        {
+                            return Err(VmError::Message(
+                                "exclusive borrowed owner loan is no longer active".into(),
+                            ));
+                        }
+                        let owner = self
+                            .call_stack
+                            .iter_mut()
+                            .find(|frame| frame.token == handle.owner_frame)
+                            .ok_or_else(|| {
+                                VmError::Message(
+                                    "exclusive borrowed owner frame is no longer alive".into(),
+                                )
+                            })?;
+                        let target = owner
+                            .locals
+                            .get_mut(handle.local_id.0 as usize)
+                            .ok_or(VmError::LocalOutOfBounds(handle.local_id.0))?;
+                        if matches!(target, Some(VmValue::BorrowedLocal(_))) {
+                            return Err(VmError::Message(
+                                "nested exclusive borrowed owner is unsupported".into(),
+                            ));
+                        }
+                        *target = Some(val);
+                        continue;
+                    }
+                    if self.borrowed_sources.contains(&(token, id.0)) {
+                        return Err(VmError::Message(
+                            "cannot overwrite an active borrowed owner directly".into(),
+                        ));
+                    }
+                    self.call_stack
+                        .last_mut()
+                        .ok_or(VmError::MissingReturn)?
+                        .locals[id.0 as usize] = Some(val);
                 }
 
                 BytecodeInstr::Pop => {
@@ -762,9 +537,6 @@ impl<'a> Interpreter<'a> {
                         if offset.0 <= current_ip {
                             let stats = &mut prof.stats[frame_func_id.0 as usize];
                             stats.backedge_count += 1;
-
-                            #[cfg(feature = "jit-cranelift")]
-                            self.maybe_compile_jit(frame_func_id);
                         }
                     }
                     self.call_stack.last_mut().ok_or(VmError::MissingReturn)?.ip = offset.0;
@@ -776,144 +548,320 @@ impl<'a> Interpreter<'a> {
                             if offset.0 <= current_ip {
                                 let stats = &mut prof.stats[frame_func_id.0 as usize];
                                 stats.backedge_count += 1;
-
-                                #[cfg(feature = "jit-cranelift")]
-                                self.maybe_compile_jit(frame_func_id);
                             }
                         }
                         self.call_stack.last_mut().ok_or(VmError::MissingReturn)?.ip = offset.0;
                     }
                 }
 
-                BytecodeInstr::Call(target_id, argc) => {
-                    #[cfg(feature = "jit-cranelift")]
-                    if self
-                        .profiling
-                        .as_ref()
-                        .map(|p| p.options.jit_enabled)
-                        .unwrap_or(false)
+                BytecodeInstr::BorrowSliceMut(local) => {
+                    let end =
+                        usize::try_from(self.pop_i64()?).map_err(|_| VmError::ExpectedIntIndex)?;
+                    let start =
+                        usize::try_from(self.pop_i64()?).map_err(|_| VmError::ExpectedIntIndex)?;
+                    let handle = self.borrow_slice_mut(local, start, end)?;
+                    self.push(VmValue::BorrowedLocal(handle))?;
+                }
+                BytecodeInstr::InoutSliceGet(local) => {
+                    let index =
+                        usize::try_from(self.pop_i64()?).map_err(|_| VmError::ExpectedIntIndex)?;
+                    let (handle, start, end) = self.exclusive_slice_handle(local)?;
+                    if index >= end - start {
+                        return Err(VmError::IndexOutOfBounds(index));
+                    }
+                    let value = self
+                        .slice_owner(handle)?
+                        .get(start + index)
+                        .cloned()
+                        .ok_or(VmError::IndexOutOfBounds(index))?;
+                    if !is_slice_scalar(&value) {
+                        return Err(VmError::Message(
+                            "exclusive slice element is not a supported scalar".into(),
+                        ));
+                    }
+                    self.push(value)?;
+                }
+                BytecodeInstr::InoutSliceSet(local) => {
+                    let value = self.pop()?;
+                    let index =
+                        usize::try_from(self.pop_i64()?).map_err(|_| VmError::ExpectedIntIndex)?;
+                    let (handle, start, end) = self.exclusive_slice_handle(local)?;
+                    if index >= end - start {
+                        return Err(VmError::IndexOutOfBounds(index));
+                    }
+                    let existing = self
+                        .slice_owner(handle)?
+                        .get(start + index)
+                        .ok_or(VmError::IndexOutOfBounds(index))?;
+                    if !is_slice_scalar(&value)
+                        || std::mem::discriminant(existing) != std::mem::discriminant(&value)
                     {
-                        // ── Heap-aware JIT call ──────────────────────────────────────────
-                        if let Some(jit_fn) = self.jit_cache_heap.get(&target_id).copied() {
-                            let mut args = Vec::with_capacity(argc as usize);
-                            for _ in 0..argc {
-                                args.push(self.pop()?);
-                            }
-                            args.reverse();
-
-                            let mut ctx = JitRuntimeContext::new();
-                            let mut i64_args: Vec<i64> = Vec::with_capacity(argc as usize);
-                            let mut marshal_ok = true;
-                            for arg in &args {
-                                match vm_value_to_jit_handle(arg, &mut ctx) {
-                                    Some(h) => i64_args.push(h),
-                                    None => {
-                                        marshal_ok = false;
-                                        break;
-                                    }
-                                }
-                            }
-
-                            if marshal_ok {
-                                let before_helpers = ctx.helper_calls;
-                                let before_allocs = ctx.allocation_count();
-
-                                let start_native = std::time::Instant::now();
-                                let result = jit_fn
-                                    .call_with_ctx(&mut ctx as *mut JitRuntimeContext, &i64_args);
-                                let elapsed = start_native.elapsed().as_nanos() as u64;
-
-                                if let Some(ref mut prof) = self.profiling {
-                                    let stats = &mut prof.stats[target_id.0 as usize];
-                                    stats.jit_runtime_calls += 1;
-                                    stats.jit_heap_runtime_calls += 1;
-                                    stats.jit_heap_helper_calls +=
-                                        ctx.helper_calls - before_helpers;
-                                    stats.jit_heap_handle_allocations +=
-                                        ctx.allocation_count() - before_allocs;
-                                    stats.jit_heap_context_objects += ctx.object_count() as u64;
-                                    stats.jit_heap_handle_cache_hits += ctx.cache_hits;
-                                    stats.jit_heap_handle_cache_misses += ctx.cache_misses;
-                                    stats.jit_total_native_time_ns += elapsed;
-                                    if result.is_err() {
-                                        stats.jit_heap_errors += 1;
-                                    }
-                                }
-
-                                match result {
-                                    Ok(res) => {
-                                        self.push(VmValue::Int64(res))?;
-                                        continue;
-                                    }
-                                    Err(error) => return Err(jit_runtime_error_to_vm(error)),
-                                }
-                            }
-
-                            // Unsupported value at the native boundary: fall back to
-                            // the interpreter. This is not a native runtime failure.
-                            if let Some(ref mut prof) = self.profiling {
-                                let stats = &mut prof.stats[target_id.0 as usize];
-                                stats.jit_fallback_calls += 1;
-                                stats.jit_heap_fallbacks += 1;
-                            }
-                            // Put args back on stack for the interpreter.
-                            for arg in args {
-                                self.push(arg)?;
-                            }
+                        return Err(VmError::Message(
+                            "exclusive slice write requires matching scalar element type".into(),
+                        ));
+                    }
+                    let owner = self
+                        .call_stack
+                        .iter_mut()
+                        .find(|frame| frame.token == handle.owner_frame)
+                        .ok_or_else(|| {
+                            VmError::Message("exclusive slice owner is no longer alive".into())
+                        })?;
+                    let Some(Some(VmValue::Array(buffer))) =
+                        owner.locals.get_mut(handle.local_id.0 as usize)
+                    else {
+                        return Err(VmError::ExpectedArrayOrSlice);
+                    };
+                    // The owner slot is updated, never the descriptor or a detached copy.
+                    // Physical COW preserves value semantics for independent array copies.
+                    Rc::make_mut(buffer)[start + index] = value;
+                }
+                BytecodeInstr::InoutSliceLen(local) => {
+                    let (_, start, end) = self.exclusive_slice_handle(local)?;
+                    let len = i64::try_from(end - start)
+                        .map_err(|_| VmError::Message("exclusive slice length overflow".into()))?;
+                    self.push(VmValue::Int64(len))?;
+                }
+                BytecodeInstr::BorrowLocal(local) | BytecodeInstr::BorrowLocalMut(local) => {
+                    let owner = self.call_stack.last().ok_or(VmError::MissingReturn)?;
+                    let value = owner
+                        .locals
+                        .get(local.0 as usize)
+                        .ok_or(VmError::LocalOutOfBounds(local.0))?
+                        .as_ref()
+                        .ok_or(VmError::LocalNotInitialized(local.0))?;
+                    let exclusive = matches!(instr, BytecodeInstr::BorrowLocalMut(_));
+                    if let VmValue::BorrowedLocal(handle) = value {
+                        if !exclusive || !handle.mutable || handle.range.is_some() {
+                            return Err(VmError::Message(
+                                "cannot reborrow a read-only or invalid exclusive parameter".into(),
+                            ));
                         }
-                        // ── Pure-i64 JIT call ────────────────────────────────────────────
-                        else if let Some(jit_fn) = self.jit_cache.get(&target_id).copied() {
-                            let mut args = Vec::with_capacity(argc as usize);
-                            for _ in 0..argc {
-                                args.push(self.pop()?);
+                        let handle = *handle;
+                        let key = (handle.owner_frame, handle.local_id.0);
+                        if !self.exclusive_sources.contains(&key)
+                            || !self
+                                .call_stack
+                                .iter()
+                                .any(|frame| frame.token == handle.owner_frame)
+                        {
+                            return Err(VmError::Message(
+                                "exclusive reborrow owner is not active".into(),
+                            ));
+                        }
+                        // The parent call retains the loan. No second owner
+                        // token is acquired or released by this nested call.
+                        self.push(VmValue::BorrowedLocal(handle))?;
+                        continue;
+                    }
+                    let token = owner.token;
+                    let key = (token, local.0);
+                    if self.exclusive_sources.contains(&key)
+                        || (exclusive && self.borrowed_sources.contains(&key))
+                    {
+                        return Err(VmError::Message(
+                            "conflicting exclusive borrow of local".into(),
+                        ));
+                    }
+                    if exclusive {
+                        self.exclusive_sources.insert(key);
+                    }
+                    self.borrowed_sources.insert(key);
+                    self.push(VmValue::BorrowedLocal(VmBorrow {
+                        owner_frame: token,
+                        local_id: local,
+                        mutable: exclusive,
+                        range: None,
+                    }))?;
+                }
+                BytecodeInstr::MakeClosureRef(target_id, capture_count)
+                | BytecodeInstr::MakeClosureInout(target_id, capture_count) => {
+                    let target = self
+                        .module
+                        .functions
+                        .get(target_id.0 as usize)
+                        .ok_or_else(|| VmError::UnknownFunction(target_id.to_string()))?;
+                    let count = usize::from(capture_count);
+                    if count == 0 || count > target.params.len() || target.is_extern {
+                        return Err(VmError::Message(
+                            "invalid borrowed closure target/capture count".into(),
+                        ));
+                    }
+                    let public_signature = BytecodeSignature {
+                        params: target.params[count..].to_vec(),
+                        ret: target.ret,
+                    };
+                    let signature_id = self
+                        .module
+                        .signatures
+                        .iter()
+                        .position(|sig| sig == &public_signature)
+                        .map(|index| SignatureId(index as u32))
+                        .ok_or_else(|| {
+                            VmError::Message("borrowed closure signature missing".into())
+                        })?;
+                    let owner_token = self.call_stack.last().ok_or(VmError::MissingReturn)?.token;
+                    let exclusive = matches!(instr, BytecodeInstr::MakeClosureInout(_, _));
+                    let mut captures = Vec::with_capacity(count);
+                    for _ in 0..count {
+                        let raw = self.pop_raw()?;
+                        match &raw {
+                            VmValue::BorrowedLocal(handle)
+                                if handle.owner_frame == owner_token
+                                    && handle.mutable == exclusive =>
+                            {
+                                captures.push(raw)
                             }
-                            args.reverse();
-
-                            let mut i64_args = Vec::with_capacity(argc as usize);
-                            let mut compatible = true;
-                            for arg in &args {
-                                if let VmValue::Int64(i) = arg {
-                                    i64_args.push(*i);
-                                } else {
-                                    compatible = false;
-                                    break;
-                                }
+                            _ => {
+                                return Err(VmError::Message(
+                                    "MakeClosureRef requires current-frame borrow handles".into(),
+                                ))
                             }
-
-                            if compatible {
-                                let start_native = std::time::Instant::now();
-                                let result = jit_fn.call_i64(&i64_args);
-                                let elapsed = start_native.elapsed().as_nanos() as u64;
-
-                                if let Some(ref mut prof) = self.profiling {
-                                    let stats = &mut prof.stats[target_id.0 as usize];
-                                    stats.jit_runtime_calls += 1;
-                                    stats.jit_total_native_time_ns += elapsed;
-                                }
-
-                                match result {
-                                    Ok(res) => {
-                                        self.push(VmValue::Int64(res))?;
-                                        continue;
-                                    }
-                                    Err(error) => return Err(jit_runtime_error_to_vm(error)),
-                                }
-                            }
-
-                            // Unsupported value at the native boundary: fall back to
-                            // the interpreter. This is not a native runtime failure.
-                            if let Some(ref mut prof) = self.profiling {
-                                prof.stats[target_id.0 as usize].jit_fallback_calls += 1;
-                            }
-                            // Put args back on stack for the interpreter.
-                            for arg in args {
-                                self.push(arg)?;
-                            }
-                        } else {
-                            self.maybe_compile_jit(target_id);
                         }
                     }
+                    captures.reverse();
+                    self.push(VmValue::Closure(VmClosure {
+                        function_id: target_id,
+                        signature_id,
+                        captures,
+                    }))?;
+                }
+                BytecodeInstr::MakeClosure(target_id, capture_count) => {
+                    let target = self
+                        .module
+                        .functions
+                        .get(target_id.0 as usize)
+                        .ok_or_else(|| VmError::UnknownFunction(target_id.to_string()))?;
+                    let capture_len = usize::from(capture_count);
+                    if capture_len > target.params.len() {
+                        return Err(VmError::WrongArity {
+                            expected: target.params.len() as u16,
+                            found: capture_count,
+                        });
+                    }
+                    // The verifier requires the public signature to be in the
+                    // module table. Resolve it when constructing the value,
+                    // so indirect dispatch only compares compact SignatureIds.
+                    let public_signature = BytecodeSignature {
+                        params: target.params[capture_len..].to_vec(),
+                        ret: target.ret,
+                    };
+                    let signature_id = self
+                        .module
+                        .signatures
+                        .iter()
+                        .position(|signature| signature == &public_signature)
+                        .map(|index| SignatureId(index as u32))
+                        .ok_or_else(|| {
+                            VmError::Message("closure public signature missing from module".into())
+                        })?;
 
+                    let mut captures = Vec::with_capacity(capture_len);
+                    for _ in 0..capture_len {
+                        captures.push(self.pop()?);
+                    }
+                    captures.reverse();
+                    self.push(VmValue::Closure(VmClosure {
+                        function_id: target_id,
+                        signature_id,
+                        captures,
+                    }))?;
+                }
+                BytecodeInstr::CallClosure(signature_id, argc) => {
+                    // Stack contract: [..., callable, arg0, ..., argN].
+                    let mut args = Vec::with_capacity(usize::from(argc));
+                    for _ in 0..argc {
+                        args.push(self.pop()?);
+                    }
+                    args.reverse();
+                    let closure = match self.pop()? {
+                        VmValue::Closure(closure) => closure,
+                        other => {
+                            return Err(VmError::TypeMismatch {
+                                expected: "Closure".into(),
+                                found: other.type_name().into(),
+                            })
+                        }
+                    };
+                    if closure.signature_id != signature_id {
+                        return Err(VmError::TypeMismatch {
+                            expected: format!("Callable(#{})", signature_id.0),
+                            found: format!("Callable(#{})", closure.signature_id.0),
+                        });
+                    }
+                    let (param_count, local_count, max_stack, is_extern) = {
+                        let target = self
+                            .module
+                            .functions
+                            .get(closure.function_id.0 as usize)
+                            .ok_or_else(|| {
+                                VmError::UnknownFunction(closure.function_id.to_string())
+                            })?;
+                        (
+                            target.params.len(),
+                            target.locals.len(),
+                            target.max_stack as usize,
+                            target.is_extern,
+                        )
+                    };
+                    if is_extern {
+                        return Err(VmError::Native(
+                            "indirect calls to native externs are not supported yet".into(),
+                        ));
+                    }
+                    let supplied = closure.captures.len() + args.len();
+                    if supplied != param_count {
+                        return Err(VmError::WrongArity {
+                            expected: param_count as u16,
+                            found: supplied as u16,
+                        });
+                    }
+                    if local_count < supplied {
+                        return Err(VmError::LocalOutOfBounds(local_count as u32));
+                    }
+                    let target = &self.module.functions[closure.function_id.0 as usize];
+                    let count = closure.captures.len();
+                    let signature = self
+                        .module
+                        .signatures
+                        .get(signature_id.0 as usize)
+                        .ok_or_else(|| VmError::Message("invalid closure signature".into()))?;
+                    if target.params[count..] != signature.params[..]
+                        || target.ret != signature.ret
+                        || target.inout_params[count..].iter().any(|access| *access)
+                        || closure
+                            .captures
+                            .iter()
+                            .enumerate()
+                            .any(|(index, capture)| match capture {
+                                VmValue::BorrowedLocal(handle) => {
+                                    let key = (handle.owner_frame, handle.local_id.0);
+                                    handle.range.is_some()
+                                        || handle.mutable != target.inout_params[index]
+                                        || !self.borrowed_sources.contains(&key)
+                                        || (handle.mutable
+                                            && !self.exclusive_sources.contains(&key))
+                                        || !self
+                                            .call_stack
+                                            .iter()
+                                            .any(|frame| frame.token == handle.owner_frame)
+                                }
+                                _ => target.inout_params[index],
+                            })
+                    {
+                        return Err(VmError::Message(
+                            "closure access/signature contract mismatch".into(),
+                        ));
+                    }
+                    let mut locals = vec![None; local_count];
+                    // Captured parameters are hidden, ordered before the
+                    // explicitly supplied arguments.
+                    for (index, value) in closure.captures.into_iter().chain(args).enumerate() {
+                        locals[index] = Some(value);
+                    }
+                    self.push_interpreted_frame(closure.function_id, locals, max_stack)?;
+                }
+                BytecodeInstr::Call(target_id, argc) => {
                     let target_func = self
                         .module
                         .functions
@@ -954,22 +902,66 @@ impl<'a> Interpreter<'a> {
                     }
 
                     let mut locals = vec![None; target_func.locals.len()];
-                    // Pop arguments directly into locals in reverse order (right-to-left)
+                    let mut acquired_loans = Vec::new();
+                    let mut exclusive_arguments = HashSet::new();
+                    let caller_token = self.call_stack.last().ok_or(VmError::MissingReturn)?.token;
+                    // Ordinary arguments are materialized by value, while
+                    // exclusive parameters preserve the non-owning handle.
                     for i in (0..argc).rev() {
-                        locals[i as usize] = Some(self.pop()?);
+                        let value = if target_func
+                            .inout_params
+                            .get(i as usize)
+                            .copied()
+                            .unwrap_or(false)
+                        {
+                            let raw = self.pop_raw()?;
+                            match &raw {
+                                VmValue::BorrowedLocal(handle) if handle.mutable => {
+                                    let key = (handle.owner_frame, handle.local_id.0);
+                                    if handle.range.is_some()
+                                        != (target_func.params[i as usize]
+                                            == BytecodeType::ExclusiveSlice)
+                                        || !exclusive_arguments.insert(key)
+                                    {
+                                        return Err(VmError::Message(
+                                            "exclusive argument kind or owner alias mismatch"
+                                                .into(),
+                                        ));
+                                    }
+                                    if !self.exclusive_sources.contains(&key)
+                                        || !self
+                                            .call_stack
+                                            .iter()
+                                            .any(|frame| frame.token == handle.owner_frame)
+                                    {
+                                        return Err(VmError::Message(
+                                            "invalid or expired exclusive inout handle".into(),
+                                        ));
+                                    }
+                                    if handle.owner_frame == caller_token {
+                                        acquired_loans.push(key);
+                                    }
+                                }
+                                _ => {
+                                    return Err(VmError::Message(
+                                        "inout parameter requires an exclusive borrow handle"
+                                            .into(),
+                                    ))
+                                }
+                            }
+                            raw
+                        } else {
+                            self.pop()?
+                        };
+                        locals[i as usize] = Some(value);
                     }
 
-                    if let Some(ref mut prof) = self.profiling {
-                        prof.stats[target_id.0 as usize].call_count += 1;
-                    }
-
-                    let new_frame = Frame {
-                        function_id: target_id,
-                        ip: 0,
-                        locals,
-                        stack: Vec::with_capacity(target_func.max_stack as usize),
-                    };
-                    self.call_stack.push(new_frame);
+                    let callee_max_stack = target_func.max_stack as usize;
+                    self.push_interpreted_frame(target_id, locals, callee_max_stack)?;
+                    self.call_stack
+                        .last_mut()
+                        .ok_or(VmError::MissingReturn)?
+                        .inout_loans = acquired_loans;
                 }
 
                 BytecodeInstr::Return => {
@@ -979,7 +971,16 @@ impl<'a> Interpreter<'a> {
                         None
                     };
 
-                    self.call_stack.pop();
+                    if let Some(popped) = self.call_stack.pop() {
+                        for key in &popped.inout_loans {
+                            self.exclusive_sources.remove(key);
+                            self.borrowed_sources.remove(key);
+                        }
+                        self.borrowed_sources
+                            .retain(|(frame_id, _)| *frame_id != popped.token);
+                        self.exclusive_sources
+                            .retain(|(frame_id, _)| *frame_id != popped.token);
+                    }
 
                     if let Some(prev_frame) = self.call_stack.last_mut() {
                         if let Some(val) = ret_val {
@@ -1261,50 +1262,83 @@ impl<'a> Interpreter<'a> {
                 BytecodeInstr::Unreachable => return Err(VmError::UnreachableExecuted),
 
                 BytecodeInstr::AddI64LL(a, b) => {
-                    let frame = self.call_stack.last().ok_or(VmError::MissingReturn)?;
-                    let val_a = frame
-                        .locals
-                        .get(a.0 as usize)
-                        .ok_or(VmError::LocalOutOfBounds(a.0))?
-                        .as_ref()
-                        .ok_or(VmError::LocalNotInitialized(a.0))?;
-                    let val_b = frame
-                        .locals
-                        .get(b.0 as usize)
-                        .ok_or(VmError::LocalOutOfBounds(b.0))?
-                        .as_ref()
-                        .ok_or(VmError::LocalNotInitialized(b.0))?;
-
-                    if let (VmValue::Int64(ia), VmValue::Int64(ib)) = (val_a, val_b) {
-                        let res = VmValue::Int64(tempra_runtime::add_i64(*ia, *ib)?);
-                        self.push(res)?;
-                    } else {
-                        return Err(VmError::Message("Type mismatch in AddI64LL".into()));
+                    let (left, right) = {
+                        let frame = self.call_stack.last().ok_or(VmError::MissingReturn)?;
+                        let left = frame
+                            .locals
+                            .get(a.0 as usize)
+                            .ok_or(VmError::LocalOutOfBounds(a.0))?
+                            .as_ref()
+                            .ok_or(VmError::LocalNotInitialized(a.0))?
+                            .clone();
+                        let right = frame
+                            .locals
+                            .get(b.0 as usize)
+                            .ok_or(VmError::LocalOutOfBounds(b.0))?
+                            .as_ref()
+                            .ok_or(VmError::LocalNotInitialized(b.0))?
+                            .clone();
+                        (left, right)
+                    };
+                    let left = self.resolve_borrowed_value(left)?;
+                    let right = self.resolve_borrowed_value(right)?;
+                    match (left, right) {
+                        (VmValue::Int64(x), VmValue::Int64(y)) => {
+                            self.push(VmValue::Int64(tempra_runtime::add_i64(x, y)?))?;
+                        }
+                        _ => return Err(VmError::Message("Type mismatch in AddI64LL".into())),
                     }
                 }
                 BytecodeInstr::AddI64LC(a, id) => {
-                    let frame = self.call_stack.last().ok_or(VmError::MissingReturn)?;
-                    let val_a = frame
-                        .locals
-                        .get(a.0 as usize)
-                        .ok_or(VmError::LocalOutOfBounds(a.0))?
-                        .as_ref()
-                        .ok_or(VmError::LocalNotInitialized(a.0))?;
-
+                    let raw = {
+                        let frame = self.call_stack.last().ok_or(VmError::MissingReturn)?;
+                        frame
+                            .locals
+                            .get(a.0 as usize)
+                            .ok_or(VmError::LocalOutOfBounds(a.0))?
+                            .as_ref()
+                            .ok_or(VmError::LocalNotInitialized(a.0))?
+                            .clone()
+                    };
+                    let value = self.resolve_borrowed_value(raw)?;
                     let constant = match self.module.constants.get(id.0 as usize) {
-                        Some(BytecodeConstant::Int64(i)) => *i,
+                        Some(BytecodeConstant::Int64(x)) => *x,
                         _ => return Err(VmError::InvalidConstant(id.0)),
                     };
-
-                    if let VmValue::Int64(ia) = val_a {
-                        let res = VmValue::Int64(tempra_runtime::add_i64(*ia, constant)?);
-                        self.push(res)?;
-                    } else {
-                        return Err(VmError::Message("Type mismatch in AddI64LC".into()));
+                    match value {
+                        VmValue::Int64(x) => {
+                            self.push(VmValue::Int64(tempra_runtime::add_i64(x, constant)?))?;
+                        }
+                        _ => return Err(VmError::Message("Type mismatch in AddI64LC".into())),
                     }
                 }
             }
         }
+    }
+
+    /// Enters a verified bytecode function using the same frame lifecycle for
+    /// direct and indirect calls. The caller has already populated parameter
+    /// locals and handled native extern dispatch where applicable.
+    #[inline]
+    fn push_interpreted_frame(
+        &mut self,
+        function_id: FunctionId,
+        locals: Vec<Option<VmValue>>,
+        max_stack: usize,
+    ) -> Result<(), VmError> {
+        let token = self.allocate_frame_token()?;
+        if let Some(ref mut profiling) = self.profiling {
+            profiling.stats[function_id.0 as usize].call_count += 1;
+        }
+        self.call_stack.push(Frame {
+            token,
+            function_id,
+            ip: 0,
+            locals,
+            stack: Vec::with_capacity(max_stack),
+            inout_loans: Vec::new(),
+        });
+        Ok(())
     }
 
     #[inline(always)]
@@ -1313,14 +1347,159 @@ impl<'a> Interpreter<'a> {
         Ok(())
     }
 
+    fn allocate_frame_token(&mut self) -> Result<u64, VmError> {
+        self.next_frame_token = self
+            .next_frame_token
+            .checked_add(1)
+            .ok_or_else(|| VmError::Message("VM frame token space exhausted".into()))?;
+        Ok(self.next_frame_token)
+    }
+
+    fn slice_owner(&self, handle: VmBorrow) -> Result<&Vec<VmValue>, VmError> {
+        if !handle.mutable
+            || !self
+                .exclusive_sources
+                .contains(&(handle.owner_frame, handle.local_id.0))
+        {
+            return Err(VmError::Message(
+                "exclusive slice loan is not active".into(),
+            ));
+        }
+        let owner = self
+            .call_stack
+            .iter()
+            .find(|frame| frame.token == handle.owner_frame)
+            .ok_or_else(|| VmError::Message("exclusive slice owner is no longer alive".into()))?;
+        let Some(Some(VmValue::Array(buffer))) = owner.locals.get(handle.local_id.0 as usize)
+        else {
+            return Err(VmError::ExpectedArrayOrSlice);
+        };
+        Ok(buffer.as_ref())
+    }
+
+    fn exclusive_slice_handle(
+        &self,
+        local: tempra_bytecode::function::LocalId,
+    ) -> Result<(VmBorrow, usize, usize), VmError> {
+        let frame = self.call_stack.last().ok_or(VmError::MissingReturn)?;
+        let Some(Some(VmValue::BorrowedLocal(handle))) = frame.locals.get(local.0 as usize) else {
+            return Err(VmError::Message(
+                "exclusive slice parameter requires a live handle".into(),
+            ));
+        };
+        let Some((start, end)) = handle.range else {
+            return Err(VmError::Message("expected exclusive slice range".into()));
+        };
+        if start > end || end > self.slice_owner(*handle)?.len() {
+            return Err(VmError::Message(
+                "invalid exclusive slice owner bounds".into(),
+            ));
+        }
+        Ok((*handle, start, end))
+    }
+
+    fn borrow_slice_mut(
+        &mut self,
+        local: tempra_bytecode::function::LocalId,
+        start: usize,
+        end: usize,
+    ) -> Result<VmBorrow, VmError> {
+        let frame = self.call_stack.last().ok_or(VmError::MissingReturn)?;
+        let value = frame
+            .locals
+            .get(local.0 as usize)
+            .ok_or(VmError::LocalOutOfBounds(local.0))?
+            .as_ref()
+            .ok_or(VmError::LocalNotInitialized(local.0))?;
+        if matches!(value, VmValue::BorrowedLocal(_)) {
+            let (mut handle, parent_start, parent_end) = self.exclusive_slice_handle(local)?;
+            let len = parent_end - parent_start;
+            if start > end || end > len {
+                return Err(VmError::InvalidSliceRange { start, end, len });
+            }
+            handle.range = Some((parent_start + start, parent_start + end));
+            return Ok(handle);
+        }
+        let VmValue::Array(buffer) = value else {
+            return Err(VmError::ExpectedArrayOrSlice);
+        };
+        let len = buffer.len();
+        if start > end || end > len {
+            return Err(VmError::InvalidSliceRange { start, end, len });
+        }
+        let token = frame.token;
+        let key = (token, local.0);
+        if self.borrowed_sources.contains(&key) || self.exclusive_sources.contains(&key) {
+            return Err(VmError::Message(
+                "conflicting exclusive slice borrow of local".into(),
+            ));
+        }
+        self.exclusive_sources.insert(key);
+        self.borrowed_sources.insert(key);
+        Ok(VmBorrow {
+            owner_frame: token,
+            local_id: local,
+            mutable: true,
+            range: Some((start, end)),
+        })
+    }
+
+    /// Read a borrowed place as a value, never as another transferable handle.
+    fn resolve_borrowed_value(&self, value: VmValue) -> Result<VmValue, VmError> {
+        let VmValue::BorrowedLocal(handle) = value else {
+            return Ok(value);
+        };
+        if handle.range.is_some() {
+            return Err(VmError::Message(
+                "exclusive slice descriptor cannot be materialized".into(),
+            ));
+        }
+        let key = (handle.owner_frame, handle.local_id.0);
+        if !self.borrowed_sources.contains(&key)
+            || (handle.mutable && !self.exclusive_sources.contains(&key))
+        {
+            return Err(VmError::Message(
+                "borrowed owner loan is no longer active".into(),
+            ));
+        }
+        let frame = self
+            .call_stack
+            .iter()
+            .find(|frame| frame.token == handle.owner_frame)
+            .ok_or_else(|| VmError::Message("borrowed owner frame is no longer alive".into()))?;
+        let value = frame
+            .locals
+            .get(handle.local_id.0 as usize)
+            .ok_or(VmError::LocalOutOfBounds(handle.local_id.0))?
+            .as_ref()
+            .ok_or(VmError::LocalNotInitialized(handle.local_id.0))?;
+        if matches!(value, VmValue::BorrowedLocal(_)) {
+            return Err(VmError::Message(
+                "borrowed handle must name an original owner".into(),
+            ));
+        }
+        Ok(value.clone())
+    }
+
     #[inline(always)]
-    fn pop(&mut self) -> Result<VmValue, VmError> {
+    fn pop_raw(&mut self) -> Result<VmValue, VmError> {
         self.call_stack
             .last_mut()
-            .unwrap()
+            .ok_or(VmError::MissingReturn)?
             .stack
             .pop()
             .ok_or(VmError::StackUnderflow)
+    }
+
+    #[inline(always)]
+    fn pop(&mut self) -> Result<VmValue, VmError> {
+        let value = self.pop_raw()?;
+        if matches!(&value, VmValue::BorrowedLocal(_)) {
+            return Err(VmError::Message(
+                "raw borrow handle used as an ordinary operand".into(),
+            ));
+        }
+        Ok(value)
     }
 
     #[inline(always)]
@@ -1365,53 +1544,6 @@ impl<'a> Interpreter<'a> {
                 found: other.type_name().into(),
             }),
         }
-    }
-}
-
-/// Converts a native JIT failure into a VM error.
-///
-/// Native runtime failures are returned to the caller and never trigger VM
-/// fallback: by the time the native wrapper reports an error, the function has
-/// already started executing and re-running it in the interpreter would
-/// duplicate side effects.
-#[cfg(feature = "jit-cranelift")]
-fn jit_runtime_error_to_vm(error: JitRuntimeError) -> VmError {
-    match error {
-        JitRuntimeError::Int64Arithmetic(error) => VmError::Int64Arithmetic(error),
-        other => VmError::Native(other.to_string()),
-    }
-}
-
-/// Marshals a `VmValue` into an i64 suitable for passing to a heap-aware JIT function.
-///
-/// - `VmValue::Int64(i)`  → the integer itself, no allocation needed.
-/// - `VmValue::String(s)` → allocates a string handle in `ctx`, returns handle as i64.
-/// - `VmValue::Array(arr)` where every element is `Int64` → allocates an array handle
-///   containing `JitHeapScalar::Int64` elements, returns handle as i64.
-///
-/// Returns `None` for any type that cannot be represented across the JIT boundary
-/// (Bool, UInt64, Float64, Slice, Enum, Struct, heterogeneous arrays). The caller
-/// must fall back to the interpreter in that case.
-#[cfg(feature = "jit-cranelift")]
-fn vm_value_to_jit_handle(value: &VmValue, ctx: &mut JitRuntimeContext) -> Option<i64> {
-    match value {
-        VmValue::Int64(i) => Some(*i),
-        VmValue::String(s) => {
-            let handle = ctx.alloc_or_get_string(s);
-            Some(handle.0 as i64)
-        }
-        VmValue::Array(arr) => {
-            let mut values = Vec::with_capacity(arr.len());
-            for elem in arr.iter() {
-                match elem {
-                    VmValue::Int64(i) => values.push(*i),
-                    _ => return None, // heterogeneous or unsupported element type
-                }
-            }
-            let handle = ctx.alloc_or_get_array_int64(&values);
-            Some(handle.0 as i64)
-        }
-        _ => None,
     }
 }
 
@@ -1471,4 +1603,15 @@ pub fn run_function_with_resolver(
     let mut interp = Interpreter::with_options(module, options);
     interp.native_resolver = resolver;
     interp.run_function_id(FunctionId(id as u32), args)
+}
+
+fn is_slice_scalar(value: &VmValue) -> bool {
+    matches!(
+        value,
+        VmValue::Int64(_)
+            | VmValue::UInt64(_)
+            | VmValue::UInt8(_)
+            | VmValue::Float64(_)
+            | VmValue::Bool(_)
+    )
 }

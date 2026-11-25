@@ -230,8 +230,7 @@ cargo test -p tempra-bytecode
 cargo test -p tempra-effects
 cargo test -p tempra-native
 cargo test -p tempra-driver
-cargo test --workspace
-cargo test --workspace --features jit-cranelift
+cargo test --workspace --locked
 cargo fmt --all -- --check
 git diff --check
 ```

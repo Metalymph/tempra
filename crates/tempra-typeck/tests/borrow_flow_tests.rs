@@ -696,3 +696,504 @@ fn borrow_inout_slice_requires_mutable_owner_err() {
         "inout slice owner",
     );
 }
+
+// A2: access modes, temporary call loans and composite provenance.
+#[test]
+fn a2_exclusive_capture_rejects_owner_read_before_last_use() {
+    rejected(
+        r#"
+        fn main() -> Int {
+            var total = 10
+            let update = fn[inout total]() { total = total + 1 }
+            let snapshot = total
+            update()
+            snapshot
+        }
+    "#,
+        "borrow conflict",
+    );
+}
+
+#[test]
+fn a2_exclusive_capture_allows_owner_read_after_last_use() {
+    accepted(
+        r#"
+        fn main() -> Int {
+            var total = 10
+            let update = fn[inout total]() { total = total + 1 }
+            update()
+            total
+        }
+    "#,
+    );
+}
+
+#[test]
+fn a2_shared_capture_allows_owner_read() {
+    accepted(
+        r#"
+        fn main() -> Int {
+            var total = 10
+            let get = fn[ref total]() -> Int { total }
+            let snapshot = total
+            snapshot + get()
+        }
+    "#,
+    );
+}
+
+#[test]
+fn a2_scalar_inout_conflicts_with_live_shared_capture() {
+    rejected(
+        r#"
+        fn increment(inout value: Int) { value = value + 1 }
+        fn main() -> Int {
+            var total = 10
+            let get = fn[ref total]() -> Int { total }
+            increment(inout total)
+            get()
+        }
+    "#,
+        "borrow conflict",
+    );
+}
+
+#[test]
+fn a2_scalar_inout_allows_sequential_shared_capture() {
+    accepted(
+        r#"
+        fn increment(inout value: Int) { value = value + 1 }
+        fn main() -> Int {
+            var total = 10
+            let get = fn[ref total]() -> Int { total }
+            let before = get()
+            increment(inout total)
+            before + total
+        }
+    "#,
+    );
+}
+
+#[test]
+fn a2_inout_argument_kept_live_during_later_argument() {
+    rejected(
+        r#"
+        fn bump(inout value: Int) -> Int { value = value + 1; value }
+        fn combine(inout value: Int, other: Int) { value = other }
+        fn main() {
+            var number = 10
+            combine(inout number, bump(inout number))
+        }
+    "#,
+        "borrow conflict",
+    );
+}
+
+#[test]
+fn a2_inout_arguments_of_independent_owners_are_compatible() {
+    accepted(
+        r#"
+        fn bump(inout value: Int) -> Int { value = value + 1; value }
+        fn combine(inout value: Int, other: Int) { value = other }
+        fn main() {
+            var first = 10
+            var second = 20
+            combine(inout first, bump(inout second))
+        }
+    "#,
+    );
+}
+
+#[test]
+fn a2_exclusive_receiver_conflicts_with_live_capture() {
+    rejected(
+        r#"
+        struct Counter { var value: Int }
+        extend Counter {
+            fn bump(inout self) { self.value = self.value + 1 }
+        }
+        fn main() -> Int {
+            var counter = Counter { value: 10 }
+            let get = fn[ref counter]() -> Int { counter.value }
+            counter.bump()
+            get()
+        }
+    "#,
+        "borrow conflict",
+    );
+}
+
+#[test]
+fn a2_struct_field_preserves_borrow_until_last_use() {
+    rejected(
+        r#"
+        struct Window { data: Slice(Int) }
+        fn main() -> Int {
+            var data = [1, 2, 3]
+            let window = Window { data: data[0..2] }
+            data[0] = 99
+            window.data[0]
+        }
+    "#,
+        "borrow conflict",
+    );
+}
+
+#[test]
+fn a2_struct_field_allows_owner_mutation_after_last_use() {
+    accepted(
+        r#"
+        struct Window { data: Slice(Int) }
+        fn main() -> Int {
+            var data = [1, 2, 3]
+            let window = Window { data: data[0..2] }
+            let before = window.data[0]
+            data[0] = 99
+            before
+        }
+    "#,
+    );
+}
+
+#[test]
+fn a2_struct_with_borrowed_parameter_cannot_escape() {
+    rejected(
+        r#"
+        struct Window { data: Slice(Int) }
+        fn invalid(data: Slice(Int)) -> Window {
+            Window { data: data[0..1] }
+        }
+    "#,
+        "borrow escape",
+    );
+}
+
+#[test]
+fn a2_tuple_pattern_preserves_borrow_provenance() {
+    rejected(
+        r#"
+        fn main() -> Int {
+            var data = [1, 2, 3]
+            let packed = (data[0..2], 7)
+            match packed {
+                (view, count) => {
+                    data[0] = 99
+                    view[0] + count
+                }
+                _ => 0
+            }
+        }
+    "#,
+        "borrow conflict",
+    );
+}
+
+#[test]
+fn a2_array_of_views_preserves_borrow_provenance() {
+    rejected(
+        r#"
+        fn main() -> Int {
+            var data = [1, 2, 3]
+            let views = [data[0..1], data[1..2]]
+            data[0] = 99
+            views[0][0]
+        }
+    "#,
+        "borrow conflict",
+    );
+}
+
+#[test]
+fn a2_option_pattern_preserves_borrow_provenance() {
+    rejected(
+        r#"
+        fn main() -> Int {
+            var data = [1, 2, 3]
+            let packed: Option(Slice(Int)) = Some(data[0..2])
+            match packed {
+                Some(view) => {
+                    data[0] = 99
+                    view[0]
+                }
+                None => 0
+            }
+        }
+    "#,
+        "borrow conflict",
+    );
+}
+
+#[test]
+fn a2_enum_payload_preserves_borrow_provenance() {
+    rejected(
+        r#"
+        enum Window { View(Slice(Int)) }
+        fn main() -> Int {
+            var data = [1, 2, 3]
+            let packed = View(data[0..2])
+            data[0] = 99
+            match packed { View(view) => view[0] }
+        }
+    "#,
+        "borrow conflict",
+    );
+}
+
+#[test]
+fn a2_aggregate_assignment_cannot_erase_provenance() {
+    rejected(
+        r#"
+        struct Window { data: Slice(Int) }
+        fn main() {
+            var first = [1, 2, 3]
+            var second = [4, 5, 6]
+            var window = Window { data: first[0..1] }
+            window = Window { data: second[0..1] }
+        }
+    "#,
+        "borrow provenance",
+    );
+}
+
+#[test]
+fn a2_branch_local_owner_cannot_escape_in_aggregate() {
+    rejected(
+        r#"
+        struct Window { data: Slice(Int) }
+        fn main() -> Int {
+            let window = {
+                let data = [1, 2, 3]
+                Window { data: data[0..2] }
+            }
+            window.data[0]
+        }
+    "#,
+        "borrow escape",
+    );
+}
+
+#[test]
+fn a2_generic_value_parameter_cannot_launder_slice() {
+    rejected(
+        r#"
+        fn identity(type T, value: T) -> T { value }
+        fn main() -> Int {
+            let data = [1, 2, 3]
+            let view = identity(data[0..1])
+            view[0]
+        }
+    "#,
+        "borrow escape",
+    );
+}
+
+#[test]
+fn a2_exclusive_closure_cannot_be_copied_into_second_binding() {
+    rejected(
+        r#"
+        fn main() -> Int {
+            var total = 10
+            let update = fn[inout total]() { total = total + 1 }
+            let alias = update
+            alias()
+            update()
+            total
+        }
+    "#,
+        "borrow provenance",
+    );
+}
+
+#[test]
+fn a2_inline_slice_iterable_keeps_owner_live() {
+    rejected(
+        r#"
+        fn main() {
+            var data = [1, 2, 3]
+            for item in data[0..2] {
+                data[0] = item
+            }
+        }
+    "#,
+        "borrow conflict",
+    );
+}
+
+#[test]
+fn a2_if_pattern_preserves_borrow_provenance() {
+    rejected(
+        r#"
+        fn main() -> Int {
+            var data = [1, 2, 3]
+            let packed: Option(Slice(Int)) = Some(data[0..2])
+            if packed is Some(view) {
+                data[0] = 99
+                return view[0]
+            }
+            0
+        }
+    "#,
+        "borrow conflict",
+    );
+}
+
+#[test]
+fn a2_for_expression_cannot_discard_result_provenance() {
+    rejected(
+        r#"
+        fn main() {
+            let data = [1, 2, 3]
+            let views = for i in [0, 1] { data[i..i+1] }
+        }
+    "#,
+        "borrow provenance",
+    );
+}
+
+#[test]
+fn a2_method_receiver_modes_are_isolated_per_module() {
+    use std::collections::HashMap;
+    use tempra_typeck::{check_modules, ModuleToCheck};
+
+    let bad = r#"
+        struct Counter { var value: Int }
+        extend Counter { fn bump(inout self) { self.value = self.value + 1 } }
+        fn main() -> Int {
+            var counter = Counter { value: 10 }
+            let get = fn[ref counter]() -> Int { counter.value }
+            counter.bump()
+            get()
+        }
+    "#;
+    let good = bad
+        .replace("inout self", "      self")
+        .replace("self.value = self.value + 1", "let unused = self.value + 1");
+    let mut bad_file = lower_file(bad, &parse_source(bad).unwrap());
+    let mut good_file = lower_file(&good, &parse_source(&good).unwrap());
+    let mut modules = [
+        ModuleToCheck {
+            name: "bad".into(),
+            imports: HashMap::new(),
+            file: &mut bad_file,
+        },
+        ModuleToCheck {
+            name: "good".into(),
+            imports: HashMap::new(),
+            file: &mut good_file,
+        },
+    ];
+    let errors = match check_modules(&mut modules, false) {
+        Ok(_) => panic!("exclusive receiver in first module must be checked"),
+        Err(errors) => errors,
+    };
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.module_name.as_deref() == Some("bad")
+                && e.message.contains("borrow conflict")),
+        "{errors:?}"
+    );
+    assert!(
+        errors
+            .iter()
+            .all(|e| e.module_name.as_deref() == Some("bad")),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn a2_generic_slice_observers_allow_non_escaping_reads() {
+    accepted(
+        r#"
+        fn measure(type T: Collection, value: T) -> Int { value.len() }
+        fn empty(type T: Collection, value: T) -> Bool { value.is_empty() }
+        fn main() -> Int {
+            var data = [1, 2, 3]
+            let view = data[0..2]
+            let length = measure[Slice(Int)](view)
+            let is_empty = empty[Slice(Int)](view)
+            data[0] = 9
+            length
+        }
+    "#,
+    );
+}
+
+#[test]
+fn a2_generic_slice_observer_keeps_existing_loan_live() {
+    rejected(
+        r#"
+        fn measure(type T: Collection, value: T) -> Int { value.len() }
+        fn main() -> Int {
+            var data = [1, 2, 3]
+            let view = data[0..2]
+            let length = measure[Slice(Int)](view)
+            data[0] = 9
+            view[0]
+        }
+    "#,
+        "borrow conflict",
+    );
+}
+
+#[test]
+fn a2_generic_slice_observer_name_does_not_authorize_escape() {
+    rejected(
+        r#"
+        fn measure(type T: Collection, value: T) -> T { value }
+        fn main() -> Int {
+            let data = [1, 2, 3]
+            let view = measure[Slice(Int)](data[0..2])
+            view[0]
+        }
+    "#,
+        "borrow escape",
+    );
+}
+
+#[test]
+fn a2_slice_assignment_allows_last_use_copy() {
+    accepted(
+        r#"
+        fn main() {
+            var data = [1, 2, 3, 4]
+            let view = data[0..2]
+            data[1..3] = view
+        }
+    "#,
+    );
+}
+
+#[test]
+fn a2_slice_assignment_rejects_live_source() {
+    rejected(
+        r#"
+        fn main() -> Int {
+            var data = [1, 2, 3, 4]
+            let view = data[0..2]
+            data[2..4] = view
+            view[0]
+        }
+    "#,
+        "borrow conflict",
+    );
+}
+
+#[test]
+fn a2_slice_assignment_keeps_source_live_during_bounds() {
+    rejected(
+        r#"
+        fn bound(inout data: Slice(Int)) -> Int {
+            data[0] = 9
+            0
+        }
+        fn main() {
+            var data = [1, 2, 3, 4]
+            var target = [0, 0]
+            let view = data[0..2]
+            target[bound(inout data[0..1])..2] = view
+        }
+    "#,
+        "borrow conflict",
+    );
+}

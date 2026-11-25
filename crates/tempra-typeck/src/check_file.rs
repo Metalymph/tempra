@@ -51,9 +51,11 @@ pub fn check_modules(
     // Pass 2: check item bodies in all modules
     for m in modules.iter_mut() {
         select_module(&mut ctx, m);
+        ctx.facts = crate::facts::TypecheckFacts::default();
         for item in &mut m.file.items {
             check_item(&mut ctx, item);
         }
+        ctx.module_facts.insert(m.name.clone(), ctx.facts.clone());
     }
 
     ctx.borrow_summaries = crate::borrow_summary::infer(
@@ -72,6 +74,7 @@ pub fn check_modules(
     // Pass 3: check top-level statements in all modules
     for m in modules.iter_mut() {
         select_module(&mut ctx, m);
+        ctx.facts = ctx.module_facts.remove(&m.name).unwrap_or_default();
         if !m.file.top_level_statements.is_empty() {
             ctx.current_is_fallible = true;
             ctx.current_return_type = None;
@@ -84,14 +87,18 @@ pub fn check_modules(
             ctx.scopes.pop_scope();
             ctx.current_is_fallible = false;
         }
+        ctx.module_facts.insert(m.name.clone(), ctx.facts.clone());
     }
 
     if ctx.errors.is_empty() {
         for m in modules.iter() {
             ctx.current_module = m.name.clone();
+            ctx.imports = m.imports.clone();
+            ctx.facts = ctx.module_facts.remove(&m.name).unwrap_or_default();
             let (errors, origins) = crate::borrow_flow::analyze(&*m.file, &ctx);
             ctx.errors.extend(errors);
             ctx.facts.borrow_facts.extend(origins);
+            ctx.module_facts.insert(m.name.clone(), ctx.facts.clone());
         }
     }
 

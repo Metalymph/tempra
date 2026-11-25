@@ -161,6 +161,8 @@ pub struct TypeContext {
     /// Inferred non-escaping callback parameters (§16.5).
     pub callback_summaries:
         std::collections::BTreeMap<String, crate::callback_contract::CallbackSummary>,
+    /// Candidates for a concrete, non-escaping builtin Slice observation.
+    pub(crate) slice_observers: std::collections::BTreeMap<String, (usize, String)>,
     pub structs: HashMap<String, StructInfo>,
     pub enums: HashMap<String, EnumInfo>,
     pub interfaces: HashMap<String, InterfaceInfo>,
@@ -208,6 +210,7 @@ impl TypeContext {
             functions: HashMap::new(),
             borrow_summaries: std::collections::BTreeMap::new(),
             callback_summaries: std::collections::BTreeMap::new(),
+            slice_observers: std::collections::BTreeMap::new(),
             structs: HashMap::new(),
             enums: HashMap::new(),
             interfaces: HashMap::new(),

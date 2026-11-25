@@ -2434,6 +2434,12 @@ fn check_call(ctx: &mut TypeContext, expr: &mut HirExpression, expected: Option<
                                 }
                             }
                             let sig = ctx.functions.get(&qualified).cloned().unwrap();
+                            if sig.params.iter().any(|p| p.is_inout) {
+                                ctx.error(
+                                    "inout namespace arguments require a verified call contract",
+                                    c.span,
+                                );
+                            }
                             if sig.visibility == Visibility::Private && ctx.current_module != *ns {
                                 ctx.error(
                                     format!(
@@ -2496,6 +2502,27 @@ fn check_call(ctx: &mut TypeContext, expr: &mut HirExpression, expected: Option<
                 }
 
                 if let Some(sig) = ctx.lookup_method_signature(&receiver_ty, &method) {
+                    if let Some(receiver) = sig.params.first() {
+                        ctx.facts
+                            .receiver_accesses
+                            .insert(c.span, receiver.is_inout);
+                        if receiver.is_inout {
+                            if let HirExpression::Member(member) = &*c.callee {
+                                check_receiver_mutable(ctx, &member.object, member.span);
+                                if matches!(&receiver_ty, Type::Slice(_)) {
+                                    check_exclusive_slice_write(ctx, &member.object, member.span);
+                                }
+                            }
+                        }
+                    }
+                    // Explicit exclusive arguments for methods are not yet
+                    // supported by the call ABI. Never silently pass by value.
+                    if sig.params.iter().skip(1).any(|p| p.is_inout) {
+                        ctx.error(
+                            "inout method arguments require a verified call contract",
+                            c.span,
+                        );
+                    }
                     // Check parameter count (excluding self)
                     if c.args.len() != sig.params.len() - 1 {
                         ctx.error(
@@ -2682,6 +2709,7 @@ fn check_function_call(
     let mut resolved_args: Vec<Option<&mut HirExpression>> =
         (0..sig.params.len()).map(|_| None).collect();
     let mut resolved_inout = vec![false; sig.params.len()];
+    let mut parameter_indices = vec![None; c.args.len()];
     let mut named_keys = std::collections::HashSet::new();
 
     let num_args = c
@@ -2719,6 +2747,7 @@ fn check_function_call(
                     );
                     continue;
                 }
+                parameter_indices[arg_index] = Some(param_idx);
                 resolved_args[param_idx] = Some(e);
                 resolved_inout[param_idx] = exclusive;
                 param_idx += 1;
@@ -2741,6 +2770,7 @@ fn check_function_call(
                                 n.value.span(),
                             );
                         } else {
+                            parameter_indices[arg_index] = Some(idx);
                             resolved_args[idx] = Some(&mut n.value);
                             resolved_inout[idx] = exclusive;
                         }
@@ -2758,6 +2788,10 @@ fn check_function_call(
             }
         }
     }
+
+    ctx.facts
+        .direct_call_parameters
+        .insert(c.span, (func_name.to_owned(), parameter_indices));
 
     // The caller must explicitly request exclusive access, and the argument
     // must name mutable local storage or a direct subview of an authorized
@@ -2974,6 +3008,36 @@ fn check_function_call(
                     ),
                     c.span,
                 );
+            }
+        }
+    }
+
+    // A generic parameter is not automatically a safe borrowed parameter.
+    // Certify only a concrete Slice specialization of a proven observer body.
+    if let Some((index, method)) = ctx.slice_observers.get(func_name).cloned() {
+        if let Some(param) = sig.params.get(index) {
+            if let Type::GenericParam { id, .. } = &param.ty {
+                let concrete = substitute_generics(ctx, &param.ty, &inferred);
+                let expected_return = match method.as_str() {
+                    "len" => Some(Type::Int),
+                    "is_empty" => Some(Type::Bool),
+                    _ => None,
+                };
+                let collection_constraint = sig
+                    .generic_params
+                    .iter()
+                    .any(|p| p.id == *id && p.constraint.as_deref() == Some("Collection"));
+                if collection_constraint
+                    && !param.is_inout
+                    && matches!(&concrete, Type::Slice(_))
+                    && arg_types.get(index) == Some(&concrete)
+                    && expected_return.as_ref() == Some(&sig.return_type)
+                    && ctx
+                        .lookup_direct_method_signature(&concrete, &method)
+                        .is_none()
+                {
+                    ctx.facts.slice_observer_parameters.insert(c.span, index);
+                }
             }
         }
     }

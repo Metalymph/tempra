@@ -271,6 +271,52 @@ fn block_origin(
     None
 }
 
+/// Recognize a deliberately small class of generic observer bodies.
+/// The callsite must separately prove the concrete type and builtin dispatch.
+pub(crate) fn slice_observer_candidate(function: &HirFunction) -> Option<(usize, String)> {
+    if function.is_extern || function.is_fallible {
+        return None;
+    }
+    let [statement] = function.body.as_ref()?.statements.as_slice() else {
+        return None;
+    };
+    let expression = match statement {
+        HirStatement::Expr(value) | HirStatement::Return(Some(value)) => value,
+        _ => return None,
+    };
+    let HirExpression::Call(call) = expression else {
+        return None;
+    };
+    if !call.args.is_empty() || call.type_args.is_some() || !call.inout_arguments.is_empty() {
+        return None;
+    }
+    let HirExpression::Member(member) = call.callee.as_ref() else {
+        return None;
+    };
+    if !matches!(member.field.as_str(), "len" | "is_empty") {
+        return None;
+    }
+    let HirExpression::Name(_, name) = member.object.as_ref() else {
+        return None;
+    };
+    // All other parameters must be compile-time type parameters. This rules
+    // out forwarding, secondary runtime values, and extra effects in the body.
+    let mut runtime = function
+        .parameters
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| p.kind != ParameterKind::Type);
+    let (index, parameter) = runtime.next()?;
+    if runtime.next().is_some()
+        || parameter.kind != ParameterKind::Runtime
+        || parameter.is_inout
+        || &parameter.name != name
+    {
+        return None;
+    }
+    Some((index, member.field.clone()))
+}
+
 fn infer_one(
     function: &HirFunction,
     module: &str,

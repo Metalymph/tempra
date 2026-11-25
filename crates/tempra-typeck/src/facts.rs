@@ -31,6 +31,12 @@ pub struct TypecheckFacts {
     pub variant_resolutions: HashMap<Span, Span>,
     /// Mapping from method call name span to its implementation/definition span.
     pub method_resolutions: HashMap<Span, Span>,
+    /// Access mode of the resolved method receiver, keyed by call span.
+    pub receiver_accesses: HashMap<Span, bool>,
+    /// Actual direct function identity and parameter index for each source argument.
+    pub direct_call_parameters: HashMap<Span, (String, Vec<Option<usize>>)>,
+    /// Concrete Slice parameter with a proven, non-escaping builtin observation.
+    pub(crate) slice_observer_parameters: HashMap<Span, usize>,
     /// Mapping from reference span to target module and definition span.
     pub cross_file_resolutions: HashMap<Span, (String, Span)>,
 }

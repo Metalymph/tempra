@@ -34,7 +34,7 @@ fn test_builtin_slice_satisfaction() {
             expect(size[Slice(Int)](ys) == 2);
         }
     "#;
-    assert!(test_source(source).is_ok());
+    test_source(source).expect("valid Collection slice borrow must typecheck");
 }
 
 #[test]
@@ -117,7 +117,7 @@ fn test_slice_view_semantics_with_collection() {
         }
     "#;
 
-    assert!(test_source(source).is_ok());
+    test_source(source).expect("valid Collection slice borrow must typecheck");
 }
 
 #[test]

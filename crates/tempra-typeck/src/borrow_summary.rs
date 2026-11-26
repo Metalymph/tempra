@@ -1,14 +1,15 @@
 //! Conservative, inferred borrowed-return contracts (Memory & Ownership v0.4 §14.8–14.9).
 //!
-//! Only direct, identifiable, single-source read-only Slice returns are
-//! summarized. Unknown, recursive and control-flow-dependent returns are not
-//! promoted to borrow-safe contracts. The summaries are compiler metadata,
-//! not lifetime annotations in the Tempra surface language.
+//! Only identifiable, single-source read-only Slice returns are summarized.
+//! Structured branch exits and immutable aliases are considered; unsupported
+//! control flow and unresolved cycles remain without a contract. Summaries
+//! describe provenance, not execution support or lifetime annotations.
 
+use crate::facts::TypecheckFacts;
 use std::collections::{BTreeMap, HashMap};
 use tempra_hir::{
-    HirBlock, HirCall, HirCallArgument, HirExpression, HirFile, HirFunction, HirItem, HirStatement,
-    HirType, ParameterKind,
+    HirBinaryOp, HirBlock, HirCallArgument, HirExpression, HirFile, HirFunction, HirItem,
+    HirPattern, HirStatement, HirType, ParameterKind,
 };
 
 /// Access mode required at a function boundary.
@@ -45,42 +46,6 @@ pub(crate) fn is_slice(ty: &HirType) -> bool {
     matches!(ty, HirType::Apply(_, base, _) if matches!(&**base, HirType::Named(_, name) if name == "Slice"))
 }
 
-/// Find the expression corresponding to a parameter, honoring named arguments
-/// and source-order positional arguments with type parameters skipped.
-pub(crate) fn call_argument<'a>(
-    call: &'a HirCall,
-    parameter_index: usize,
-    names: &[String],
-    kinds: &[ParameterKind],
-) -> Option<&'a HirExpression> {
-    let mut position = 0;
-    for arg in &call.args {
-        match arg {
-            HirCallArgument::Named(named) => {
-                if names
-                    .get(parameter_index)
-                    .is_some_and(|name| name == &named.name)
-                {
-                    return Some(&named.value);
-                }
-            }
-            HirCallArgument::Positional(value) => {
-                while kinds
-                    .get(position)
-                    .is_some_and(|kind| *kind == ParameterKind::Type)
-                {
-                    position += 1;
-                }
-                if position == parameter_index {
-                    return Some(value);
-                }
-                position += 1;
-            }
-        }
-    }
-    None
-}
-
 fn qualify(module: &str, name: &str) -> String {
     if module.is_empty() {
         name.to_owned()
@@ -105,14 +70,16 @@ pub(crate) fn resolve_direct<'a, T>(
         .map(|(key, value)| (key.as_str(), value))
 }
 
-// Deliberately conservative: a body containing any explicit return (including
-// nested conditional/loop/block returns) requires a later path-sensitive
-// contract inference pass. Never infer from only the last expression if an
-// earlier path might escape a different owner.
+// Detect returns in expressions outside the supported structured statement
+// traversal. Never ignore an exit just because its value is not a tail.
 fn has_explicit_return(block: &HirBlock) -> bool {
     block.statements.iter().any(|stmt| match stmt {
         HirStatement::Return(_) => true,
-        HirStatement::For(loop_) => has_explicit_return(&loop_.body),
+        HirStatement::For(loop_) => {
+            expr_has_return(&loop_.iterable)
+                || loop_.filter.as_ref().is_some_and(expr_has_return)
+                || has_explicit_return(&loop_.body)
+        }
         HirStatement::Let(l) => expr_has_return(&l.value),
         HirStatement::Var(v) => expr_has_return(&v.value),
         HirStatement::Expr(expr) => expr_has_return(expr),
@@ -187,88 +154,191 @@ fn expr_has_return(expr: &HirExpression) -> bool {
     }
 }
 
-fn origin_of(
-    expr: &HirExpression,
-    locals: &HashMap<String, usize>,
-    module: &str,
-    definitions: &BTreeMap<String, &HirFunction>,
-    known: &BTreeMap<String, BorrowSummary>,
-) -> Option<usize> {
-    match expr {
-        HirExpression::Name(_, name) => locals.get(name).copied(),
-        HirExpression::Slice(slice) => origin_of(&slice.object, locals, module, definitions, known),
-        HirExpression::Block(block) => block_origin(block, locals, module, definitions, known),
-        HirExpression::If(branch) => {
-            let then_src = block_origin(&branch.then_block, locals, module, definitions, known)?;
-            let else_src = origin_of(
-                branch.else_branch.as_deref()?,
-                locals,
-                module,
-                definitions,
-                known,
-            )?;
-            (then_src == else_src).then_some(then_src)
+// A present entry with no origin shadows an outer declaration. Only immutable
+// aliases and Slice parameters may carry a proven source.
+type Origins = HashMap<String, Option<usize>>;
+
+fn shadow_pattern(pattern: &HirPattern, locals: &mut Origins) {
+    match pattern {
+        HirPattern::Identifier(_, name) => {
+            locals.insert(name.clone(), None);
         }
-        HirExpression::Match(m) => {
-            let mut arms = m.arms.iter();
-            let first = origin_of(&arms.next()?.value, locals, module, definitions, known)?;
-            for arm in arms {
-                if origin_of(&arm.value, locals, module, definitions, known)? != first {
-                    return None;
+        HirPattern::Tuple(_, patterns)
+        | HirPattern::Or(_, patterns)
+        | HirPattern::EnumCase(_, _, patterns) => {
+            for pattern in patterns {
+                shadow_pattern(pattern, locals);
+            }
+        }
+        HirPattern::EnumConstructor(value) => {
+            for pattern in &value.payloads {
+                shadow_pattern(pattern, locals);
+            }
+        }
+        HirPattern::Struct(_, _, fields) => {
+            for (name, pattern) in fields {
+                if let Some(pattern) = pattern {
+                    shadow_pattern(pattern, locals);
+                } else {
+                    locals.insert(name.clone(), None);
                 }
             }
-            Some(first)
         }
-        HirExpression::Call(call) => {
-            let HirExpression::Name(_, callee) = &*call.callee else {
-                return None;
-            };
-            let (key, def) = resolve_direct(definitions, module, callee)?;
-            let summary = known.get(key)?;
-            let names = def
-                .parameters
-                .iter()
-                .map(|p| p.name.clone())
-                .collect::<Vec<_>>();
-            let kinds = def.parameters.iter().map(|p| p.kind).collect::<Vec<_>>();
-            let argument =
-                call_argument(call, summary.return_borrow.parameter_index, &names, &kinds)?;
-            origin_of(argument, locals, module, definitions, known)
-        }
-        _ => None,
+        HirPattern::Wildcard(_) | HirPattern::Literal(_, _) => {}
     }
 }
 
-fn block_origin(
-    block: &HirBlock,
-    outside: &HashMap<String, usize>,
-    module: &str,
-    definitions: &BTreeMap<String, &HirFunction>,
-    known: &BTreeMap<String, BorrowSummary>,
-) -> Option<usize> {
-    let mut locals = outside.clone();
-    for (index, stmt) in block.statements.iter().enumerate() {
-        let last = index + 1 == block.statements.len();
-        if !last && matches!(stmt, HirStatement::Return(_)) {
+fn shadow_condition(condition: &HirExpression, locals: &mut Origins) {
+    match condition {
+        HirExpression::IsPattern(value) => shadow_pattern(&value.pattern, locals),
+        HirExpression::Binary(value) if value.op == HirBinaryOp::And => {
+            shadow_condition(&value.left, locals);
+            shadow_condition(&value.right, locals);
+        }
+        _ => {}
+    }
+}
+
+struct Inference<'a> {
+    facts: &'a TypecheckFacts,
+    known: &'a BTreeMap<String, BorrowSummary>,
+}
+
+impl Inference<'_> {
+    // Expressions here cannot contain an explicit return. Their value must
+    // come from the same parameter on every possible value-producing path.
+    fn origin_of(&self, expr: &HirExpression, locals: &Origins) -> Option<usize> {
+        if expr_has_return(expr) {
             return None;
         }
-        match stmt {
-            HirStatement::Let(l) if !expr_has_return(&l.value) => {
-                let origin = origin_of(&l.value, &locals, module, definitions, known)?;
-                locals.insert(l.name.clone(), origin);
+        match expr {
+            HirExpression::Name(_, name) => locals.get(name).copied().flatten(),
+            HirExpression::Slice(slice) => self.origin_of(&slice.object, locals),
+            HirExpression::Block(block) => self.block_origin(block, locals),
+            HirExpression::If(branch) => {
+                let mut then_locals = locals.clone();
+                shadow_condition(&branch.condition, &mut then_locals);
+                let then_src = self.block_origin(&branch.then_block, &then_locals)?;
+                let else_src = self.origin_of(branch.else_branch.as_deref()?, locals)?;
+                (then_src == else_src).then_some(then_src)
             }
-            HirStatement::Expr(value) if last && !expr_has_return(value) => {
-                return origin_of(value, &locals, module, definitions, known);
+            HirExpression::Match(value) => {
+                let mut source = None;
+                for arm in &value.arms {
+                    let mut arm_locals = locals.clone();
+                    shadow_pattern(&arm.pattern, &mut arm_locals);
+                    record_origin(&mut source, self.origin_of(&arm.value, &arm_locals)?)?;
+                }
+                source
             }
-            HirStatement::Return(Some(value)) if last && !expr_has_return(value) => {
-                return origin_of(value, &locals, module, definitions, known);
+            HirExpression::Call(call) => {
+                // Use the actual target and argument mapping established by
+                // typeck, including named arguments and imported functions.
+                let (key, indices) = self.facts.direct_call_parameters.get(&call.span)?;
+                let summary = self.known.get(key)?;
+                let index = indices
+                    .iter()
+                    .position(|index| *index == Some(summary.return_borrow.parameter_index))?;
+                let argument = match call.args.get(index)? {
+                    HirCallArgument::Positional(value) => value,
+                    HirCallArgument::Named(named) => &named.value,
+                };
+                self.origin_of(argument, locals)
             }
-            // Mutable aliases and intermediate statements need a more advanced
-            // control-flow summary; do not guess their provenance.
-            _ => return None,
+            _ => None,
         }
     }
-    None
+
+    fn block_origin(&self, block: &HirBlock, outside: &Origins) -> Option<usize> {
+        let mut source = None;
+        if self.scan_block(block, outside, true, &mut source)? {
+            return None;
+        }
+        source
+    }
+
+    // Return true if execution can fall through this block. Every explicit
+    // return (and the implicit tail, when requested) contributes to `source`.
+    // Unknown exits fail closed; the independent borrow-flow pass still
+    // validates lifetime, access, escape and mutation on the actual CFG.
+    fn scan_block(
+        &self,
+        block: &HirBlock,
+        outside: &Origins,
+        tail_returns: bool,
+        source: &mut Option<usize>,
+    ) -> Option<bool> {
+        let mut locals = outside.clone();
+        for (index, stmt) in block.statements.iter().enumerate() {
+            let tail = tail_returns && index + 1 == block.statements.len();
+            match stmt {
+                HirStatement::Let(value) if !expr_has_return(&value.value) => {
+                    let origin = self.origin_of(&value.value, &locals);
+                    locals.insert(value.name.clone(), origin);
+                }
+                HirStatement::Var(value) if !expr_has_return(&value.value) => {
+                    // Mutable aliases have no proven stable origin here.
+                    locals.insert(value.name.clone(), None);
+                }
+                HirStatement::Return(Some(value)) => {
+                    record_origin(source, self.origin_of(value, &locals)?)?;
+                    return Some(false);
+                }
+                HirStatement::Expr(value) => {
+                    if !self.scan_expr(value, &locals, tail, source)? {
+                        return Some(false);
+                    }
+                }
+                HirStatement::For(loop_)
+                    if !expr_has_return(&loop_.iterable)
+                        && !loop_.filter.as_ref().is_some_and(expr_has_return)
+                        && !has_explicit_return(&loop_.body) => {}
+                // Do not guess about return paths in loops, initializers,
+                // matches with early exits, or nested arbitrary expressions.
+                _ => return None,
+            }
+        }
+        Some(true)
+    }
+
+    fn scan_expr(
+        &self,
+        value: &HirExpression,
+        locals: &Origins,
+        tail_returns: bool,
+        source: &mut Option<usize>,
+    ) -> Option<bool> {
+        if !expr_has_return(value) {
+            if tail_returns {
+                record_origin(source, self.origin_of(value, locals)?)?;
+                return Some(false);
+            }
+            return Some(true);
+        }
+        match value {
+            HirExpression::Block(block) => self.scan_block(block, locals, tail_returns, source),
+            HirExpression::If(branch) if !expr_has_return(&branch.condition) => {
+                let mut then_locals = locals.clone();
+                shadow_condition(&branch.condition, &mut then_locals);
+                let then_falls =
+                    self.scan_block(&branch.then_block, &then_locals, tail_returns, source)?;
+                let else_falls = match &branch.else_branch {
+                    Some(other) => self.scan_expr(other, locals, tail_returns, source)?,
+                    None => true,
+                };
+                Some(then_falls || else_falls)
+            }
+            _ => None,
+        }
+    }
+}
+
+fn record_origin(source: &mut Option<usize>, candidate: usize) -> Option<()> {
+    if source.is_some_and(|existing| existing != candidate) {
+        return None;
+    }
+    *source = Some(candidate);
+    Some(())
 }
 
 /// Recognize a deliberately small class of generic observer bodies.
@@ -319,8 +389,7 @@ pub(crate) fn slice_observer_candidate(function: &HirFunction) -> Option<(usize,
 
 fn infer_one(
     function: &HirFunction,
-    module: &str,
-    definitions: &BTreeMap<String, &HirFunction>,
+    facts: &TypecheckFacts,
     known: &BTreeMap<String, BorrowSummary>,
 ) -> Option<BorrowSummary> {
     if !is_slice(function.return_type.as_ref()?) || function.is_extern {
@@ -334,18 +403,19 @@ fn infer_one(
         .enumerate()
         .map(|(index, param)| {
             if is_slice(&param.ty) {
-                local_origins.insert(param.name.clone(), index);
+                local_origins.insert(param.name.clone(), Some(index));
                 if param.is_inout {
                     BorrowAccess::Exclusive
                 } else {
                     BorrowAccess::Read
                 }
             } else {
+                local_origins.insert(param.name.clone(), None);
                 BorrowAccess::Value
             }
         })
         .collect::<Vec<_>>();
-    let parameter_index = block_origin(body, &local_origins, module, definitions, known)?;
+    let parameter_index = Inference { facts, known }.block_origin(body, &local_origins)?;
     if !is_slice(&function.parameters.get(parameter_index)?.ty) {
         return None;
     }
@@ -359,26 +429,26 @@ fn infer_one(
 }
 
 /// Infer modular, order-independent contracts for a conservative set of
-/// concrete, directly callable functions. An unresolved cycle remains without
-/// a summary, and is rejected rather than accepted speculatively.
-pub fn infer(files: &[(&str, &HirFile)]) -> BTreeMap<String, BorrowSummary> {
-    let mut definitions = BTreeMap::<String, &HirFunction>::new();
-    for &(module, file) in files {
+/// concrete, directly callable functions using the corresponding module's
+/// structural typecheck facts. An unresolved cycle remains without a summary,
+/// and is rejected rather than accepted speculatively.
+pub fn infer(files: &[(&str, &HirFile, &TypecheckFacts)]) -> BTreeMap<String, BorrowSummary> {
+    let mut definitions = BTreeMap::<String, (&HirFunction, &TypecheckFacts)>::new();
+    for &(module, file, facts) in files {
         for item in &file.items {
             if let HirItem::Function(function) = item {
-                definitions.insert(qualify(module, &function.name), function);
+                definitions.insert(qualify(module, &function.name), (function, facts));
             }
         }
     }
     let mut summaries = BTreeMap::new();
     for _ in 0..definitions.len() {
         let mut changed = false;
-        for (key, function) in &definitions {
+        for (key, (function, facts)) in &definitions {
             if summaries.contains_key(key) {
                 continue;
             }
-            let module = key.rsplit_once('.').map(|(module, _)| module).unwrap_or("");
-            if let Some(summary) = infer_one(function, module, &definitions, &summaries) {
+            if let Some(summary) = infer_one(function, facts, &summaries) {
                 summaries.insert(key.clone(), summary);
                 changed = true;
             }

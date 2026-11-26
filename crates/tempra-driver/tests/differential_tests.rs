@@ -1235,3 +1235,47 @@ fn vm_parity_a1_ref_capture_copy_mutation() {
     assert_differential(source);
     assert_eq!(run_source_vm(source, &[]).unwrap(), VmValue::Int64(23));
 }
+
+#[test]
+fn vm_parity_a3_1_readonly_return_after_scalar_observation() {
+    let source = r#"
+        fn prefix(data: Slice(Int)) -> Slice(Int) {
+            let count = data.len()
+            data[0..count]
+        }
+        fn overwrite(inout view: Slice(Int)) {
+            view[0] = 42
+        }
+        fn main() -> Int {
+            var data = [10, 20, 30]
+            let view = prefix(data[1..3])
+            let first = view[0]
+            overwrite(inout data[1..2])
+            first + data[1]
+        }
+    "#;
+    assert_differential(source);
+    assert_eq!(run_source_vm(source, &[]).unwrap(), VmValue::Int64(62));
+}
+
+// Direct array-index assignment remains a VM parity gap.
+#[test]
+fn hir_a3_1_readonly_return_before_direct_index_assignment() {
+    let source = r#"
+        fn prefix(data: Slice(Int)) -> Slice(Int) {
+            let count = data.len()
+            data[0..count]
+        }
+        fn main() -> Int {
+            var data = [10, 20, 30]
+            let view = prefix(data[1..3])
+            let first = view[0]
+            data[1] = 42
+            first + data[1]
+        }
+    "#;
+    assert_eq!(
+        normalize_hir(run_source_hir(source, &[]).unwrap()),
+        NormalizedValue::Int(62)
+    );
+}

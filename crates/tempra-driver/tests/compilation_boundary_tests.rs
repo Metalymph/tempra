@@ -16,7 +16,7 @@ use tempra_vm::profile::VmOptions;
 use tempra_vm::VmValue;
 
 const CURRENT_SEMANTICS_FINGERPRINT: &str =
-    concat!("tempra-", env!("CARGO_PKG_VERSION"), "-semantics-17");
+    concat!("tempra-", env!("CARGO_PKG_VERSION"), "-semantics-18");
 
 struct CacheGuard {
     path: PathBuf,

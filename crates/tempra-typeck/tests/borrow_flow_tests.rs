@@ -1197,3 +1197,172 @@ fn a2_slice_assignment_keeps_source_live_during_bounds() {
         "borrow conflict",
     );
 }
+
+#[test]
+fn a3_1_mutating_slice_return_summary_has_read_result() {
+    use tempra_typeck::borrow_summary::{BorrowAccess, ReturnBorrow};
+    let source = r#"
+        fn normalize(inout data: Slice(Int)) -> Slice(Int) {
+            data[0] = 99
+            let count = data.len()
+            data[0..count]
+        }
+    "#;
+    let ast = parse_source(source).unwrap();
+    let mut file = lower_file(source, &ast);
+    let ctx = check_file_with_context(&mut file).unwrap();
+    let summary = &ctx.borrow_summaries["normalize"];
+    assert_eq!(summary.parameter_accesses, vec![BorrowAccess::Exclusive]);
+    assert_eq!(
+        summary.return_borrow,
+        ReturnBorrow {
+            parameter_index: 0,
+            mode: BorrowAccess::Read,
+        }
+    );
+}
+
+#[test]
+fn a3_1_exclusive_return_releases_owner_after_last_use() {
+    accepted(
+        r#"
+        fn normalize(inout data: Slice(Int)) -> Slice(Int) {
+            data[0] = 99
+            data[0..2]
+        }
+        fn main() -> Int {
+            var data = [10, 20, 30]
+            let view = normalize(inout data[0..3])
+            let first = view[0]
+            data[0] = 42
+            first
+        }
+    "#,
+    );
+}
+
+#[test]
+fn a3_1_exclusive_return_retains_caller_read_loan() {
+    rejected(
+        r#"
+        fn normalize(inout data: Slice(Int)) -> Slice(Int) {
+            data[0] = 99
+            data[0..2]
+        }
+        fn main() -> Int {
+            var data = [10, 20, 30]
+            let view = normalize(inout data[0..3])
+            data[0] = 42
+            view[0]
+        }
+    "#,
+        "borrow conflict",
+    );
+}
+
+#[test]
+fn a3_1_exclusive_return_does_not_retain_exclusive_access() {
+    accepted(
+        r#"
+        fn normalize(inout data: Slice(Int)) -> Slice(Int) {
+            data[0] = 99
+            data[0..1]
+        }
+        fn main() -> Int {
+            var data = [10, 20, 30]
+            let view = normalize(inout data[0..3])
+            data[1] + view[0]
+        }
+    "#,
+    );
+}
+
+#[test]
+fn a3_1_same_owner_early_and_tail_returns() {
+    accepted(
+        r#"
+        fn prefix(data: Slice(Int), flag: Bool) -> Slice(Int) {
+            let count = data.len()
+            if flag { return data[0..1] }
+            data[0..count]
+        }
+    "#,
+    );
+}
+
+#[test]
+fn a3_1_distinct_early_return_owner_is_rejected() {
+    rejected(
+        r#"
+        fn choose(a: Slice(Int), b: Slice(Int), flag: Bool) -> Slice(Int) {
+            if flag { return a[0..1] }
+            b[0..1]
+        }
+    "#,
+        "borrow return contract unavailable",
+    );
+}
+
+#[test]
+fn a3_1_early_return_of_local_owner_is_rejected() {
+    rejected(
+        r#"
+        fn choose(data: Slice(Int), flag: Bool) -> Slice(Int) {
+            if flag {
+                let local = [1, 2, 3]
+                return local[0..1]
+            }
+            data[0..1]
+        }
+    "#,
+        "borrow escape",
+    );
+}
+
+#[test]
+fn a3_1_shadowing_cannot_forge_parameter_origin() {
+    rejected(
+        r#"
+        fn invalid(data: Slice(Int)) -> Slice(Int) {
+            let data = [1, 2, 3]
+            data[0..1]
+        }
+    "#,
+        "borrow escape",
+    );
+}
+
+#[test]
+fn a3_1_intermediate_owned_binding_does_not_discard_origin() {
+    accepted(
+        r#"
+        fn prefix(data: Slice(Int)) -> Slice(Int) {
+            let alias = data
+            let count = alias.len()
+            alias[0..count]
+        }
+    "#,
+    );
+}
+
+#[test]
+fn a3_1_resolved_named_argument_retains_return_origin() {
+    rejected(
+        r#"
+        fn prefix(data: Slice(Int), count: Int) -> Slice(Int) {
+            let limit = count
+            data[0..limit]
+        }
+        fn forward(data: Slice(Int)) -> Slice(Int) {
+            prefix(count=1, data=data)
+        }
+        fn main() -> Int {
+            var data = [1, 2, 3]
+            let view = forward(data[0..2])
+            data[0] = 99
+            view[0]
+        }
+    "#,
+        "borrow conflict",
+    );
+}

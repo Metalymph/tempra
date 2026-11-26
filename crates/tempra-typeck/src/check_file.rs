@@ -61,7 +61,7 @@ pub fn check_modules(
     ctx.borrow_summaries = crate::borrow_summary::infer(
         &modules
             .iter()
-            .map(|m| (m.name.as_str(), &*m.file))
+            .map(|m| (m.name.as_str(), &*m.file, &ctx.module_facts[&m.name]))
             .collect::<Vec<_>>(),
     );
     ctx.callback_summaries = crate::callback_contract::infer(
@@ -183,7 +183,7 @@ fn check_modules_always_impl(
     ctx.borrow_summaries = crate::borrow_summary::infer(
         &modules
             .iter()
-            .map(|m| (m.name.as_str(), &*m.file))
+            .map(|m| (m.name.as_str(), &*m.file, &ctx.module_facts[&m.name]))
             .collect::<Vec<_>>(),
     );
     ctx.callback_summaries = crate::callback_contract::infer(
@@ -258,7 +258,7 @@ fn check_file_internal(file: &mut HirFile, source: Option<String>) -> TypeContex
         ctx.current_is_fallible = false;
     }
 
-    ctx.borrow_summaries = crate::borrow_summary::infer(&[("", &*file)]);
+    ctx.borrow_summaries = crate::borrow_summary::infer(&[("", &*file, &ctx.facts)]);
     ctx.callback_summaries = crate::callback_contract::infer(&[("", &*file)]);
 
     // Source-level, path-sensitive borrow verification (v0.4 §14 subset).

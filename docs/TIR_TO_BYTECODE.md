@@ -183,3 +183,22 @@ The ownership row describes a **future gate**, not a passed implementation miles
 The currently accessible source is the GitHub `main` snapshot, not the local `feature/k5-compiler-timings` branch. Before merging the documentation PR, compare this specification with the active `tempra-bytecode-lower` and verifier implementations, record the exact tested commit and revise any remaining historical status statements.
 
 **Principle:** the lowering stage schedules and encodes computation; it does not define who owns memory.
+
+### A3.2a — Typed read-return provenance
+
+`TirFunction::return_borrow` identifies a runtime parameter, not a source
+parameter or SSA value. The source `BorrowSummary` index is translated when
+compile-time type parameters are omitted. The TIR verifier independently
+checks reachable return paths with a must-provenance CFG analysis. Only aliases,
+subviews and direct calls with a proven return contract preserve the origin.
+Storage exposed to exclusive writes cannot establish the proof. Bytecode
+lowering preserves this index and maps ordinary `Slice(T)` to `ReadSlice`,
+including the result of `Slice` and `Bytes`. Exclusive parameter slots remain
+`ExclusiveSlice`. Format 11 and semantic revision 19 replace older artifacts.
+
+The bytecode verifier repeats the return-provenance check across its own stack,
+locals and CFG. The VM checks the physical slice descriptor at typed boundaries.
+This is the typed direct-return foundation, not the final non-owning slice
+representation or a complete read-loan liveness verifier. `Any` aggregates,
+static/temporary byte views and Exclusive-to-Read execution remain follow-up
+work. No new opcode is introduced by this gate.

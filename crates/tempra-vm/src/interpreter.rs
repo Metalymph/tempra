@@ -91,6 +91,11 @@ impl<'a> Interpreter<'a> {
         }
 
         // Initialize locals
+        for (ty, arg) in func.params.iter().zip(&args) {
+            if *ty == BytecodeType::ReadSlice {
+                Self::validate_read_slice(arg)?;
+            }
+        }
         let mut locals = vec![None; func.locals.len()];
         for (i, arg) in args.into_iter().enumerate() {
             locals[i] = Some(arg);
@@ -339,10 +344,24 @@ impl<'a> Interpreter<'a> {
                             .clone()
                     };
                     let value = self.resolve_borrowed_value(val)?;
+                    if self.module.functions[frame_func_id.0 as usize]
+                        .locals
+                        .get(id.0 as usize)
+                        == Some(&BytecodeType::ReadSlice)
+                    {
+                        Self::validate_read_slice(&value)?;
+                    }
                     self.push(value)?;
                 }
                 BytecodeInstr::StoreLocal(id) => {
                     let val = self.pop_raw()?;
+                    if self.module.functions[frame_func_id.0 as usize]
+                        .locals
+                        .get(id.0 as usize)
+                        == Some(&BytecodeType::ReadSlice)
+                    {
+                        Self::validate_read_slice(&val)?;
+                    }
                     let (token, existing) = {
                         let frame = self.call_stack.last().ok_or(VmError::MissingReturn)?;
                         let existing = frame
@@ -874,6 +893,11 @@ impl<'a> Interpreter<'a> {
                             args.push(self.pop()?);
                         }
                         args.reverse();
+                        for (ty, arg) in target_func.params.iter().zip(&args) {
+                            if *ty == BytecodeType::ReadSlice {
+                                Self::validate_read_slice(arg)?;
+                            }
+                        }
 
                         let resolver = self.native_resolver.ok_or_else(|| {
                             VmError::Native("native resolver not registered".into())
@@ -970,6 +994,10 @@ impl<'a> Interpreter<'a> {
                     } else {
                         None
                     };
+
+                    if ret_type == BytecodeType::ReadSlice {
+                        Self::validate_read_slice(ret_val.as_ref().ok_or(VmError::MissingReturn)?)?;
+                    }
 
                     if let Some(popped) = self.call_stack.pop() {
                         for key in &popped.inout_loans {
@@ -1326,6 +1354,23 @@ impl<'a> Interpreter<'a> {
         locals: Vec<Option<VmValue>>,
         max_stack: usize,
     ) -> Result<(), VmError> {
+        let target = &self.module.functions[function_id.0 as usize];
+        for (index, ty) in target.params.iter().enumerate() {
+            if *ty == BytecodeType::ReadSlice {
+                let arg = locals
+                    .get(index)
+                    .and_then(Option::as_ref)
+                    .ok_or(VmError::LocalNotInitialized(index as u32))?;
+                // A hidden ref capture may hold an existing scalar borrow
+                // of a read-slice descriptor; validate the materialized view.
+                if matches!(arg, VmValue::BorrowedLocal(_)) {
+                    let value = self.resolve_borrowed_value(arg.clone())?;
+                    Self::validate_read_slice(&value)?;
+                } else {
+                    Self::validate_read_slice(arg)?;
+                }
+            }
+        }
         let token = self.allocate_frame_token()?;
         if let Some(ref mut profiling) = self.profiling {
             profiling.stats[function_id.0 as usize].call_count += 1;
@@ -1345,6 +1390,24 @@ impl<'a> Interpreter<'a> {
     fn push(&mut self, val: VmValue) -> Result<(), VmError> {
         self.call_stack.last_mut().unwrap().stack.push(val);
         Ok(())
+    }
+
+    /// Validate the current physical read-slice descriptor at a typed boundary.
+    /// This does not certify an owner lifetime; the non-owning representation
+    /// and its lifetime protocol are a separate gate.
+    fn validate_read_slice(value: &VmValue) -> Result<(), VmError> {
+        match value {
+            VmValue::Slice { parent, start, end } if start <= end && *end <= parent.len() => Ok(()),
+            VmValue::Slice { parent, start, end } => Err(VmError::InvalidSliceRange {
+                start: *start,
+                end: *end,
+                len: parent.len(),
+            }),
+            other => Err(VmError::TypeMismatch {
+                expected: "ReadSlice".into(),
+                found: other.type_name().into(),
+            }),
+        }
     }
 
     fn allocate_frame_token(&mut self) -> Result<u64, VmError> {

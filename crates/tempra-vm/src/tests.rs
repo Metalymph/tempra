@@ -1450,3 +1450,46 @@ fn a1_verifier_rejects_pending_exclusive_fused_local_reads() {
         assert!(error.to_string().contains("exclusive argument is pending"));
     }
 }
+
+#[test]
+fn a3_2a_read_slice_boundary_checks_descriptor() {
+    use std::rc::Rc;
+    let mut module = BytecodeModule::new();
+    let mut function = BytecodeFunction::new(
+        "observe".into(),
+        vec![BytecodeType::ReadSlice],
+        BytecodeType::Int64,
+    );
+    function.locals = function.params.clone();
+    function.max_stack = 1;
+    function.code = vec![
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::Len,
+        BytecodeInstr::Return,
+    ];
+    module.add_function(function);
+    let parent = Rc::new(vec![VmValue::Int64(7), VmValue::Int64(8)]);
+    let valid = VmValue::Slice {
+        parent: parent.clone(),
+        start: 1,
+        end: 2,
+    };
+    assert_eq!(
+        run_function(&module, "observe", vec![valid]).unwrap(),
+        VmValue::Int64(1)
+    );
+    let wrong_type = VmValue::Array(parent.clone());
+    assert!(matches!(
+        run_function(&module, "observe", vec![wrong_type]),
+        Err(VmError::TypeMismatch { .. })
+    ));
+    let wrong_bounds = VmValue::Slice {
+        parent,
+        start: 1,
+        end: 3,
+    };
+    assert!(matches!(
+        run_function(&module, "observe", vec![wrong_bounds]),
+        Err(VmError::InvalidSliceRange { .. })
+    ));
+}

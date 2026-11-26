@@ -1571,10 +1571,138 @@ fn a1_raw_borrow_cannot_be_stored_as_ordinary_value() {
 fn a1_previous_loadlocal_format_is_rejected() {
     let module = a1_callable_access_fixture(2, vec![true, false]);
     let mut bytes = encode_module(&module).unwrap();
-    assert_eq!(&bytes[4..8], &10_u32.to_le_bytes());
+    assert_eq!(&bytes[4..8], &11_u32.to_le_bytes());
     bytes[4..8].copy_from_slice(&9_u32.to_le_bytes());
     assert!(matches!(
         decode_artifact(&bytes),
         Err(BytecodeSerializeError::UnsupportedVersion)
     ));
+}
+
+fn a3_2a_read_return_join_fixture(other_owner: bool) -> BytecodeModule {
+    use crate::opcode::InstrOffset;
+    let mut module = BytecodeModule::new();
+    let mut function = BytecodeFunction::new(
+        "select".into(),
+        vec![
+            BytecodeType::ReadSlice,
+            BytecodeType::ReadSlice,
+            BytecodeType::Bool,
+        ],
+        BytecodeType::ReadSlice,
+    );
+    function.return_borrow = Some(0);
+    function.locals = function.params.clone();
+    function.locals.push(BytecodeType::ReadSlice);
+    function.max_stack = 1;
+    function.code = vec![
+        BytecodeInstr::LoadLocal(LocalId(2)),
+        BytecodeInstr::JumpIfFalse(InstrOffset(5)),
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::StoreLocal(LocalId(3)),
+        BytecodeInstr::Jump(InstrOffset(7)),
+        BytecodeInstr::LoadLocal(LocalId(if other_owner { 1 } else { 0 })),
+        BytecodeInstr::StoreLocal(LocalId(3)),
+        BytecodeInstr::LoadLocal(LocalId(3)),
+        BytecodeInstr::Return,
+    ];
+    module.add_function(function);
+    module
+}
+
+#[test]
+fn a3_2a_read_return_contract_roundtrip_and_format() {
+    let module = a3_2a_read_return_join_fixture(false);
+    let encoded = encode_module(&module).unwrap();
+    let artifact = decode_and_verify_artifact(&encoded).unwrap();
+    let function = &artifact.module.functions[0];
+    assert_eq!(function.return_borrow, Some(0));
+    assert_eq!(function.ret, BytecodeType::ReadSlice);
+    assert_eq!(function.params[0], BytecodeType::ReadSlice);
+    assert_eq!(function.locals[3], BytecodeType::ReadSlice);
+    assert_eq!(encode_module(&artifact.module).unwrap(), encoded);
+    assert_eq!(&encoded[4..8], &11_u32.to_le_bytes());
+    let mut old = encoded;
+    old[4..8].copy_from_slice(&10_u32.to_le_bytes());
+    assert!(matches!(
+        decode_artifact(&old),
+        Err(BytecodeSerializeError::UnsupportedVersion)
+    ));
+}
+
+#[test]
+fn a3_2a_read_return_different_origin_at_join_is_rejected() {
+    let module = a3_2a_read_return_join_fixture(true);
+    let error = crate::verify::verify_module(&module).unwrap_err();
+    assert!(error.to_string().contains("read slice return must derive"));
+    let bytes = encode_module(&module).unwrap();
+    assert!(matches!(
+        decode_and_verify_artifact(&bytes),
+        Err(BytecodeSerializeError::VerifyError(_))
+    ));
+}
+
+#[test]
+fn a3_2a_read_return_missing_or_forged_metadata_is_rejected() {
+    let mut module = a3_2a_read_return_join_fixture(false);
+    for contract in [None, Some(1), Some(2), Some(u32::MAX)] {
+        module.functions[0].return_borrow = contract;
+        let error = crate::verify::verify_module(&module).unwrap_err();
+        assert!(error.to_string().contains("read slice return must derive"));
+    }
+}
+
+#[test]
+fn a3_2a_read_return_any_cannot_manufacture_origin() {
+    let mut module = a3_2a_read_return_join_fixture(false);
+    let function = &mut module.functions[0];
+    function.params[1] = BytecodeType::Any;
+    function.locals[1] = BytecodeType::Any;
+    function.code = vec![BytecodeInstr::LoadLocal(LocalId(1)), BytecodeInstr::Return];
+    let error = crate::verify::verify_module(&module).unwrap_err();
+    assert!(error.to_string().contains("read slice return must derive"));
+}
+
+#[test]
+fn a3_2a_read_return_local_array_cannot_manufacture_origin() {
+    let mut module = a3_2a_read_return_join_fixture(false);
+    let zero = module.add_constant(BytecodeConstant::Int64(0));
+    let one = module.add_constant(BytecodeConstant::Int64(1));
+    let function = &mut module.functions[0];
+    function.max_stack = 3;
+    function.code = vec![
+        BytecodeInstr::ConstI64(one),
+        BytecodeInstr::MakeArray(1),
+        BytecodeInstr::ConstI64(zero),
+        BytecodeInstr::ConstI64(one),
+        BytecodeInstr::Slice,
+        BytecodeInstr::Return,
+    ];
+    let error = crate::verify::verify_module(&module).unwrap_err();
+    assert!(error.to_string().contains("read slice return must derive"));
+}
+
+#[test]
+fn a3_2a_read_return_direct_call_uses_declared_argument() {
+    let mut module = a3_2a_read_return_join_fixture(false);
+    let mut forward = BytecodeFunction::new(
+        "forward".into(),
+        vec![BytecodeType::ReadSlice, BytecodeType::ReadSlice],
+        BytecodeType::ReadSlice,
+    );
+    forward.return_borrow = Some(1);
+    forward.locals = forward.params.clone();
+    forward.max_stack = 3;
+    forward.code = vec![
+        BytecodeInstr::LoadLocal(LocalId(1)),
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::ConstBool(true),
+        BytecodeInstr::Call(FunctionId(0), 3),
+        BytecodeInstr::Return,
+    ];
+    let id = module.add_function(forward);
+    crate::verify::verify_module(&module).unwrap();
+    module.functions[id.0 as usize].return_borrow = Some(0);
+    let error = crate::verify::verify_module(&module).unwrap_err();
+    assert!(error.to_string().contains("read slice return must derive"));
 }

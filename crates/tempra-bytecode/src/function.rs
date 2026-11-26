@@ -32,7 +32,7 @@ pub enum BytecodeType {
     UInt8,
     Float64,
     String,
-    /// Verifier-only escape hatch for dynamic types (Enums, Structs, Arrays, Slices).
+    /// Verifier-only escape hatch for dynamic types (Enums, Structs, Arrays).
     /// Used when the bytecode verifier doesn't have enough metadata to perform full static type checking
     /// for complex user-defined types.
     Any,
@@ -40,6 +40,8 @@ pub enum BytecodeType {
     Callable(SignatureId),
     /// Internal exclusive slice argument; valid only for direct inout parameters.
     ExclusiveSlice,
+    /// Read-only slice descriptor. Return provenance is checked separately.
+    ReadSlice,
 }
 
 /// Function-valued signature excluding any captured/hidden parameters.
@@ -62,6 +64,7 @@ impl fmt::Display for BytecodeType {
             BytecodeType::Any => write!(f, "Any"),
             BytecodeType::Callable(id) => write!(f, "Callable(#{})", id.0),
             BytecodeType::ExclusiveSlice => write!(f, "ExclusiveSlice"),
+            BytecodeType::ReadSlice => write!(f, "ReadSlice"),
         }
     }
 }
@@ -73,6 +76,8 @@ pub struct BytecodeFunction {
     /// Access modes for direct calls, indexed by parameter. An inout parameter
     /// receives a non-owning exclusive frame handle, never an ordinary copy.
     pub inout_params: Vec<bool>,
+    /// Runtime parameter supplying a verified read-only slice return.
+    pub return_borrow: Option<u32>,
     pub ret: BytecodeType,
     pub is_extern: bool,
     pub locals: Vec<BytecodeType>,
@@ -87,6 +92,7 @@ impl BytecodeFunction {
             name,
             params,
             inout_params,
+            return_borrow: None,
             ret,
             is_extern: false,
             locals: Vec::new(),

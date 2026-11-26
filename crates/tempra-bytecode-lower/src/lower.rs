@@ -54,6 +54,15 @@ pub fn lower_tir_module(module: &TirModule) -> Result<BytecodeModule, BytecodeLo
         let ret = map_type(&tir_func.return_type, &bc_module)?;
         let mut bc_func = BytecodeFunction::new(tir_func.name.clone(), params, ret);
         bc_func.is_extern = tir_func.is_extern;
+        bc_func.return_borrow = tir_func
+            .return_borrow
+            .map(u32::try_from)
+            .transpose()
+            .map_err(|_| {
+                BytecodeLowerError::UnsupportedType(
+                    "return borrow parameter index exceeds u32".into(),
+                )
+            })?;
         bc_func.inout_params = if tir_func.inout_params.is_empty() {
             vec![false; tir_func.params.len()]
         } else {
@@ -104,6 +113,13 @@ fn lower_function(
 
     let mut bc_func = BytecodeFunction::new(tir_func.name.clone(), params, ret);
     bc_func.is_extern = tir_func.is_extern;
+    bc_func.return_borrow = tir_func
+        .return_borrow
+        .map(u32::try_from)
+        .transpose()
+        .map_err(|_| {
+            BytecodeLowerError::UnsupportedType("return borrow parameter index exceeds u32".into())
+        })?;
     bc_func.inout_params = if tir_func.inout_params.is_empty() {
         vec![false; tir_func.params.len()]
     } else {
@@ -882,10 +898,10 @@ impl<'a> FunctionLowerer<'a> {
             TirInstr::Tag(_, _) => Ok(BytecodeType::String),
             TirInstr::Unwrap(_, _, _, _) => Ok(BytecodeType::Any),
             TirInstr::GetIndex(_, _, _) => Ok(BytecodeType::Any),
-            TirInstr::Slice(_, _, _, _) => Ok(BytecodeType::Any),
+            TirInstr::Slice(_, _, _, _) => Ok(BytecodeType::ReadSlice),
             TirInstr::Len(_, _) => Ok(BytecodeType::Int64),
             TirInstr::Size(_, _) => Ok(BytecodeType::Int64),
-            TirInstr::Bytes(_, _) => Ok(BytecodeType::Any),
+            TirInstr::Bytes(_, _) => Ok(BytecodeType::ReadSlice),
             TirInstr::ArrayPush(_, _, _) => Ok(BytecodeType::Any),
             _ => Err(BytecodeLowerError::UnsupportedInstr(format!(
                 "Cannot infer type for {:?}",
@@ -978,7 +994,7 @@ fn map_type(ty: &TirType, module: &BytecodeModule) -> Result<BytecodeType, Bytec
         TirType::Result(_, _) => Ok(BytecodeType::Any),
         TirType::Option(_) => Ok(BytecodeType::Any),
         TirType::Array(_) => Ok(BytecodeType::Any),
-        TirType::Slice(_) => Ok(BytecodeType::Any),
+        TirType::Slice(_) => Ok(BytecodeType::ReadSlice),
         TirType::Tuple(_) => Ok(BytecodeType::Any),
         TirType::Struct(_) => Ok(BytecodeType::Any),
         TirType::Enum(_) => Ok(BytecodeType::Any),

@@ -148,7 +148,12 @@ fn verify_function_inner(
         )]);
     }
     if func.blocks.is_empty() {
-        // Declaration only, nothing more to verify here
+        // Declarations cannot certify executable borrowed return contracts.
+        if func.return_borrow.is_some() {
+            return Err(vec![VerifierError::GenericError(
+                "read slice return requires an executable body".into(),
+            )]);
+        }
         return Ok(HashMap::new());
     }
 
@@ -418,6 +423,11 @@ fn verify_function_inner(
                 }
                 TirInstr::MakeClosure(res, target_func, captures) => {
                     if let Some(f) = functions.get(target_func) {
+                        if matches!(&f.return_type, TirType::Slice(_)) {
+                            errors.push(VerifierError::GenericError(
+                                "indirect slice return requires a provenance contract".into(),
+                            ));
+                        }
                         if f.inout_params.iter().any(|access| *access) {
                             errors.push(VerifierError::GenericError(
                                 "ordinary closure target cannot have inout parameters".into(),
@@ -469,6 +479,11 @@ fn verify_function_inner(
                         ));
                         value_types.insert(*res, None);
                     } else if let Some(f) = functions.get(target_func) {
+                        if matches!(&f.return_type, TirType::Slice(_)) {
+                            errors.push(VerifierError::GenericError(
+                                "indirect slice return requires a provenance contract".into(),
+                            ));
+                        }
                         if f.is_extern || f.blocks.is_empty() {
                             errors.push(VerifierError::GenericError(format!(
                                 "make_closure_ref requires a defined target: {:?}",
@@ -533,6 +548,11 @@ fn verify_function_inner(
                             value_types.insert(*res, None);
                         }
                         Some(Some(TirType::Function(params, ret))) => {
+                            if matches!(ret.as_ref(), TirType::Slice(_)) {
+                                errors.push(VerifierError::GenericError(
+                                    "indirect slice return requires a provenance contract".into(),
+                                ));
+                            }
                             if args.len() != params.len() {
                                 errors.push(VerifierError::GenericError(format!(
                                     "closure call arity mismatch: expected {}, found {}",
@@ -813,12 +833,180 @@ fn verify_function_inner(
     errors.extend(verify_borrowed_closure_frame_lifetimes(func, functions));
     errors.extend(verify_exclusive_call_borrows(func, functions));
     errors.extend(verify_inout_bindings(func));
+    if let Err(error) = verify_read_return_provenance(func, functions) {
+        errors.push(error);
+    }
 
     if errors.is_empty() {
         Ok(value_types)
     } else {
         Err(errors)
     }
+}
+
+/// Must-provenance for the declared read-only return parameter. Unknown origins
+/// never become proven at a join. This checks return provenance, not full loan
+/// liveness; the latter is still enforced at source level in this tranche.
+fn verify_read_return_provenance(
+    func: &TirFunction,
+    functions: &HashMap<TirFunctionId, &TirFunction>,
+) -> Result<(), VerifierError> {
+    let error = || {
+        VerifierError::GenericError(
+            "read slice return must derive from its declared parameter on every path".into(),
+        )
+    };
+    let Some(parameter) = func.return_borrow else {
+        return if matches!(&func.return_type, TirType::Slice(_)) {
+            Err(error())
+        } else {
+            Ok(())
+        };
+    };
+    let Some((source, ty)) = func.params.get(parameter) else {
+        return Err(error());
+    };
+    if !matches!(ty, TirType::Slice(_))
+        || ty != &func.return_type
+        || func.is_extern
+        || func.inout_params.get(parameter).copied().unwrap_or(false)
+    {
+        return Err(error());
+    }
+    let entry = func.blocks.first().ok_or_else(error)?.id;
+
+    // Storage whose address can be exposed to a writer is not a reliable
+    // origin-preserving alias. This is deliberately conservative.
+    let mut exposed = HashSet::new();
+    for block in &func.blocks {
+        for instr in &block.instrs {
+            match instr {
+                TirInstr::BorrowInout(_, slot) | TirInstr::BindInout(slot, _) => {
+                    exposed.insert(*slot);
+                }
+                TirInstr::BorrowSliceInout(_, TirSliceSource::Owner(slot), _, _) => {
+                    exposed.insert(*slot);
+                }
+                TirInstr::MakeClosureInout(_, _, slots) => exposed.extend(slots.iter().copied()),
+                _ => {}
+            }
+        }
+    }
+    #[derive(Clone)]
+    struct State {
+        values: HashSet<TirValueId>,
+        slots: HashSet<TirSlotId>,
+    }
+    let mut states = HashMap::from([(
+        entry,
+        State {
+            values: HashSet::from([*source]),
+            slots: HashSet::new(),
+        },
+    )]);
+    let mut pending = std::collections::VecDeque::from([entry]);
+    while let Some(id) = pending.pop_front() {
+        let block = func.blocks.iter().find(|b| b.id == id).ok_or_else(error)?;
+        let mut state = states[&id].clone();
+        for instr in &block.instrs {
+            let result = match instr {
+                TirInstr::Slot(slot, _) | TirInstr::BindInout(slot, _) => {
+                    state.slots.remove(slot);
+                    None
+                }
+                TirInstr::Store(slot, value) => {
+                    if state.values.contains(value) && !exposed.contains(slot) {
+                        state.slots.insert(*slot);
+                    } else {
+                        state.slots.remove(slot);
+                    }
+                    None
+                }
+                TirInstr::Load(value, slot) => Some((*value, state.slots.contains(slot))),
+                TirInstr::Slice(value, object, _, _) => {
+                    Some((*value, state.values.contains(object)))
+                }
+                TirInstr::Call(value, target, args) => {
+                    let proven = functions
+                        .get(target)
+                        .and_then(|callee| {
+                            if !matches!(&callee.return_type, TirType::Slice(_)) {
+                                return None;
+                            }
+                            let parameter = callee.return_borrow?;
+                            if callee.inout_params.get(parameter).copied().unwrap_or(false) {
+                                return None;
+                            }
+                            args.get(parameter)
+                        })
+                        .is_some_and(|arg| state.values.contains(arg));
+                    Some((*value, proven))
+                }
+                // All other producers lose the proof, including aggregate
+                // projections, bytes(), and indirect calls without contracts.
+                TirInstr::Const(v, _)
+                | TirInstr::Make(v, _, _, _)
+                | TirInstr::MakeStruct(v, _, _)
+                | TirInstr::Get(v, _, _)
+                | TirInstr::Set(v, _, _, _)
+                | TirInstr::Tag(v, _)
+                | TirInstr::Unwrap(v, _, _, _)
+                | TirInstr::BorrowInout(v, _)
+                | TirInstr::BorrowSliceInout(v, _, _, _)
+                | TirInstr::InoutSliceGet(v, _, _)
+                | TirInstr::InoutSliceLen(v, _)
+                | TirInstr::MakeClosure(v, _, _)
+                | TirInstr::MakeClosureRef(v, _, _)
+                | TirInstr::MakeClosureInout(v, _, _)
+                | TirInstr::CallClosure(v, _, _)
+                | TirInstr::Add(v, _, _)
+                | TirInstr::Sub(v, _, _)
+                | TirInstr::Mul(v, _, _)
+                | TirInstr::Div(v, _, _)
+                | TirInstr::Eq(v, _, _)
+                | TirInstr::Lt(v, _, _)
+                | TirInstr::Gt(v, _, _)
+                | TirInstr::And(v, _, _)
+                | TirInstr::Or(v, _, _)
+                | TirInstr::Not(v, _)
+                | TirInstr::GetIndex(v, _, _)
+                | TirInstr::Len(v, _)
+                | TirInstr::Size(v, _)
+                | TirInstr::Bytes(v, _)
+                | TirInstr::ArrayPush(v, _, _) => Some((*v, false)),
+                TirInstr::InoutSliceSet(_, _, _) => None,
+            };
+            if let Some((value, proven)) = result {
+                if proven {
+                    state.values.insert(value);
+                } else {
+                    state.values.remove(&value);
+                }
+            }
+        }
+        let successors = match &block.terminator {
+            Some(TirTerminator::Ret(Some(value))) if state.values.contains(value) => vec![],
+            Some(TirTerminator::Ret(_)) => return Err(error()),
+            Some(TirTerminator::Br(target)) => vec![*target],
+            Some(TirTerminator::CondBr(_, yes, no)) => vec![*yes, *no],
+            Some(TirTerminator::Unreachable) => vec![],
+            None => return Err(error()),
+        };
+        for next in successors {
+            if let Some(existing) = states.get_mut(&next) {
+                let before = existing.values.len() + existing.slots.len();
+                existing.values.retain(|value| state.values.contains(value));
+                existing.slots.retain(|slot| state.slots.contains(slot));
+                if before != existing.values.len() + existing.slots.len() {
+                    pending.push_back(next);
+                }
+            } else {
+                states.insert(next, state.clone());
+                pending.push_back(next);
+            }
+        }
+    }
+    Ok(())
 }
 
 // VM Parity 2B.1d: frame-bound borrowed closures.

@@ -16,7 +16,7 @@ use tempra_vm::profile::VmOptions;
 use tempra_vm::VmValue;
 
 const CURRENT_SEMANTICS_FINGERPRINT: &str =
-    concat!("tempra-", env!("CARGO_PKG_VERSION"), "-semantics-18");
+    concat!("tempra-", env!("CARGO_PKG_VERSION"), "-semantics-19");
 
 struct CacheGuard {
     path: PathBuf,
@@ -603,4 +603,49 @@ fn main() -> Int64 { return k46b2_unclassified_native() }
         EffectQueryError::Compiler(error) => expect_unclassified_extern(error),
         other => panic!("expected inspection to fail closed, got {other:?}"),
     }
+}
+
+#[test]
+fn a3_2a_source_contract_survives_tir_bytecode_and_cache_encoding() {
+    use tempra_bytecode::function::BytecodeType;
+    let source = r#"
+        fn prefix(count: Int, data: Slice(Int)) -> Slice(Int) {
+            let limit = count
+            data[0..limit]
+        }
+        fn forward(data: Slice(Int)) -> Slice(Int) {
+            prefix(1, data)
+        }
+        fn main() -> Int {
+            let data = [10, 20, 30]
+            let view = forward(data[1..3])
+            view[0]
+        }
+    "#;
+    let compilation = compile_source(source).unwrap();
+    for (name, origin) in [("prefix", 1usize), ("forward", 0usize)] {
+        let tir = compilation
+            .tir()
+            .functions
+            .iter()
+            .find(|f| f.name == name)
+            .unwrap();
+        assert_eq!(tir.return_borrow, Some(origin));
+        let bytecode = compilation
+            .bytecode()
+            .functions
+            .iter()
+            .find(|f| f.name == name)
+            .unwrap();
+        assert_eq!(bytecode.return_borrow, Some(origin as u32));
+        assert_eq!(bytecode.params[origin], BytecodeType::ReadSlice);
+        assert_eq!(bytecode.ret, BytecodeType::ReadSlice);
+    }
+    let bytes = tempra_bytecode::serialize::encode_module(compilation.bytecode()).unwrap();
+    let decoded = tempra_bytecode::serialize::decode_and_verify_artifact(&bytes).unwrap();
+    assert_eq!(
+        tempra_vm::run_function(&decoded.module, "main", vec![]).unwrap(),
+        VmValue::Int64(20)
+    );
+    assert_eq!(run_source_vm(source, &[]).unwrap(), VmValue::Int64(20));
 }

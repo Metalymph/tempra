@@ -63,7 +63,7 @@ impl From<crate::verify::BytecodeVerifyError> for BytecodeSerializeError {
 
 const MAGIC: &[u8; 4] = b"TMBC";
 // v10: LoadLocal materializes values; raw handle copies are no longer legal.
-const FORMAT_VERSION: u32 = 10;
+const FORMAT_VERSION: u32 = 11;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct BytecodeCacheHeader {
@@ -185,6 +185,13 @@ pub fn encode_artifact(
         }
 
         write_type(&mut buf, &f.ret)?;
+        match f.return_borrow {
+            None => buf.write_all(&[0])?,
+            Some(parameter) => {
+                buf.write_all(&[1])?;
+                write_u32(&mut buf, parameter)?;
+            }
+        }
 
         write_u32(&mut buf, f.locals.len() as u32)?;
         for l in &f.locals {
@@ -232,6 +239,7 @@ fn write_type(w: &mut impl Write, ty: &BytecodeType) -> io::Result<()> {
         BytecodeType::UInt8 => 7,
         BytecodeType::Callable(_) => 8,
         BytecodeType::ExclusiveSlice => 9,
+        BytecodeType::ReadSlice => 10,
     };
     w.write_all(&[tag])?;
     if let BytecodeType::Callable(id) = ty {
@@ -499,6 +507,13 @@ pub fn decode_artifact(bytes: &[u8]) -> Result<BytecodeCacheArtifact, BytecodeSe
 
         let mut f = BytecodeFunction::new(name, params, ret);
         f.inout_params = inout_params;
+        let mut return_tag = [0u8; 1];
+        cursor.read_exact(&mut return_tag)?;
+        f.return_borrow = match return_tag[0] {
+            0 => None,
+            1 => Some(read_u32(&mut cursor)?),
+            _ => return Err(BytecodeSerializeError::InvalidTag),
+        };
 
         let local_len = read_u32(&mut cursor)?;
         for _ in 0..local_len {
@@ -570,6 +585,7 @@ fn read_type(r: &mut impl Read) -> Result<BytecodeType, BytecodeSerializeError> 
         7 => Ok(BytecodeType::UInt8),
         8 => Ok(BytecodeType::Callable(SignatureId(read_u32(r)?))),
         9 => Ok(BytecodeType::ExclusiveSlice),
+        10 => Ok(BytecodeType::ReadSlice),
         _ => Err(BytecodeSerializeError::InvalidTag),
     }
 }

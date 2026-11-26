@@ -1562,3 +1562,76 @@ fn a1_tir_rejects_inout_public_callable_parameter() {
     module.add_function(main.build());
     assert!(verify_module(&module.module).is_err());
 }
+
+fn a3_2a_tir_join_fixture(other_owner: bool) -> TirModule {
+    let slice = TirType::Slice(Box::new(TirType::Int64));
+    let mut module = ModuleBuilder::new();
+    let mut function = module.new_function("select", slice.clone());
+    let first = function.add_param(slice.clone());
+    let second = function.add_param(slice.clone());
+    let flag = function.add_param(TirType::Bool);
+    function.func.return_borrow = Some(0);
+    let entry = function.new_block();
+    let yes = function.new_block();
+    let no = function.new_block();
+    let join = function.new_block();
+    function.set_current_block(entry);
+    let slot = function.build_slot(slice, Some("selected")).unwrap();
+    function.build_condbr(flag, yes, no).unwrap();
+    function.set_current_block(yes);
+    function.build_store(slot, first).unwrap();
+    function.build_br(join).unwrap();
+    function.set_current_block(no);
+    function
+        .build_store(slot, if other_owner { second } else { first })
+        .unwrap();
+    function.build_br(join).unwrap();
+    function.set_current_block(join);
+    let value = function.build_load(slot).unwrap();
+    function.build_ret(Some(value)).unwrap();
+    module.add_function(function.build());
+    module.module
+}
+
+#[test]
+fn a3_2a_tir_same_origin_at_join_is_valid() {
+    verify_module(&a3_2a_tir_join_fixture(false)).unwrap();
+}
+
+#[test]
+fn a3_2a_tir_different_origin_at_join_is_rejected() {
+    let errors = verify_module(&a3_2a_tir_join_fixture(true)).unwrap_err();
+    assert!(format!("{errors:?}").contains("read slice return must derive"));
+}
+
+#[test]
+fn a3_2a_tir_missing_or_forged_origin_is_rejected() {
+    let mut module = a3_2a_tir_join_fixture(false);
+    for contract in [None, Some(1), Some(2), Some(usize::MAX)] {
+        module.functions[0].return_borrow = contract;
+        let errors = verify_module(&module).unwrap_err();
+        assert!(format!("{errors:?}").contains("read slice return must derive"));
+    }
+}
+
+#[test]
+fn a3_2a_tir_local_array_cannot_satisfy_return_contract() {
+    let mut module = ModuleBuilder::new();
+    let slice = TirType::Slice(Box::new(TirType::Int64));
+    let mut function = module.new_function("escape", slice.clone());
+    function.add_param(slice);
+    function.func.return_borrow = Some(0);
+    let entry = function.new_block();
+    function.set_current_block(entry);
+    let item = function.build_const(TirConst::Int64(7)).unwrap();
+    let array = function
+        .build_make(TirType::Array(Box::new(TirType::Int64)), None, vec![item])
+        .unwrap();
+    let start = function.build_const(TirConst::Int64(0)).unwrap();
+    let end = function.build_const(TirConst::Int64(1)).unwrap();
+    let view = function.build_slice(array, start, end).unwrap();
+    function.build_ret(Some(view)).unwrap();
+    module.add_function(function.build());
+    let errors = verify_module(&module.module).unwrap_err();
+    assert!(format!("{errors:?}").contains("read slice return must derive"));
+}

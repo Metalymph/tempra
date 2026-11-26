@@ -24,6 +24,12 @@ pub fn format_tir_function(func: &TirFunction) -> String {
         format_type(&func.return_type)
     ));
 
+    if let Some(parameter) = func.return_borrow {
+        out.push_str(&format!(
+            "  // return borrow: parameter {parameter} (read)\n"
+        ));
+    }
+
     let mut sorted_slots: Vec<_> = func.debug_slots.iter().collect();
     sorted_slots.sort_by_key(|(id, _)| id.0);
 

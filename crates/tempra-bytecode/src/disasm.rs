@@ -41,6 +41,9 @@ pub fn disassemble_function(
         out.push_str(&format!("{}", p));
     }
     out.push_str(&format!(") -> {}\n", func.ret));
+    if let Some(parameter) = func.return_borrow {
+        out.push_str(&format!("  return borrow: parameter {parameter} (read)\n"));
+    }
     out.push_str(&format!("  max_stack: {}\n", func.max_stack));
     out.push_str("  locals:\n");
     for (i, l) in func.locals.iter().enumerate() {

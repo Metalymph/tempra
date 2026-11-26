@@ -18,6 +18,7 @@ fn test_lower_const_return_i64() {
         debug_slots: Default::default(),
         is_extern: false,
         inout_params: Vec::new(),
+        return_borrow: None,
     };
 
     let b0 = TirBlockId(0);
@@ -58,6 +59,7 @@ fn test_lower_add_i64() {
         debug_slots: Default::default(),
         is_extern: false,
         inout_params: Vec::new(),
+        return_borrow: None,
     };
 
     let b0 = TirBlockId(0);
@@ -94,6 +96,7 @@ fn test_lower_if_condbr() {
         debug_slots: Default::default(),
         is_extern: false,
         inout_params: Vec::new(),
+        return_borrow: None,
     };
 
     // Block 0: CondBr %0, B1, B2
@@ -150,6 +153,7 @@ fn test_unsupported_make_error() {
         debug_slots: Default::default(),
         is_extern: false,
         inout_params: Vec::new(),
+        return_borrow: None,
     };
 
     // Non-field Set remains unsupported; tuple/index reads lower through GetIndex.
@@ -192,6 +196,7 @@ fn test_lower_make_tuple() {
         debug_slots: Default::default(),
         is_extern: false,
         inout_params: Vec::new(),
+        return_borrow: None,
     };
 
     func.blocks.push(TirBlock {
@@ -231,6 +236,7 @@ fn test_peephole_preserves_user_slots() {
         debug_slots: Default::default(),
         is_extern: false,
         inout_params: Vec::new(),
+        return_borrow: None,
     };
 
     let s0 = TirSlotId(0);
@@ -279,6 +285,7 @@ fn test_peephole_fuses_superinstructions() {
         debug_slots: Default::default(),
         is_extern: false,
         inout_params: Vec::new(),
+        return_borrow: None,
     };
 
     // v2 = v0 + v1
@@ -330,6 +337,7 @@ fn returning_i64_function(id: usize, name: &str, value: i64) -> TirFunction {
         debug_slots: Default::default(),
         is_extern: false,
         inout_params: Vec::new(),
+        return_borrow: None,
     }
 }
 
@@ -350,6 +358,7 @@ fn calling_function(id: usize, name: &str, target: usize) -> TirFunction {
         debug_slots: Default::default(),
         is_extern: false,
         inout_params: Vec::new(),
+        return_borrow: None,
     }
 }
 
@@ -441,6 +450,7 @@ fn lower_numeric_binary(
             debug_slots: Default::default(),
             is_extern: false,
             inout_params: Vec::new(),
+            return_borrow: None,
         }],
     };
     let bytecode = lower_tir_module(&module).unwrap();
@@ -601,6 +611,7 @@ fn invalid_numeric_tir_is_rejected_before_bytecode_emission() {
             debug_slots: Default::default(),
             is_extern: false,
             inout_params: Vec::new(),
+            return_borrow: None,
         }],
     };
 
@@ -645,6 +656,7 @@ fn conflicting_struct_field_types_are_rejected_before_bytecode_emission() {
                 debug_slots: Default::default(),
                 is_extern: false,
                 inout_params: Vec::new(),
+                return_borrow: None,
             },
             TirFunction {
                 id: TirFunctionId(1),
@@ -669,6 +681,7 @@ fn conflicting_struct_field_types_are_rejected_before_bytecode_emission() {
                 debug_slots: Default::default(),
                 is_extern: false,
                 inout_params: Vec::new(),
+                return_borrow: None,
             },
             TirFunction {
                 id: TirFunctionId(2),
@@ -690,6 +703,7 @@ fn conflicting_struct_field_types_are_rejected_before_bytecode_emission() {
                 debug_slots: Default::default(),
                 is_extern: false,
                 inout_params: Vec::new(),
+                return_borrow: None,
             },
         ],
     };

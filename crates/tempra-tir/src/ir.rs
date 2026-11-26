@@ -139,6 +139,9 @@ pub struct TirFunction {
     pub params: Vec<(TirValueId, TirType)>,
     /// Access modes, one per runtime parameter. Never a user-visible type.
     pub inout_params: Vec<bool>,
+    /// Runtime parameter supplying the read-only returned slice, if any.
+    /// The verifier must prove this contract on every reachable return.
+    pub return_borrow: Option<usize>,
     pub return_type: TirType,
     pub is_extern: bool,
     pub blocks: Vec<TirBlock>,

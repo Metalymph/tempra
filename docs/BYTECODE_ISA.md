@@ -92,6 +92,18 @@ are the explicit handle producers. The verifier checks the matching capture or
 direct-call consumer. The serialized format version is incremented when this
 contract changes because old code may rely on implicit handle copying.
 
+**A3.2a read-return contract (format 11):** a read-only slice uses the
+`ReadSlice` type tag (10), distinct from `Any` and `ExclusiveSlice`. Function
+records include an optional zero-based runtime parameter index after the return
+type (presence byte 0 or 1, then a little-endian u32 when present). A defined
+function returning `ReadSlice` must identify a non-exclusive read-slice
+parameter. The verifier checks that each reachable return preserves that
+origin through loads, stores, subviews and direct calls; CFG merges retain only
+proven origins. Unknown aggregate projections and indirect return ABIs cannot
+establish the proof. This gate does not yet establish all dynamic read-loan
+lifetimes or change the physical `Rc`-backed runtime representation. Exclusive
+slice return/downgrade remains unsupported. The instruction IDs are unchanged.
+
 ### 3.3 Arithmetic — existing v0 families
 
 | Type | Add | Sub | Mul | Div |

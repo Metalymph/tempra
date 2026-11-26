@@ -1279,3 +1279,24 @@ fn hir_a3_1_readonly_return_before_direct_index_assignment() {
         NormalizedValue::Int(62)
     );
 }
+
+#[test]
+fn vm_parity_a3_2a_transitive_read_return_with_same_owner_branches() {
+    let source = r#"
+        fn choose(data: Slice(Int), flag: Bool) -> Slice(Int) {
+            if flag { return data[0..1] }
+            data[1..2]
+        }
+        fn forward(data: Slice(Int), flag: Bool) -> Slice(Int) {
+            choose(data, flag)
+        }
+        fn main() -> Int {
+            let data = [10, 20, 30]
+            let first = forward(data[0..2], true)
+            let second = forward(data[0..2], false)
+            first[0] + second[0]
+        }
+    "#;
+    assert_differential(source);
+    assert_eq!(run_source_vm(source, &[]).unwrap(), VmValue::Int64(30));
+}

@@ -4251,6 +4251,30 @@ fn lower_function_inner(
     let mut builder = module_builder.new_function(&qual_name, ret_ty);
     builder.func.is_extern = func.is_extern;
 
+    // BorrowSummary indexes the complete source parameter list. TIR omits
+    // compile-time type parameters; translate rather than copying the index.
+    if matches!(&builder.func.return_type, TirType::Slice(_)) && self_ty.is_none() {
+        let source_name = match module_prefix {
+            Some(prefix) if !prefix.is_empty() => format!("{prefix}.{}", func.name),
+            _ => func.name.clone(),
+        };
+        if let Some(summary) = type_ctx.borrow_summaries.get(&source_name) {
+            let source_index = summary.return_borrow.parameter_index;
+            if func
+                .parameters
+                .get(source_index)
+                .is_some_and(|p| p.kind != tempra_ast::ParameterKind::Type)
+            {
+                builder.func.return_borrow = Some(
+                    func.parameters[..source_index]
+                        .iter()
+                        .filter(|p| p.kind != tempra_ast::ParameterKind::Type)
+                        .count(),
+                );
+            }
+        }
+    }
+
     // Extern functions: emit params + empty entry block with Ret
     if func.is_extern {
         let entry_block = builder.new_block();

@@ -151,6 +151,17 @@ pub fn verify_function_direct(
         ));
     }
     verify_exclusive_slice_layout(module, func)?;
+    verify_read_return_layout(func)?;
+    if !func.code.is_empty()
+        && func.params.iter().enumerate().any(|(index, ty)| {
+            *ty == BytecodeType::ReadSlice
+                && (func.locals.get(index) != Some(ty) || func.inout_params[index])
+        })
+    {
+        return Err(BytecodeVerifyError::Unsupported(
+            "read slice parameter requires a matching non-exclusive local slot".into(),
+        ));
+    }
     if func.inout_params.iter().enumerate().any(|(index, access)| {
         *access
             && (func.locals.get(index) != func.params.get(index)
@@ -549,6 +560,11 @@ pub fn verify_function_direct(
                     if found != expected {
                         return Err(BytecodeVerifyError::StackTypeMismatch { expected, found });
                     }
+                    if signature.ret == BytecodeType::ReadSlice {
+                        return Err(BytecodeVerifyError::Unsupported(
+                            "indirect slice return requires a provenance contract".into(),
+                        ));
+                    }
                     if signature.ret != BytecodeType::Unit {
                         state.stack.push(signature.ret);
                     }
@@ -626,18 +642,37 @@ pub fn verify_function_direct(
                     state.stack.push(BytecodeType::Any);
                 }
                 BytecodeInstr::Slice => {
-                    state.pop_ty()?; // pop end
-                    state.pop_ty()?; // pop start
-                    state.pop_ty()?; // pop object
-                    state.stack.push(BytecodeType::Any);
+                    for _ in 0..2 {
+                        let found = state.pop_ty()?;
+                        if !matches!(found, BytecodeType::Int64 | BytecodeType::Any) {
+                            return Err(BytecodeVerifyError::StackTypeMismatch {
+                                expected: BytecodeType::Int64,
+                                found,
+                            });
+                        }
+                    }
+                    let found = state.pop_ty()?;
+                    if !matches!(found, BytecodeType::ReadSlice | BytecodeType::Any) {
+                        return Err(BytecodeVerifyError::StackTypeMismatch {
+                            expected: BytecodeType::ReadSlice,
+                            found,
+                        });
+                    }
+                    state.stack.push(BytecodeType::ReadSlice);
                 }
                 BytecodeInstr::Len | BytecodeInstr::Size => {
                     state.pop_ty()?; // pop object
                     state.stack.push(BytecodeType::Int64);
                 }
                 BytecodeInstr::Bytes => {
-                    state.pop_ty()?; // pop object
-                    state.stack.push(BytecodeType::Any);
+                    let found = state.pop_ty()?;
+                    if !matches!(found, BytecodeType::String | BytecodeType::Any) {
+                        return Err(BytecodeVerifyError::StackTypeMismatch {
+                            expected: BytecodeType::String,
+                            found,
+                        });
+                    }
+                    state.stack.push(BytecodeType::ReadSlice);
                 }
                 BytecodeInstr::MakeStruct(_, _, count) => {
                     for _ in 0..count {
@@ -739,6 +774,137 @@ pub fn verify_function_direct(
         });
     }
 
+    verify_read_return_provenance(module, func)?;
+    Ok(())
+}
+
+fn read_return_error() -> BytecodeVerifyError {
+    BytecodeVerifyError::Unsupported(
+        "read slice return must derive from its declared parameter on every path".into(),
+    )
+}
+
+fn verify_read_return_layout(func: &BytecodeFunction) -> Result<(), BytecodeVerifyError> {
+    match (func.ret, func.return_borrow) {
+        (BytecodeType::ReadSlice, Some(index)) => {
+            let index = index as usize;
+            if func.params.get(index) != Some(&BytecodeType::ReadSlice)
+                || func.locals.get(index) != Some(&BytecodeType::ReadSlice)
+                || func.inout_params.get(index) != Some(&false)
+                || func.is_extern
+                || func.code.is_empty()
+            {
+                return Err(read_return_error());
+            }
+        }
+        (BytecodeType::ReadSlice, None) | (_, Some(_)) => return Err(read_return_error()),
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Independent must-analysis of the declared source parameter through the
+/// operand stack, local slots and direct calls. No source metadata is taken
+/// on faith: every function's declared read-return contract is checked.
+fn verify_read_return_provenance(
+    module: &BytecodeModule,
+    func: &BytecodeFunction,
+) -> Result<(), BytecodeVerifyError> {
+    let Some(parameter) = func.return_borrow else {
+        return Ok(());
+    };
+    // The ordinary verifier has already checked all reachable stack effects,
+    // argument counts, local IDs and jump targets before this pass runs.
+    let exposed: HashSet<LocalId> = func
+        .code
+        .iter()
+        .filter_map(|instr| match instr {
+            BytecodeInstr::BorrowLocalMut(id) | BytecodeInstr::BorrowSliceMut(id) => Some(*id),
+            _ => None,
+        })
+        .collect();
+    #[derive(Clone)]
+    struct State {
+        stack: Vec<bool>,
+        locals: Vec<bool>,
+    }
+    let mut initial = State {
+        stack: vec![],
+        locals: vec![false; func.locals.len()],
+    };
+    initial.locals[parameter as usize] = !exposed.contains(&LocalId(parameter));
+    let mut states = HashMap::from([(0usize, initial)]);
+    let mut pending = VecDeque::from([0usize]);
+    while let Some(pc) = pending.pop_front() {
+        let mut state = states[&pc].clone();
+        let instr = func.code.get(pc).ok_or_else(read_return_error)?;
+        let effect = stack_effect(instr, module, func)
+            .map_err(|e| BytecodeVerifyError::Message(e.to_string()))?;
+        let base = state
+            .stack
+            .len()
+            .checked_sub(usize::from(effect.pops))
+            .ok_or(BytecodeVerifyError::StackUnderflow)?;
+        let args = state.stack.split_off(base);
+        match *instr {
+            BytecodeInstr::LoadLocal(id) => state.stack.push(state.locals[id.0 as usize]),
+            BytecodeInstr::StoreLocal(id) => {
+                state.locals[id.0 as usize] = args[0] && !exposed.contains(&id);
+            }
+            BytecodeInstr::Dup => state.stack.extend([args[0], args[0]]),
+            BytecodeInstr::Slice => state.stack.push(args[0]),
+            BytecodeInstr::Call(target, _) if effect.pushes == 1 => {
+                let target = &module.functions[target.0 as usize];
+                let origin = target.return_borrow.filter(|index| {
+                    target.ret == BytecodeType::ReadSlice
+                        && target.params.get(*index as usize) == Some(&BytecodeType::ReadSlice)
+                        && target.inout_params.get(*index as usize) == Some(&false)
+                });
+                state.stack.push(
+                    origin
+                        .and_then(|index| args.get(index as usize))
+                        .copied()
+                        .unwrap_or(false),
+                );
+            }
+            BytecodeInstr::Return => {
+                if args.as_slice() != &[true] {
+                    return Err(read_return_error());
+                }
+            }
+            _ => state
+                .stack
+                .extend(std::iter::repeat_n(false, usize::from(effect.pushes))),
+        }
+        for next in borrow_successors(pc, func) {
+            if next >= func.code.len() {
+                return Err(BytecodeVerifyError::InvalidJumpTarget(next));
+            }
+            if let Some(existing) = states.get_mut(&next) {
+                if existing.stack.len() != state.stack.len() {
+                    return Err(read_return_error());
+                }
+                let mut changed = false;
+                for (old, new) in existing
+                    .stack
+                    .iter_mut()
+                    .zip(&state.stack)
+                    .chain(existing.locals.iter_mut().zip(&state.locals))
+                {
+                    if *old && !*new {
+                        *old = false;
+                        changed = true;
+                    }
+                }
+                if changed {
+                    pending.push_back(next);
+                }
+            } else {
+                states.insert(next, state.clone());
+                pending.push_back(next);
+            }
+        }
+    }
     Ok(())
 }
 
@@ -1189,6 +1355,11 @@ fn verify_closure_access(
     {
         return Err(BytecodeVerifyError::Unsupported(
             "closure capture access must match target metadata; public inout is unsupported".into(),
+        ));
+    }
+    if target.ret == BytecodeType::ReadSlice {
+        return Err(BytecodeVerifyError::Unsupported(
+            "indirect slice return requires a provenance contract".into(),
         ));
     }
     if read_capture

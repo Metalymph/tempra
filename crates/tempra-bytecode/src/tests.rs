@@ -461,7 +461,7 @@ fn closure_isa_roundtrip_reserves_stable_opcode_ids() {
 
     assert_eq!(BytecodeInstr::MakeClosure(target, 0).opcode_id(), 53);
     assert_eq!(BytecodeInstr::CallClosure(signature_id, 1).opcode_id(), 54);
-    assert_eq!(crate::opcode::BYTECODE_OPCODE_COUNT, 63);
+    assert_eq!(crate::opcode::BYTECODE_OPCODE_COUNT, 64);
     let bytes = encode_module(&module).unwrap();
     assert_eq!(bytes, encode_module(&module).unwrap());
     let decoded = decode_artifact(&bytes).unwrap();
@@ -835,7 +835,7 @@ fn borrowed_closure_bytecode_opcode_identity_and_fail_closed() {
         BytecodeInstr::MakeClosureRef(FunctionId(0), 1).opcode_id(),
         56
     );
-    assert_eq!(crate::opcode::BYTECODE_OPCODE_COUNT, 63);
+    assert_eq!(crate::opcode::BYTECODE_OPCODE_COUNT, 64);
     assert!(matches!(
         verify_module(&module),
         Err(BytecodeVerifyError::Unsupported(_))
@@ -1459,7 +1459,7 @@ fn mutable_slice_isa_reserves_stable_opcode_ids() {
     assert_eq!(BytecodeInstr::InoutSliceGet(LocalId(0)).opcode_id(), 60);
     assert_eq!(BytecodeInstr::InoutSliceSet(LocalId(0)).opcode_id(), 61);
     assert_eq!(BytecodeInstr::InoutSliceLen(LocalId(0)).opcode_id(), 62);
-    assert_eq!(crate::opcode::BYTECODE_OPCODE_COUNT, 63);
+    assert_eq!(crate::opcode::BYTECODE_OPCODE_COUNT, 64);
 }
 
 /// Construct a typed closure with independently chosen target access metadata.
@@ -1571,7 +1571,7 @@ fn a1_raw_borrow_cannot_be_stored_as_ordinary_value() {
 fn a1_previous_loadlocal_format_is_rejected() {
     let module = a1_callable_access_fixture(2, vec![true, false]);
     let mut bytes = encode_module(&module).unwrap();
-    assert_eq!(&bytes[4..8], &11_u32.to_le_bytes());
+    assert_eq!(&bytes[4..8], &12_u32.to_le_bytes());
     bytes[4..8].copy_from_slice(&9_u32.to_le_bytes());
     assert!(matches!(
         decode_artifact(&bytes),
@@ -1621,9 +1621,9 @@ fn a3_2a_read_return_contract_roundtrip_and_format() {
     assert_eq!(function.params[0], BytecodeType::ReadSlice);
     assert_eq!(function.locals[3], BytecodeType::ReadSlice);
     assert_eq!(encode_module(&artifact.module).unwrap(), encoded);
-    assert_eq!(&encoded[4..8], &11_u32.to_le_bytes());
+    assert_eq!(&encoded[4..8], &12_u32.to_le_bytes());
     let mut old = encoded;
-    old[4..8].copy_from_slice(&10_u32.to_le_bytes());
+    old[4..8].copy_from_slice(&11_u32.to_le_bytes());
     assert!(matches!(
         decode_artifact(&old),
         Err(BytecodeSerializeError::UnsupportedVersion)
@@ -1705,4 +1705,119 @@ fn a3_2a_read_return_direct_call_uses_declared_argument() {
     module.functions[id.0 as usize].return_borrow = Some(0);
     let error = crate::verify::verify_module(&module).unwrap_err();
     assert!(error.to_string().contains("read slice return must derive"));
+}
+
+fn a3_2b1_downgrade_fixture() -> BytecodeModule {
+    let mut module = BytecodeModule::new();
+    let zero = module.add_constant(BytecodeConstant::Int64(0));
+    let one = module.add_constant(BytecodeConstant::Int64(1));
+    let value = module.add_constant(BytecodeConstant::Int64(99));
+    let mut normalize = BytecodeFunction::new(
+        "normalize".into(),
+        vec![BytecodeType::ExclusiveSlice],
+        BytecodeType::ReadSlice,
+    );
+    normalize.inout_params[0] = true;
+    normalize.return_borrow = Some(0);
+    normalize.locals = normalize.params.clone();
+    normalize.max_stack = 3;
+    normalize.code = vec![
+        BytecodeInstr::ConstI64(zero),
+        BytecodeInstr::ConstI64(value),
+        BytecodeInstr::InoutSliceSet(LocalId(0)),
+        BytecodeInstr::ConstI64(zero),
+        BytecodeInstr::ConstI64(one),
+        BytecodeInstr::ReadInoutSlice(LocalId(0)),
+        BytecodeInstr::Return,
+    ];
+    module.add_function(normalize);
+    module
+}
+
+#[test]
+fn a3_2b1_downgrade_opcode_roundtrip() {
+    let module = a3_2b1_downgrade_fixture();
+    assert_eq!(BytecodeInstr::ReadInoutSlice(LocalId(0)).opcode_id(), 63);
+    let bytes = encode_module(&module).unwrap();
+    assert_eq!(&bytes[4..8], &12_u32.to_le_bytes());
+    let decoded = decode_and_verify_artifact(&bytes).unwrap();
+    assert_eq!(decoded.module.functions[0].return_borrow, Some(0));
+    assert_eq!(decoded.module.functions[0].code, module.functions[0].code);
+    assert_eq!(encode_module(&decoded.module).unwrap(), bytes);
+}
+
+#[test]
+fn a3_2b1_downgrade_rejects_forged_parameter_provenance() {
+    let mut module = a3_2b1_downgrade_fixture();
+    let f = &mut module.functions[0];
+    f.params.push(BytecodeType::ExclusiveSlice);
+    f.locals.push(BytecodeType::ExclusiveSlice);
+    f.inout_params.push(true);
+    f.code[5] = BytecodeInstr::ReadInoutSlice(LocalId(1));
+    let error = crate::verify::verify_module(&module).unwrap_err();
+    assert!(error.to_string().contains("read slice return must derive"));
+}
+
+#[test]
+fn a3_2b1_verifier_rejects_write_while_read_operand_is_live() {
+    let mut module = a3_2b1_downgrade_fixture();
+    let f = &mut module.functions[0];
+    f.code[..6].rotate_left(3);
+    let error = crate::verify::verify_module(&module).unwrap_err();
+    assert!(error.to_string().contains("frame read loan is live"));
+    let bytes = encode_module(&module).unwrap();
+    assert!(decode_and_verify_artifact(&bytes).is_err());
+}
+
+#[test]
+fn a3_2b1_verifier_rejects_opaque_aggregate_of_frame_read_loan() {
+    let mut module = a3_2b1_downgrade_fixture();
+    let f = &mut module.functions[0];
+    f.ret = BytecodeType::Unit;
+    f.return_borrow = None;
+    f.code.insert(6, BytecodeInstr::MakeTuple(1));
+    f.code.insert(7, BytecodeInstr::Pop);
+    let error = crate::verify::verify_module(&module).unwrap_err();
+    assert!(error.to_string().contains("unsupported operation or ABI"));
+}
+
+#[test]
+fn a3_2b1_local_liveness_handles_branches_and_overwrite() {
+    use crate::opcode::InstrOffset;
+    let mut f = BytecodeFunction::new(
+        "liveness".into(),
+        vec![
+            BytecodeType::ReadSlice,
+            BytecodeType::ReadSlice,
+            BytecodeType::Bool,
+        ],
+        BytecodeType::Unit,
+    );
+    f.locals = f.params.clone();
+    f.max_stack = 1;
+    // The current value is read on one reachable branch.
+    f.code = vec![
+        BytecodeInstr::LoadLocal(LocalId(2)),
+        BytecodeInstr::JumpIfFalse(InstrOffset(6)),
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::Len,
+        BytecodeInstr::Pop,
+        BytecodeInstr::Jump(InstrOffset(6)),
+        BytecodeInstr::Return,
+    ];
+    assert!(crate::verify::local_value_is_live(&f, 0, LocalId(0)));
+    assert!(!crate::verify::local_value_is_live(&f, 6, LocalId(0)));
+    // Rebinding before the only read kills the old value.
+    f.code = vec![
+        BytecodeInstr::LoadLocal(LocalId(2)),
+        BytecodeInstr::JumpIfFalse(InstrOffset(8)),
+        BytecodeInstr::LoadLocal(LocalId(1)),
+        BytecodeInstr::StoreLocal(LocalId(0)),
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::Len,
+        BytecodeInstr::Pop,
+        BytecodeInstr::Jump(InstrOffset(8)),
+        BytecodeInstr::Return,
+    ];
+    assert!(!crate::verify::local_value_is_live(&f, 0, LocalId(0)));
 }

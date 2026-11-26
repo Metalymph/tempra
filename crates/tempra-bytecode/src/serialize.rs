@@ -63,7 +63,7 @@ impl From<crate::verify::BytecodeVerifyError> for BytecodeSerializeError {
 
 const MAGIC: &[u8; 4] = b"TMBC";
 // v10: LoadLocal materializes values; raw handle copies are no longer legal.
-const FORMAT_VERSION: u32 = 11;
+const FORMAT_VERSION: u32 = 12;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct BytecodeCacheHeader {
@@ -326,7 +326,8 @@ fn write_instr(w: &mut impl Write, instr: &BytecodeInstr) -> io::Result<()> {
         BytecodeInstr::BorrowSliceMut(id)
         | BytecodeInstr::InoutSliceGet(id)
         | BytecodeInstr::InoutSliceSet(id)
-        | BytecodeInstr::InoutSliceLen(id) => {
+        | BytecodeInstr::InoutSliceLen(id)
+        | BytecodeInstr::ReadInoutSlice(id) => {
             w.write_all(&[instr.opcode_id() as u8])?;
             write_u32(w, id.0)
         }
@@ -660,6 +661,7 @@ fn read_instr(r: &mut impl Read) -> Result<BytecodeInstr, BytecodeSerializeError
         60 => Ok(BytecodeInstr::InoutSliceGet(LocalId(read_u32(r)?))),
         61 => Ok(BytecodeInstr::InoutSliceSet(LocalId(read_u32(r)?))),
         62 => Ok(BytecodeInstr::InoutSliceLen(LocalId(read_u32(r)?))),
+        63 => Ok(BytecodeInstr::ReadInoutSlice(LocalId(read_u32(r)?))),
         58 => {
             let target_id = FunctionId(read_u32(r)?);
             let mut count = [0u8; 2];

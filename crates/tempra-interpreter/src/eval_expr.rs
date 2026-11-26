@@ -3088,7 +3088,8 @@ impl Interpreter {
             .as_ref()
             .map(|ty| self.resolve_hir_type(ty))
             .unwrap_or(Type::Unit);
-        if (!scalar_type(&return_type) && return_type != Type::Unit)
+        let read_slice_return = matches!(&return_type, Type::Slice(inner) if scalar_type(inner));
+        if (!scalar_type(&return_type) && return_type != Type::Unit && !read_slice_return)
             || function
                 .parameters
                 .iter()
@@ -3098,7 +3099,7 @@ impl Interpreter {
                     _ => !scalar_type(ty),
                 })
         {
-            return Ok(ControlFlow::Crash("exclusive slice execution currently requires scalar elements, scalar/exclusive-slice parameters and scalar/Unit return".into()));
+            return Ok(ControlFlow::Crash("exclusive slice execution currently requires scalar elements, scalar/exclusive-slice parameters and scalar/Unit/read-slice return".into()));
         }
         let mut prepared = Vec::new();
         let mut seen = std::collections::HashSet::new();

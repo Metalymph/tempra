@@ -1167,7 +1167,7 @@ fn classify_instruction(
         TirInstr::GetIndex(_, _, _) | TirInstr::InoutSliceGet(_, _, _) => {
             (Capability::Panic, DirectCapabilitySource::DynamicIndexGet)
         }
-        TirInstr::BorrowSliceInout(_, _, _, _) => {
+        TirInstr::BorrowSliceInout(_, _, _, _) | TirInstr::ReadInoutSlice(_, _, _, _) => {
             (Capability::Panic, DirectCapabilitySource::Slice)
         }
         TirInstr::InoutSliceSet(_, _, _) | TirInstr::InoutSliceLen(_, _) => return None,
@@ -1263,6 +1263,10 @@ fn record_instruction_type(
         TirInstr::ArrayPush(result, array, _) => {
             value_types.get(array).cloned().map(|ty| (*result, ty))
         }
+        TirInstr::ReadInoutSlice(result, parameter, _, _) => function
+            .params
+            .get(*parameter)
+            .map(|(_, ty)| (*result, ty.clone())),
         TirInstr::InoutSliceGet(result, parameter, _) => match function.params.get(*parameter) {
             Some((_, TirType::Slice(inner))) => Some((*result, (**inner).clone())),
             _ => None,

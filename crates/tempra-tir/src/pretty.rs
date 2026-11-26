@@ -135,6 +135,10 @@ pub fn format_instr(instr: &TirInstr) -> String {
         TirInstr::InoutSliceLen(res, parameter) => {
             format!("%{} = inout_slice_len arg{}", res.0, parameter)
         }
+        TirInstr::ReadInoutSlice(res, parameter, start, end) => format!(
+            "%{} = read_inout_slice arg{}, %{}, %{}",
+            res.0, parameter, start.0, end.0
+        ),
         TirInstr::Store(slot, val) => format!("store ${}, %{}", slot.0, val.0),
         TirInstr::Call(res, func, args) => {
             format!("%{} = call @{} ({})", res.0, func.0, format_args(args))

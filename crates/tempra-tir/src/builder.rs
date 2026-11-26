@@ -153,6 +153,17 @@ impl FunctionBuilder {
         Ok(id)
     }
 
+    pub fn build_read_inout_slice(
+        &mut self,
+        parameter: usize,
+        start: TirValueId,
+        end: TirValueId,
+    ) -> Result<TirValueId, TirBuildError> {
+        let id = self.next_value();
+        self.push_instr(TirInstr::ReadInoutSlice(id, parameter, start, end))?;
+        Ok(id)
+    }
+
     pub fn new_block(&mut self) -> TirBlockId {
         let id = TirBlockId(self.func.next_block_id);
         self.func.next_block_id += 1;

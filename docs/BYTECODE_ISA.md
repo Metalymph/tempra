@@ -304,3 +304,21 @@ Future native Tempra Native/LLVM AOT must preserve the **same language semantics
 ---
 
 **Invariant:** *Bytecode may change; Tempra's checked semantics must not.*
+
+### A3.2b.1 — Direct downgrade (format 12)
+
+Format 12 extends the read-return contract to an incoming `ExclusiveSlice`
+parameter with matching `inout` metadata. Opcode 63 (`ReadInoutSlice`, u32
+local index) pops two Int64 bounds (start then end in stack order) and pushes
+one `ReadSlice` value. It requires an incoming exclusive slice parameter, not
+an ordinary owner or arbitrary local. Bounds are relative to that parameter.
+The produced frame read loan owns no `Rc` and preserves the original owner
+frame, slot and absolute subrange. Returning it releases the callee's
+transient exclusive acquisition, where applicable; it does not release an
+ancestor's enclosing exclusive access. A live read loan blocks incompatible
+writes and reborrows; CFG last-use checks avoid retaining dead SSA aliases.
+
+The existing format-11 descriptions above document the previous gate. This
+extension covers direct scalar slice downgrade and typed read descriptors.
+Legacy ordinary slices/bytes and untyped aggregate/foreign/callable lifetime
+contracts are not certified by this gate.

@@ -7,7 +7,7 @@ use tempra_bytecode::bytecode::BytecodeModule;
 use tempra_bytecode::constant::BytecodeConstant;
 use tempra_bytecode::function::{BytecodeSignature, BytecodeType, FunctionId, SignatureId};
 use tempra_bytecode::opcode::BytecodeInstr;
-use tempra_bytecode::verify::verify_module;
+use tempra_bytecode::verify::{local_value_is_live, verify_module};
 
 pub struct Frame {
     /// Unique lifetime identity; never reused within this interpreter.
@@ -29,6 +29,7 @@ pub struct Interpreter<'a> {
     next_frame_token: u64,
     borrowed_sources: HashSet<(u64, u32)>,
     exclusive_sources: HashSet<(u64, u32)>,
+    has_read_loans: bool,
     pub(crate) profiling: Option<ProfilingState>,
     pub native_resolver: Option<NativeResolver>,
 }
@@ -41,6 +42,7 @@ impl<'a> Interpreter<'a> {
             next_frame_token: 0,
             borrowed_sources: HashSet::new(),
             exclusive_sources: HashSet::new(),
+            has_read_loans: false,
             profiling: None,
             native_resolver: None,
         }
@@ -59,6 +61,7 @@ impl<'a> Interpreter<'a> {
             next_frame_token: 0,
             borrowed_sources: HashSet::new(),
             exclusive_sources: HashSet::new(),
+            has_read_loans: false,
             profiling,
             native_resolver: None,
         }
@@ -90,10 +93,15 @@ impl<'a> Interpreter<'a> {
             });
         }
 
+        if args.iter().any(contains_read_loan) {
+            return Err(VmError::Message(
+                "frame read loans cannot enter the VM from the host".into(),
+            ));
+        }
         // Initialize locals
         for (ty, arg) in func.params.iter().zip(&args) {
             if *ty == BytecodeType::ReadSlice {
-                Self::validate_read_slice(arg)?;
+                self.validate_read_slice(arg)?;
             }
         }
         let mut locals = vec![None; func.locals.len()];
@@ -264,6 +272,7 @@ impl<'a> Interpreter<'a> {
             60 => "InoutSliceGet",
             61 => "InoutSliceSet",
             62 => "InoutSliceLen",
+            63 => "ReadInoutSlice",
             _ => "Unknown",
         }
     }
@@ -349,18 +358,28 @@ impl<'a> Interpreter<'a> {
                         .get(id.0 as usize)
                         == Some(&BytecodeType::ReadSlice)
                     {
-                        Self::validate_read_slice(&value)?;
+                        self.validate_read_slice(&value)?;
                     }
                     self.push(value)?;
                 }
                 BytecodeInstr::StoreLocal(id) => {
                     let val = self.pop_raw()?;
+                    if matches!(&val, VmValue::ReadLoan(_))
+                        && self.module.functions[frame_func_id.0 as usize]
+                            .locals
+                            .get(id.0 as usize)
+                            != Some(&BytecodeType::ReadSlice)
+                    {
+                        return Err(VmError::Message(
+                            "frame read loan requires a typed read-slice slot".into(),
+                        ));
+                    }
                     if self.module.functions[frame_func_id.0 as usize]
                         .locals
                         .get(id.0 as usize)
                         == Some(&BytecodeType::ReadSlice)
                     {
-                        Self::validate_read_slice(&val)?;
+                        self.validate_read_slice(&val)?;
                     }
                     let (token, existing) = {
                         let frame = self.call_stack.last().ok_or(VmError::MissingReturn)?;
@@ -377,6 +396,12 @@ impl<'a> Interpreter<'a> {
                         ));
                     }
                     if let Some(VmValue::BorrowedLocal(handle)) = existing {
+                        if matches!(&val, VmValue::ReadLoan(_)) {
+                            return Err(VmError::Message(
+                                "frame read loan cannot be stored through an exclusive alias"
+                                    .into(),
+                            ));
+                        }
                         if handle.range.is_some() {
                             return Err(VmError::Message(
                                 "exclusive slice parameter cannot be rebound".into(),
@@ -395,6 +420,7 @@ impl<'a> Interpreter<'a> {
                                 "exclusive borrowed owner loan is no longer active".into(),
                             ));
                         }
+                        self.ensure_no_live_read_loan((handle.owner_frame, handle.local_id.0))?;
                         let owner = self
                             .call_stack
                             .iter_mut()
@@ -416,6 +442,7 @@ impl<'a> Interpreter<'a> {
                         *target = Some(val);
                         continue;
                     }
+                    self.ensure_no_live_read_loan((token, id.0))?;
                     if self.borrowed_sources.contains(&(token, id.0)) {
                         return Err(VmError::Message(
                             "cannot overwrite an active borrowed owner directly".into(),
@@ -503,6 +530,11 @@ impl<'a> Interpreter<'a> {
                 BytecodeInstr::Eq => {
                     let b = self.pop()?;
                     let a = self.pop()?;
+                    if matches!(&a, VmValue::ReadLoan(_)) || matches!(&b, VmValue::ReadLoan(_)) {
+                        return Err(VmError::Message(
+                            "read loan equality is not supported".into(),
+                        ));
+                    }
                     self.push(VmValue::Bool(a == b))?;
                 }
                 BytecodeInstr::LtI64 => {
@@ -581,6 +613,22 @@ impl<'a> Interpreter<'a> {
                     let handle = self.borrow_slice_mut(local, start, end)?;
                     self.push(VmValue::BorrowedLocal(handle))?;
                 }
+                BytecodeInstr::ReadInoutSlice(local) => {
+                    let end =
+                        usize::try_from(self.pop_i64()?).map_err(|_| VmError::ExpectedIntIndex)?;
+                    let start =
+                        usize::try_from(self.pop_i64()?).map_err(|_| VmError::ExpectedIntIndex)?;
+                    let (mut handle, parent_start, parent_end) =
+                        self.exclusive_slice_handle(local)?;
+                    let len = parent_end - parent_start;
+                    if start > end || end > len {
+                        return Err(VmError::InvalidSliceRange { start, end, len });
+                    }
+                    handle.mutable = false;
+                    handle.range = Some((parent_start + start, parent_start + end));
+                    self.has_read_loans = true;
+                    self.push(VmValue::ReadLoan(handle))?;
+                }
                 BytecodeInstr::InoutSliceGet(local) => {
                     let index =
                         usize::try_from(self.pop_i64()?).map_err(|_| VmError::ExpectedIntIndex)?;
@@ -608,6 +656,7 @@ impl<'a> Interpreter<'a> {
                     if index >= end - start {
                         return Err(VmError::IndexOutOfBounds(index));
                     }
+                    self.ensure_no_live_read_loan((handle.owner_frame, handle.local_id.0))?;
                     let existing = self
                         .slice_owner(handle)?
                         .get(start + index)
@@ -650,6 +699,11 @@ impl<'a> Interpreter<'a> {
                         .as_ref()
                         .ok_or(VmError::LocalNotInitialized(local.0))?;
                     let exclusive = matches!(instr, BytecodeInstr::BorrowLocalMut(_));
+                    if matches!(value, VmValue::ReadLoan(_)) {
+                        return Err(VmError::Message(
+                            "capturing a frame read loan is not supported".into(),
+                        ));
+                    }
                     if let VmValue::BorrowedLocal(handle) = value {
                         if !exclusive || !handle.mutable || handle.range.is_some() {
                             return Err(VmError::Message(
@@ -675,6 +729,9 @@ impl<'a> Interpreter<'a> {
                     }
                     let token = owner.token;
                     let key = (token, local.0);
+                    if exclusive {
+                        self.ensure_no_live_read_loan(key)?;
+                    }
                     if self.exclusive_sources.contains(&key)
                         || (exclusive && self.borrowed_sources.contains(&key))
                     {
@@ -793,6 +850,11 @@ impl<'a> Interpreter<'a> {
                         args.push(self.pop()?);
                     }
                     args.reverse();
+                    if args.iter().any(contains_read_loan) {
+                        return Err(VmError::Message(
+                            "frame read loan requires a direct call contract".into(),
+                        ));
+                    }
                     let closure = match self.pop()? {
                         VmValue::Closure(closure) => closure,
                         other => {
@@ -893,9 +955,14 @@ impl<'a> Interpreter<'a> {
                             args.push(self.pop()?);
                         }
                         args.reverse();
+                        if args.iter().any(contains_read_loan) {
+                            return Err(VmError::Message(
+                                "frame read loans cannot cross native ABI".into(),
+                            ));
+                        }
                         for (ty, arg) in target_func.params.iter().zip(&args) {
                             if *ty == BytecodeType::ReadSlice {
-                                Self::validate_read_slice(arg)?;
+                                self.validate_read_slice(arg)?;
                             }
                         }
 
@@ -918,6 +985,11 @@ impl<'a> Interpreter<'a> {
                             ))
                         })?;
                         let res = func_ptr(&args).map_err(VmError::Native)?;
+                        if contains_read_loan(&res) {
+                            return Err(VmError::Message(
+                                "native ABI cannot manufacture frame read loans".into(),
+                            ));
+                        }
 
                         if target_func.ret != BytecodeType::Unit {
                             self.push(res)?;
@@ -962,6 +1034,7 @@ impl<'a> Interpreter<'a> {
                                             "invalid or expired exclusive inout handle".into(),
                                         ));
                                     }
+                                    self.ensure_no_live_read_loan(key)?;
                                     if handle.owner_frame == caller_token {
                                         acquired_loans.push(key);
                                     }
@@ -977,6 +1050,13 @@ impl<'a> Interpreter<'a> {
                         } else {
                             self.pop()?
                         };
+                        if matches!(&value, VmValue::ReadLoan(_))
+                            && target_func.params[i as usize] != BytecodeType::ReadSlice
+                        {
+                            return Err(VmError::Message(
+                                "frame read loan requires a typed read-slice parameter".into(),
+                            ));
+                        }
                         locals[i as usize] = Some(value);
                     }
 
@@ -996,7 +1076,50 @@ impl<'a> Interpreter<'a> {
                     };
 
                     if ret_type == BytecodeType::ReadSlice {
-                        Self::validate_read_slice(ret_val.as_ref().ok_or(VmError::MissingReturn)?)?;
+                        self.validate_read_slice(ret_val.as_ref().ok_or(VmError::MissingReturn)?)?;
+                    }
+                    if let Some(VmValue::ReadLoan(handle)) = &ret_val {
+                        let frame = self.call_stack.last().ok_or(VmError::MissingReturn)?;
+                        let func = &self.module.functions[frame.function_id.0 as usize];
+                        if ret_type != BytecodeType::ReadSlice
+                            || handle.owner_frame == frame.token
+                            || self.call_stack.len() == 1
+                        {
+                            return Err(VmError::Message(
+                                "frame read loan cannot escape its owner or typed return contract"
+                                    .into(),
+                            ));
+                        }
+                        // Verify the concrete returned interval is a subrange of
+                        // the declared incoming descriptor, not just a matching type.
+                        let source = func
+                            .return_borrow
+                            .and_then(|i| frame.locals.get(i as usize))
+                            .and_then(Option::as_ref);
+                        let source = match source {
+                            Some(VmValue::BorrowedLocal(source))
+                            | Some(VmValue::ReadLoan(source)) => source,
+                            _ => {
+                                return Err(VmError::Message(
+                                    "read loan return has no live source parameter".into(),
+                                ))
+                            }
+                        };
+                        let (start, end) = handle
+                            .range
+                            .ok_or_else(|| VmError::Message("missing read loan bounds".into()))?;
+                        let (source_start, source_end) = source
+                            .range
+                            .ok_or_else(|| VmError::Message("missing source bounds".into()))?;
+                        if source.owner_frame != handle.owner_frame
+                            || source.local_id != handle.local_id
+                            || start < source_start
+                            || end > source_end
+                        {
+                            return Err(VmError::Message(
+                                "read loan return violates its source interval".into(),
+                            ));
+                        }
                     }
 
                     if let Some(popped) = self.call_stack.pop() {
@@ -1103,6 +1226,19 @@ impl<'a> Interpreter<'a> {
                             }
                             self.push(parent[start + index].clone())?;
                         }
+                        VmValue::ReadLoan(handle) => {
+                            let (buffer, start, end) = self.read_loan_bounds(handle)?;
+                            if index >= end - start {
+                                return Err(VmError::IndexOutOfBounds(index));
+                            }
+                            let value = buffer[start + index].clone();
+                            if !is_slice_scalar(&value) {
+                                return Err(VmError::Message(
+                                    "frame read loan element must be scalar".into(),
+                                ));
+                            }
+                            self.push(value)?;
+                        }
                         VmValue::Tuple(elements) => {
                             if index >= elements.len() {
                                 return Err(VmError::IndexOutOfBounds(index));
@@ -1141,6 +1277,15 @@ impl<'a> Interpreter<'a> {
                                 end,
                             })?;
                         }
+                        VmValue::ReadLoan(mut handle) => {
+                            let (_, p_start, p_end) = self.read_loan_bounds(handle)?;
+                            let len = p_end - p_start;
+                            if start > end || end > len {
+                                return Err(VmError::InvalidSliceRange { start, end, len });
+                            }
+                            handle.range = Some((p_start + start, p_start + end));
+                            self.push(VmValue::ReadLoan(handle))?;
+                        }
                         VmValue::Slice {
                             parent,
                             start: p_start,
@@ -1171,6 +1316,13 @@ impl<'a> Interpreter<'a> {
                         }
                         VmValue::Slice { start, end, .. } => {
                             self.push(VmValue::Int64((end - start) as i64))?;
+                        }
+                        VmValue::ReadLoan(handle) => {
+                            let (_, start, end) = self.read_loan_bounds(handle)?;
+                            let len = i64::try_from(end - start).map_err(|_| {
+                                VmError::Message("read loan length overflow".into())
+                            })?;
+                            self.push(VmValue::Int64(len))?;
                         }
                         VmValue::String(s) => {
                             // Number of Unicode scalar values (chars)
@@ -1365,9 +1517,9 @@ impl<'a> Interpreter<'a> {
                 // of a read-slice descriptor; validate the materialized view.
                 if matches!(arg, VmValue::BorrowedLocal(_)) {
                     let value = self.resolve_borrowed_value(arg.clone())?;
-                    Self::validate_read_slice(&value)?;
+                    self.validate_read_slice(&value)?;
                 } else {
-                    Self::validate_read_slice(arg)?;
+                    self.validate_read_slice(arg)?;
                 }
             }
         }
@@ -1388,15 +1540,23 @@ impl<'a> Interpreter<'a> {
 
     #[inline(always)]
     fn push(&mut self, val: VmValue) -> Result<(), VmError> {
+        // This gate supports direct descriptors, not aggregate/closure ABI.
+        // Reject rather than erase provenance inside an Any value.
+        if self.has_read_loans && !matches!(&val, VmValue::ReadLoan(_)) && contains_read_loan(&val)
+        {
+            return Err(VmError::Message(
+                "frame read loan aggregate or capture is not supported".into(),
+            ));
+        }
         self.call_stack.last_mut().unwrap().stack.push(val);
         Ok(())
     }
 
-    /// Validate the current physical read-slice descriptor at a typed boundary.
-    /// This does not certify an owner lifetime; the non-owning representation
-    /// and its lifetime protocol are a separate gate.
-    fn validate_read_slice(value: &VmValue) -> Result<(), VmError> {
+    /// Validate a read slice at a typed boundary. Frame-derived read loans
+    /// must resolve their original owner; legacy slices retain their previous ABI.
+    fn validate_read_slice(&self, value: &VmValue) -> Result<(), VmError> {
         match value {
+            VmValue::ReadLoan(handle) => self.read_loan_bounds(*handle).map(|_| ()),
             VmValue::Slice { parent, start, end } if start <= end && *end <= parent.len() => Ok(()),
             VmValue::Slice { parent, start, end } => Err(VmError::InvalidSliceRange {
                 start: *start,
@@ -1408,6 +1568,62 @@ impl<'a> Interpreter<'a> {
                 found: other.type_name().into(),
             }),
         }
+    }
+
+    fn read_loan_bounds(&self, handle: VmBorrow) -> Result<(&[VmValue], usize, usize), VmError> {
+        if handle.mutable {
+            return Err(VmError::Message("read loan cannot authorize writes".into()));
+        }
+        let (start, end) = handle
+            .range
+            .ok_or_else(|| VmError::Message("read loan requires bounds".into()))?;
+        let owner = self
+            .call_stack
+            .iter()
+            .find(|frame| frame.token == handle.owner_frame)
+            .ok_or_else(|| VmError::Message("read loan owner frame is no longer alive".into()))?;
+        let Some(Some(VmValue::Array(buffer))) = owner.locals.get(handle.local_id.0 as usize)
+        else {
+            return Err(VmError::ExpectedArrayOrSlice);
+        };
+        if start > end || end > buffer.len() {
+            return Err(VmError::InvalidSliceRange {
+                start,
+                end,
+                len: buffer.len(),
+            });
+        }
+        Ok((buffer.as_slice(), start, end))
+    }
+
+    /// Dead SSA temporaries may still occupy locals; use CFG liveness rather
+    /// than retaining a physical loan until the enclosing frame returns.
+    fn ensure_no_live_read_loan(&self, key: (u64, u32)) -> Result<(), VmError> {
+        if !self.has_read_loans {
+            return Ok(());
+        }
+        let matches_owner = |value: &VmValue| {
+            matches!(value,
+            VmValue::ReadLoan(handle) if (handle.owner_frame, handle.local_id.0) == key)
+        };
+        for frame in &self.call_stack {
+            let func = &self.module.functions[frame.function_id.0 as usize];
+            if frame.stack.iter().any(matches_owner)
+                || frame.locals.iter().enumerate().any(|(i, value)| {
+                    value.as_ref().is_some_and(matches_owner)
+                        && local_value_is_live(
+                            func,
+                            frame.ip,
+                            tempra_bytecode::function::LocalId(i as u32),
+                        )
+                })
+            {
+                return Err(VmError::Message(
+                    "conflicting write or exclusive borrow while a frame read loan is live".into(),
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn allocate_frame_token(&mut self) -> Result<u64, VmError> {
@@ -1480,6 +1696,7 @@ impl<'a> Interpreter<'a> {
             if start > end || end > len {
                 return Err(VmError::InvalidSliceRange { start, end, len });
             }
+            self.ensure_no_live_read_loan((handle.owner_frame, handle.local_id.0))?;
             handle.range = Some((parent_start + start, parent_start + end));
             return Ok(handle);
         }
@@ -1492,6 +1709,7 @@ impl<'a> Interpreter<'a> {
         }
         let token = frame.token;
         let key = (token, local.0);
+        self.ensure_no_live_read_loan(key)?;
         if self.borrowed_sources.contains(&key) || self.exclusive_sources.contains(&key) {
             return Err(VmError::Message(
                 "conflicting exclusive slice borrow of local".into(),
@@ -1561,6 +1779,9 @@ impl<'a> Interpreter<'a> {
             return Err(VmError::Message(
                 "raw borrow handle used as an ordinary operand".into(),
             ));
+        }
+        if let VmValue::ReadLoan(handle) = &value {
+            self.read_loan_bounds(*handle)?;
         }
         Ok(value)
     }
@@ -1677,4 +1898,19 @@ fn is_slice_scalar(value: &VmValue) -> bool {
             | VmValue::Float64(_)
             | VmValue::Bool(_)
     )
+}
+
+/// Detect a frame loan in a value at an ABI/aggregate boundary.
+fn contains_read_loan(value: &VmValue) -> bool {
+    match value {
+        VmValue::ReadLoan(_) => true,
+        VmValue::Array(values) => values.iter().any(contains_read_loan),
+        VmValue::Tuple(values) | VmValue::Enum(_, _, values) => {
+            values.iter().any(contains_read_loan)
+        }
+        VmValue::Struct { fields, .. } => fields.iter().any(|(_, value)| contains_read_loan(value)),
+        VmValue::Closure(closure) => closure.captures.iter().any(contains_read_loan),
+        VmValue::Slice { parent, .. } => parent.iter().any(contains_read_loan),
+        _ => false,
+    }
 }

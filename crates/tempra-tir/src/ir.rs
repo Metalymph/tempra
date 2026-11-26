@@ -81,6 +81,8 @@ pub enum TirInstr {
     InoutSliceGet(TirValueId, usize, TirValueId),
     InoutSliceSet(usize, TirValueId, TirValueId),
     InoutSliceLen(TirValueId, usize),
+    /// Read-only subview of an incoming exclusive slice; bounds relative to it.
+    ReadInoutSlice(TirValueId, usize, TirValueId, TirValueId),
     Store(TirSlotId, TirValueId),
 
     Call(TirValueId, TirFunctionId, Vec<TirValueId>),

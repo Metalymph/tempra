@@ -36,6 +36,9 @@ pub enum VmValue {
     Closure(VmClosure),
     /// Non-owning borrow of a local in another active frame.
     BorrowedLocal(VmBorrow),
+    /// Read-only view of a live owner slot. Unlike Slice, this descriptor owns
+    /// neither the buffer nor an allocation retaining the frame.
+    ReadLoan(VmBorrow),
     Enum(String, String, Vec<VmValue>), // enum_name, variant_name, payloads
     Tuple(Vec<VmValue>),
     Array(Rc<Vec<VmValue>>),
@@ -65,7 +68,7 @@ impl VmValue {
             VmValue::Enum(_, _, _) => "Enum",
             VmValue::Tuple(_) => "Tuple",
             VmValue::Array(_) => "Array",
-            VmValue::Slice { .. } => "Slice",
+            VmValue::Slice { .. } | VmValue::ReadLoan(_) => "Slice",
             VmValue::Struct { .. } => "Struct", // We could return the actual name, but matching the signature is simpler for now
         }
     }
@@ -86,6 +89,11 @@ impl fmt::Display for VmValue {
                 f,
                 "<borrow frame={} local=${}>",
                 handle.owner_frame, handle.local_id.0
+            ),
+            VmValue::ReadLoan(handle) => write!(
+                f,
+                "<read loan frame={} local=${} range={:?}>",
+                handle.owner_frame, handle.local_id.0, handle.range
             ),
             VmValue::Enum(_e, v, payloads) => {
                 if payloads.is_empty() {

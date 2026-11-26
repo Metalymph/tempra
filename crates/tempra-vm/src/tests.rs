@@ -585,6 +585,7 @@ fn opcode_ids_are_unique_and_within_bounds() {
         BytecodeInstr::InoutSliceGet(LocalId(0)),
         BytecodeInstr::InoutSliceSet(LocalId(0)),
         BytecodeInstr::InoutSliceLen(LocalId(0)),
+        BytecodeInstr::ReadInoutSlice(LocalId(0)),
         BytecodeInstr::AddI64LL(
             tempra_bytecode::function::LocalId(0),
             tempra_bytecode::function::LocalId(0),
@@ -1492,4 +1493,200 @@ fn a3_2a_read_slice_boundary_checks_descriptor() {
         run_function(&module, "observe", vec![wrong_bounds]),
         Err(VmError::InvalidSliceRange { .. })
     ));
+}
+
+fn a3_2b1_vm_downgrade_module() -> BytecodeModule {
+    let mut module = BytecodeModule::new();
+    let zero = module.add_constant(BytecodeConstant::Int64(0));
+    let one = module.add_constant(BytecodeConstant::Int64(1));
+    let two = module.add_constant(BytecodeConstant::Int64(2));
+    let three = module.add_constant(BytecodeConstant::Int64(3));
+    let ten = module.add_constant(BytecodeConstant::Int64(10));
+    let twenty = module.add_constant(BytecodeConstant::Int64(20));
+    let thirty = module.add_constant(BytecodeConstant::Int64(30));
+    let ninety_nine = module.add_constant(BytecodeConstant::Int64(99));
+    let forty_two = module.add_constant(BytecodeConstant::Int64(42));
+    let mut normalize = BytecodeFunction::new(
+        "normalize".into(),
+        vec![BytecodeType::ExclusiveSlice],
+        BytecodeType::ReadSlice,
+    );
+    normalize.inout_params[0] = true;
+    normalize.return_borrow = Some(0);
+    normalize.locals = normalize.params.clone();
+    normalize.max_stack = 2;
+    normalize.code = vec![
+        BytecodeInstr::ConstI64(zero),
+        BytecodeInstr::ConstI64(ninety_nine),
+        BytecodeInstr::InoutSliceSet(LocalId(0)),
+        BytecodeInstr::ConstI64(zero),
+        BytecodeInstr::ConstI64(two),
+        BytecodeInstr::ReadInoutSlice(LocalId(0)),
+        BytecodeInstr::Return,
+    ];
+    let normalize_id = module.add_function(normalize);
+    let mut overwrite = BytecodeFunction::new(
+        "overwrite".into(),
+        vec![BytecodeType::ExclusiveSlice],
+        BytecodeType::Unit,
+    );
+    overwrite.inout_params[0] = true;
+    overwrite.locals = overwrite.params.clone();
+    overwrite.max_stack = 2;
+    overwrite.code = vec![
+        BytecodeInstr::ConstI64(zero),
+        BytecodeInstr::ConstI64(forty_two),
+        BytecodeInstr::InoutSliceSet(LocalId(0)),
+        BytecodeInstr::Return,
+    ];
+    let overwrite_id = module.add_function(overwrite);
+    let mut main = BytecodeFunction::new("main".into(), vec![], BytecodeType::Int64);
+    main.locals = vec![
+        BytecodeType::Any,
+        BytecodeType::ReadSlice,
+        BytecodeType::Int64,
+    ];
+    main.max_stack = 3;
+    main.code = vec![
+        BytecodeInstr::ConstI64(ten),
+        BytecodeInstr::ConstI64(twenty),
+        BytecodeInstr::ConstI64(thirty),
+        BytecodeInstr::MakeArray(3),
+        BytecodeInstr::StoreLocal(LocalId(0)),
+        BytecodeInstr::ConstI64(zero),
+        BytecodeInstr::ConstI64(three),
+        BytecodeInstr::BorrowSliceMut(LocalId(0)),
+        BytecodeInstr::Call(normalize_id, 1),
+        BytecodeInstr::StoreLocal(LocalId(1)),
+        BytecodeInstr::LoadLocal(LocalId(1)),
+        BytecodeInstr::ConstI64(zero),
+        BytecodeInstr::GetIndex,
+        BytecodeInstr::StoreLocal(LocalId(2)),
+        BytecodeInstr::ConstI64(zero),
+        BytecodeInstr::ConstI64(one),
+        BytecodeInstr::BorrowSliceMut(LocalId(0)),
+        BytecodeInstr::Call(overwrite_id, 1),
+        BytecodeInstr::LoadLocal(LocalId(2)),
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::ConstI64(zero),
+        BytecodeInstr::GetIndex,
+        BytecodeInstr::AddI64,
+        BytecodeInstr::Return,
+    ];
+    module.add_function(main);
+    module
+}
+
+#[test]
+fn a3_2b1_vm_downgrade_releases_exclusive_loan_and_honors_last_use() {
+    let module = a3_2b1_vm_downgrade_module();
+    tempra_bytecode::verify::verify_module(&module).unwrap();
+    assert_eq!(
+        run_function(&module, "main", vec![]).unwrap(),
+        VmValue::Int64(141)
+    );
+    let bytes = tempra_bytecode::serialize::encode_module(&module).unwrap();
+    let decoded = tempra_bytecode::serialize::decode_and_verify_artifact(&bytes).unwrap();
+    assert_eq!(
+        run_function(&decoded.module, "main", vec![]).unwrap(),
+        VmValue::Int64(141)
+    );
+}
+
+#[test]
+fn a3_2b1_vm_rejects_reborrow_with_live_returned_read_loan() {
+    let mut module = a3_2b1_vm_downgrade_module();
+    let main = &mut module.functions[2];
+    main.code.splice(
+        18..18,
+        [
+            BytecodeInstr::LoadLocal(LocalId(1)),
+            BytecodeInstr::Len,
+            BytecodeInstr::Pop,
+        ],
+    );
+    let error = tempra_bytecode::verify::verify_module(&module).unwrap_err();
+    assert!(error.to_string().contains("frame read loan is live"));
+}
+
+#[test]
+fn a3_2b1_vm_rejects_laundering_read_loan_into_any_slot() {
+    let mut module = a3_2b1_vm_downgrade_module();
+    module.functions[2].locals[1] = BytecodeType::Any;
+    let error = tempra_bytecode::verify::verify_module(&module).unwrap_err();
+    assert!(error.to_string().contains("unsupported operation or ABI"));
+}
+
+#[test]
+fn a3_2b1_vm_checks_downgrade_bounds() {
+    let mut module = a3_2b1_vm_downgrade_module();
+    let four = module.add_constant(BytecodeConstant::Int64(4));
+    module.functions[0].code[4] = BytecodeInstr::ConstI64(four);
+    tempra_bytecode::verify::verify_module(&module).unwrap();
+    assert!(matches!(
+        run_function(&module, "main", vec![]),
+        Err(VmError::InvalidSliceRange { .. })
+    ));
+}
+
+#[test]
+fn a3_2b1_vm_rejects_forged_host_read_loan() {
+    use crate::value::VmBorrow;
+    let mut module = BytecodeModule::new();
+    let mut observe = BytecodeFunction::new(
+        "observe".into(),
+        vec![BytecodeType::ReadSlice],
+        BytecodeType::Int64,
+    );
+    observe.locals = observe.params.clone();
+    observe.max_stack = 1;
+    observe.code = vec![
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::Len,
+        BytecodeInstr::Return,
+    ];
+    module.add_function(observe);
+    let forged = VmValue::ReadLoan(VmBorrow {
+        owner_frame: 1,
+        local_id: LocalId(0),
+        mutable: false,
+        range: Some((0, 1)),
+    });
+    let error = run_function(&module, "observe", vec![forged]).unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("cannot enter the VM from the host"));
+}
+
+#[test]
+fn a3_2b1_vm_checks_opaque_escape_in_legacy_read_parameter_callee() {
+    let mut module = a3_2b1_vm_downgrade_module();
+    let mut pack = BytecodeFunction::new(
+        "pack".into(),
+        vec![BytecodeType::ReadSlice],
+        BytecodeType::Unit,
+    );
+    pack.locals = pack.params.clone();
+    pack.max_stack = 1;
+    pack.code = vec![
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::MakeTuple(1),
+        BytecodeInstr::Pop,
+        BytecodeInstr::Return,
+    ];
+    let pack_id = module.add_function(pack);
+    module.functions[2].code.splice(
+        10..10,
+        [
+            BytecodeInstr::LoadLocal(LocalId(1)),
+            BytecodeInstr::Call(pack_id, 1),
+        ],
+    );
+    // An ordinary read parameter may still carry a legacy descriptor; the
+    // caller's new frame origin cannot be erased by its opaque aggregation.
+    tempra_bytecode::verify::verify_module(&module).unwrap();
+    let error = run_function(&module, "main", vec![]).unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("frame read loan aggregate or capture is not supported"));
 }

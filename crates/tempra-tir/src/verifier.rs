@@ -329,6 +329,19 @@ fn verify_function_inner(
                     }
                     value_types.insert(*res, element.map(|ty| TirType::Slice(Box::new(ty))));
                 }
+                TirInstr::ReadInoutSlice(res, parameter, start, end) => {
+                    let element = exclusive_slice_element(func, *parameter);
+                    if element.is_none()
+                        || [start, end]
+                            .iter()
+                            .any(|v| value_types.get(*v) != Some(&Some(TirType::Int64)))
+                    {
+                        errors.push(VerifierError::GenericError(
+                            "invalid read subview of exclusive slice".into(),
+                        ));
+                    }
+                    value_types.insert(*res, element.map(|ty| TirType::Slice(Box::new(ty))));
+                }
                 TirInstr::InoutSliceGet(res, parameter, index) => {
                     let element = exclusive_slice_element(func, *parameter);
                     if element.is_none() || value_types.get(index) != Some(&Some(TirType::Int64)) {
@@ -838,6 +851,11 @@ fn verify_function_inner(
     }
 
     if errors.is_empty() {
+        if let Err(error) = verify_tir_frame_read_loans(func, functions, &slot_types) {
+            errors.push(error);
+        }
+    }
+    if errors.is_empty() {
         Ok(value_types)
     } else {
         Err(errors)
@@ -869,7 +887,8 @@ fn verify_read_return_provenance(
     if !matches!(ty, TirType::Slice(_))
         || ty != &func.return_type
         || func.is_extern
-        || func.inout_params.get(parameter).copied().unwrap_or(false)
+        || (func.inout_params.get(parameter).copied().unwrap_or(false)
+            && exclusive_slice_element(func, parameter).is_none())
     {
         return Err(error());
     }
@@ -926,6 +945,10 @@ fn verify_read_return_provenance(
                 TirInstr::Slice(value, object, _, _) => {
                     Some((*value, state.values.contains(object)))
                 }
+                TirInstr::ReadInoutSlice(value, index, _, _) => Some((*value, *index == parameter)),
+                TirInstr::BorrowSliceInout(value, TirSliceSource::Parameter(index), _, _) => {
+                    Some((*value, *index == parameter))
+                }
                 TirInstr::Call(value, target, args) => {
                     let proven = functions
                         .get(target)
@@ -934,9 +957,6 @@ fn verify_read_return_provenance(
                                 return None;
                             }
                             let parameter = callee.return_borrow?;
-                            if callee.inout_params.get(parameter).copied().unwrap_or(false) {
-                                return None;
-                            }
                             args.get(parameter)
                         })
                         .is_some_and(|arg| state.values.contains(arg));
@@ -998,6 +1018,406 @@ fn verify_read_return_provenance(
                 existing.values.retain(|value| state.values.contains(value));
                 existing.slots.retain(|slot| state.slots.contains(slot));
                 if before != existing.values.len() + existing.slots.len() {
+                    pending.push_back(next);
+                }
+            } else {
+                states.insert(next, state.clone());
+                pending.push_back(next);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A normalized read-loan source is either a local owner or an incoming
+/// exclusive slice parameter. Keep the two namespaces distinct.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct TirReadOrigin {
+    read: HashSet<TirSliceSource>,
+    exclusive: HashSet<TirSliceSource>,
+}
+
+#[derive(Clone, Copy)]
+enum TirReadLocation {
+    Value(TirValueId),
+    Slot(TirSlotId),
+}
+
+fn read_value_def(instr: &TirInstr) -> Option<TirValueId> {
+    match instr {
+        TirInstr::Const(v, _)
+        | TirInstr::Make(v, _, _, _)
+        | TirInstr::MakeStruct(v, _, _)
+        | TirInstr::Get(v, _, _)
+        | TirInstr::Set(v, _, _, _)
+        | TirInstr::Tag(v, _)
+        | TirInstr::Unwrap(v, _, _, _)
+        | TirInstr::Load(v, _)
+        | TirInstr::BorrowInout(v, _)
+        | TirInstr::BorrowSliceInout(v, _, _, _)
+        | TirInstr::ReadInoutSlice(v, _, _, _)
+        | TirInstr::InoutSliceGet(v, _, _)
+        | TirInstr::InoutSliceLen(v, _)
+        | TirInstr::Call(v, _, _)
+        | TirInstr::MakeClosure(v, _, _)
+        | TirInstr::MakeClosureRef(v, _, _)
+        | TirInstr::MakeClosureInout(v, _, _)
+        | TirInstr::CallClosure(v, _, _)
+        | TirInstr::Add(v, _, _)
+        | TirInstr::Sub(v, _, _)
+        | TirInstr::Mul(v, _, _)
+        | TirInstr::Div(v, _, _)
+        | TirInstr::Eq(v, _, _)
+        | TirInstr::Lt(v, _, _)
+        | TirInstr::Gt(v, _, _)
+        | TirInstr::And(v, _, _)
+        | TirInstr::Or(v, _, _)
+        | TirInstr::Not(v, _)
+        | TirInstr::GetIndex(v, _, _)
+        | TirInstr::Slice(v, _, _, _)
+        | TirInstr::Len(v, _)
+        | TirInstr::Size(v, _)
+        | TirInstr::Bytes(v, _)
+        | TirInstr::ArrayPush(v, _, _) => Some(*v),
+        TirInstr::Slot(_, _)
+        | TirInstr::BindInout(_, _)
+        | TirInstr::Store(_, _)
+        | TirInstr::InoutSliceSet(_, _, _) => None,
+    }
+}
+
+fn read_value_used(instr: &TirInstr, value: TirValueId) -> bool {
+    match instr {
+        TirInstr::Const(_, _)
+        | TirInstr::Slot(_, _)
+        | TirInstr::BindInout(_, _)
+        | TirInstr::Load(_, _)
+        | TirInstr::BorrowInout(_, _)
+        | TirInstr::MakeClosureRef(_, _, _)
+        | TirInstr::MakeClosureInout(_, _, _)
+        | TirInstr::InoutSliceLen(_, _) => false,
+        TirInstr::Make(_, _, _, args)
+        | TirInstr::MakeClosure(_, _, args)
+        | TirInstr::Call(_, _, args) => args.contains(&value),
+        TirInstr::CallClosure(_, target, args) => *target == value || args.contains(&value),
+        TirInstr::MakeStruct(_, _, fields) => fields.iter().any(|(_, v)| *v == value),
+        TirInstr::Get(_, v, _)
+        | TirInstr::Tag(_, v)
+        | TirInstr::Unwrap(_, v, _, _)
+        | TirInstr::Store(_, v)
+        | TirInstr::Not(_, v)
+        | TirInstr::Len(_, v)
+        | TirInstr::Size(_, v)
+        | TirInstr::Bytes(_, v)
+        | TirInstr::InoutSliceGet(_, _, v) => *v == value,
+        TirInstr::Set(_, a, _, b)
+        | TirInstr::Add(_, a, b)
+        | TirInstr::Sub(_, a, b)
+        | TirInstr::Mul(_, a, b)
+        | TirInstr::Div(_, a, b)
+        | TirInstr::Eq(_, a, b)
+        | TirInstr::Lt(_, a, b)
+        | TirInstr::Gt(_, a, b)
+        | TirInstr::And(_, a, b)
+        | TirInstr::Or(_, a, b)
+        | TirInstr::GetIndex(_, a, b)
+        | TirInstr::ArrayPush(_, a, b)
+        | TirInstr::BorrowSliceInout(_, _, a, b)
+        | TirInstr::ReadInoutSlice(_, _, a, b)
+        | TirInstr::InoutSliceSet(_, a, b) => *a == value || *b == value,
+        TirInstr::Slice(_, a, b, c) => *a == value || *b == value || *c == value,
+    }
+}
+
+fn read_slot_used(instr: &TirInstr, slot: TirSlotId) -> bool {
+    match instr {
+        TirInstr::Load(_, id) | TirInstr::BorrowInout(_, id) => *id == slot,
+        TirInstr::BorrowSliceInout(_, TirSliceSource::Owner(id), _, _) => *id == slot,
+        TirInstr::MakeClosureRef(_, _, captures) | TirInstr::MakeClosureInout(_, _, captures) => {
+            captures.contains(&slot)
+        }
+        _ => false,
+    }
+}
+
+fn tir_read_successors(term: Option<&TirTerminator>) -> Vec<TirBlockId> {
+    match term {
+        Some(TirTerminator::Br(target)) => vec![*target],
+        Some(TirTerminator::CondBr(_, a, b)) => vec![*a, *b],
+        _ => vec![],
+    }
+}
+
+/// Last-use proof for an SSA value or slot, accounting for redefinition at a
+/// loop backedge. Only normalized TIR is analyzed here.
+fn tir_read_location_live(
+    func: &TirFunction,
+    block: TirBlockId,
+    index: usize,
+    location: TirReadLocation,
+) -> bool {
+    let mut pending = vec![(block, index)];
+    let mut seen = HashSet::new();
+    while let Some((id, start)) = pending.pop() {
+        if !seen.insert((id, start)) {
+            continue;
+        }
+        let Some(block) = func.blocks.iter().find(|b| b.id == id) else {
+            continue;
+        };
+        let mut killed = false;
+        for instr in block.instrs.iter().skip(start) {
+            match location {
+                TirReadLocation::Value(value) => {
+                    if read_value_used(instr, value) {
+                        return true;
+                    }
+                    if read_value_def(instr) == Some(value) {
+                        killed = true;
+                        break;
+                    }
+                }
+                TirReadLocation::Slot(slot) => {
+                    if read_slot_used(instr, slot) {
+                        return true;
+                    }
+                    if matches!(instr, TirInstr::Store(id, _) | TirInstr::Slot(id, _) | TirInstr::BindInout(id, _) if *id == slot)
+                    {
+                        killed = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if killed {
+            continue;
+        }
+        if let TirReadLocation::Value(value) = location {
+            if matches!(&block.terminator, Some(TirTerminator::Ret(Some(v))) | Some(TirTerminator::CondBr(v, _, _)) if *v == value)
+            {
+                return true;
+            }
+        }
+        pending.extend(
+            tir_read_successors(block.terminator.as_ref())
+                .into_iter()
+                .map(|next| (next, 0)),
+        );
+    }
+    false
+}
+
+/// Verify the normalized direct downgrade subset independently of bytecode
+/// lowering. The may-analysis detects any reachable conflicting live origin;
+/// the separate read-return must-analysis proves the declared return source.
+fn verify_tir_frame_read_loans(
+    func: &TirFunction,
+    functions: &HashMap<TirFunctionId, &TirFunction>,
+    slot_types: &HashMap<TirSlotId, TirType>,
+) -> Result<(), VerifierError> {
+    if !func
+        .blocks
+        .iter()
+        .flat_map(|b| &b.instrs)
+        .any(|instr| match instr {
+            TirInstr::ReadInoutSlice(_, _, _, _) => true,
+            TirInstr::Call(_, target, _) => functions.get(target).is_some_and(|target| {
+                target
+                    .return_borrow
+                    .is_some_and(|i| exclusive_slice_element(target, i).is_some())
+            }),
+            _ => false,
+        })
+    {
+        return Ok(());
+    }
+    let unsupported = || {
+        VerifierError::GenericError(
+            "frame read loan escapes through an unsupported TIR operation or ABI".into(),
+        )
+    };
+    let conflict = || {
+        VerifierError::GenericError(
+            "conflicting write or exclusive borrow while a frame read loan is live".into(),
+        )
+    };
+    let entry = func.blocks.first().ok_or_else(unsupported)?.id;
+    #[derive(Clone, Default)]
+    struct State {
+        values: HashMap<TirValueId, TirReadOrigin>,
+        slots: HashMap<TirSlotId, TirReadOrigin>,
+    }
+    fn merge<K: std::hash::Hash + Eq + Copy>(
+        old: &mut HashMap<K, TirReadOrigin>,
+        new: &HashMap<K, TirReadOrigin>,
+    ) -> bool {
+        let mut changed = false;
+        for (key, value) in new {
+            let entry = old.entry(*key).or_default();
+            let before = entry.read.len() + entry.exclusive.len();
+            entry.read.extend(value.read.iter().copied());
+            entry.exclusive.extend(value.exclusive.iter().copied());
+            changed |= before != entry.read.len() + entry.exclusive.len();
+        }
+        changed
+    }
+    let mut states = HashMap::from([(entry, State::default())]);
+    let mut pending = std::collections::VecDeque::from([entry]);
+    while let Some(id) = pending.pop_front() {
+        let block = func
+            .blocks
+            .iter()
+            .find(|b| b.id == id)
+            .ok_or_else(unsupported)?;
+        let mut state = states[&id].clone();
+        for (index, instr) in block.instrs.iter().enumerate() {
+            let owner_is_read = |owner: TirSliceSource, state: &State| {
+                state.values.iter().any(|(value, origin)| {
+                    origin.read.contains(&owner)
+                        && (read_value_used(instr, *value)
+                            || tir_read_location_live(
+                                func,
+                                id,
+                                index + 1,
+                                TirReadLocation::Value(*value),
+                            ))
+                }) || state.slots.iter().any(|(slot, origin)| {
+                    origin.read.contains(&owner)
+                        && (read_slot_used(instr, *slot)
+                            || tir_read_location_live(
+                                func,
+                                id,
+                                index + 1,
+                                TirReadLocation::Slot(*slot),
+                            ))
+                })
+            };
+            match instr {
+                TirInstr::Store(slot, _) if owner_is_read(TirSliceSource::Owner(*slot), &state) => {
+                    return Err(conflict())
+                }
+                TirInstr::InoutSliceSet(parameter, _, _)
+                    if owner_is_read(TirSliceSource::Parameter(*parameter), &state) =>
+                {
+                    return Err(conflict())
+                }
+                _ => {}
+            }
+            let mut result = TirReadOrigin::default();
+            match instr {
+                TirInstr::Slot(slot, _) | TirInstr::BindInout(slot, _) => {
+                    state.slots.remove(slot);
+                }
+                TirInstr::Store(slot, value) => {
+                    let origin = state.values.get(value).cloned().unwrap_or_default();
+                    if !origin.read.is_empty()
+                        && !matches!(slot_types.get(slot), Some(TirType::Slice(_)))
+                    {
+                        return Err(unsupported());
+                    }
+                    if origin == TirReadOrigin::default() {
+                        state.slots.remove(slot);
+                    } else {
+                        state.slots.insert(*slot, origin);
+                    }
+                }
+                TirInstr::Load(_, slot) => {
+                    result = state.slots.get(slot).cloned().unwrap_or_default()
+                }
+                TirInstr::BorrowInout(_, slot) => {
+                    if state.slots.get(slot).is_some_and(|o| !o.read.is_empty()) {
+                        return Err(unsupported());
+                    }
+                    result.exclusive.insert(TirSliceSource::Owner(*slot));
+                }
+                TirInstr::BorrowSliceInout(_, source, _, _) => {
+                    result.exclusive.insert(*source);
+                }
+                TirInstr::ReadInoutSlice(_, parameter, _, _) => {
+                    result.read.insert(TirSliceSource::Parameter(*parameter));
+                }
+                TirInstr::Slice(_, object, _, _) => {
+                    if let Some(origin) = state.values.get(object) {
+                        result.read = origin.read.clone();
+                    }
+                }
+                TirInstr::Call(_, target, args) => {
+                    let target = functions.get(target).ok_or_else(unsupported)?;
+                    for (index, value) in args.iter().enumerate() {
+                        let Some(origin) = state.values.get(value) else {
+                            continue;
+                        };
+                        if !origin.read.is_empty()
+                            && (target.is_extern
+                                || !matches!(
+                                    target.params.get(index),
+                                    Some((_, TirType::Slice(_)))
+                                )
+                                || target.inout_params.get(index) != Some(&false))
+                        {
+                            return Err(unsupported());
+                        }
+                        for owner in &origin.exclusive {
+                            if owner_is_read(*owner, &state) {
+                                return Err(conflict());
+                            }
+                        }
+                    }
+                    if let Some(source) = target
+                        .return_borrow
+                        .and_then(|index| args.get(index))
+                        .and_then(|v| state.values.get(v))
+                    {
+                        result.read.extend(source.read.iter().copied());
+                        result.read.extend(source.exclusive.iter().copied());
+                    }
+                }
+                TirInstr::MakeClosureRef(_, _, slots) | TirInstr::MakeClosureInout(_, _, slots) => {
+                    for slot in slots {
+                        if state.slots.get(slot).is_some_and(|o| !o.read.is_empty()) {
+                            return Err(unsupported());
+                        }
+                        if matches!(instr, TirInstr::MakeClosureInout(_, _, _))
+                            && owner_is_read(TirSliceSource::Owner(*slot), &state)
+                        {
+                            return Err(conflict());
+                        }
+                    }
+                }
+                TirInstr::GetIndex(_, _, _) | TirInstr::Len(_, _) => {}
+                _ => {
+                    if state
+                        .values
+                        .iter()
+                        .any(|(v, origin)| !origin.read.is_empty() && read_value_used(instr, *v))
+                    {
+                        return Err(unsupported());
+                    }
+                }
+            }
+            if let Some(value) = read_value_def(instr) {
+                if result == TirReadOrigin::default() {
+                    state.values.remove(&value);
+                } else {
+                    state.values.insert(value, result);
+                }
+            }
+        }
+        if let Some(TirTerminator::Ret(Some(value))) = &block.terminator {
+            if state
+                .values
+                .get(value)
+                .is_some_and(|origin| !origin.read.is_empty())
+                && !matches!(&func.return_type, TirType::Slice(_))
+            {
+                return Err(unsupported());
+            }
+        }
+        for next in tir_read_successors(block.terminator.as_ref()) {
+            if let Some(existing) = states.get_mut(&next) {
+                let changed_values = merge(&mut existing.values, &state.values);
+                let changed_slots = merge(&mut existing.slots, &state.slots);
+                if changed_values || changed_slots {
                     pending.push_back(next);
                 }
             } else {
@@ -1145,6 +1565,10 @@ fn verify_exclusive_call_borrows(
     if !slice_parameters.is_empty()
         && !is_slice_scalar(&func.return_type)
         && func.return_type != TirType::Unit
+        && !func.return_borrow.is_some_and(|index| {
+            exclusive_slice_element(func, index)
+                .is_some_and(|ty| func.return_type == TirType::Slice(Box::new(ty)))
+        })
     {
         invalid = true;
     }
@@ -1160,7 +1584,8 @@ fn verify_exclusive_call_borrows(
                 | TirInstr::MakeClosureRef(_, _, _)
                 | TirInstr::MakeClosureInout(_, _, _)
                 | TirInstr::InoutSliceLen(_, _) => {}
-                TirInstr::BorrowSliceInout(_, _, start, end) => operands.extend([*start, *end]),
+                TirInstr::BorrowSliceInout(_, _, start, end)
+                | TirInstr::ReadInoutSlice(_, _, start, end) => operands.extend([*start, *end]),
                 TirInstr::InoutSliceGet(_, _, index) => operands.push(*index),
                 TirInstr::InoutSliceSet(_, index, value) => operands.extend([*index, *value]),
                 TirInstr::Make(_, _, _, args) | TirInstr::MakeClosure(_, _, args) => {
@@ -1526,7 +1951,8 @@ fn instruction_escapes_borrowed_closure(
         | TirInstr::MakeClosureRef(_, _, _)
         | TirInstr::MakeClosureInout(_, _, _)
         | TirInstr::InoutSliceLen(_, _) => false,
-        TirInstr::BorrowSliceInout(_, _, start, end) => contains(start) || contains(end),
+        TirInstr::BorrowSliceInout(_, _, start, end)
+        | TirInstr::ReadInoutSlice(_, _, start, end) => contains(start) || contains(end),
         TirInstr::InoutSliceGet(_, _, index) => contains(index),
         TirInstr::InoutSliceSet(_, index, value) => contains(index) || contains(value),
         TirInstr::Call(_, target, args) => {

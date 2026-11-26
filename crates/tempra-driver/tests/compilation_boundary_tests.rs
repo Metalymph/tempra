@@ -16,7 +16,7 @@ use tempra_vm::profile::VmOptions;
 use tempra_vm::VmValue;
 
 const CURRENT_SEMANTICS_FINGERPRINT: &str =
-    concat!("tempra-", env!("CARGO_PKG_VERSION"), "-semantics-19");
+    concat!("tempra-", env!("CARGO_PKG_VERSION"), "-semantics-20");
 
 struct CacheGuard {
     path: PathBuf,
@@ -648,4 +648,41 @@ fn a3_2a_source_contract_survives_tir_bytecode_and_cache_encoding() {
         VmValue::Int64(20)
     );
     assert_eq!(run_source_vm(source, &[]).unwrap(), VmValue::Int64(20));
+}
+
+#[test]
+fn a3_2b1_source_downgrade_contract_survives_encoding() {
+    use tempra_bytecode::function::BytecodeType;
+    use tempra_bytecode::opcode::BytecodeInstr;
+    let source = r#"
+        fn normalize(inout data: Slice(Int)) -> Slice(Int) {
+            data[0] = 99
+            data[0..1]
+        }
+        fn main() -> Int {
+            var data = [10, 20, 30]
+            let view = normalize(inout data[1..3])
+            view[0]
+        }
+    "#;
+    let compilation = compile_source(source).unwrap();
+    let f = compilation
+        .bytecode()
+        .functions
+        .iter()
+        .find(|f| f.name == "normalize")
+        .unwrap();
+    assert_eq!(f.params, vec![BytecodeType::ExclusiveSlice]);
+    assert_eq!(f.ret, BytecodeType::ReadSlice);
+    assert_eq!(f.return_borrow, Some(0));
+    assert!(f
+        .code
+        .iter()
+        .any(|i| matches!(i, BytecodeInstr::ReadInoutSlice(_))));
+    let encoded = tempra_bytecode::serialize::encode_module(compilation.bytecode()).unwrap();
+    let decoded = tempra_bytecode::serialize::decode_and_verify_artifact(&encoded).unwrap();
+    assert_eq!(
+        tempra_vm::run_function(&decoded.module, "main", vec![]).unwrap(),
+        VmValue::Int64(99)
+    );
 }

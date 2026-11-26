@@ -80,6 +80,8 @@ pub enum BytecodeInstr {
     /// Index and value on stack; mutate the original owner via an incoming view.
     InoutSliceSet(LocalId),
     InoutSliceLen(LocalId),
+    /// Produce a non-owning read view of an exclusive slice parameter.
+    ReadInoutSlice(LocalId),
 
     // Enum-like
     MakeEnum(ConstId, ConstId, u16), // enum_name, variant_name, payload_count
@@ -106,7 +108,7 @@ pub enum BytecodeInstr {
     AddI64LC(LocalId, ConstId), // LoadLocal a; ConstI64 b; AddI64
 }
 
-pub const BYTECODE_OPCODE_COUNT: usize = 63;
+pub const BYTECODE_OPCODE_COUNT: usize = 64;
 
 impl BytecodeInstr {
     pub fn opcode_id(&self) -> usize {
@@ -174,6 +176,7 @@ impl BytecodeInstr {
             BytecodeInstr::InoutSliceGet(_) => 60,
             BytecodeInstr::InoutSliceSet(_) => 61,
             BytecodeInstr::InoutSliceLen(_) => 62,
+            BytecodeInstr::ReadInoutSlice(_) => 63,
         }
     }
 
@@ -242,6 +245,7 @@ impl BytecodeInstr {
             BytecodeInstr::InoutSliceGet(_) => "InoutSliceGet",
             BytecodeInstr::InoutSliceSet(_) => "InoutSliceSet",
             BytecodeInstr::InoutSliceLen(_) => "InoutSliceLen",
+            BytecodeInstr::ReadInoutSlice(_) => "ReadInoutSlice",
         }
     }
 }
@@ -318,6 +322,7 @@ pub fn stack_effect(
         BytecodeInstr::InoutSliceGet(_) => StackEffect { pops: 1, pushes: 1 },
         BytecodeInstr::InoutSliceSet(_) => StackEffect { pops: 2, pushes: 0 },
         BytecodeInstr::InoutSliceLen(_) => StackEffect { pops: 0, pushes: 1 },
+        BytecodeInstr::ReadInoutSlice(_) => StackEffect { pops: 2, pushes: 1 },
         BytecodeInstr::BorrowLocal(id) | BytecodeInstr::BorrowLocalMut(id) => {
             if id.0 as usize >= func.locals.len() {
                 return Err(BytecodeError::Message(format!(

@@ -308,6 +308,7 @@ fn defined_value(instruction: &TirInstr) -> Option<(TirValueId, Option<&TirConst
         | TirInstr::BorrowInout(value, _)
         | TirInstr::BorrowSliceInout(value, _, _, _)
         | TirInstr::InoutSliceGet(value, _, _)
+        | TirInstr::ReadInoutSlice(value, _, _, _)
         | TirInstr::InoutSliceLen(value, _)
         | TirInstr::MakeClosureRef(value, _, _)
         | TirInstr::MakeClosureInout(value, _, _)

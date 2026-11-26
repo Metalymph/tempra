@@ -202,3 +202,29 @@ This is the typed direct-return foundation, not the final non-owning slice
 representation or a complete read-loan liveness verifier. `Any` aggregates,
 static/temporary byte views and Exclusive-to-Read execution remain follow-up
 work. No new opcode is introduced by this gate.
+
+### A3.2b.1 — Direct exclusive-to-read downgrade
+
+`ReadInoutSlice(result, parameter, start, end)` creates a non-owning read
+subview of an incoming scalar `inout Slice(T)` parameter. Bounds are relative
+to the incoming interval; execution preserves the original owner frame and
+slot and converts the interval to absolute bounds. The result maps to
+`ReadSlice`, not to an exclusive handle or an owned array. The opcode is
+`ReadInoutSlice` (63); format 12 and semantic revision 20 are required.
+
+The declared read-return source may be an exclusive slice parameter. TIR and
+bytecode independently prove the return source and perform may-provenance
+checks for locally created frame read loans and direct downgrade results.
+A write or exclusive reborrow conflicts with a still-live read loan of that
+owner, including aliases in slots/SSA temporaries and live operand-stack
+values. Last use follows reachable CFG paths, not the physical lifetime of
+an SSA slot. Nested reborrows preserve the original owner. The runtime also
+checks the live owner, bounds, return source and local/stack liveness.
+
+This is a deliberately bounded direct-descriptor gate: legacy `Slice` and
+`Bytes` still use their prior representation, and frame-derived read loans
+are not admitted into opaque aggregates, closure captures, indirect calls,
+extern/native or host ABIs, or untyped slots. The HIR reference interpreter
+supports the corresponding source behavior with its existing slice storage.
+General non-owning read loans, aggregate provenance, temporary/static byte
+views and full lifetime certification remain follow-up work.

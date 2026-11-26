@@ -98,7 +98,8 @@ pub fn disassemble_function(
             BytecodeInstr::BorrowSliceMut(id)
             | BytecodeInstr::InoutSliceGet(id)
             | BytecodeInstr::InoutSliceSet(id)
-            | BytecodeInstr::InoutSliceLen(id) => {
+            | BytecodeInstr::InoutSliceLen(id)
+            | BytecodeInstr::ReadInoutSlice(id) => {
                 out.push_str(&format!("{} ${}\n", instr.opcode_name(), id.0));
             }
             BytecodeInstr::BorrowLocalMut(id) => {

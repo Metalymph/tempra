@@ -1366,3 +1366,25 @@ fn a3_1_resolved_named_argument_retains_return_origin() {
         "borrow conflict",
     );
 }
+
+#[test]
+fn a3_2b1_returned_read_loan_conflicts_with_new_exclusive_call() {
+    rejected(
+        r#"
+        fn normalize(inout data: Slice(Int)) -> Slice(Int) {
+            data[0] = 99
+            data[0..2]
+        }
+        fn overwrite(inout data: Slice(Int)) {
+            data[0] = 42
+        }
+        fn main() -> Int {
+            var data = [10, 20, 30]
+            let view = normalize(inout data[0..3])
+            overwrite(inout data[0..1])
+            view[0]
+        }
+    "#,
+        "borrow conflict",
+    );
+}

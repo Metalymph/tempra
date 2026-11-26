@@ -3472,6 +3472,11 @@ impl<'a> LowerContext<'a> {
                 self.builder.build_get_index(obj, idx).map_err(|e| e.into())
             }
             HirExpression::Slice(s) => {
+                if let Some(parameter) = self.exclusive_slice_parameter(&s.object) {
+                    let start = self.lower_expression(&s.start)?;
+                    let end = self.lower_expression(&s.end)?;
+                    return Ok(self.builder.build_read_inout_slice(parameter, start, end)?);
+                }
                 let obj_ty = self.infer_expr_type(&s.object)?;
                 if matches!(obj_ty, Type::String) {
                     return Err(TirLowerError::UnsupportedExpr(

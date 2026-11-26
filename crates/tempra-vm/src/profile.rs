@@ -138,6 +138,7 @@ impl VmProfile {
             60 => "InoutSliceGet",
             61 => "InoutSliceSet",
             62 => "InoutSliceLen",
+            63 => "ReadInoutSlice",
             _ => "Unknown",
         }
     }

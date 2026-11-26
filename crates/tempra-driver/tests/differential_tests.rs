@@ -83,7 +83,9 @@ fn normalize_vm(val: VmValue) -> NormalizedValue {
         VmValue::Float64(f) => NormalizedValue::Float(f),
         VmValue::String(s) => NormalizedValue::String(s),
         VmValue::Closure(_) => NormalizedValue::Unsupported("vm_closure".into()),
-        VmValue::BorrowedLocal(_) => NormalizedValue::Unsupported("vm_borrow".into()),
+        VmValue::BorrowedLocal(_) | VmValue::ReadLoan(_) => {
+            NormalizedValue::Unsupported("vm_borrow".into())
+        }
         VmValue::Array(arr) => {
             let inner = arr.iter().map(|v| normalize_vm(v.clone())).collect();
             NormalizedValue::Array(inner)
@@ -1299,4 +1301,68 @@ fn vm_parity_a3_2a_transitive_read_return_with_same_owner_branches() {
     "#;
     assert_differential(source);
     assert_eq!(run_source_vm(source, &[]).unwrap(), VmValue::Int64(30));
+}
+
+#[test]
+fn vm_parity_a3_2b1_exclusive_to_read_then_reborrow() {
+    let source = r#"
+        fn normalize(inout data: Slice(Int)) -> Slice(Int) {
+            data[0] = 99
+            data[0..2]
+        }
+        fn overwrite(inout data: Slice(Int)) {
+            data[0] = 42
+        }
+        fn main() -> Int {
+            var data = [10, 20, 30, 40]
+            let view = normalize(inout data[0..3])
+            let first = view[0]
+            overwrite(inout data[0..1])
+            first + data[0]
+        }
+    "#;
+    assert_differential(source);
+    assert_eq!(run_source_vm(source, &[]).unwrap(), VmValue::Int64(141));
+}
+
+#[test]
+fn vm_parity_a3_2b1_nested_downgrade_preserves_absolute_range() {
+    let source = r#"
+        fn normalize(inout data: Slice(Int)) -> Slice(Int) {
+            data[0] = 99
+            data[0..2]
+        }
+        fn forward(inout data: Slice(Int)) -> Slice(Int) {
+            normalize(inout data[1..3])
+        }
+        fn narrow(data: Slice(Int)) -> Slice(Int) {
+            data[0..1]
+        }
+        fn main() -> Int {
+            var data = [10, 20, 30, 40]
+            let view = forward(inout data[0..4])
+            let first = narrow(view)
+            first[0] + data[0] + data[2]
+        }
+    "#;
+    assert_differential(source);
+    assert_eq!(run_source_vm(source, &[]).unwrap(), VmValue::Int64(139));
+}
+
+#[test]
+fn vm_parity_a3_2b1_downgrade_preserves_independent_owner_copies() {
+    let source = r#"
+        fn normalize(inout data: Slice(Int)) -> Slice(Int) {
+            data[0] = 99
+            data[0..1]
+        }
+        fn main() -> Int {
+            var data = [10, 20, 30]
+            let before = data
+            let view = normalize(inout data[1..3])
+            view[0] + before[1] + data[0]
+        }
+    "#;
+    assert_differential(source);
+    assert_eq!(run_source_vm(source, &[]).unwrap(), VmValue::Int64(129));
 }

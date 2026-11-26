@@ -1635,3 +1635,44 @@ fn a3_2a_tir_local_array_cannot_satisfy_return_contract() {
     let errors = verify_module(&module.module).unwrap_err();
     assert!(format!("{errors:?}").contains("read slice return must derive"));
 }
+
+fn a3_2b1_tir_downgrade_fixture(conflict: bool) -> TirModule {
+    let slice = TirType::Slice(Box::new(TirType::Int64));
+    let mut module = ModuleBuilder::new();
+    let mut function = module.new_function("normalize", slice.clone());
+    function.add_inout_param(slice);
+    function.func.return_borrow = Some(0);
+    let block = function.new_block();
+    function.set_current_block(block);
+    let zero = function.build_const(TirConst::Int64(0)).unwrap();
+    let one = function.build_const(TirConst::Int64(1)).unwrap();
+    let value = function.build_const(TirConst::Int64(99)).unwrap();
+    if !conflict {
+        function.build_inout_slice_set(0, zero, value).unwrap();
+    }
+    let view = function.build_read_inout_slice(0, zero, one).unwrap();
+    if conflict {
+        function.build_inout_slice_set(0, zero, value).unwrap();
+    }
+    function.build_ret(Some(view)).unwrap();
+    module.add_function(function.build());
+    module.module
+}
+
+#[test]
+fn a3_2b1_tir_accepts_downgrade_after_mutation() {
+    verify_module(&a3_2b1_tir_downgrade_fixture(false)).unwrap();
+}
+
+#[test]
+fn a3_2b1_tir_rejects_mutation_before_returned_view_last_use() {
+    let errors = verify_module(&a3_2b1_tir_downgrade_fixture(true)).unwrap_err();
+    assert!(format!("{errors:?}").contains("frame read loan is live"));
+}
+
+#[test]
+fn a3_2b1_tir_rejects_nonexclusive_read_inout_source() {
+    let mut module = a3_2b1_tir_downgrade_fixture(false);
+    module.functions[0].inout_params[0] = false;
+    assert!(verify_module(&module).is_err());
+}

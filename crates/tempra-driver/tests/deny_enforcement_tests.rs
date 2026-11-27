@@ -296,3 +296,57 @@ fn normal_and_profiled_vm_execute_a_real_enforcement_aware_cache_hit() {
         modified
     );
 }
+
+#[test]
+fn a3_2b2_cursor_removes_iterator_alloc_without_hiding_result_alloc() {
+    use tempra_tir::ir::TirInstr;
+
+    let compilation = compile(
+        r#"
+        @deny(alloc)
+        fn count_slice(data: Slice(Int)) -> Int { data.count() }
+        @deny(alloc)
+        fn count_array(data: Array(Int)) -> Int { data.count() }
+        fn main() -> Int {
+            let xs = [1, 2, 3]
+            let view = xs[1..3]
+            let pairs = view.enumerate()
+            count_slice(view) + count_array(xs) + pairs.len()
+        }
+    "#,
+    )
+    .unwrap();
+    for function in &compilation.tir().functions {
+        assert!(!function.blocks.iter().flat_map(|b| &b.instrs).any(|i| {
+            matches!(i, TirInstr::MakeStruct(_, name, _) if name == "$SliceIter" || name == "$ArrayIter")
+        }));
+    }
+    for name in ["count_slice", "count_array"] {
+        let function = compilation
+            .tir()
+            .functions
+            .iter()
+            .find(|f| f.name == name)
+            .unwrap();
+        let required = compilation
+            .capabilities()
+            .summary(function.id)
+            .unwrap()
+            .required;
+        assert!(!required.contains(Capability::Alloc));
+        assert!(required.contains(Capability::Panic));
+    }
+    assert_eq!(
+        tempra_vm::run_function(compilation.bytecode(), "main", vec![]).unwrap(),
+        tempra_vm::VmValue::Int64(7)
+    );
+
+    let errors = violations(
+        r#"
+        @deny(alloc)
+        fn materialize(data: Slice(Int)) -> [Int] { data.take(1) }
+        fn main() -> Int { 0 }
+    "#,
+    );
+    assert!(errors.iter().any(|e| e.capability == Capability::Alloc));
+}

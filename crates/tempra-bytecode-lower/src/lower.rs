@@ -343,6 +343,14 @@ impl<'a> FunctionLowerer<'a> {
                 self.load_val(*value)?;
                 self.emit(BytecodeInstr::InoutSliceSet(LocalId(*parameter as u32)));
             }
+            TirInstr::BorrowReadArray(res, slot) => {
+                let local = *self
+                    .slot_to_local
+                    .get(slot)
+                    .ok_or_else(|| BytecodeLowerError::UnknownSlot(format!("${}", slot.0)))?;
+                self.emit(BytecodeInstr::BorrowReadArray(local));
+                self.store_res(*res)?;
+            }
             TirInstr::ReadInoutSlice(res, parameter, start, end) => {
                 self.load_val(*start)?;
                 self.load_val(*end)?;
@@ -904,9 +912,9 @@ impl<'a> FunctionLowerer<'a> {
             TirInstr::Tag(_, _) => Ok(BytecodeType::String),
             TirInstr::Unwrap(_, _, _, _) => Ok(BytecodeType::Any),
             TirInstr::GetIndex(_, _, _) => Ok(BytecodeType::Any),
-            TirInstr::Slice(_, _, _, _) | TirInstr::ReadInoutSlice(_, _, _, _) => {
-                Ok(BytecodeType::ReadSlice)
-            }
+            TirInstr::Slice(_, _, _, _)
+            | TirInstr::ReadInoutSlice(_, _, _, _)
+            | TirInstr::BorrowReadArray(_, _) => Ok(BytecodeType::ReadSlice),
             TirInstr::Len(_, _) => Ok(BytecodeType::Int64),
             TirInstr::Size(_, _) => Ok(BytecodeType::Int64),
             TirInstr::Bytes(_, _) => Ok(BytecodeType::ReadSlice),
@@ -950,6 +958,7 @@ fn get_instr_res_id(instr: &TirInstr) -> Option<TirValueId> {
         | TirInstr::Unwrap(id, _, _, _)
         | TirInstr::GetIndex(id, _, _)
         | TirInstr::ReadInoutSlice(id, _, _, _)
+        | TirInstr::BorrowReadArray(id, _)
         | TirInstr::Slice(id, _, _, _)
         | TirInstr::Len(id, _)
         | TirInstr::Size(id, _)

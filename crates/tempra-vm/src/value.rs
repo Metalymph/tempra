@@ -10,7 +10,7 @@ pub struct VmBorrow {
     pub local_id: tempra_bytecode::function::LocalId,
     /// An exclusive handle permits writes through its captured alias only.
     pub mutable: bool,
-    /// Absolute half-open interval in the owning array; None for scalar/capture loans.
+    /// Absolute half-open interval in the owning array; None for whole-place loans.
     pub range: Option<(usize, usize)>,
 }
 

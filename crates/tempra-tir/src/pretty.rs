@@ -139,6 +139,9 @@ pub fn format_instr(instr: &TirInstr) -> String {
             "%{} = read_inout_slice arg{}, %{}, %{}",
             res.0, parameter, start.0, end.0
         ),
+        TirInstr::BorrowReadArray(res, slot) => {
+            format!("%{} = borrow_read_array ${}", res.0, slot.0)
+        }
         TirInstr::Store(slot, val) => format!("store ${}, %{}", slot.0, val.0),
         TirInstr::Call(res, func, args) => {
             format!("%{} = call @{} ({})", res.0, func.0, format_args(args))

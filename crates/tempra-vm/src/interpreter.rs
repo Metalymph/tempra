@@ -273,6 +273,7 @@ impl<'a> Interpreter<'a> {
             61 => "InoutSliceSet",
             62 => "InoutSliceLen",
             63 => "ReadInoutSlice",
+            64 => "BorrowReadArray",
             _ => "Unknown",
         }
     }
@@ -613,6 +614,44 @@ impl<'a> Interpreter<'a> {
                     let handle = self.borrow_slice_mut(local, start, end)?;
                     self.push(VmValue::BorrowedLocal(handle))?;
                 }
+                BytecodeInstr::BorrowReadArray(local) => {
+                    let frame = self.call_stack.last().ok_or(VmError::MissingReturn)?;
+                    let value = frame
+                        .locals
+                        .get(local.0 as usize)
+                        .ok_or(VmError::LocalOutOfBounds(local.0))?
+                        .as_ref()
+                        .ok_or(VmError::LocalNotInitialized(local.0))?;
+                    let (mut handle, len) = match value {
+                        VmValue::Array(buffer) => {
+                            if self.exclusive_sources.contains(&(frame.token, local.0)) {
+                                return Err(VmError::Message(
+                                    "cannot read array while an exclusive borrow is active".into(),
+                                ));
+                            }
+                            (
+                                VmBorrow {
+                                    owner_frame: frame.token,
+                                    local_id: local,
+                                    mutable: false,
+                                    range: None,
+                                },
+                                buffer.len(),
+                            )
+                        }
+                        VmValue::BorrowedLocal(_) => {
+                            let handle = self.whole_array_parameter_handle(local)?;
+                            (handle, self.slice_owner(handle)?.len())
+                        }
+                        _ => return Err(VmError::ExpectedArrayOrSlice),
+                    };
+                    // The read descriptor points directly to the original
+                    // array, never to the callee's exclusive-handle slot.
+                    handle.mutable = false;
+                    handle.range = Some((0, len));
+                    self.has_read_loans = true;
+                    self.push(VmValue::ReadLoan(handle))?;
+                }
                 BytecodeInstr::ReadInoutSlice(local) => {
                     let end =
                         usize::try_from(self.pop_i64()?).map_err(|_| VmError::ExpectedIntIndex)?;
@@ -724,6 +763,7 @@ impl<'a> Interpreter<'a> {
                         }
                         // The parent call retains the loan. No second owner
                         // token is acquired or released by this nested call.
+                        self.ensure_no_live_read_loan(key)?;
                         self.push(VmValue::BorrowedLocal(handle))?;
                         continue;
                     }
@@ -1656,6 +1696,36 @@ impl<'a> Interpreter<'a> {
         Ok(buffer.as_ref())
     }
 
+    /// Resolve an incoming whole-array exclusive parameter without cloning
+    /// the array or creating a second exclusive-loan-table entry.
+    fn whole_array_parameter_handle(
+        &self,
+        local: tempra_bytecode::function::LocalId,
+    ) -> Result<VmBorrow, VmError> {
+        let frame = self.call_stack.last().ok_or(VmError::MissingReturn)?;
+        let func = &self.module.functions[frame.function_id.0 as usize];
+        let index = local.0 as usize;
+        let Some(Some(VmValue::BorrowedLocal(handle))) = frame.locals.get(index) else {
+            return Err(VmError::ExpectedArrayOrSlice);
+        };
+        if func.params.get(index) != Some(&BytecodeType::Any)
+            || func.inout_params.get(index) != Some(&true)
+            || !handle.mutable
+            || handle.range.is_some()
+            || handle.owner_frame == frame.token
+            || !self
+                .borrowed_sources
+                .contains(&(handle.owner_frame, handle.local_id.0))
+        {
+            return Err(VmError::Message(
+                "array reborrow requires a live exclusive whole-place parameter".into(),
+            ));
+        }
+        // Also validates the active exclusive key, original owner and value.
+        self.slice_owner(*handle)?;
+        Ok(*handle)
+    }
+
     fn exclusive_slice_handle(
         &self,
         local: tempra_bytecode::function::LocalId,
@@ -1690,8 +1760,13 @@ impl<'a> Interpreter<'a> {
             .ok_or(VmError::LocalOutOfBounds(local.0))?
             .as_ref()
             .ok_or(VmError::LocalNotInitialized(local.0))?;
-        if matches!(value, VmValue::BorrowedLocal(_)) {
-            let (mut handle, parent_start, parent_end) = self.exclusive_slice_handle(local)?;
+        if let VmValue::BorrowedLocal(source) = value {
+            let (mut handle, parent_start, parent_end) = if source.range.is_some() {
+                self.exclusive_slice_handle(local)?
+            } else {
+                let handle = self.whole_array_parameter_handle(local)?;
+                (handle, 0, self.slice_owner(handle)?.len())
+            };
             let len = parent_end - parent_start;
             if start > end || end > len {
                 return Err(VmError::InvalidSliceRange { start, end, len });

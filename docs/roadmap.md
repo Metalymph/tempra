@@ -877,3 +877,18 @@ The Phase 15–18 JIT documents are historical implementation records for an
 opt-in experiment. They are not the normative language roadmap. The same applies
 to phase-numbered lowering, VM and performance records: they document their
 named prototypes and do not override current status here.
+
+## Script ecosystem priority (2026-11-26)
+
+After ownership conformance, final VM parity, ARC NO-CYCLE, VM-only comptime
+and VM-only transition, the following milestones precede Native implementation:
+
+1. **Shell REPL** — interactive scripting environment.
+2. **StdLib rework** — coherent ownership-aware standard library.
+3. **Tooling rework: LSP, fmt, lint, graph** — shared compiler infrastructure.
+4. **Tempra MCP** — agent-facing language and tooling integration.
+
+The Native AOT direction (custom backend + LLVM) remains planned, but the
+complete Script environment takes implementation priority. This ordering
+supersedes earlier sequencing where it conflicts, without changing the
+normative Memory & Ownership v0.4 contracts.

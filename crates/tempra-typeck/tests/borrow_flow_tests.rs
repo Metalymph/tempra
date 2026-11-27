@@ -1388,3 +1388,143 @@ fn a3_2b1_returned_read_loan_conflicts_with_new_exclusive_call() {
         "borrow conflict",
     );
 }
+
+#[test]
+fn a3_2b2_rejects_exclusive_call_during_read_slice_bounds() {
+    rejected(
+        r#"
+        fn bound(inout data: Slice(Int)) -> Int {
+            data[0] = 9
+            0
+        }
+        fn main() -> Int {
+            var data = [1, 2, 3]
+            let view = data[bound(inout data[0..1])..2]
+            view[0]
+        }
+    "#,
+        "borrow conflict",
+    );
+}
+
+#[test]
+fn a3_2b2_cursor_materialization_does_not_extend_loan() {
+    accepted(
+        r#"
+        fn main() -> Int {
+            var data = [10, 20, 30]
+            let view = data[0..2]
+            let values = view.take(1)
+            data[0] = 99
+            values[0]
+        }
+    "#,
+    );
+}
+
+#[test]
+fn a3_2b2_cursor_rejects_mutation_before_final_read() {
+    rejected(
+        r#"
+        fn main() -> Int {
+            var data = [10, 20, 30]
+            let view = data[0..2]
+            let values = view.take(1)
+            data[0] = 99
+            values[0] + view.count()
+        }
+    "#,
+        "borrow conflict",
+    );
+}
+
+#[test]
+fn a3_2b2_f01_accepts_array_replacement_after_read() {
+    accepted(
+        r#"
+        fn update(inout data: Array(Int)) -> Int {
+            let view = data[0..1]
+            let old = view[0]
+            data = [7, 8]
+            old + data[0]
+        }
+        fn main() -> Int {
+            var data = [1, 2]
+            update(inout data)
+        }
+    "#,
+    );
+}
+
+#[test]
+fn a3_2b2_f01_rejects_array_replacement_before_last_use() {
+    rejected(
+        r#"
+        fn update(inout data: Array(Int)) -> Int {
+            let view = data[0..1]
+            data = [7, 8]
+            view[0]
+        }
+    "#,
+        "borrow conflict",
+    );
+}
+
+#[test]
+fn a3_2b2_f01_rejects_array_forwarding_before_last_use() {
+    rejected(
+        r#"
+        fn replace(inout data: Array(Int)) { data = [7, 8] }
+        fn update(inout data: Array(Int)) -> Int {
+            let view = data[0..1]
+            replace(inout data)
+            view[0]
+        }
+    "#,
+        "borrow conflict",
+    );
+}
+
+#[test]
+fn a3_2b2_f01_rejects_array_mutation_during_read_bounds() {
+    rejected(
+        r#"
+        fn bound(inout data: Array(Int)) -> Int {
+            data = [7, 8]
+            0
+        }
+        fn update(inout data: Array(Int)) -> Int {
+            let view = data[bound(inout data)..1]
+            view[0]
+        }
+    "#,
+        "borrow conflict",
+    );
+}
+
+#[test]
+fn a3_2b2_f01_rejects_array_slice_escape() {
+    rejected(
+        r#"
+        fn escape(inout data: Array(Int)) -> Slice(Int) {
+            data[0..1]
+        }
+    "#,
+        "borrow escape",
+    );
+}
+
+#[test]
+fn a3_2b2_f01_rejects_exclusive_subview_before_last_use() {
+    rejected(
+        r#"
+        fn overwrite(inout data: Slice(Int)) { data[0] = 42 }
+        fn update(inout data: Array(Int)) -> Int {
+            let view = data[0..1]
+            overwrite(inout data[0..1])
+            view[0]
+        }
+    "#,
+        "borrow conflict",
+    );
+}

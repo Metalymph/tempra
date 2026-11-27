@@ -1179,6 +1179,7 @@ fn classify_instruction(
         | TirInstr::BindInout(_, _)
         | TirInstr::Load(_, _)
         | TirInstr::BorrowInout(_, _)
+        | TirInstr::BorrowReadArray(_, _)
         | TirInstr::Store(_, _)
         | TirInstr::Call(_, _, _)
         | TirInstr::Add(_, _, _)
@@ -1263,6 +1264,10 @@ fn record_instruction_type(
         TirInstr::ArrayPush(result, array, _) => {
             value_types.get(array).cloned().map(|ty| (*result, ty))
         }
+        TirInstr::BorrowReadArray(result, slot) => match slot_types.get(slot) {
+            Some(TirType::Array(inner)) => Some((*result, TirType::Slice(inner.clone()))),
+            _ => None,
+        },
         TirInstr::ReadInoutSlice(result, parameter, _, _) => function
             .params
             .get(*parameter)

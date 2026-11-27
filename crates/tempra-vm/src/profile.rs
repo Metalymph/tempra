@@ -139,6 +139,7 @@ impl VmProfile {
             61 => "InoutSliceSet",
             62 => "InoutSliceLen",
             63 => "ReadInoutSlice",
+            64 => "BorrowReadArray",
             _ => "Unknown",
         }
     }

@@ -586,6 +586,7 @@ fn opcode_ids_are_unique_and_within_bounds() {
         BytecodeInstr::InoutSliceSet(LocalId(0)),
         BytecodeInstr::InoutSliceLen(LocalId(0)),
         BytecodeInstr::ReadInoutSlice(LocalId(0)),
+        BytecodeInstr::BorrowReadArray(LocalId(0)),
         BytecodeInstr::AddI64LL(
             tempra_bytecode::function::LocalId(0),
             tempra_bytecode::function::LocalId(0),
@@ -1682,11 +1683,92 @@ fn a3_2b1_vm_checks_opaque_escape_in_legacy_read_parameter_callee() {
             BytecodeInstr::Call(pack_id, 1),
         ],
     );
-    // An ordinary read parameter may still carry a legacy descriptor; the
-    // caller's new frame origin cannot be erased by its opaque aggregation.
-    tempra_bytecode::verify::verify_module(&module).unwrap();
-    let error = run_function(&module, "main", vec![]).unwrap_err();
-    assert!(error
-        .to_string()
-        .contains("frame read loan aggregate or capture is not supported"));
+    // An ordinary read parameter can carry a frame loan from its caller.
+    // This escape is now rejected before execution, independently of the caller.
+    let error = tempra_bytecode::verify::verify_module(&module).unwrap_err();
+    assert!(error.to_string().contains("frame read loan escapes"));
+    assert!(run_function(&module, "main", vec![]).is_err());
+}
+
+fn a3_2b2_read_array_module() -> BytecodeModule {
+    let mut module = BytecodeModule::new();
+    let zero = module.add_constant(BytecodeConstant::Int64(0));
+    let one = module.add_constant(BytecodeConstant::Int64(1));
+    let mut f = BytecodeFunction::new(
+        "observe".into(),
+        vec![BytecodeType::Any],
+        BytecodeType::Int64,
+    );
+    f.locals = f.params.clone();
+    f.max_stack = 3;
+    f.code = vec![
+        BytecodeInstr::BorrowReadArray(LocalId(0)),
+        BytecodeInstr::ConstI64(zero),
+        BytecodeInstr::ConstI64(one),
+        BytecodeInstr::Slice,
+        BytecodeInstr::ConstI64(zero),
+        BytecodeInstr::GetIndex,
+        BytecodeInstr::Return,
+    ];
+    module.add_function(f);
+    module
+}
+
+#[test]
+fn a3_2b2_vm_reads_original_array() {
+    let module = a3_2b2_read_array_module();
+    let data = VmValue::Array(std::rc::Rc::new(vec![VmValue::Int64(7)]));
+    assert_eq!(
+        run_function(&module, "observe", vec![data]).unwrap(),
+        VmValue::Int64(7)
+    );
+}
+
+#[test]
+fn a3_2b2_vm_rejects_non_array_owner() {
+    let module = a3_2b2_read_array_module();
+    assert!(matches!(
+        run_function(&module, "observe", vec![VmValue::Int64(7)]),
+        Err(VmError::ExpectedArrayOrSlice)
+    ));
+}
+
+fn a3_2b2_f01_vm_array_reborrow_fixture() -> BytecodeModule {
+    let mut module = a3_2b2_read_array_module();
+    module.functions[0].inout_params[0] = true;
+    let mut main =
+        BytecodeFunction::new("main".into(), vec![BytecodeType::Any], BytecodeType::Int64);
+    // BorrowLocalMut requires an actual non-repeating owner initialization,
+    // not a by-value incoming parameter. Store the host value into a new local.
+    main.locals = vec![BytecodeType::Any, BytecodeType::Any];
+    main.max_stack = 1;
+    main.code = vec![
+        BytecodeInstr::LoadLocal(LocalId(0)),
+        BytecodeInstr::StoreLocal(LocalId(1)),
+        BytecodeInstr::BorrowLocalMut(LocalId(1)),
+        BytecodeInstr::Call(FunctionId(0), 1),
+        BytecodeInstr::Return,
+    ];
+    module.add_function(main);
+    module
+}
+
+#[test]
+fn a3_2b2_f01_vm_resolves_original_owner_and_releases_frames() {
+    let module = a3_2b2_f01_vm_array_reborrow_fixture();
+    let buffer = std::rc::Rc::new(vec![VmValue::Int64(7)]);
+    assert_eq!(
+        run_function(&module, "main", vec![VmValue::Array(buffer.clone())]).unwrap(),
+        VmValue::Int64(7)
+    );
+    assert_eq!(std::rc::Rc::strong_count(&buffer), 1);
+}
+
+#[test]
+fn a3_2b2_f01_vm_rejects_non_array_exclusive_owner() {
+    let module = a3_2b2_f01_vm_array_reborrow_fixture();
+    assert!(matches!(
+        run_function(&module, "main", vec![VmValue::Int64(7)]),
+        Err(VmError::ExpectedArrayOrSlice)
+    ));
 }

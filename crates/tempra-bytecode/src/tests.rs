@@ -461,7 +461,7 @@ fn closure_isa_roundtrip_reserves_stable_opcode_ids() {
 
     assert_eq!(BytecodeInstr::MakeClosure(target, 0).opcode_id(), 53);
     assert_eq!(BytecodeInstr::CallClosure(signature_id, 1).opcode_id(), 54);
-    assert_eq!(crate::opcode::BYTECODE_OPCODE_COUNT, 64);
+    assert_eq!(crate::opcode::BYTECODE_OPCODE_COUNT, 65);
     let bytes = encode_module(&module).unwrap();
     assert_eq!(bytes, encode_module(&module).unwrap());
     let decoded = decode_artifact(&bytes).unwrap();
@@ -835,7 +835,7 @@ fn borrowed_closure_bytecode_opcode_identity_and_fail_closed() {
         BytecodeInstr::MakeClosureRef(FunctionId(0), 1).opcode_id(),
         56
     );
-    assert_eq!(crate::opcode::BYTECODE_OPCODE_COUNT, 64);
+    assert_eq!(crate::opcode::BYTECODE_OPCODE_COUNT, 65);
     assert!(matches!(
         verify_module(&module),
         Err(BytecodeVerifyError::Unsupported(_))
@@ -1459,7 +1459,7 @@ fn mutable_slice_isa_reserves_stable_opcode_ids() {
     assert_eq!(BytecodeInstr::InoutSliceGet(LocalId(0)).opcode_id(), 60);
     assert_eq!(BytecodeInstr::InoutSliceSet(LocalId(0)).opcode_id(), 61);
     assert_eq!(BytecodeInstr::InoutSliceLen(LocalId(0)).opcode_id(), 62);
-    assert_eq!(crate::opcode::BYTECODE_OPCODE_COUNT, 64);
+    assert_eq!(crate::opcode::BYTECODE_OPCODE_COUNT, 65);
 }
 
 /// Construct a typed closure with independently chosen target access metadata.
@@ -1571,7 +1571,7 @@ fn a1_raw_borrow_cannot_be_stored_as_ordinary_value() {
 fn a1_previous_loadlocal_format_is_rejected() {
     let module = a1_callable_access_fixture(2, vec![true, false]);
     let mut bytes = encode_module(&module).unwrap();
-    assert_eq!(&bytes[4..8], &12_u32.to_le_bytes());
+    assert_eq!(&bytes[4..8], &13_u32.to_le_bytes());
     bytes[4..8].copy_from_slice(&9_u32.to_le_bytes());
     assert!(matches!(
         decode_artifact(&bytes),
@@ -1621,7 +1621,7 @@ fn a3_2a_read_return_contract_roundtrip_and_format() {
     assert_eq!(function.params[0], BytecodeType::ReadSlice);
     assert_eq!(function.locals[3], BytecodeType::ReadSlice);
     assert_eq!(encode_module(&artifact.module).unwrap(), encoded);
-    assert_eq!(&encoded[4..8], &12_u32.to_le_bytes());
+    assert_eq!(&encoded[4..8], &13_u32.to_le_bytes());
     let mut old = encoded;
     old[4..8].copy_from_slice(&11_u32.to_le_bytes());
     assert!(matches!(
@@ -1739,7 +1739,7 @@ fn a3_2b1_downgrade_opcode_roundtrip() {
     let module = a3_2b1_downgrade_fixture();
     assert_eq!(BytecodeInstr::ReadInoutSlice(LocalId(0)).opcode_id(), 63);
     let bytes = encode_module(&module).unwrap();
-    assert_eq!(&bytes[4..8], &12_u32.to_le_bytes());
+    assert_eq!(&bytes[4..8], &13_u32.to_le_bytes());
     let decoded = decode_and_verify_artifact(&bytes).unwrap();
     assert_eq!(decoded.module.functions[0].return_borrow, Some(0));
     assert_eq!(decoded.module.functions[0].code, module.functions[0].code);
@@ -1820,4 +1820,186 @@ fn a3_2b1_local_liveness_handles_branches_and_overwrite() {
         BytecodeInstr::Return,
     ];
     assert!(!crate::verify::local_value_is_live(&f, 0, LocalId(0)));
+}
+
+fn a3_2b2_read_array_fixture() -> BytecodeModule {
+    let mut module = BytecodeModule::new();
+    let one = module.add_constant(BytecodeConstant::Int64(1));
+    let two = module.add_constant(BytecodeConstant::Int64(2));
+    let mut f = BytecodeFunction::new("main".into(), vec![], BytecodeType::Int64);
+    f.locals = vec![
+        BytecodeType::Any,
+        BytecodeType::ReadSlice,
+        BytecodeType::Int64,
+    ];
+    f.max_stack = 1;
+    f.code = vec![
+        BytecodeInstr::ConstI64(one),
+        BytecodeInstr::MakeArray(1),
+        BytecodeInstr::StoreLocal(LocalId(0)),
+        BytecodeInstr::BorrowReadArray(LocalId(0)),
+        BytecodeInstr::StoreLocal(LocalId(1)),
+        BytecodeInstr::LoadLocal(LocalId(1)),
+        BytecodeInstr::Len,
+        BytecodeInstr::StoreLocal(LocalId(2)),
+        BytecodeInstr::ConstI64(two),
+        BytecodeInstr::MakeArray(1),
+        BytecodeInstr::StoreLocal(LocalId(0)),
+        BytecodeInstr::LoadLocal(LocalId(2)),
+        BytecodeInstr::Return,
+    ];
+    module.add_function(f);
+    module
+}
+
+#[test]
+fn a3_2b2_bytecode_read_array_roundtrip_and_last_use() {
+    let module = a3_2b2_read_array_fixture();
+    assert_eq!(BytecodeInstr::BorrowReadArray(LocalId(0)).opcode_id(), 64);
+    let bytes = encode_module(&module).unwrap();
+    assert_eq!(&bytes[4..8], &13_u32.to_le_bytes());
+    let decoded = decode_and_verify_artifact(&bytes).unwrap();
+    assert_eq!(decoded.module.functions[0].code, module.functions[0].code);
+}
+
+#[test]
+fn a3_2b2_bytecode_rejects_owner_store_before_last_use() {
+    let mut module = a3_2b2_read_array_fixture();
+    module.functions[0].code.splice(
+        11..11,
+        [
+            BytecodeInstr::LoadLocal(LocalId(1)),
+            BytecodeInstr::Len,
+            BytecodeInstr::Pop,
+        ],
+    );
+    let error = crate::verify::verify_module(&module).unwrap_err();
+    assert!(error.to_string().contains("frame read loan is live"));
+}
+
+#[test]
+fn a3_2b2_bytecode_rejects_invalid_read_array_slot() {
+    let mut module = a3_2b2_read_array_fixture();
+    module.functions[0].code[3] = BytecodeInstr::BorrowReadArray(LocalId(99));
+    assert!(crate::verify::verify_module(&module).is_err());
+}
+
+#[test]
+fn a3_2b2_cursor_bytecode_still_rejects_aggregate_loan() {
+    let mut module = a3_2b2_read_array_fixture();
+    module.functions[0].code.splice(
+        4..4,
+        [
+            BytecodeInstr::MakeTuple(1),
+            BytecodeInstr::Pop,
+            BytecodeInstr::BorrowReadArray(LocalId(0)),
+        ],
+    );
+    let error = crate::verify::verify_module(&module).unwrap_err();
+    assert!(error.to_string().contains("frame read loan escapes"));
+}
+
+fn a3_2b2_f01_bound_array_fixture(conflict: bool, forward: bool) -> BytecodeModule {
+    let mut module = BytecodeModule::new();
+    let mut sink =
+        BytecodeFunction::new("sink".into(), vec![BytecodeType::Any], BytecodeType::Unit);
+    sink.inout_params[0] = true;
+    sink.locals = sink.params.clone();
+    sink.code = vec![BytecodeInstr::Return];
+    let sink_id = module.add_function(sink);
+    let mut f = BytecodeFunction::new(
+        "observe".into(),
+        vec![BytecodeType::Any],
+        BytecodeType::Int64,
+    );
+    f.inout_params[0] = true;
+    f.locals = vec![
+        BytecodeType::Any,
+        BytecodeType::ReadSlice,
+        BytecodeType::Int64,
+    ];
+    f.max_stack = 1;
+    f.code = vec![
+        BytecodeInstr::BorrowReadArray(LocalId(0)),
+        BytecodeInstr::StoreLocal(LocalId(1)),
+    ];
+    let read = [
+        BytecodeInstr::LoadLocal(LocalId(1)),
+        BytecodeInstr::Len,
+        BytecodeInstr::StoreLocal(LocalId(2)),
+    ];
+    if !conflict {
+        f.code.extend(read);
+    }
+    if forward {
+        f.code.extend([
+            BytecodeInstr::BorrowLocalMut(LocalId(0)),
+            BytecodeInstr::Call(sink_id, 1),
+        ]);
+    } else {
+        f.code.extend([
+            BytecodeInstr::MakeArray(0),
+            BytecodeInstr::StoreLocal(LocalId(0)),
+        ]);
+    }
+    if conflict {
+        f.code.extend(read);
+    }
+    f.code
+        .extend([BytecodeInstr::LoadLocal(LocalId(2)), BytecodeInstr::Return]);
+    module.add_function(f);
+    module
+}
+
+#[test]
+fn a3_2b2_f01_bytecode_accepts_bound_array_after_last_use() {
+    for forward in [false, true] {
+        let module = a3_2b2_f01_bound_array_fixture(false, forward);
+        let bytes = encode_module(&module).unwrap();
+        decode_and_verify_artifact(&bytes).unwrap();
+    }
+}
+
+#[test]
+fn a3_2b2_f01_bytecode_rejects_bound_array_conflicts() {
+    for forward in [false, true] {
+        let module = a3_2b2_f01_bound_array_fixture(true, forward);
+        let error = crate::verify::verify_module(&module).unwrap_err();
+        assert!(error.to_string().contains("frame read loan is live"));
+    }
+}
+
+#[test]
+fn a3_2b2_f01_bytecode_rejects_whole_array_read_return_contract() {
+    let mut module = a3_2b2_f01_bound_array_fixture(false, false);
+    let f = &mut module.functions[1];
+    f.ret = BytecodeType::ReadSlice;
+    f.return_borrow = Some(0);
+    f.code = vec![
+        BytecodeInstr::BorrowReadArray(LocalId(0)),
+        BytecodeInstr::Return,
+    ];
+    let error = crate::verify::verify_module(&module).unwrap_err();
+    assert!(error.to_string().contains("read slice return must derive"));
+}
+
+#[test]
+fn a3_2b2_f01_bytecode_rejects_exclusive_subview_before_last_use() {
+    let mut module = a3_2b2_f01_bound_array_fixture(true, true);
+    let zero = module.add_constant(BytecodeConstant::Int64(0));
+    let one = module.add_constant(BytecodeConstant::Int64(1));
+    module.functions[0].params[0] = BytecodeType::ExclusiveSlice;
+    module.functions[0].locals[0] = BytecodeType::ExclusiveSlice;
+    let f = &mut module.functions[1];
+    f.max_stack = 2;
+    f.code.splice(
+        2..3,
+        [
+            BytecodeInstr::ConstI64(zero),
+            BytecodeInstr::ConstI64(one),
+            BytecodeInstr::BorrowSliceMut(LocalId(0)),
+        ],
+    );
+    let error = crate::verify::verify_module(&module).unwrap_err();
+    assert!(error.to_string().contains("frame read loan is live"));
 }

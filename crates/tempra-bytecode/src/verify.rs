@@ -453,6 +453,17 @@ pub fn verify_function_direct(
                     }
                 }
                 BytecodeInstr::InoutSliceLen(_) => state.stack.push(BytecodeType::Int64),
+                BytecodeInstr::BorrowReadArray(id) => {
+                    let index = id.0 as usize;
+                    if func.locals.get(index) != Some(&BytecodeType::Any)
+                        || !state.locals_init.get(index).copied().unwrap_or(false)
+                    {
+                        return Err(BytecodeVerifyError::Unsupported(
+                            "read array borrow requires an initialized array place".into(),
+                        ));
+                    }
+                    state.stack.push(BytecodeType::ReadSlice);
+                }
                 BytecodeInstr::ReadInoutSlice(id) => {
                     if func.params.get(id.0 as usize) != Some(&BytecodeType::ExclusiveSlice)
                         || !state
@@ -823,6 +834,7 @@ pub fn local_value_is_live(func: &BytecodeFunction, pc: usize, local: LocalId) -
             | BytecodeInstr::InoutSliceSet(id)
             | BytecodeInstr::InoutSliceLen(id)
             | BytecodeInstr::ReadInoutSlice(id)
+            | BytecodeInstr::BorrowReadArray(id)
             | BytecodeInstr::AddI64LC(id, _)
                 if id == local =>
             {
@@ -837,15 +849,19 @@ pub fn local_value_is_live(func: &BytecodeFunction, pc: usize, local: LocalId) -
     false
 }
 
-/// May-provenance for the new frame read loans. An owner is recorded relative
-/// to the current frame (including its incoming exclusive slice parameters).
-/// Ordinary read-slice parameters can denote loans in an ancestor frame; their
-/// runtime ABI is checked separately. The source-level ownership checker and
-/// the must-provenance return proof remain independent of this pass.
+/// Symbolic origins distinguish frame-owned storage from a borrowed parameter
+/// whose actual owner lives in an ancestor frame. Direct callsites check alias
+/// compatibility; the callee independently verifies its typed parameter uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum FrameReadSource {
+    Owner(LocalId),
+    Parameter(LocalId),
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct FrameReadOrigin {
-    read: HashSet<LocalId>,
-    exclusive: HashSet<LocalId>,
+    read: HashSet<FrameReadSource>,
+    exclusive: HashSet<FrameReadSource>,
 }
 
 fn verify_frame_read_loans(
@@ -858,14 +874,16 @@ fn verify_frame_read_loans(
                 target.params.get(i as usize) == Some(&BytecodeType::ExclusiveSlice)
             })
     };
-    if !func.code.iter().any(|instr| match instr {
-        BytecodeInstr::ReadInoutSlice(_) => true,
-        BytecodeInstr::Call(target, _) => module
-            .functions
-            .get(target.0 as usize)
-            .is_some_and(is_downgrade),
-        _ => false,
-    }) {
+    if !func.params.contains(&BytecodeType::ReadSlice)
+        && !func.code.iter().any(|instr| match instr {
+            BytecodeInstr::ReadInoutSlice(_) | BytecodeInstr::BorrowReadArray(_) => true,
+            BytecodeInstr::Call(target, _) => module
+                .functions
+                .get(target.0 as usize)
+                .is_some_and(is_downgrade),
+            _ => false,
+        })
+    {
         return Ok(());
     }
     let unsupported = || {
@@ -882,10 +900,29 @@ fn verify_frame_read_loans(
     struct State {
         stack: Vec<FrameReadOrigin>,
         locals: HashMap<LocalId, FrameReadOrigin>,
+        captured_exclusive: HashSet<FrameReadSource>,
     }
     let initial = State {
         stack: vec![],
-        locals: HashMap::new(),
+        locals: func
+            .params
+            .iter()
+            .enumerate()
+            .filter_map(|(index, ty)| {
+                if *ty != BytecodeType::ReadSlice {
+                    return None;
+                }
+                let id = LocalId(index as u32);
+                Some((
+                    id,
+                    FrameReadOrigin {
+                        read: HashSet::from([FrameReadSource::Parameter(id)]),
+                        exclusive: HashSet::new(),
+                    },
+                ))
+            })
+            .collect(),
+        captured_exclusive: HashSet::new(),
     };
     let mut states = HashMap::from([(0usize, initial)]);
     let mut pending = VecDeque::from([0usize]);
@@ -903,7 +940,14 @@ fn verify_frame_read_loans(
             .checked_sub(usize::from(effect.pops))
             .ok_or(BytecodeVerifyError::StackUnderflow)?;
         let args = state.stack.split_off(base);
-        let owner_is_read = |id: LocalId, state: &State| {
+        let source_of = |id: LocalId| {
+            if func.locals.get(id.0 as usize) == Some(&BytecodeType::ExclusiveSlice) {
+                FrameReadSource::Parameter(id)
+            } else {
+                FrameReadSource::Owner(id)
+            }
+        };
+        let owner_is_read = |id: FrameReadSource, state: &State| {
             state
                 .stack
                 .iter()
@@ -918,7 +962,7 @@ fn verify_frame_read_loans(
             | BytecodeInstr::BorrowLocalMut(id)
             | BytecodeInstr::BorrowSliceMut(id)
             | BytecodeInstr::InoutSliceSet(id)
-                if owner_is_read(id, &state) =>
+                if owner_is_read(source_of(id), &state) =>
             {
                 return Err(conflict())
             }
@@ -942,6 +986,9 @@ fn verify_frame_read_loans(
             }
             BytecodeInstr::Dup => result = args[0].clone(),
             BytecodeInstr::BorrowLocal(id) | BytecodeInstr::BorrowLocalMut(id) => {
+                if matches!(instr, BytecodeInstr::BorrowLocalMut(_)) {
+                    result.exclusive.insert(source_of(id));
+                }
                 if state
                     .locals
                     .get(&id)
@@ -951,12 +998,45 @@ fn verify_frame_read_loans(
                 }
             }
             BytecodeInstr::BorrowSliceMut(id) => {
-                result.exclusive.insert(id);
+                result.exclusive.insert(source_of(id));
+            }
+            BytecodeInstr::BorrowReadArray(id) => {
+                // The same local identity represents a whole-place inout
+                // alias and is used by StoreLocal and BorrowLocalMut below.
+                let owner = source_of(id);
+                if state.captured_exclusive.contains(&owner)
+                    || state
+                        .stack
+                        .iter()
+                        .any(|origin| origin.exclusive.contains(&owner))
+                    || state
+                        .locals
+                        .get(&id)
+                        .is_some_and(|origin| !origin.read.is_empty())
+                {
+                    return Err(conflict());
+                }
+                result.read.insert(owner);
+            }
+            BytecodeInstr::MakeClosureInout(_, _) => {
+                for arg in &args {
+                    if !arg.read.is_empty() {
+                        return Err(unsupported());
+                    }
+                    state
+                        .captured_exclusive
+                        .extend(arg.exclusive.iter().copied());
+                }
             }
             BytecodeInstr::ReadInoutSlice(id) => {
-                result.read.insert(id);
+                result.read.insert(FrameReadSource::Parameter(id));
             }
-            BytecodeInstr::Slice => result.read = args[0].read.clone(),
+            BytecodeInstr::Slice => {
+                if args[1..].iter().any(|arg| !arg.read.is_empty()) {
+                    return Err(unsupported());
+                }
+                result.read = args[0].read.clone();
+            }
             BytecodeInstr::Call(target, _) => {
                 let target = &module.functions[target.0 as usize];
                 for (index, arg) in args.iter().enumerate() {
@@ -978,7 +1058,12 @@ fn verify_frame_read_loans(
                     result.read.extend(source.exclusive.iter().copied());
                 }
             }
-            BytecodeInstr::GetIndex | BytecodeInstr::Len | BytecodeInstr::Pop => {}
+            BytecodeInstr::GetIndex => {
+                if !args[1].read.is_empty() {
+                    return Err(unsupported());
+                }
+            }
+            BytecodeInstr::Len | BytecodeInstr::Pop => {}
             BytecodeInstr::Return if func.ret == BytecodeType::ReadSlice => {}
             _ => {
                 if args.iter().any(|value| !value.read.is_empty()) {
@@ -1011,6 +1096,11 @@ fn verify_frame_read_loans(
                     old.exclusive.extend(origin.exclusive.iter().copied());
                     changed |= before != old.read.len() + old.exclusive.len();
                 }
+                let old_captures = existing.captured_exclusive.len();
+                existing
+                    .captured_exclusive
+                    .extend(state.captured_exclusive.iter().copied());
+                changed |= old_captures != existing.captured_exclusive.len();
                 if changed {
                     pending.push_back(next);
                 }
@@ -1434,7 +1524,8 @@ fn proves_nonescaping_callback_parameter(
                     BytecodeInstr::Jump(_) | BytecodeInstr::Unreachable => {}
                     BytecodeInstr::BorrowLocal(id)
                     | BytecodeInstr::BorrowLocalMut(id)
-                    | BytecodeInstr::BorrowSliceMut(id) => {
+                    | BytecodeInstr::BorrowSliceMut(id)
+                    | BytecodeInstr::BorrowReadArray(id) => {
                         if *locals
                             .get(id.0 as usize)
                             .ok_or(BytecodeVerifyError::InvalidLocalId(id))?
@@ -1629,7 +1720,7 @@ fn verify_closure_access(
     if read_capture
         && target.code.iter().any(|instr| {
             matches!(instr, BytecodeInstr::StoreLocal(id) | BytecodeInstr::BorrowLocalMut(id)
-            | BytecodeInstr::BorrowSliceMut(id) if (id.0 as usize) < hidden)
+            | BytecodeInstr::BorrowSliceMut(id) | BytecodeInstr::BorrowReadArray(id) if (id.0 as usize) < hidden)
         })
     {
         return Err(BytecodeVerifyError::Unsupported(
@@ -1657,7 +1748,8 @@ fn verify_borrowed_frame_contract(
             | BytecodeInstr::InoutSliceGet(_)
             | BytecodeInstr::InoutSliceSet(_)
             | BytecodeInstr::InoutSliceLen(_)
-            | BytecodeInstr::ReadInoutSlice(_) => true,
+            | BytecodeInstr::ReadInoutSlice(_)
+            | BytecodeInstr::BorrowReadArray(_) => true,
             BytecodeInstr::Call(target, _) => {
                 module.functions.get(target.0 as usize).is_some_and(|f| {
                     f.inout_params.iter().any(|access| *access)
@@ -1809,6 +1901,18 @@ fn verify_borrowed_frame_contract(
                 state
                     .stack
                     .push(BorrowProvenance::ExclusiveSliceHandle(source));
+            }
+            BytecodeInstr::BorrowReadArray(source) => {
+                let index = source.0 as usize;
+                if !state.initialized[index]
+                    || state.locals[index] != BorrowProvenance::Plain
+                    || pending_exclusive(&state.stack, source)
+                {
+                    return Err(BytecodeVerifyError::Unsupported(
+                        "read array borrow requires an initialized plain place without pending exclusive access".into(),
+                    ));
+                }
+                state.stack.push(BorrowProvenance::Plain);
             }
             BytecodeInstr::InoutSliceGet(source)
             | BytecodeInstr::InoutSliceSet(source)

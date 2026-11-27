@@ -228,3 +228,31 @@ extern/native or host ABIs, or untyped slots. The HIR reference interpreter
 supports the corresponding source behavior with its existing slice storage.
 General non-owning read loans, aggregate provenance, temporary/static byte
 views and full lifetime certification remain follow-up work.
+
+### A3.2b.2 — Direct array read loans
+
+`BorrowReadArray(value, slot)` produces a full non-owning scalar array view,
+lowers to opcode 64, and is followed by `Slice` to restrict the range.
+The original initialized slot, not an SSA copy of the array, is the owner.
+A verified `BindInout` array slot denotes its caller's whole place. The same
+symbolic slot identifies reads, whole-place stores and exclusive reborrows;
+the VM resolves the actual original owner without retaining its buffer.
+Direct calls support mutable scalar arrays in addition to scalar places;
+a slice reborrow from such a parameter uses the existing slice ABI. Returning
+a slice derived from the whole-array parameter remains unsupported. Whole
+array replacement and mutation via the existing exclusive slice ABI are
+covered; direct array-index assignment and mixed whole-array/exclusive-slice
+parameter signatures are not added by this gate. Direct whole-array inout
+calls remain unsupported in the legacy HIR reference interpreter: enabling
+them requires a separate audit of its mutable array value semantics. This
+VM gate does not certify same-source HIR/VM parity for those new calls.
+Both TIR and bytecode check symbolic read provenance and liveness; direct
+read-only parameters may carry a caller's frame loan. Slice `for` lowering
+retains a typed slice value and an independent index slot instead of hiding
+the view inside an opaque iterator struct. Eager Array/Slice collection helpers
+use the same separation: a lowering-only cursor holds the collection SSA ID
+and an independent index slot; two-input helpers use two cursors. No iterator
+aggregate, new opcode, or ownership promotion is required. Results are still
+materialized as specified. Explicit `iter()` / `next()` and other legacy slice
+creation paths are not migrated by this change. Aggregate and indirect/native ABI support
+for frame loans remains conservative and is not certified by this gate.

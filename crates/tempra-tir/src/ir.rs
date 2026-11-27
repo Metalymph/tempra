@@ -83,6 +83,10 @@ pub enum TirInstr {
     InoutSliceLen(TirValueId, usize),
     /// Read-only subview of an incoming exclusive slice; bounds relative to it.
     ReadInoutSlice(TirValueId, usize, TirValueId, TirValueId),
+    /// Non-owning read view of an initialized scalar array place, including a
+    /// verified BindInout alias. Bounds are applied separately with Slice,
+    /// preserving operand evaluation order.
+    BorrowReadArray(TirValueId, TirSlotId),
     Store(TirSlotId, TirValueId),
 
     Call(TirValueId, TirFunctionId, Vec<TirValueId>),

@@ -1366,3 +1366,75 @@ fn vm_parity_a3_2b1_downgrade_preserves_independent_owner_copies() {
     assert_differential(source);
     assert_eq!(run_source_vm(source, &[]).unwrap(), VmValue::Int64(129));
 }
+
+#[test]
+fn vm_parity_a3_2b2_direct_read_loan_then_reborrow() {
+    let source = r#"
+        fn narrow(data: Slice(Int)) -> Slice(Int) { data[1..2] }
+        fn overwrite(inout data: Slice(Int)) { data[0] = 42 }
+        fn main() -> Int {
+            var data = [10, 20, 30]
+            let before = data
+            let view = narrow(data[1..3])
+            let first = view[0]
+            overwrite(inout data[2..3])
+            first + data[2] + before[2]
+        }
+    "#;
+    assert_differential(source);
+    assert_eq!(run_source_vm(source, &[]).unwrap(), VmValue::Int64(102));
+}
+
+#[test]
+fn vm_parity_a3_2b2_slice_for_statement() {
+    let source = r#"
+        fn main() -> Int {
+            let data = [10, 20, 30]
+            let view = data[1..3]
+            var sum = 0
+            for x in view { sum = sum + x }
+            sum
+        }
+    "#;
+    assert_differential(source);
+    assert_eq!(run_source_vm(source, &[]).unwrap(), VmValue::Int64(50));
+}
+
+#[test]
+fn vm_parity_a3_2b2_slice_for_expression() {
+    let source = r#"
+        fn main() -> [Int] {
+            let data = [10, 20, 30]
+            let view = data[1..3]
+            return for x in view { x * 2 }
+        }
+    "#;
+    assert_differential(source);
+}
+
+#[test]
+fn a3_2b2_cursor_fold_matches_hir_explicit_loop() {
+    // The legacy HIR interpreter does not implement eager collection helpers.
+    // Compare equivalent programs, not the same source on both backends.
+    let vm_source = r#"
+        fn digits(a: Int, b: Int) -> Int { a * 10 + b }
+        fn main() -> Int {
+            let xs = [1, 2, 3, 4]
+            let view = xs[1..4]
+            view.fold(0, digits)
+        }
+    "#;
+    let hir_source = r#"
+        fn main() -> Int {
+            let xs = [1, 2, 3, 4]
+            let view = xs[1..4]
+            var acc = 0
+            for x in view { acc = acc * 10 + x }
+            acc
+        }
+    "#;
+    let hir = normalize_hir(run_source_hir(hir_source, &[]).unwrap());
+    let vm = normalize_vm(run_source_vm(vm_source, &[]).unwrap());
+    assert_eq!(hir, NormalizedValue::Int(234));
+    assert_eq!(vm, hir);
+}

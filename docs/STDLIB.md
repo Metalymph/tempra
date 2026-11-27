@@ -92,8 +92,8 @@ capability, ownership, concurrency, and backend roadmap. Entries marked eager ex
 | `Array(T)`, `Slice(T)` | `.first() -> Option(T)` | Yes | Yes | Yes | Yes | `None` for empty collections. |
 | `Array(T)`, `Slice(T)` | `.last() -> Option(T)` | Yes | Yes | Yes | Yes | `None` for empty collections. |
 | `Array(T)`, `Slice(T)`, `String` | `.iter()` | Yes | Iterator protocol | Yes | Typechecked | `String.iter()` is byte-oriented and returns `SliceIter(UInt8)`. |
-| `ArrayIter(T)`, `SliceIter(T)` | `.next() -> Option(T)` | Yes | Stepwise | Yes | Typechecked | Used by `for` lowering and eager helpers. |
-| `Array(T)`, `Slice(T)` | `.count() -> Int` | Yes | Yes | Yes | Yes | Lowered through `iter()` / `next()`. |
+| `ArrayIter(T)`, `SliceIter(T)` | `.next() -> Option(T)` | Yes | Stepwise | Yes | Typechecked | Explicit iterator stepping; eager VM helpers use internal cursors. |
+| `Array(T)`, `Slice(T)` | `.count() -> Int` | Yes | Yes | Yes | Yes | Lowered as an indexed loop in the VM. |
 | `Array(T)`, `Slice(T)` | `.map(fn(T) -> U) -> Array(U)` | Yes | Yes | Yes | Yes | Direct top-level callback only. |
 | `Array(T)`, `Slice(T)` | `.filter(fn(T) -> Bool) -> Array(T)` | Yes | Yes | Yes | Yes | Direct top-level callback only. |
 | `Array(T)`, `Slice(T)` | `.find(fn(T) -> Bool) -> Option(T)` | Yes | Yes | Yes | Yes | First matching element. |

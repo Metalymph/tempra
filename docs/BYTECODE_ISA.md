@@ -322,3 +322,22 @@ The existing format-11 descriptions above document the previous gate. This
 extension covers direct scalar slice downgrade and typed read descriptors.
 Legacy ordinary slices/bytes and untyped aggregate/foreign/callable lifetime
 contracts are not certified by this gate.
+
+### A3.2b.2 — Frame-owned scalar array read loans
+
+`BorrowReadArray(LocalId)` (opcode 64; format 13, semantic revision 21)
+consumes no stack operands and pushes a `ReadSlice` descriptor for the entire
+initialized array local or a verified incoming whole-array `inout` parameter.
+For a parameter, the VM validates the active exclusive handle and resolves its
+original caller-frame array. `BorrowSliceMut` may reborrow that same whole
+place with explicit bounds, without acquiring a second exclusive owner token.
+The following `Slice` narrows the absolute read interval. Returning a read
+slice directly from an `inout Array` remains outside the read-return ABI.
+The owner is borrowed before either bound is evaluated. The descriptor does
+not acquire an `Rc` of the underlying buffer. A symbolic owner and the current
+value's liveness are checked before a conflicting write or exclusive borrow.
+Because array locals still use `Any`, the VM also validates the actual value.
+Typed incoming `ReadSlice` parameters are checked as potential frame loans.
+This gate does not migrate temporary, static, projected or non-scalar array
+views or string bytes. Opaque aggregate storage of frame loans is rejected
+until a structural provenance contract exists.

@@ -16,7 +16,7 @@ use tempra_vm::profile::VmOptions;
 use tempra_vm::VmValue;
 
 const CURRENT_SEMANTICS_FINGERPRINT: &str =
-    concat!("tempra-", env!("CARGO_PKG_VERSION"), "-semantics-20");
+    concat!("tempra-", env!("CARGO_PKG_VERSION"), "-semantics-21");
 
 struct CacheGuard {
     path: PathBuf,
@@ -684,5 +684,66 @@ fn a3_2b1_source_downgrade_contract_survives_encoding() {
     assert_eq!(
         tempra_vm::run_function(&decoded.module, "main", vec![]).unwrap(),
         VmValue::Int64(99)
+    );
+}
+
+#[test]
+fn a3_2b2_source_emits_read_array_loan() {
+    use tempra_bytecode::opcode::BytecodeInstr;
+    let source = "fn main() -> Int { let data = [10, 20, 30]; let view = data[1..3]; view[0] }";
+    let compilation = compile_source(source).unwrap();
+    let f = compilation
+        .bytecode()
+        .functions
+        .iter()
+        .find(|f| f.name == "main")
+        .unwrap();
+    let acquire = f
+        .code
+        .iter()
+        .position(|i| matches!(i, BytecodeInstr::BorrowReadArray(_)))
+        .unwrap();
+    let narrow = f
+        .code
+        .iter()
+        .position(|i| matches!(i, BytecodeInstr::Slice))
+        .unwrap();
+    assert!(acquire < narrow);
+    let bytes = tempra_bytecode::serialize::encode_module(compilation.bytecode()).unwrap();
+    let decoded = tempra_bytecode::serialize::decode_and_verify_artifact(&bytes).unwrap();
+    assert_eq!(
+        tempra_vm::run_function(&decoded.module, "main", vec![]).unwrap(),
+        VmValue::Int64(20)
+    );
+}
+
+#[test]
+fn a3_2b2_f01_source_emits_bound_array_read_loan() {
+    use tempra_bytecode::function::LocalId;
+    use tempra_bytecode::opcode::BytecodeInstr;
+    let source = r#"
+        fn inspect(inout data: Array(Int)) -> Int {
+            let view = data[0..2]
+            view[0] + view[1]
+        }
+        fn main() -> Int {
+            var data = [10, 20, 30]
+            inspect(inout data)
+        }
+    "#;
+    let compilation = compile_source(source).unwrap();
+    let f = compilation
+        .bytecode()
+        .functions
+        .iter()
+        .find(|f| f.name == "inspect")
+        .unwrap();
+    assert_eq!(f.inout_params, vec![true]);
+    assert!(f.code.contains(&BytecodeInstr::BorrowReadArray(LocalId(0))));
+    let bytes = tempra_bytecode::serialize::encode_module(compilation.bytecode()).unwrap();
+    let decoded = tempra_bytecode::serialize::decode_and_verify_artifact(&bytes).unwrap();
+    assert_eq!(
+        tempra_vm::run_function(&decoded.module, "main", vec![]).unwrap(),
+        VmValue::Int64(30)
     );
 }

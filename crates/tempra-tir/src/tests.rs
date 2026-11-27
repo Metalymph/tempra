@@ -1676,3 +1676,164 @@ fn a3_2b1_tir_rejects_nonexclusive_read_inout_source() {
     module.functions[0].inout_params[0] = false;
     assert!(verify_module(&module).is_err());
 }
+
+fn a3_2b2_read_array_fixture(conflict: bool) -> TirModule {
+    let mut module = ModuleBuilder::new();
+    let mut function = module.new_function("main", TirType::Int64);
+    let block = function.new_block();
+    function.set_current_block(block);
+    let ty = TirType::Array(Box::new(TirType::Int64));
+    let slot = function.build_slot(ty.clone(), Some("data")).unwrap();
+    let item = function.build_const(TirConst::Int64(7)).unwrap();
+    let array = function.build_make(ty, None, vec![item]).unwrap();
+    function.build_store(slot, array).unwrap();
+    let view = function.build_borrow_read_array(slot).unwrap();
+    if conflict {
+        function.build_store(slot, array).unwrap();
+    }
+    let len = function.build_len(view).unwrap();
+    if !conflict {
+        function.build_store(slot, array).unwrap();
+    }
+    function.build_ret(Some(len)).unwrap();
+    module.add_function(function.build());
+    module.module
+}
+
+#[test]
+fn a3_2b2_tir_accepts_owner_store_after_last_use() {
+    verify_module(&a3_2b2_read_array_fixture(false)).unwrap();
+}
+
+#[test]
+fn a3_2b2_tir_rejects_owner_store_before_last_use() {
+    let errors = verify_module(&a3_2b2_read_array_fixture(true)).unwrap_err();
+    assert!(format!("{errors:?}").contains("frame read loan is live"));
+}
+
+#[test]
+fn a3_2b2_cursor_tir_still_rejects_opaque_iterator_loan() {
+    let mut module = ModuleBuilder::new();
+    let mut function = module.new_function("main", TirType::Int64);
+    let block = function.new_block();
+    function.set_current_block(block);
+    let ty = TirType::Array(Box::new(TirType::Int64));
+    let slot = function.build_slot(ty.clone(), Some("data")).unwrap();
+    let item = function.build_const(TirConst::Int64(7)).unwrap();
+    let array = function.build_make(ty, None, vec![item]).unwrap();
+    function.build_store(slot, array).unwrap();
+    let view = function.build_borrow_read_array(slot).unwrap();
+    let zero = function.build_const(TirConst::Int64(0)).unwrap();
+    function
+        .build_make_struct(
+            "$SliceIter".into(),
+            vec![("data".into(), view), ("idx".into(), zero)],
+        )
+        .unwrap();
+    let len = function.build_len(view).unwrap();
+    function.build_ret(Some(len)).unwrap();
+    module.add_function(function.build());
+    let errors = verify_module(&module.module).unwrap_err();
+    assert!(format!("{errors:?}").contains("frame read loan escapes"));
+}
+
+fn a3_2b2_f01_tir_bound_array(conflict: bool, forward: bool) -> TirModule {
+    let mut module = ModuleBuilder::new();
+    let ty = TirType::Array(Box::new(TirType::Int64));
+    let mut sink = module.new_function("sink", TirType::Unit);
+    let block = sink.new_block();
+    sink.set_current_block(block);
+    sink.add_inout_param(ty.clone());
+    sink.build_ret(None).unwrap();
+    let sink_id = sink.func.id;
+    module.add_function(sink.build());
+
+    let mut f = module.new_function("observe", TirType::Int64);
+    let block = f.new_block();
+    f.set_current_block(block);
+    f.add_inout_param(ty.clone());
+    let slot = f.build_slot(ty.clone(), Some("data")).unwrap();
+    f.build_bind_inout(slot, 0).unwrap();
+    let view = f.build_borrow_read_array(slot).unwrap();
+    let len = if conflict {
+        None
+    } else {
+        Some(f.build_len(view).unwrap())
+    };
+    if forward {
+        let handle = f.build_borrow_inout(slot).unwrap();
+        f.build_call(sink_id, vec![handle]).unwrap();
+    } else {
+        let replacement = f.build_make(ty, None, vec![]).unwrap();
+        f.build_store(slot, replacement).unwrap();
+    }
+    let len = len.unwrap_or_else(|| f.build_len(view).unwrap());
+    f.build_ret(Some(len)).unwrap();
+    module.add_function(f.build());
+    module.module
+}
+
+#[test]
+fn a3_2b2_f01_tir_accepts_bound_array_after_last_use() {
+    for forward in [false, true] {
+        verify_module(&a3_2b2_f01_tir_bound_array(false, forward)).unwrap();
+    }
+}
+
+#[test]
+fn a3_2b2_f01_tir_rejects_bound_array_conflicts() {
+    for forward in [false, true] {
+        let errors = verify_module(&a3_2b2_f01_tir_bound_array(true, forward)).unwrap_err();
+        assert!(format!("{errors:?}").contains("frame read loan is live"));
+    }
+}
+
+#[test]
+fn a3_2b2_f01_tir_rejects_whole_array_read_return_contract() {
+    let mut module = ModuleBuilder::new();
+    let ty = TirType::Array(Box::new(TirType::Int64));
+    let mut f = module.new_function("escape", TirType::Slice(Box::new(TirType::Int64)));
+    let block = f.new_block();
+    f.set_current_block(block);
+    f.add_inout_param(ty.clone());
+    let slot = f.build_slot(ty, Some("data")).unwrap();
+    f.build_bind_inout(slot, 0).unwrap();
+    let view = f.build_borrow_read_array(slot).unwrap();
+    f.build_ret(Some(view)).unwrap();
+    f.func.return_borrow = Some(0);
+    module.add_function(f.build());
+    let errors = verify_module(&module.module).unwrap_err();
+    assert!(format!("{errors:?}").contains("read slice return must derive"));
+}
+
+#[test]
+fn a3_2b2_f01_tir_rejects_exclusive_subview_before_last_use() {
+    let mut module = ModuleBuilder::new();
+    let slice = TirType::Slice(Box::new(TirType::Int64));
+    let mut sink = module.new_function("sink", TirType::Unit);
+    let block = sink.new_block();
+    sink.set_current_block(block);
+    sink.add_inout_param(slice);
+    sink.build_ret(None).unwrap();
+    let sink_id = sink.func.id;
+    module.add_function(sink.build());
+    let mut f = module.new_function("observe", TirType::Int64);
+    let block = f.new_block();
+    f.set_current_block(block);
+    let ty = TirType::Array(Box::new(TirType::Int64));
+    f.add_inout_param(ty.clone());
+    let slot = f.build_slot(ty, Some("data")).unwrap();
+    f.build_bind_inout(slot, 0).unwrap();
+    let view = f.build_borrow_read_array(slot).unwrap();
+    let zero = f.build_const(TirConst::Int64(0)).unwrap();
+    let one = f.build_const(TirConst::Int64(1)).unwrap();
+    let handle = f
+        .build_borrow_slice_inout(TirSliceSource::Owner(slot), zero, one)
+        .unwrap();
+    f.build_call(sink_id, vec![handle]).unwrap();
+    let len = f.build_len(view).unwrap();
+    f.build_ret(Some(len)).unwrap();
+    module.add_function(f.build());
+    let errors = verify_module(&module.module).unwrap_err();
+    assert!(format!("{errors:?}").contains("frame read loan is live"));
+}

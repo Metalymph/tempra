@@ -912,3 +912,154 @@ fn test_experimental_vm_for_expr_complex_body() {
     "#;
     assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(11));
 }
+
+#[test]
+fn a3_2b2_cursor_zip_same_owner_and_empty_slice() {
+    let source = r#"
+        fn main() -> Int64 {
+            let xs = [10, 20, 30]
+            let left = xs[0..2]
+            let right = xs[1..3]
+            let empty = xs[1..1]
+            let pairs = left.zip(right)
+            let total = match pairs[1] {
+                (a, b) => a + b,
+                _ => 0,
+            }
+            total + pairs.len() + empty.zip(right).len()
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(52));
+}
+
+#[test]
+fn a3_2b2_cursor_slice_take_skip_boundaries() {
+    let source = r#"
+        fn main() -> Int64 {
+            let xs = [10, 20, 30, 40]
+            let view = xs[1..3]
+            let empty = xs[2..2]
+            let taken = view.take(1)
+            let skipped = view.skip(1)
+            taken[0] + skipped[0]
+                + view.take(0).len() + view.take(-1).len()
+                + view.take(10).len() + view.skip(-1).len()
+                + view.skip(10).len() + empty.take(1).len()
+                + empty.skip(1).len()
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(54));
+}
+
+#[test]
+fn a3_2b2_cursor_materialization_releases_source_loan() {
+    let source = r#"
+        fn overwrite(inout data: Slice(Int)) { data[0] = 42 }
+        fn main() -> Int64 {
+            var data = [10, 20, 30]
+            let before = data
+            let view = data[1..3]
+            let values = view.take(2)
+            overwrite(inout data[1..2])
+            values[0] + values[1] + data[1] + before[1]
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(112));
+}
+
+#[test]
+fn a3_2b2_cursor_receiver_evaluated_once_and_fold_order() {
+    let source = r#"
+        fn digits(a: Int, b: Int) -> Int { a * 10 + b }
+        fn make(inout calls: Int) -> [Int] {
+            calls = calls + 1
+            return [2, 3, 4]
+        }
+        fn main() -> Int64 {
+            var calls = 0
+            let folded = make(inout calls).fold(0, digits)
+            folded + calls * 1000
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(1234));
+}
+
+#[test]
+fn a3_2b2_cursor_scalar_slice_functional_helpers() {
+    let source = r#"
+        fn twice(x: Int) -> Int { x * 2 }
+        fn large(x: Int) -> Bool { x > 2 }
+        fn visit(x: Int) {}
+        fn digits(a: Int, b: Int) -> Int { a * 10 + b }
+        fn main() -> Int64 {
+            let xs = [1, 2, 3, 4]
+            let view = xs[1..4]
+            let empty = xs[0..0]
+            let mapped = view.map(twice)
+            let filtered = view.filter(large)
+            view.for_each(visit)
+            if !view.any(large) || view.all(large) || !empty.all(large) || empty.any(large) {
+                return 0
+            }
+            let empty_reduced = empty.reduce(digits)
+            if empty_reduced is Some(v) { return v }
+            let found = view.find(large)
+            let first = match found {
+                Some(v) => v,
+                None => 0,
+            }
+            let reduction = view.reduce(digits)
+            let reduced = match reduction {
+                Some(v) => v,
+                None => 0,
+            }
+            mapped[0] + mapped[2] + filtered[0] + filtered.len() + first
+                + view.count() + reduced + empty.fold(7, digits)
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(264));
+}
+
+#[test]
+fn a3_2b2_f01_array_reborrow_then_replace() {
+    let source = r#"
+        fn inspect(inout data: Array(Int)) -> Int {
+            let view = data[0..2]
+            let old = view[0] + view[1]
+            data = [7, 8]
+            let current = data[0..1]
+            old + current[0]
+        }
+        fn main() -> Int {
+            var data = [10, 20, 30]
+            let before = data
+            let result = inspect(inout data)
+            result + data[0] + before[0]
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(54));
+}
+
+#[test]
+fn a3_2b2_f01_nested_array_forwarding_and_slice_mutation() {
+    let source = r#"
+        fn read(data: Slice(Int)) -> Int { data[0] }
+        fn overwrite(inout data: Slice(Int)) { data[0] = 42 }
+        fn step(inout data: Array(Int)) -> Int {
+            let view = data[0..3]
+            let sub = view[1..2]
+            let first = read(sub)
+            overwrite(inout data[1..2])
+            let second = data[1..2]
+            first + read(second)
+        }
+        fn forward(inout data: Array(Int)) -> Int { step(inout data) }
+        fn main() -> Int {
+            var data = [10, 20, 30]
+            let before = data
+            let result = forward(inout data)
+            result + data[1] + before[1]
+        }
+    "#;
+    assert_eq!(run_source(source, "main", vec![]), VmValue::Int64(124));
+}

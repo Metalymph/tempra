@@ -82,6 +82,9 @@ pub enum BytecodeInstr {
     InoutSliceLen(LocalId),
     /// Produce a non-owning read view of an exclusive slice parameter.
     ReadInoutSlice(LocalId),
+    /// Produce a full read-only loan of an array place, owned or incoming
+    /// whole-place inout (no stack operands).
+    BorrowReadArray(LocalId),
 
     // Enum-like
     MakeEnum(ConstId, ConstId, u16), // enum_name, variant_name, payload_count
@@ -108,7 +111,7 @@ pub enum BytecodeInstr {
     AddI64LC(LocalId, ConstId), // LoadLocal a; ConstI64 b; AddI64
 }
 
-pub const BYTECODE_OPCODE_COUNT: usize = 64;
+pub const BYTECODE_OPCODE_COUNT: usize = 65;
 
 impl BytecodeInstr {
     pub fn opcode_id(&self) -> usize {
@@ -177,6 +180,7 @@ impl BytecodeInstr {
             BytecodeInstr::InoutSliceSet(_) => 61,
             BytecodeInstr::InoutSliceLen(_) => 62,
             BytecodeInstr::ReadInoutSlice(_) => 63,
+            BytecodeInstr::BorrowReadArray(_) => 64,
         }
     }
 
@@ -246,6 +250,7 @@ impl BytecodeInstr {
             BytecodeInstr::InoutSliceSet(_) => "InoutSliceSet",
             BytecodeInstr::InoutSliceLen(_) => "InoutSliceLen",
             BytecodeInstr::ReadInoutSlice(_) => "ReadInoutSlice",
+            BytecodeInstr::BorrowReadArray(_) => "BorrowReadArray",
         }
     }
 }
@@ -323,6 +328,15 @@ pub fn stack_effect(
         BytecodeInstr::InoutSliceSet(_) => StackEffect { pops: 2, pushes: 0 },
         BytecodeInstr::InoutSliceLen(_) => StackEffect { pops: 0, pushes: 1 },
         BytecodeInstr::ReadInoutSlice(_) => StackEffect { pops: 2, pushes: 1 },
+        BytecodeInstr::BorrowReadArray(id) => {
+            if id.0 as usize >= func.locals.len() {
+                return Err(BytecodeError::Message(format!(
+                    "read array owner local ${} is out of bounds",
+                    id.0
+                )));
+            }
+            StackEffect { pops: 0, pushes: 1 }
+        }
         BytecodeInstr::BorrowLocal(id) | BytecodeInstr::BorrowLocalMut(id) => {
             if id.0 as usize >= func.locals.len() {
                 return Err(BytecodeError::Message(format!(

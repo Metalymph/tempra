@@ -164,6 +164,16 @@ impl FunctionBuilder {
         Ok(id)
     }
 
+    /// Acquire a read-only view of a scalar array's original owner or verified inout place.
+    pub fn build_borrow_read_array(
+        &mut self,
+        slot: TirSlotId,
+    ) -> Result<TirValueId, TirBuildError> {
+        let id = self.next_value();
+        self.push_instr(TirInstr::BorrowReadArray(id, slot))?;
+        Ok(id)
+    }
+
     pub fn new_block(&mut self) -> TirBlockId {
         let id = TirBlockId(self.func.next_block_id);
         self.func.next_block_id += 1;

@@ -271,6 +271,13 @@ fn resolve_hir_type(
     }
 }
 
+/// Lowering-only loop state, never materialized as a runtime aggregate.
+#[derive(Clone, Copy)]
+struct CollectionCursor {
+    data: TirValueId,
+    index_slot: TirSlotId,
+}
+
 pub struct LowerContext<'a> {
     pub builder: FunctionBuilder,
     pub type_ctx: &'a TypeContext,
@@ -906,21 +913,32 @@ impl<'a> LowerContext<'a> {
             iter_val
         };
         let zero = self.builder.build_const(TirConst::Int64(0))?;
-        let struct_name = if matches!(iterable_ty, Type::Array(_)) {
-            "$ArrayIter"
+        // Slice iteration retains the typed data SSA value and a separate
+        // index slot, rather than laundering a read loan through a struct.
+        let slice_iteration = matches!(iterable_ty, Type::Slice(_));
+        let iter_slot = if slice_iteration {
+            let slot = self
+                .builder
+                .build_slot(TirType::Int64, Some("$slice_idx"))?;
+            self.builder.build_store(slot, zero)?;
+            slot
         } else {
-            "$SliceIter"
+            let struct_name = if matches!(iterable_ty, Type::Array(_)) {
+                "$ArrayIter"
+            } else {
+                "$SliceIter"
+            };
+            let iter_struct = self.builder.build_make_struct(
+                struct_name.to_string(),
+                vec![("data".to_string(), data_val), ("idx".to_string(), zero)],
+            )?;
+            let slot = self.builder.build_slot(
+                TirType::Struct(struct_name.to_string()),
+                Some(&format!("$it_{}", f.span.start)),
+            )?;
+            self.builder.build_store(slot, iter_struct)?;
+            slot
         };
-        let iter_struct = self.builder.build_make_struct(
-            struct_name.to_string(),
-            vec![("data".to_string(), data_val), ("idx".to_string(), zero)],
-        )?;
-
-        let tir_iter_ty = TirType::Struct(struct_name.to_string());
-        let iter_slot = self
-            .builder
-            .build_slot(tir_iter_ty, Some(&format!("$it_{}", f.span.start)))?;
-        self.builder.build_store(iter_slot, iter_struct)?;
 
         // 2. Create blocks
         let cond_block = self.builder.new_block();
@@ -932,12 +950,17 @@ impl<'a> LowerContext<'a> {
         // 3. Condition block — inline next() logic
         self.builder.set_current_block(cond_block);
         let loaded_it = self.builder.build_load(iter_slot)?;
-        let data_val = self
-            .builder
-            .build_get(loaded_it, tempra_tir::ir::TirKey::Field("data".to_string()))?;
-        let idx_val = self
-            .builder
-            .build_get(loaded_it, tempra_tir::ir::TirKey::Field("idx".to_string()))?;
+        let (data_val, idx_val) = if slice_iteration {
+            (data_val, loaded_it)
+        } else {
+            let data = self
+                .builder
+                .build_get(loaded_it, tempra_tir::ir::TirKey::Field("data".to_string()))?;
+            let index = self
+                .builder
+                .build_get(loaded_it, tempra_tir::ir::TirKey::Field("idx".to_string()))?;
+            (data, index)
+        };
         let len_val = self.builder.build_len(data_val)?;
         let is_less = self.builder.build_lt(idx_val, len_val)?;
         self.builder.build_condbr(is_less, body_block, exit_block)?;
@@ -971,11 +994,15 @@ impl<'a> LowerContext<'a> {
         if !self.builder.is_terminated() {
             let one = self.builder.build_const(TirConst::Int64(1))?;
             let next_idx = self.builder.build_add(idx_val, one)?;
-            let updated_it = self.builder.build_set(
-                loaded_it,
-                tempra_tir::ir::TirKey::Field("idx".to_string()),
-                next_idx,
-            )?;
+            let updated_it = if slice_iteration {
+                next_idx
+            } else {
+                self.builder.build_set(
+                    loaded_it,
+                    tempra_tir::ir::TirKey::Field("idx".to_string()),
+                    next_idx,
+                )?
+            };
             self.builder.build_store(iter_slot, updated_it)?;
             self.builder.build_br(cond_block)?;
         }
@@ -1214,21 +1241,32 @@ impl<'a> LowerContext<'a> {
             iter_val
         };
         let zero = self.builder.build_const(TirConst::Int64(0))?;
-        let struct_name = if matches!(iterable_ty, Type::Array(_)) {
-            "$ArrayIter"
+        // Slice iteration retains the typed data SSA value and a separate
+        // index slot, rather than laundering a read loan through a struct.
+        let slice_iteration = matches!(iterable_ty, Type::Slice(_));
+        let iter_slot = if slice_iteration {
+            let slot = self
+                .builder
+                .build_slot(TirType::Int64, Some("$slice_idx"))?;
+            self.builder.build_store(slot, zero)?;
+            slot
         } else {
-            "$SliceIter"
+            let struct_name = if matches!(iterable_ty, Type::Array(_)) {
+                "$ArrayIter"
+            } else {
+                "$SliceIter"
+            };
+            let iter_struct = self.builder.build_make_struct(
+                struct_name.to_string(),
+                vec![("data".to_string(), data_val), ("idx".to_string(), zero)],
+            )?;
+            let slot = self.builder.build_slot(
+                TirType::Struct(struct_name.to_string()),
+                Some(&format!("$it_{}", f.span.start)),
+            )?;
+            self.builder.build_store(slot, iter_struct)?;
+            slot
         };
-        let iter_struct = self.builder.build_make_struct(
-            struct_name.to_string(),
-            vec![("data".to_string(), data_val), ("idx".to_string(), zero)],
-        )?;
-
-        let tir_iter_ty = TirType::Struct(struct_name.to_string());
-        let iter_slot = self
-            .builder
-            .build_slot(tir_iter_ty, Some(&format!("$it_{}", f.span.start)))?;
-        self.builder.build_store(iter_slot, iter_struct)?;
 
         // 4. Create blocks
         let cond_block = self.builder.new_block();
@@ -1240,12 +1278,17 @@ impl<'a> LowerContext<'a> {
         // 5. Condition block — inline next() logic
         self.builder.set_current_block(cond_block);
         let loaded_it = self.builder.build_load(iter_slot)?;
-        let data_val = self
-            .builder
-            .build_get(loaded_it, tempra_tir::ir::TirKey::Field("data".to_string()))?;
-        let idx_val = self
-            .builder
-            .build_get(loaded_it, tempra_tir::ir::TirKey::Field("idx".to_string()))?;
+        let (data_val, idx_val) = if slice_iteration {
+            (data_val, loaded_it)
+        } else {
+            let data = self
+                .builder
+                .build_get(loaded_it, tempra_tir::ir::TirKey::Field("data".to_string()))?;
+            let index = self
+                .builder
+                .build_get(loaded_it, tempra_tir::ir::TirKey::Field("idx".to_string()))?;
+            (data, index)
+        };
         let len_val = self.builder.build_len(data_val)?;
         let is_less = self.builder.build_lt(idx_val, len_val)?;
         self.builder.build_condbr(is_less, body_block, exit_block)?;
@@ -1300,11 +1343,15 @@ impl<'a> LowerContext<'a> {
         if !self.builder.is_terminated() {
             let one = self.builder.build_const(TirConst::Int64(1))?;
             let next_idx = self.builder.build_add(idx_val, one)?;
-            let updated_it = self.builder.build_set(
-                loaded_it,
-                tempra_tir::ir::TirKey::Field("idx".to_string()),
-                next_idx,
-            )?;
+            let updated_it = if slice_iteration {
+                next_idx
+            } else {
+                self.builder.build_set(
+                    loaded_it,
+                    tempra_tir::ir::TirKey::Field("idx".to_string()),
+                    next_idx,
+                )?
+            };
             self.builder.build_store(iter_slot, updated_it)?;
             self.builder.build_br(cond_block)?;
         }
@@ -1420,70 +1467,61 @@ impl<'a> LowerContext<'a> {
         Ok(qualified_name)
     }
 
-    fn build_collection_iterator(
+    /// Evaluate the collection once. Keep its typed SSA value visible to the
+    /// loan verifier; only the index needs mutable storage across iterations.
+    fn build_collection_cursor(
         &mut self,
         object: &HirExpression,
         obj_ty: &Type,
         span: Span,
-    ) -> Result<TirSlotId, TirLowerError> {
-        let obj = self.lower_expression(object)?;
+    ) -> Result<CollectionCursor, TirLowerError> {
+        if !matches!(obj_ty, Type::Array(_) | Type::Slice(_)) {
+            return Err(TirLowerError::UnsupportedExpr(
+                format!("collection helper requires Array/Slice, found {}", obj_ty),
+                span,
+            ));
+        }
+        let data = self.lower_expression(object)?;
         let zero = self.builder.build_const(TirConst::Int64(0))?;
-        let struct_name = match obj_ty {
-            Type::Array(_) => "$ArrayIter",
-            Type::Slice(_) => "$SliceIter",
-            _ => {
-                return Err(TirLowerError::UnsupportedExpr(
-                    format!("collection helper requires Array/Slice, found {}", obj_ty),
-                    span,
-                ))
-            }
-        };
-        let iter_struct = self.builder.build_make_struct(
-            struct_name.to_string(),
-            vec![("data".to_string(), obj), ("idx".to_string(), zero)],
+        let index_slot = self.builder.build_slot(
+            TirType::Int64,
+            Some(&format!("$functional_idx_{}", span.start)),
         )?;
-        let iter_slot = self.builder.build_slot(
-            TirType::Struct(struct_name.to_string()),
-            Some(&format!("$functional_it_{}", span.start)),
-        )?;
-        self.builder.build_store(iter_slot, iter_struct)?;
-        Ok(iter_slot)
+        self.builder.build_store(index_slot, zero)?;
+        Ok(CollectionCursor { data, index_slot })
     }
 
     fn build_collection_loop_cond(
         &mut self,
-        iter_slot: TirSlotId,
+        cursor: CollectionCursor,
         body_block: TirBlockId,
         exit_block: TirBlockId,
-    ) -> Result<(TirValueId, TirValueId, TirValueId), TirLowerError> {
-        let loaded_it = self.builder.build_load(iter_slot)?;
-        let data_val = self
-            .builder
-            .build_get(loaded_it, tempra_tir::ir::TirKey::Field("data".to_string()))?;
-        let idx_val = self
-            .builder
-            .build_get(loaded_it, tempra_tir::ir::TirKey::Field("idx".to_string()))?;
-        let len_val = self.builder.build_len(data_val)?;
+    ) -> Result<(TirValueId, TirValueId), TirLowerError> {
+        let idx_val = self.builder.build_load(cursor.index_slot)?;
+        let len_val = self.builder.build_len(cursor.data)?;
         let is_less = self.builder.build_lt(idx_val, len_val)?;
         self.builder.build_condbr(is_less, body_block, exit_block)?;
-        Ok((loaded_it, data_val, idx_val))
+        Ok((cursor.data, idx_val))
+    }
+
+    fn advance_collection_cursor(
+        &mut self,
+        cursor: CollectionCursor,
+        idx_val: TirValueId,
+    ) -> Result<(), TirLowerError> {
+        let one = self.builder.build_const(TirConst::Int64(1))?;
+        let next_idx = self.builder.build_add(idx_val, one)?;
+        self.builder.build_store(cursor.index_slot, next_idx)?;
+        Ok(())
     }
 
     fn build_collection_loop_continue(
         &mut self,
-        loaded_it: TirValueId,
+        cursor: CollectionCursor,
         idx_val: TirValueId,
-        iter_slot: TirSlotId,
         cond_block: TirBlockId,
     ) -> Result<(), TirLowerError> {
-        let one = self.builder.build_const(TirConst::Int64(1))?;
-        let next_idx = self.builder.build_add(idx_val, one)?;
-        let updated_it = self.builder.build_set(
-            loaded_it,
-            tempra_tir::ir::TirKey::Field("idx".to_string()),
-            next_idx,
-        )?;
-        self.builder.build_store(iter_slot, updated_it)?;
+        self.advance_collection_cursor(cursor, idx_val)?;
         self.builder.build_br(cond_block)?;
         Ok(())
     }
@@ -1509,7 +1547,7 @@ impl<'a> LowerContext<'a> {
                     ));
                 }
 
-                let iter_slot = self.build_collection_iterator(object, obj_ty, span)?;
+                let cursor = self.build_collection_cursor(object, obj_ty, span)?;
                 let zero = self.builder.build_const(TirConst::Int64(0))?;
                 let count_slot = self
                     .builder
@@ -1522,15 +1560,15 @@ impl<'a> LowerContext<'a> {
                 self.builder.build_br(cond_block)?;
 
                 self.builder.set_current_block(cond_block);
-                let (loaded_it, _data_val, idx_val) =
-                    self.build_collection_loop_cond(iter_slot, body_block, exit_block)?;
+                let (_data_val, idx_val) =
+                    self.build_collection_loop_cond(cursor, body_block, exit_block)?;
 
                 self.builder.set_current_block(body_block);
                 let current = self.builder.build_load(count_slot)?;
                 let one = self.builder.build_const(TirConst::Int64(1))?;
                 let next = self.builder.build_add(current, one)?;
                 self.builder.build_store(count_slot, next)?;
-                self.build_collection_loop_continue(loaded_it, idx_val, iter_slot, cond_block)?;
+                self.build_collection_loop_continue(cursor, idx_val, cond_block)?;
 
                 self.builder.set_current_block(exit_block);
                 return self
@@ -1563,15 +1601,15 @@ impl<'a> LowerContext<'a> {
                 )?;
                 self.builder.build_store(index_slot, zero)?;
 
-                let iter_slot = self.build_collection_iterator(object, obj_ty, span)?;
+                let cursor = self.build_collection_cursor(object, obj_ty, span)?;
                 let cond_block = self.builder.new_block();
                 let body_block = self.builder.new_block();
                 let exit_block = self.builder.new_block();
                 self.builder.build_br(cond_block)?;
 
                 self.builder.set_current_block(cond_block);
-                let (loaded_it, data_val, idx_val) =
-                    self.build_collection_loop_cond(iter_slot, body_block, exit_block)?;
+                let (data_val, idx_val) =
+                    self.build_collection_loop_cond(cursor, body_block, exit_block)?;
 
                 self.builder.set_current_block(body_block);
                 let item_val = self.builder.build_get_index(data_val, idx_val)?;
@@ -1586,7 +1624,7 @@ impl<'a> LowerContext<'a> {
                 let one = self.builder.build_const(TirConst::Int64(1))?;
                 let next_index = self.builder.build_add(index_val, one)?;
                 self.builder.build_store(index_slot, next_index)?;
-                self.build_collection_loop_continue(loaded_it, idx_val, iter_slot, cond_block)?;
+                self.build_collection_loop_continue(cursor, idx_val, cond_block)?;
 
                 self.builder.set_current_block(exit_block);
                 return self
@@ -1633,36 +1671,21 @@ impl<'a> LowerContext<'a> {
                     .build_slot(arr_ty, Some(&format!("$zip_res_{}", span.start)))?;
                 self.builder.build_store(result_slot, empty)?;
 
-                let left_iter_slot = self.build_collection_iterator(object, obj_ty, span)?;
-                let right_iter_slot =
-                    self.build_collection_iterator(other_expr, &other_ty, span)?;
+                let left_cursor = self.build_collection_cursor(object, obj_ty, span)?;
+                let right_cursor = self.build_collection_cursor(other_expr, &other_ty, span)?;
                 let cond_block = self.builder.new_block();
                 let body_block = self.builder.new_block();
                 let exit_block = self.builder.new_block();
                 self.builder.build_br(cond_block)?;
 
                 self.builder.set_current_block(cond_block);
-                let loaded_left = self.builder.build_load(left_iter_slot)?;
-                let left_data = self.builder.build_get(
-                    loaded_left,
-                    tempra_tir::ir::TirKey::Field("data".to_string()),
-                )?;
-                let left_idx = self.builder.build_get(
-                    loaded_left,
-                    tempra_tir::ir::TirKey::Field("idx".to_string()),
-                )?;
+                let left_data = left_cursor.data;
+                let left_idx = self.builder.build_load(left_cursor.index_slot)?;
                 let left_len = self.builder.build_len(left_data)?;
                 let left_has = self.builder.build_lt(left_idx, left_len)?;
 
-                let loaded_right = self.builder.build_load(right_iter_slot)?;
-                let right_data = self.builder.build_get(
-                    loaded_right,
-                    tempra_tir::ir::TirKey::Field("data".to_string()),
-                )?;
-                let right_idx = self.builder.build_get(
-                    loaded_right,
-                    tempra_tir::ir::TirKey::Field("idx".to_string()),
-                )?;
+                let right_data = right_cursor.data;
+                let right_idx = self.builder.build_load(right_cursor.index_slot)?;
                 let right_len = self.builder.build_len(right_data)?;
                 let right_has = self.builder.build_lt(right_idx, right_len)?;
                 let both_have = self.builder.build_and(left_has, right_has)?;
@@ -1679,23 +1702,9 @@ impl<'a> LowerContext<'a> {
                 let next = self.builder.build_array_push(current, tuple_val)?;
                 self.builder.build_store(result_slot, next)?;
 
-                let one_left = self.builder.build_const(TirConst::Int64(1))?;
-                let next_left_idx = self.builder.build_add(left_idx, one_left)?;
-                let updated_left = self.builder.build_set(
-                    loaded_left,
-                    tempra_tir::ir::TirKey::Field("idx".to_string()),
-                    next_left_idx,
-                )?;
-                self.builder.build_store(left_iter_slot, updated_left)?;
+                self.advance_collection_cursor(left_cursor, left_idx)?;
 
-                let one_right = self.builder.build_const(TirConst::Int64(1))?;
-                let next_right_idx = self.builder.build_add(right_idx, one_right)?;
-                let updated_right = self.builder.build_set(
-                    loaded_right,
-                    tempra_tir::ir::TirKey::Field("idx".to_string()),
-                    next_right_idx,
-                )?;
-                self.builder.build_store(right_iter_slot, updated_right)?;
+                self.advance_collection_cursor(right_cursor, right_idx)?;
                 self.builder.build_br(cond_block)?;
 
                 self.builder.set_current_block(exit_block);
@@ -1741,20 +1750,15 @@ impl<'a> LowerContext<'a> {
                 )?;
                 self.builder.build_store(remaining_slot, remaining)?;
 
-                let iter_slot = self.build_collection_iterator(object, obj_ty, span)?;
+                let cursor = self.build_collection_cursor(object, obj_ty, span)?;
                 let cond_block = self.builder.new_block();
                 let body_block = self.builder.new_block();
                 let exit_block = self.builder.new_block();
                 self.builder.build_br(cond_block)?;
 
                 self.builder.set_current_block(cond_block);
-                let loaded_it = self.builder.build_load(iter_slot)?;
-                let data_val = self
-                    .builder
-                    .build_get(loaded_it, tempra_tir::ir::TirKey::Field("data".to_string()))?;
-                let idx_val = self
-                    .builder
-                    .build_get(loaded_it, tempra_tir::ir::TirKey::Field("idx".to_string()))?;
+                let data_val = cursor.data;
+                let idx_val = self.builder.build_load(cursor.index_slot)?;
                 let len_val = self.builder.build_len(data_val)?;
                 let has_item = self.builder.build_lt(idx_val, len_val)?;
                 let remaining_val = self.builder.build_load(remaining_slot)?;
@@ -1773,7 +1777,7 @@ impl<'a> LowerContext<'a> {
                 let one = self.builder.build_const(TirConst::Int64(1))?;
                 let next_remaining = self.builder.build_sub(remaining_val, one)?;
                 self.builder.build_store(remaining_slot, next_remaining)?;
-                self.build_collection_loop_continue(loaded_it, idx_val, iter_slot, cond_block)?;
+                self.build_collection_loop_continue(cursor, idx_val, cond_block)?;
 
                 self.builder.set_current_block(exit_block);
                 return self
@@ -1818,7 +1822,7 @@ impl<'a> LowerContext<'a> {
                 )?;
                 self.builder.build_store(remaining_slot, remaining)?;
 
-                let iter_slot = self.build_collection_iterator(object, obj_ty, span)?;
+                let cursor = self.build_collection_cursor(object, obj_ty, span)?;
                 let skip_cond_block = self.builder.new_block();
                 let skip_body_block = self.builder.new_block();
                 let collect_cond_block = self.builder.new_block();
@@ -1827,15 +1831,8 @@ impl<'a> LowerContext<'a> {
                 self.builder.build_br(skip_cond_block)?;
 
                 self.builder.set_current_block(skip_cond_block);
-                let loaded_skip_it = self.builder.build_load(iter_slot)?;
-                let skip_data_val = self.builder.build_get(
-                    loaded_skip_it,
-                    tempra_tir::ir::TirKey::Field("data".to_string()),
-                )?;
-                let skip_idx_val = self.builder.build_get(
-                    loaded_skip_it,
-                    tempra_tir::ir::TirKey::Field("idx".to_string()),
-                )?;
+                let skip_data_val = cursor.data;
+                let skip_idx_val = self.builder.build_load(cursor.index_slot)?;
                 let skip_len_val = self.builder.build_len(skip_data_val)?;
                 let has_item = self.builder.build_lt(skip_idx_val, skip_len_val)?;
                 let remaining_val = self.builder.build_load(remaining_slot)?;
@@ -1849,16 +1846,11 @@ impl<'a> LowerContext<'a> {
                 let one = self.builder.build_const(TirConst::Int64(1))?;
                 let next_remaining = self.builder.build_sub(remaining_val, one)?;
                 self.builder.build_store(remaining_slot, next_remaining)?;
-                self.build_collection_loop_continue(
-                    loaded_skip_it,
-                    skip_idx_val,
-                    iter_slot,
-                    skip_cond_block,
-                )?;
+                self.build_collection_loop_continue(cursor, skip_idx_val, skip_cond_block)?;
 
                 self.builder.set_current_block(collect_cond_block);
-                let (loaded_collect_it, collect_data_val, collect_idx_val) =
-                    self.build_collection_loop_cond(iter_slot, collect_body_block, exit_block)?;
+                let (collect_data_val, collect_idx_val) =
+                    self.build_collection_loop_cond(cursor, collect_body_block, exit_block)?;
 
                 self.builder.set_current_block(collect_body_block);
                 let item_val = self
@@ -1867,12 +1859,7 @@ impl<'a> LowerContext<'a> {
                 let current = self.builder.build_load(result_slot)?;
                 let next = self.builder.build_array_push(current, item_val)?;
                 self.builder.build_store(result_slot, next)?;
-                self.build_collection_loop_continue(
-                    loaded_collect_it,
-                    collect_idx_val,
-                    iter_slot,
-                    collect_cond_block,
-                )?;
+                self.build_collection_loop_continue(cursor, collect_idx_val, collect_cond_block)?;
 
                 self.builder.set_current_block(exit_block);
                 return self
@@ -1929,9 +1916,8 @@ impl<'a> LowerContext<'a> {
                     .build_slot(arr_ty, Some(&format!("$chain_res_{}", span.start)))?;
                 self.builder.build_store(result_slot, empty)?;
 
-                let left_iter_slot = self.build_collection_iterator(object, obj_ty, span)?;
-                let right_iter_slot =
-                    self.build_collection_iterator(other_expr, &other_ty, span)?;
+                let left_cursor = self.build_collection_cursor(object, obj_ty, span)?;
+                let right_cursor = self.build_collection_cursor(other_expr, &other_ty, span)?;
 
                 let left_cond_block = self.builder.new_block();
                 let left_body_block = self.builder.new_block();
@@ -1941,8 +1927,8 @@ impl<'a> LowerContext<'a> {
                 self.builder.build_br(left_cond_block)?;
 
                 self.builder.set_current_block(left_cond_block);
-                let (loaded_left, left_data, left_idx) = self.build_collection_loop_cond(
-                    left_iter_slot,
+                let (left_data, left_idx) = self.build_collection_loop_cond(
+                    left_cursor,
                     left_body_block,
                     right_cond_block,
                 )?;
@@ -1952,28 +1938,18 @@ impl<'a> LowerContext<'a> {
                 let current = self.builder.build_load(result_slot)?;
                 let next = self.builder.build_array_push(current, left_item)?;
                 self.builder.build_store(result_slot, next)?;
-                self.build_collection_loop_continue(
-                    loaded_left,
-                    left_idx,
-                    left_iter_slot,
-                    left_cond_block,
-                )?;
+                self.build_collection_loop_continue(left_cursor, left_idx, left_cond_block)?;
 
                 self.builder.set_current_block(right_cond_block);
-                let (loaded_right, right_data, right_idx) =
-                    self.build_collection_loop_cond(right_iter_slot, right_body_block, exit_block)?;
+                let (right_data, right_idx) =
+                    self.build_collection_loop_cond(right_cursor, right_body_block, exit_block)?;
 
                 self.builder.set_current_block(right_body_block);
                 let right_item = self.builder.build_get_index(right_data, right_idx)?;
                 let current = self.builder.build_load(result_slot)?;
                 let next = self.builder.build_array_push(current, right_item)?;
                 self.builder.build_store(result_slot, next)?;
-                self.build_collection_loop_continue(
-                    loaded_right,
-                    right_idx,
-                    right_iter_slot,
-                    right_cond_block,
-                )?;
+                self.build_collection_loop_continue(right_cursor, right_idx, right_cond_block)?;
 
                 self.builder.set_current_block(exit_block);
                 return self
@@ -2018,15 +1994,15 @@ impl<'a> LowerContext<'a> {
                     .build_slot(acc_ty.clone(), Some(&format!("$fold_acc_{}", span.start)))?;
                 self.builder.build_store(acc_slot, init_val)?;
 
-                let iter_slot = self.build_collection_iterator(object, obj_ty, span)?;
+                let cursor = self.build_collection_cursor(object, obj_ty, span)?;
                 let cond_block = self.builder.new_block();
                 let body_block = self.builder.new_block();
                 let exit_block = self.builder.new_block();
                 self.builder.build_br(cond_block)?;
 
                 self.builder.set_current_block(cond_block);
-                let (loaded_it, data_val, idx_val) =
-                    self.build_collection_loop_cond(iter_slot, body_block, exit_block)?;
+                let (data_val, idx_val) =
+                    self.build_collection_loop_cond(cursor, body_block, exit_block)?;
 
                 self.builder.set_current_block(body_block);
                 let item_val = self.builder.build_get_index(data_val, idx_val)?;
@@ -2035,7 +2011,7 @@ impl<'a> LowerContext<'a> {
                     .builder
                     .build_call(callback_id, vec![acc_val, item_val])?;
                 self.builder.build_store(acc_slot, next_acc)?;
-                self.build_collection_loop_continue(loaded_it, idx_val, iter_slot, cond_block)?;
+                self.build_collection_loop_continue(cursor, idx_val, cond_block)?;
 
                 self.builder.set_current_block(exit_block);
                 return self
@@ -2067,7 +2043,7 @@ impl<'a> LowerContext<'a> {
                     Some(&format!("$reduce_acc_{}", span.start)),
                 )?;
 
-                let iter_slot = self.build_collection_iterator(object, obj_ty, span)?;
+                let cursor = self.build_collection_cursor(object, obj_ty, span)?;
                 let first_cond_block = self.builder.new_block();
                 let first_body_block = self.builder.new_block();
                 let cond_block = self.builder.new_block();
@@ -2077,17 +2053,17 @@ impl<'a> LowerContext<'a> {
                 self.builder.build_br(first_cond_block)?;
 
                 self.builder.set_current_block(first_cond_block);
-                let (loaded_it, data_val, idx_val) =
-                    self.build_collection_loop_cond(iter_slot, first_body_block, exit_block)?;
+                let (data_val, idx_val) =
+                    self.build_collection_loop_cond(cursor, first_body_block, exit_block)?;
 
                 self.builder.set_current_block(first_body_block);
                 let first_val = self.builder.build_get_index(data_val, idx_val)?;
                 self.builder.build_store(acc_slot, first_val)?;
-                self.build_collection_loop_continue(loaded_it, idx_val, iter_slot, cond_block)?;
+                self.build_collection_loop_continue(cursor, idx_val, cond_block)?;
 
                 self.builder.set_current_block(cond_block);
-                let (loaded_it, data_val, idx_val) =
-                    self.build_collection_loop_cond(iter_slot, body_block, done_block)?;
+                let (data_val, idx_val) =
+                    self.build_collection_loop_cond(cursor, body_block, done_block)?;
 
                 self.builder.set_current_block(body_block);
                 let item_val = self.builder.build_get_index(data_val, idx_val)?;
@@ -2096,7 +2072,7 @@ impl<'a> LowerContext<'a> {
                     .builder
                     .build_call(callback_id, vec![acc_val, item_val])?;
                 self.builder.build_store(acc_slot, next_acc)?;
-                self.build_collection_loop_continue(loaded_it, idx_val, iter_slot, cond_block)?;
+                self.build_collection_loop_continue(cursor, idx_val, cond_block)?;
 
                 self.builder.set_current_block(done_block);
                 let final_acc = self.builder.build_load(acc_slot)?;
@@ -2133,7 +2109,7 @@ impl<'a> LowerContext<'a> {
         let callback_id = self.module_builder.declare_function(&callback_name);
         let elem_tir_ty = map_type(&elem_ty)?;
 
-        let iter_slot = self.build_collection_iterator(object, obj_ty, span)?;
+        let cursor = self.build_collection_cursor(object, obj_ty, span)?;
         let result_slot = match method {
             "map" => {
                 let out_ty = map_type(&callback_sig.return_type)?;
@@ -2191,8 +2167,8 @@ impl<'a> LowerContext<'a> {
         self.builder.build_br(cond_block)?;
 
         self.builder.set_current_block(cond_block);
-        let (loaded_it, data_val, idx_val) =
-            self.build_collection_loop_cond(iter_slot, body_block, exit_block)?;
+        let (data_val, idx_val) =
+            self.build_collection_loop_cond(cursor, body_block, exit_block)?;
 
         self.builder.set_current_block(body_block);
         let item_val = self.builder.build_get_index(data_val, idx_val)?;
@@ -2204,7 +2180,7 @@ impl<'a> LowerContext<'a> {
                 let cur = self.builder.build_load(slot)?;
                 let next = self.builder.build_array_push(cur, callback_val)?;
                 self.builder.build_store(slot, next)?;
-                self.build_collection_loop_continue(loaded_it, idx_val, iter_slot, cond_block)?;
+                self.build_collection_loop_continue(cursor, idx_val, cond_block)?;
             }
             "filter" => {
                 let push_block = self.builder.new_block();
@@ -2224,7 +2200,7 @@ impl<'a> LowerContext<'a> {
                 self.builder.build_br(cont_block)?;
 
                 self.builder.set_current_block(cont_block);
-                self.build_collection_loop_continue(loaded_it, idx_val, iter_slot, cond_block)?;
+                self.build_collection_loop_continue(cursor, idx_val, cond_block)?;
             }
             "find" => {
                 let found_block = self.builder.new_block();
@@ -2242,7 +2218,7 @@ impl<'a> LowerContext<'a> {
                 self.builder.build_br(exit_block)?;
 
                 self.builder.set_current_block(next_block);
-                self.build_collection_loop_continue(loaded_it, idx_val, iter_slot, cond_block)?;
+                self.build_collection_loop_continue(cursor, idx_val, cond_block)?;
             }
             "any" => {
                 let true_block = self.builder.new_block();
@@ -2257,7 +2233,7 @@ impl<'a> LowerContext<'a> {
                 self.builder.build_br(exit_block)?;
 
                 self.builder.set_current_block(false_block);
-                self.build_collection_loop_continue(loaded_it, idx_val, iter_slot, cond_block)?;
+                self.build_collection_loop_continue(cursor, idx_val, cond_block)?;
             }
             "all" => {
                 let true_block = self.builder.new_block();
@@ -2266,7 +2242,7 @@ impl<'a> LowerContext<'a> {
                     .build_condbr(callback_val, true_block, false_block)?;
 
                 self.builder.set_current_block(true_block);
-                self.build_collection_loop_continue(loaded_it, idx_val, iter_slot, cond_block)?;
+                self.build_collection_loop_continue(cursor, idx_val, cond_block)?;
 
                 self.builder.set_current_block(false_block);
                 let slot = result_slot.unwrap();
@@ -2275,7 +2251,7 @@ impl<'a> LowerContext<'a> {
                 self.builder.build_br(exit_block)?;
             }
             "for_each" => {
-                self.build_collection_loop_continue(loaded_it, idx_val, iter_slot, cond_block)?;
+                self.build_collection_loop_continue(cursor, idx_val, cond_block)?;
             }
             _ => unreachable!(),
         }
@@ -3316,18 +3292,23 @@ impl<'a> LowerContext<'a> {
                                     self.locals.get(owner).cloned().ok_or_else(|| {
                                         TirLowerError::UnknownLocal(owner.clone(), c.span)
                                     })?;
-                                if !mutable
-                                    || !matches!(
-                                        slot_type,
+                                let scalar = |ty: &TirType| {
+                                    matches!(
+                                        ty,
                                         TirType::Int64
                                             | TirType::Bool
                                             | TirType::UInt64
                                             | TirType::UInt8
                                             | TirType::Float64
                                     )
-                                {
+                                };
+                                let supported = scalar(&slot_type)
+                                    || matches!(&slot_type, TirType::Array(inner) if scalar(inner));
+                                if !mutable || !supported {
                                     return Err(TirLowerError::UnsupportedExpr(
-                                        "VM inout calls currently support mutable scalar owners only".into(), c.span,
+                                        "VM inout calls require a mutable scalar or scalar array owner"
+                                            .into(),
+                                        c.span,
                                     ));
                                 }
                                 self.builder.build_borrow_inout(slot)?
@@ -3484,7 +3465,33 @@ impl<'a> LowerContext<'a> {
                         s.span,
                     ));
                 }
-                let obj = self.lower_expression(&s.object)?;
+                // The full read loan is acquired before evaluating the bounds.
+                // A temporary SSA copy of the array is not the borrowed owner.
+                let direct_owner = match s.object.as_ref() {
+                    HirExpression::Name(_, name) => {
+                        self.locals.get(name).and_then(|(slot, ty, _)| match ty {
+                            TirType::Array(inner)
+                                if matches!(
+                                    inner.as_ref(),
+                                    TirType::Int64
+                                        | TirType::UInt64
+                                        | TirType::UInt8
+                                        | TirType::Float64
+                                        | TirType::Bool
+                                ) =>
+                            {
+                                Some(*slot)
+                            }
+                            _ => None,
+                        })
+                    }
+                    _ => None,
+                };
+                let obj = if let Some(slot) = direct_owner {
+                    self.builder.build_borrow_read_array(slot)?
+                } else {
+                    self.lower_expression(&s.object)?
+                };
                 let start = self.lower_expression(&s.start)?;
                 let end = self.lower_expression(&s.end)?;
                 self.builder

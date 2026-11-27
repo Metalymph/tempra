@@ -876,7 +876,16 @@ impl<'a> Analyzer<'a> {
             HirExpression::Slice(s) => {
                 previous = self.expr(&s.object, previous);
                 let mut held = Vec::new();
-                if let Some(loan) = self.loan_of(&s.object) {
+                let direct_array = matches!(s.object.as_ref(), HirExpression::Name(_, _))
+                    && matches!(self.ctx.facts.expr_types.get(&s.object.span()),
+                        Some(Type::Array(item)) if item.is_numeric() || matches!(item.as_ref(), Type::Bool));
+                let operand_loan = if direct_array {
+                    // The owner is borrowed before the bounds are evaluated.
+                    self.loan_of(expr)
+                } else {
+                    self.loan_of(&s.object)
+                };
+                if let Some(loan) = operand_loan {
                     let (next, id) = self.hold_loan(loan, previous);
                     previous = next;
                     held.push(id);
